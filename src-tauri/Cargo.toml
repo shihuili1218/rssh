@@ -32,20 +32,15 @@ async-trait = "0.1"
 # SFTP
 russh-sftp = "2"
 
+# HTTP + crypto
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+base64 = "0.22"
+sha2 = "0.10"
+hmac = "0.12"
+
 # PTY — 桌面平台专用
 [target.'cfg(not(target_os = "android"))'.dependencies]
 portable-pty = "0.8"
-
-# HTTP — GitHub sync (desktop only)
-[target.'cfg(not(target_os = "android"))'.dependencies.reqwest]
-version = "0.12"
-features = ["json"]
-[target.'cfg(not(target_os = "android"))'.dependencies.base64]
-version = "0.22"
-[target.'cfg(not(target_os = "android"))'.dependencies.sha2]
-version = "0.10"
-[target.'cfg(not(target_os = "android"))'.dependencies.hmac]
-version = "0.12"
 
 # CLI
 [dependencies.clap]

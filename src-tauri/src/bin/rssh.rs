@@ -324,7 +324,6 @@ fn cmd_open_fwd(conn: &Connection, name: &str) -> AppResult<()> {
 }
 
 fn write_temp_key(pem: &str) -> AppResult<tempfile::NamedTempFile> {
-    use std::os::unix::fs::PermissionsExt;
     let mut f = tempfile::NamedTempFile::new()
         .map_err(|e| rssh_lib::error::AppError::Io(e))?;
     f.write_all(pem.as_bytes())
@@ -335,8 +334,12 @@ fn write_temp_key(pem: &str) -> AppResult<tempfile::NamedTempFile> {
     }
     f.flush()
         .map_err(|e| rssh_lib::error::AppError::Io(e))?;
-    f.as_file().set_permissions(std::fs::Permissions::from_mode(0o600))
-        .map_err(|e| rssh_lib::error::AppError::Io(e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        f.as_file().set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| rssh_lib::error::AppError::Io(e))?;
+    }
     Ok(f)
 }
 

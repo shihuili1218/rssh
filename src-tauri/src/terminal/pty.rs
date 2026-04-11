@@ -69,7 +69,12 @@ pub fn spawn(cols: u16, rows: u16, app: tauri::AppHandle, shell_override: Option
         .unwrap_or_else(default_shell);
 
     let mut cmd = CommandBuilder::new(&shell);
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
     cmd.env("RSSH_APP", "1");
+    if !cfg!(target_os = "windows") {
+        cmd.arg("-l");
+    }
     let _child = pair
         .slave
         .spawn_command(cmd)

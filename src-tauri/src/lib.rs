@@ -98,10 +98,7 @@ pub fn run() {
             // sync
             commands::sync::export_config,
             commands::sync::import_config,
-            // GitHub sync (desktop only)
-            #[cfg(not(target_os = "android"))]
             commands::sync::github_push,
-            #[cfg(not(target_os = "android"))]
             commands::sync::github_pull,
         ])
         .run(tauri::generate_context!())

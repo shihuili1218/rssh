@@ -68,10 +68,10 @@ pub fn import_config(state: State<'_, AppState>, json: String) -> AppResult<()> 
 }
 
 // ---------------------------------------------------------------------------
-// GitHub sync（桌面专用）
+// GitHub sync
 // ---------------------------------------------------------------------------
 
-#[cfg(not(target_os = "android"))]
+
 #[tauri::command]
 pub async fn github_push(state: State<'_, AppState>, password: String) -> AppResult<()> {
     use crate::sync::github::GitHubSync;
@@ -112,7 +112,7 @@ pub async fn github_push(state: State<'_, AppState>, password: String) -> AppRes
     sync.push(&encrypted).await
 }
 
-#[cfg(not(target_os = "android"))]
+
 #[tauri::command]
 pub async fn github_pull(state: State<'_, AppState>, password: String) -> AppResult<()> {
     use crate::sync::github::GitHubSync;

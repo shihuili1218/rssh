@@ -1,5 +1,6 @@
 # Rust
 /src-tauri/target/
+/src-tauri/bin/rssh-cli*
 
 # Node
 /node_modules/

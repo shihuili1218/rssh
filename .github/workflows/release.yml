@@ -16,16 +16,20 @@ jobs:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
-            cli_name: rssh-cli
-          - os: macos-13
+            os_name: macos
+            arch: aarch64
+          - os: macos-14
             target: x86_64-apple-darwin
-            cli_name: rssh-cli
+            os_name: macos
+            arch: x86_64
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            cli_name: rssh-cli
+            os_name: linux
+            arch: x86_64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            cli_name: rssh-cli.exe
+            os_name: windows
+            arch: x86_64
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -46,7 +50,6 @@ jobs:
         with:
           workspaces: src-tauri
 
-      # Linux build dependencies
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -54,52 +57,54 @@ jobs:
             libgtk-3-dev libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev librsvg2-dev
 
-      # Build CLI binary
+      - name: Sync version from tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd src-tauri
+          sed -i.bak "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" tauri.conf.json && rm -f tauri.conf.json.bak
+          sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml && rm -f Cargo.toml.bak
+
       - name: Build CLI
         working-directory: src-tauri
         run: cargo build --release --features cli --bin rssh-cli --target ${{ matrix.target }}
 
-      # Stage CLI into resources so Tauri bundles it
       - name: Stage CLI for bundling
         shell: bash
         run: |
           mkdir -p src-tauri/bin
-          cp "src-tauri/target/${{ matrix.target }}/release/${{ matrix.cli_name }}" src-tauri/bin/
+          NAME="rssh-cli"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then NAME="rssh-cli.exe"; fi
+          cp "src-tauri/target/${{ matrix.target }}/release/${NAME}" src-tauri/bin/
 
-      # Build & upload Tauri app (inject CLI as bundled resource)
-      - uses: tauri-apps/tauri-action@v0
+      - name: Build Tauri app
+        run: npx tauri build --target ${{ matrix.target }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_CONFIG: '{"bundle":{"resources":{"bin/*":"bin/"}}}'
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "RSSH ${{ github.ref_name }}"
-          releaseBody: ""
-          releaseDraft: true
-          prerelease: false
-          args: --target ${{ matrix.target }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
 
-      # Upload standalone CLI binary
-      - name: Upload CLI binary
+      - name: Rename artifacts
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PREFIX="rssh-${VERSION}-${{ matrix.os_name }}-${{ matrix.arch }}"
+          BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle"
+          mkdir -p dist
+
+          for f in "${BUNDLE}"/dmg/*.dmg;            do [ -f "$f" ] && cp "$f" "dist/${PREFIX}.dmg";       done
+          for f in "${BUNDLE}"/deb/*.deb;             do [ -f "$f" ] && cp "$f" "dist/${PREFIX}.deb";       done
+          for f in "${BUNDLE}"/rpm/*.rpm;              do [ -f "$f" ] && cp "$f" "dist/${PREFIX}.rpm";       done
+          for f in "${BUNDLE}"/appimage/*.AppImage;    do [ -f "$f" ] && cp "$f" "dist/${PREFIX}.AppImage";  done
+          for f in "${BUNDLE}"/msi/*.msi;              do [ -f "$f" ] && cp "$f" "dist/${PREFIX}.msi";       done
+          for f in "${BUNDLE}"/nsis/*-setup.exe;       do [ -f "$f" ] && cp "$f" "dist/${PREFIX}-setup.exe"; done
+
+          ls -lh dist/
+
+      - name: Upload
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          files: src-tauri/bin/${{ matrix.cli_name }}
-          # Rename to include target triple
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Rename and re-upload CLI
-        shell: bash
-        run: |
-          EXT=""
-          if [[ "${{ matrix.target }}" == *windows* ]]; then EXT=".exe"; fi
-          cp "src-tauri/bin/${{ matrix.cli_name }}" "rssh-${{ matrix.target }}${EXT}"
-
-      - uses: softprops/action-gh-release@v2
-        with:
-          draft: true
-          files: rssh-${{ matrix.target }}*
+          name: "RSSH ${{ github.ref_name }}"
+          files: dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -135,15 +140,42 @@ jobs:
       - name: Install Android targets
         run: rustup target add aarch64-linux-android armv7-linux-androideabi
 
+      - name: Sync version from tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd src-tauri
+          sed -i "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" tauri.conf.json
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+
+      - name: Setup signing
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > src-tauri/gen/android/release.jks
+          printf 'storeFile=release.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+            "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+            "${{ secrets.ANDROID_KEY_ALIAS }}" \
+            "${{ secrets.ANDROID_KEY_PASSWORD }}" \
+            > src-tauri/gen/android/key.properties
+
       - name: Build Android APK
         run: npx tauri android build --apk
         env:
           NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
 
-      - name: Upload APK
+      - name: Rename APK
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -type f | head -1)
+          cp "$APK" "dist/rssh-${VERSION}-android-universal.apk"
+          ls -lh dist/
+
+      - name: Upload
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          files: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          name: "RSSH ${{ github.ref_name }}"
+          files: dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

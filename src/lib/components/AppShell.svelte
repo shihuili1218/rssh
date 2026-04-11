@@ -37,7 +37,7 @@
     type NavItem = { kind: "pin"; profile: Profile } | { kind: "tab"; id: string } | { kind: "new-tab" } | { kind: "settings" };
     let navItems = $derived<NavItem[]>([
         ...app.tabs().filter(t => t.type === "home").map(t => ({kind: "tab" as const, id: t.id})),
-        {kind: "new-tab" as const},
+        ...(app.isMobile ? [] : [{kind: "new-tab" as const}]),
         ...pinnedProfiles.map(p => ({kind: "pin" as const, profile: p})),
         ...app.tabs().filter(t => t.type !== "home").map(t => ({kind: "tab" as const, id: t.id})),
         {kind: "settings" as const},
@@ -199,11 +199,13 @@
                 </button>
             {/each}
 
-            <!-- New Terminal -->
+            <!-- New Terminal (desktop only) -->
+            {#if !app.isMobile}
             <button class="sb-item new-tab" class:focused={focusIdx === 1} onclick={addLocalTab} title="New terminal">
                 <span class="sb-icon">+</span>
                 <span class="sb-label">New Terminal</span>
             </button>
+            {/if}
 
             {#if pinnedProfiles.length > 0}
                 <div class="sidebar-section">
@@ -289,9 +291,9 @@
     .sidebar {
         position: fixed;
         left: 0;
-        top: 0;
+        top: env(safe-area-inset-top, 0px);
         width: 40px;
-        height: 100%;
+        height: calc(100% - env(safe-area-inset-top, 0px));
         background: var(--bg);
         border-right: 1px solid var(--divider);
         z-index: 200;
@@ -460,6 +462,7 @@
         display: flex;
         flex-direction: column;
         background: var(--bg);
+        padding-top: env(safe-area-inset-top, 0px);
     }
 
     .sftp-bar {

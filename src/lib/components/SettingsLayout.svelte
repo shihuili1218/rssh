@@ -18,7 +18,7 @@
 
   type MenuItem = { id: string; label: string; section: string };
 
-  const menu: MenuItem[] = [
+  const allMenu: MenuItem[] = [
     { id: "profiles", label: "Profiles", section: "连接" },
     { id: "credentials", label: "凭证管理", section: "连接" },
     { id: "forwards", label: "端口转发", section: "连接" },
@@ -31,6 +31,9 @@
     { id: "cli", label: "CLI Tool", section: "工具" },
     { id: "help", label: "快捷键", section: "帮助" },
   ];
+
+  const hiddenOnMobile = new Set(["cli", "help"]);
+  const menu = app.isMobile ? allMenu.filter(m => !hiddenOnMobile.has(m.id)) : allMenu;
 
   let sections = $derived((() => {
     const seen = new Set<string>();
@@ -54,7 +57,8 @@
   }
 </script>
 
-<div class="settings-layout">
+<div class="settings-layout" class:mobile={app.isMobile}>
+  {#if !app.isMobile || app.settingsPage() === "menu"}
   <nav class="settings-menu">
     <div class="menu-header">设置</div>
     {#each sections as s}
@@ -70,8 +74,13 @@
       {/each}
     {/each}
   </nav>
+  {/if}
 
+  {#if !app.isMobile || app.settingsPage() !== "menu"}
   <div class="settings-content">
+    {#if app.isMobile}
+      <button class="mobile-back" onclick={() => app.settingsBack()}>← 返回</button>
+    {/if}
     {#if app.settingsPage() === "menu"}
       <div class="welcome">
         <h2>设置</h2>
@@ -109,6 +118,7 @@
       <HelpScreen />
     {/if}
   </div>
+  {/if}
 </div>
 
 <style>
@@ -174,4 +184,29 @@
     gap: 8px;
   }
   .welcome h2 { font-size: 20px; color: var(--text-sub); }
+
+  /* ── Mobile: stack navigation ── */
+  .settings-layout.mobile .settings-menu {
+    width: 100%;
+    border-right: none;
+  }
+  .settings-layout.mobile .settings-content {
+    width: 100%;
+  }
+  .mobile-back {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 12px 16px;
+    border: none;
+    border-bottom: 1px solid var(--divider);
+    background: var(--bg);
+    color: var(--accent);
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    width: 100%;
+    text-align: left;
+  }
 </style>

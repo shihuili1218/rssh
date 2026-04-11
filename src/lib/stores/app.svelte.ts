@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 
 /* ═══════════════════════════════════════════════════════
+   Platform
+   ═══════════════════════════════════════════════════════ */
+export const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+
+/* ═══════════════════════════════════════════════════════
    Types
    ═══════════════════════════════════════════════════════ */
 export type TabType = "home" | "ssh" | "local" | "forward";
@@ -114,6 +119,15 @@ export function settingsBack() {
   else if (_settingsPage === "forward-edit") _settingsPage = "forwards";
   else _settingsPage = "menu";
 }
+
+/* ─── Mobile key modifiers (sticky Ctrl/Alt) ─── */
+let _ctrlActive = $state(false);
+let _altActive = $state(false);
+export function ctrlActive() { return _ctrlActive; }
+export function altActive() { return _altActive; }
+export function setCtrl(v: boolean) { _ctrlActive = v; }
+export function setAlt(v: boolean) { _altActive = v; }
+export function clearModifiers() { _ctrlActive = false; _altActive = false; }
 
 /* ─── Send to active terminal ─── */
 let _terminalWriter: ((text: string) => void) | null = null;

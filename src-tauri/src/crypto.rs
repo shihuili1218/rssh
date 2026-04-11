@@ -8,7 +8,7 @@ use crate::error::{AppError, AppResult};
 // Auth: HMAC-SHA256(key, ciphertext)
 // ---------------------------------------------------------------------------
 
-#[cfg(not(target_os = "android"))]
+
 fn derive_key(password: &str, salt: &[u8]) -> Vec<u8> {
     use sha2::{Sha256, Digest};
     let mut k = Sha256::digest([password.as_bytes(), salt].concat()).to_vec();
@@ -18,7 +18,7 @@ fn derive_key(password: &str, salt: &[u8]) -> Vec<u8> {
     k
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn keystream(key: &[u8], length: usize) -> Vec<u8> {
     use sha2::{Sha256, Digest};
     let mut out = Vec::with_capacity(length + 32);
@@ -35,7 +35,7 @@ fn keystream(key: &[u8], length: usize) -> Vec<u8> {
     out
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
@@ -44,7 +44,7 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
     mac.finalize().into_bytes().to_vec()
 }
 
-#[cfg(not(target_os = "android"))]
+
 pub fn encrypt(json: &str, password: &str) -> AppResult<String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
 
@@ -75,7 +75,7 @@ pub fn encrypt(json: &str, password: &str) -> AppResult<String> {
     Ok(STANDARD.encode(&out))
 }
 
-#[cfg(not(target_os = "android"))]
+
 pub fn decrypt(b64: &str, password: &str) -> AppResult<String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
 

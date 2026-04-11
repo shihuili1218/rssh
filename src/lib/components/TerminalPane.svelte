@@ -7,6 +7,7 @@
     import {listen, type UnlistenFn} from "@tauri-apps/api/event";
     import type {HighlightRule} from "../stores/app.svelte.ts";
     import * as app from "../stores/app.svelte.ts";
+    import MobileKeybar from "./MobileKeybar.svelte";
 
     const ANSI: Record<string, string> = {
         red: "\x1b[31m", green: "\x1b[32m", yellow: "\x1b[33m",
@@ -250,7 +251,8 @@
         // Wire input
         terminal.onData((data: string) => {
             if (!disconnected) {
-                invoke(writeCmd, {sessionId: sid, data: Array.from(new TextEncoder().encode(data))});
+                const d = processInput(data);
+                invoke(writeCmd, {sessionId: sid, data: Array.from(new TextEncoder().encode(d))});
             }
         });
         terminal.onResize(({cols, rows}) => {
@@ -272,6 +274,19 @@
             if (!disconnected) invoke(resizeCmd, {sessionId: sid, cols: terminal.cols, rows: terminal.rows});
         });
     });
+
+    function processInput(data: string): string {
+        const ctrl = app.ctrlActive();
+        const alt = app.altActive();
+        if (!ctrl && !alt) return data;
+        if (ctrl && data.length === 1) {
+            const code = data.toUpperCase().charCodeAt(0);
+            if (code >= 65 && code <= 90) data = String.fromCharCode(code - 64);
+        }
+        if (alt) data = '\x1b' + data;
+        app.clearModifiers();
+        return data;
+    }
 
     function setupReconnect() {
         // On any keypress when disconnected → reconnect
@@ -307,7 +322,7 @@
                     setupReconnect();
                 }));
                 terminal.onData((data: string) => {
-                    if (!disconnected) invoke("pty_write", {sessionId: sid, data: Array.from(new TextEncoder().encode(data))});
+                    if (!disconnected) invoke("pty_write", {sessionId: sid, data: Array.from(new TextEncoder().encode(processInput(data)))});
                 });
             } catch (e: any) {
                 terminal.write(`\x1b[31mReconnect failed: ${e}\x1b[0m\r\n`);
@@ -343,7 +358,7 @@
                     setupReconnect();
                 }));
                 terminal.onData((data: string) => {
-                    if (!disconnected) invoke("ssh_write", {sessionId: sid, data: Array.from(new TextEncoder().encode(data))});
+                    if (!disconnected) invoke("ssh_write", {sessionId: sid, data: Array.from(new TextEncoder().encode(processInput(data)))});
                 });
                 terminal.onResize(({cols, rows}) => {
                     if (!disconnected) invoke("ssh_resize", {sessionId: sid, cols, rows});
@@ -404,6 +419,9 @@
         </div>
     {/if}
     <div class="term-wrap" bind:this={containerEl}></div>
+    {#if app.isMobile}
+        <MobileKeybar />
+    {/if}
 </div>
 
 <style>

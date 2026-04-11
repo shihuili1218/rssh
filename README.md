@@ -1,72 +1,71 @@
 # RSSH
 
-SSH connection manager — desktop app (Windows/macOS/Linux/Android) + CLI tool.
+SSH connection manager with a desktop GUI and built-in CLI.
+
+macOS / Windows / Linux / Android.
+
+## Features
+
+- **SSH** -- password, private key, keyboard-interactive, jump host (ProxyJump)
+- **Terminal** -- xterm emulation, 10 000-line scrollback, keyword highlighting, search
+- **SFTP** -- remote file browser, upload/download
+- **Port Forwarding** -- local and remote, named configs, real-time stats
+- **Local Terminal** -- auto-detect zsh/bash/PowerShell
+- **Session Recording** -- asciicast v2 format, variable-speed playback
+- **Profiles & Credentials** -- SQLite storage, import from `~/.ssh/config`
+- **Sync** -- encrypted export/import, GitHub backup
+- **Snippets** -- reusable command shortcuts (Cmd+E)
+- **Mobile** -- virtual keybar (Ctrl/Alt/arrows/Tab/Esc), safe area, stack navigation
+
+## Install
+
+Download from [Releases](../../releases):
+
+| Platform | File | Notes |
+|---|---|---|
+| macOS Apple Silicon | `rssh-{ver}-macos-aarch64.dmg` | |
+| macOS Intel | `rssh-{ver}-macos-x86_64.dmg` | |
+| Linux (deb) | `rssh-{ver}-linux-x86_64.deb` | Debian/Ubuntu |
+| Linux (rpm) | `rssh-{ver}-linux-x86_64.rpm` | Fedora/RHEL |
+| Linux (AppImage) | `rssh-{ver}-linux-x86_64.AppImage` | Any distro |
+| Windows | `rssh-{ver}-windows-x86_64.msi` | Silent install: `msiexec /i` |
+| Windows | `rssh-{ver}-windows-x86_64-setup.exe` | GUI installer |
+| Android | `rssh-{ver}-android-universal.apk` | |
 
 ## CLI
 
-### Install
+The CLI binary is bundled inside the desktop app. Install it from **Settings > CLI Tool > Install** (auto-configures shell completions).
 
-**From desktop app:** Settings > CLI Tool > Install (auto-configures completions).
+To build from source:
 
-**From source:**
 ```bash
 cd src-tauri
 cargo install --path . --features cli --bin rssh-cli
 ln -sf ~/.cargo/bin/rssh-cli /usr/local/bin/rssh
 ```
 
-**From GitHub Release:** download `rssh-<target>` binary, rename to `rssh`, place in PATH.
-
-### Shell Completions
-
-The desktop app installer auto-configures completions. To set up manually:
-
-```bash
-# zsh
-mkdir -p ~/.zsh/completions
-rssh completions zsh > ~/.zsh/completions/_rssh
-# ensure ~/.zshrc has: fpath=(~/.zsh/completions $fpath) && autoload -Uz compinit && compinit
-
-# bash
-rssh completions bash >> ~/.bashrc
-
-# fish
-rssh completions fish > ~/.config/fish/completions/rssh.fish
-
-# PowerShell
-rssh completions powershell >> $PROFILE
-```
-
 ### Usage
 
 ```
-rssh                              # list all profiles (default)
-rssh ls [query]                   # list/search profiles
+rssh                              # list profiles
+rssh ls [query]                   # search profiles
 rssh ls cred                      # list credentials
-rssh ls fwd                       # list port forwards
+rssh ls fwd                       # list forwards
 
-rssh open <name>                  # connect via SSH
-rssh open fwd <name>              # start port forward
+rssh open <name>                  # SSH connect
+rssh open fwd <name>              # start forward
 
-rssh add profile                  # interactive: create profile
-rssh add cred                     # interactive: create credential
-rssh add fwd                      # interactive: create forward
+rssh add profile|cred|fwd         # create (interactive)
+rssh edit profile|cred|fwd <name> # edit
+rssh rm profile|cred|fwd <name>   # delete
 
-rssh edit profile <name>          # edit profile
-rssh edit cred <name>             # edit credential
-rssh edit fwd <name>              # edit forward
+rssh config export <file>         # encrypted backup
+rssh config import <file>         # restore
+rssh config set                   # configure GitHub sync
+rssh config push                  # push to GitHub
+rssh config pull                  # pull from GitHub
 
-rssh rm profile <name>            # delete profile
-rssh rm cred <name>               # delete credential
-rssh rm fwd <name>                # delete forward
-
-rssh config export <file>         # encrypted backup to file
-rssh config import <file>         # restore from encrypted file
-rssh config set                   # configure GitHub sync settings
-rssh config push                  # push encrypted config to GitHub
-rssh config pull                  # pull config from GitHub
-
-rssh completions <shell>          # generate completion script (zsh|bash|fish|powershell)
+rssh completions <shell>          # zsh | bash | fish | powershell
 ```
 
 ### Data
@@ -74,36 +73,24 @@ rssh completions <shell>          # generate completion script (zsh|bash|fish|po
 CLI and desktop app share the same database:
 
 ```
-~/.rssh/rssh.db        # SQLite database
-~/.rssh/known_hosts    # SSH host key store
+~/.rssh/rssh.db        # SQLite
+~/.rssh/known_hosts    # SSH host keys
 ~/.rssh/snippets.json  # command snippets
 ```
 
-## Desktop App
+## Keyboard Shortcuts
 
-### Dev
+| Key | Action |
+|---|---|
+| Cmd+K | Toggle sidebar |
+| Cmd+F | Terminal search |
+| Cmd+E | Snippet picker |
+| Cmd+O | SFTP browser |
 
-```bash
-npm install
-npm run tauri dev
-```
+## Development
 
-### Build
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-```bash
-npm run tauri build
-```
+## License
 
-### Release
-
-Push a tag `v*` to trigger the GitHub Actions workflow. It builds:
-
-| Platform | Artifacts |
-|----------|-----------|
-| macOS (Apple Silicon) | `.dmg` + standalone `rssh` CLI |
-| macOS (Intel) | `.dmg` + standalone `rssh` CLI |
-| Linux (x64) | `.deb` / `.AppImage` + standalone `rssh` CLI |
-| Windows (x64) | `.msi` / `.exe` installer + standalone `rssh.exe` CLI |
-| Android | `.apk` |
-
-Desktop installers bundle the CLI binary. Install via Settings > CLI Tool.
+MIT

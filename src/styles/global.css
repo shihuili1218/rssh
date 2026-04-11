@@ -52,7 +52,11 @@ html, body {
 }
 /* Terminal 内恢复选择 */
 .xterm { user-select: text; -webkit-user-select: text; }
-#app { height: 100%; }
+#app {
+  height: 100%;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
 
 /* ═══════════════════════════════════════════════════════
    Neumorphism Primitives
