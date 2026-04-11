@@ -43,16 +43,9 @@ hmac = "0.12"
 portable-pty = "0.8"
 
 # CLI
-[dependencies.clap]
-version = "4"
-features = ["derive"]
-optional = true
-[dependencies.rpassword]
-version = "7"
-optional = true
-[dependencies.tempfile]
-version = "3"
-optional = true
+clap = { version = "4", features = ["derive"], optional = true }
+rpassword = { version = "7", optional = true }
+tempfile = { version = "3", optional = true }
 
 [features]
 default = []
