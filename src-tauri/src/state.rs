@@ -1,0 +1,20 @@
+use rusqlite::Connection;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use crate::ssh::client::SessionHandle;
+use crate::ssh::forward::ForwardHandle;
+use crate::ssh::sftp::SftpHandle;
+#[cfg(not(target_os = "android"))]
+use crate::terminal::pty::PtyHandle;
+
+pub struct AppState {
+    pub db: Mutex<Connection>,
+    pub sessions: Mutex<HashMap<String, SessionHandle>>,
+    #[cfg(not(target_os = "android"))]
+    pub pty_sessions: Mutex<HashMap<String, PtyHandle>>,
+    pub sftp_sessions: Mutex<HashMap<String, Arc<SftpHandle>>>,
+    pub active_forwards: Mutex<HashMap<String, ForwardHandle>>,
+    pub data_dir: PathBuf,
+}

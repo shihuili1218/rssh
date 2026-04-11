@@ -1,0 +1,149 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Desktop (macOS / Linux / Windows) ────────────────────────────
+  build-desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            cli_name: rssh-cli
+          - os: macos-13
+            target: x86_64-apple-darwin
+            cli_name: rssh-cli
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            cli_name: rssh-cli
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            cli_name: rssh-cli.exe
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Linux build dependencies
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev
+
+      # Build CLI binary
+      - name: Build CLI
+        working-directory: src-tauri
+        run: cargo build --release --features cli --bin rssh-cli --target ${{ matrix.target }}
+
+      # Stage CLI into resources so Tauri bundles it
+      - name: Stage CLI for bundling
+        shell: bash
+        run: |
+          mkdir -p src-tauri/bin
+          cp "src-tauri/target/${{ matrix.target }}/release/${{ matrix.cli_name }}" src-tauri/bin/
+
+      # Build & upload Tauri app (inject CLI as bundled resource)
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_CONFIG: '{"bundle":{"resources":{"bin/*":"bin/"}}}'
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "RSSH ${{ github.ref_name }}"
+          releaseBody: ""
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }}
+
+      # Upload standalone CLI binary
+      - name: Upload CLI binary
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: src-tauri/bin/${{ matrix.cli_name }}
+          # Rename to include target triple
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rename and re-upload CLI
+        shell: bash
+        run: |
+          EXT=""
+          if [[ "${{ matrix.target }}" == *windows* ]]; then EXT=".exe"; fi
+          cp "src-tauri/bin/${{ matrix.cli_name }}" "rssh-${{ matrix.target }}${EXT}"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: rssh-${{ matrix.target }}*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Android ──────────────────────────────────────────────────────
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Setup Android SDK & NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android targets
+        run: rustup target add aarch64-linux-android armv7-linux-androideabi
+
+      - name: Build Android APK
+        run: npx tauri android build --apk
+        env:
+          NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+
+      - name: Upload APK
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

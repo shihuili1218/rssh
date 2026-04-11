@@ -1,0 +1,16 @@
+# rssh fish completions
+complete -c rssh -n '__fish_use_subcommand' -a 'ls' -d 'List profiles/credentials/forwards'
+complete -c rssh -n '__fish_use_subcommand' -a 'open' -d 'Connect via SSH'
+complete -c rssh -n '__fish_use_subcommand' -a 'add' -d 'Add profile/credential/forward'
+complete -c rssh -n '__fish_use_subcommand' -a 'edit' -d 'Edit profile/credential/forward'
+complete -c rssh -n '__fish_use_subcommand' -a 'rm' -d 'Delete profile/credential/forward'
+complete -c rssh -n '__fish_use_subcommand' -a 'config' -d 'Configuration management'
+complete -c rssh -n '__fish_use_subcommand' -a 'completions' -d 'Generate shell completions'
+
+complete -c rssh -n '__fish_seen_subcommand_from ls' -a 'cred fwd'
+complete -c rssh -n '__fish_seen_subcommand_from open' -a '(rssh _names profiles 2>/dev/null)' -a 'fwd'
+complete -c rssh -n '__fish_seen_subcommand_from add' -a 'profile cred fwd'
+complete -c rssh -n '__fish_seen_subcommand_from edit' -a 'profile cred fwd'
+complete -c rssh -n '__fish_seen_subcommand_from rm' -a 'profile cred fwd'
+complete -c rssh -n '__fish_seen_subcommand_from config' -a 'export import set push pull'
+complete -c rssh -n '__fish_seen_subcommand_from completions' -a 'zsh bash powershell fish'

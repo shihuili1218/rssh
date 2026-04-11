@@ -1,0 +1,9 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for RSSH",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-title"
+  ]
+}

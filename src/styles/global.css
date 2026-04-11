@@ -1,0 +1,276 @@
+@import "@xterm/xterm/css/xterm.css";
+
+/* ═══════════════════════════════════════════════════════
+   Dark Neumorphism Theme Tokens
+   ═══════════════════════════════════════════════════════ */
+:root {
+  --bg:           #2B2D3A;
+  --surface:      #32343F;
+  --shadow-dark:  #1E2028;
+  --shadow-light: #383B4A;
+  --text:         #E0E5EC;
+  --text-sub:     #A0A8BB;
+  --text-dim:     #6B7A99;
+  --accent:       #4A6CF7;
+  --accent-soft:  rgba(74,108,247,0.15);
+  --error:        #E05555;
+  --success:      #4CB88A;
+  --warning:      #DDAA33;
+  --divider:      #3C3F50;
+
+  /* Shadows */
+  --raised:        5px 5px 10px var(--shadow-dark), -5px -5px 10px var(--shadow-light);
+  --raised-sm:     3px 3px 6px var(--shadow-dark), -3px -3px 6px var(--shadow-light);
+  --pressed:       inset 3px 3px 6px var(--shadow-dark), inset -3px -3px 6px var(--shadow-light);
+
+  /* Terminal colors */
+  --term-bg:       #2B2D3A;
+  --term-fg:       #E0E5EC;
+  --term-cursor:   #4A6CF7;
+  --term-sel:      rgba(74,108,247,0.3);
+
+  /* Layout */
+  --radius:        14px;
+  --radius-sm:     10px;
+  --topbar-h:      44px;
+}
+
+/* ═══════════════════════════════════════════════════════
+   Reset & Base
+   ═══════════════════════════════════════════════════════ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100%;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* Terminal 内恢复选择 */
+.xterm { user-select: text; -webkit-user-select: text; }
+#app { height: 100%; }
+
+/* ═══════════════════════════════════════════════════════
+   Neumorphism Primitives
+   ═══════════════════════════════════════════════════════ */
+.neu-raised  { box-shadow: var(--raised); border-radius: var(--radius); background: var(--bg); }
+.neu-sm      { box-shadow: var(--raised-sm); border-radius: var(--radius-sm); background: var(--bg); }
+.neu-pressed { box-shadow: var(--pressed); border-radius: var(--radius); background: var(--bg); }
+.neu-flat    { border-radius: var(--radius); background: var(--bg); }
+
+/* ═══════════════════════════════════════════════════════
+   Form Elements
+   ═══════════════════════════════════════════════════════ */
+input, select, textarea {
+  background: var(--surface);
+  box-shadow: var(--pressed);
+  border: 1.5px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 10px 14px;
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent);
+}
+input::placeholder, textarea::placeholder { color: var(--text-dim); }
+select { cursor: pointer; }
+
+label {
+  color: var(--text-sub);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Checkbox & Radio */
+input[type="checkbox"], input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: var(--surface);
+  box-shadow: var(--pressed);
+  border: 1.5px solid transparent;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.15s;
+  padding: 0;
+  flex-shrink: 0;
+}
+input[type="radio"] { border-radius: 50%; }
+input[type="checkbox"]:checked, input[type="radio"]:checked {
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(74,108,247,0.4);
+  border-color: var(--accent);
+}
+input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 5px; top: 2px;
+  width: 5px; height: 9px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+input[type="radio"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px; top: 4px;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #fff;
+}
+
+/* ═══════════════════════════════════════════════════════
+   Switch Toggle (card-style, like Flutter verbose log)
+   ═══════════════════════════════════════════════════════ */
+.switch-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--bg);
+  box-shadow: var(--raised);
+  border-radius: var(--radius);
+}
+.switch-card-body { flex: 1; }
+.switch-card-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.switch-card-title.on { color: var(--accent); }
+.switch-card-title.off { color: var(--text); }
+.switch-card-desc {
+  font-size: 12px;
+  color: var(--text-sub);
+  line-height: 1.4;
+}
+
+/* The toggle switch */
+.switch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+}
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+  box-shadow: none;
+  padding: 0;
+}
+.switch .slider {
+  position: absolute;
+  inset: 0;
+  background: var(--surface);
+  box-shadow: var(--pressed);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.switch .slider::before {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  left: 3px;
+  top: 3px;
+  background: var(--text-dim);
+  border-radius: 50%;
+  transition: transform 0.2s, background 0.2s;
+}
+.switch input:checked + .slider {
+  background: rgba(74,108,247,0.5);
+}
+.switch input:checked + .slider::before {
+  transform: translateX(20px);
+  background: var(--accent);
+}
+
+/* ═══════════════════════════════════════════════════════
+   Buttons
+   ═══════════════════════════════════════════════════════ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 12px;
+  background: var(--bg);
+  box-shadow: var(--raised-sm);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  transition: box-shadow 0.13s, transform 0.1s;
+  user-select: none;
+}
+.btn:hover { box-shadow: var(--raised); }
+.btn:active { box-shadow: var(--pressed); transform: scale(0.98); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: var(--raised-sm); }
+
+.btn-accent {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 3px 3px 8px rgba(74,108,247,0.3), -2px -2px 6px var(--shadow-light);
+}
+.btn-accent:hover { box-shadow: 4px 4px 12px rgba(74,108,247,0.4), -3px -3px 8px var(--shadow-light); }
+.btn-accent:active { box-shadow: inset 2px 2px 5px rgba(0,0,0,0.3); }
+
+.btn-danger { color: var(--error); }
+.btn-sm { padding: 8px 16px; font-size: 13px; font-weight: 500; }
+.btn-icon {
+  width: 34px; height: 34px; padding: 0;
+  border-radius: 50%;
+  font-size: 16px;
+}
+
+/* ═══════════════════════════════════════════════════════
+   Cards & Sections
+   ═══════════════════════════════════════════════════════ */
+.card {
+  background: var(--bg);
+  box-shadow: var(--raised);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+.section-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 16px 0 8px;
+}
+.divider {
+  height: 1px;
+  background: var(--divider);
+  margin: 8px 0;
+}
+
+/* ═══════════════════════════════════════════════════════
+   Scrollbar
+   ═══════════════════════════════════════════════════════ */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--shadow-light); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }

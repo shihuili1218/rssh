@@ -1,0 +1,21 @@
+# Rust
+/src-tauri/target/
+
+# Node
+/node_modules/
+/dist/
+.vite/
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.iml
+*.ipr
+*.iws
+*.swp
+*.swo
+
+.claude/
