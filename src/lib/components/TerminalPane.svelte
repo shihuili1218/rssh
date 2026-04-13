@@ -1,5 +1,5 @@
 <script lang="ts">
-    import {onDestroy, onMount} from "svelte";
+    import {onDestroy, onMount, untrack} from "svelte";
     import {Terminal} from "@xterm/xterm";
     import {FitAddon} from "@xterm/addon-fit";
     import {SearchAddon} from "@xterm/addon-search";
@@ -373,6 +373,15 @@
         }
     }
 
+    // Register session in global registry for broadcast
+    $effect(() => {
+        if (sessionId && !disconnected) {
+            untrack(() => app.registerSession({ tabId, sessionId, type: tabType }));
+        } else {
+            untrack(() => app.unregisterSession(tabId));
+        }
+    });
+
     // Focus terminal + register writer when this tab becomes active
     $effect(() => {
         if (app.activeTabId() === tabId && !app.settingsActive()) {
@@ -390,6 +399,7 @@
         unlisteners.forEach(u => u());
         resizeObs?.disconnect();
         app.unregisterTerminalWriter();
+        app.unregisterSession(tabId);
         if (sessionId && !disconnected) {
             const cmd = isLocal ? "pty_close" : "ssh_disconnect";
             invoke(cmd, {sessionId}).catch(() => {

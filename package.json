@@ -10,11 +10,14 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@codemirror/legacy-modes": "^6.5.2",
+    "@codemirror/theme-one-dark": "^6.1.3",
     "@tauri-apps/api": "^2",
-    "@xterm/xterm": "^5.5.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-search": "^0.15.0",
-    "@xterm/addon-web-links": "^0.11.0"
+    "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/xterm": "^5.5.0",
+    "codemirror": "^6.0.2"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5",

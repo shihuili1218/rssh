@@ -8,7 +8,7 @@ export const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
 /* ═══════════════════════════════════════════════════════
    Types
    ═══════════════════════════════════════════════════════ */
-export type TabType = "home" | "ssh" | "local" | "forward";
+export type TabType = "home" | "ssh" | "local" | "forward" | "edit";
 export interface Tab {
   id: string;
   type: TabType;
@@ -134,6 +134,40 @@ let _terminalWriter: ((text: string) => void) | null = null;
 export function registerTerminalWriter(fn: (text: string) => void) { _terminalWriter = fn; }
 export function unregisterTerminalWriter() { _terminalWriter = null; }
 export function sendToTerminal(text: string) { _terminalWriter?.(text); }
+
+/* ─── Session registry (for broadcast) ─── */
+interface SessionEntry {
+  tabId: string;
+  sessionId: string;
+  type: "ssh" | "local";
+}
+export interface SessionInfo extends SessionEntry {
+  label: string;
+}
+let _sessions = $state<SessionEntry[]>([]);
+
+export function registerSession(info: SessionEntry) {
+  _sessions = [..._sessions.filter(s => s.tabId !== info.tabId), info];
+}
+export function unregisterSession(tabId: string) {
+  _sessions = _sessions.filter(s => s.tabId !== tabId);
+}
+export function connectedSessions(): SessionInfo[] {
+  return _sessions.map(s => ({
+    ...s,
+    label: _tabs.find(t => t.id === s.tabId)?.label ?? s.tabId,
+  }));
+}
+
+export function broadcastToSessions(tabIds: string[], text: string) {
+  const data = Array.from(new TextEncoder().encode(text));
+  for (const tabId of tabIds) {
+    const s = _sessions.find(x => x.tabId === tabId);
+    if (!s) continue;
+    const cmd = s.type === "local" ? "pty_write" : "ssh_write";
+    invoke(cmd, { sessionId: s.sessionId, data });
+  }
+}
 
 /* ─── Snippet picker ─── */
 let _snippetPickerOpen = $state(false);
