@@ -18,6 +18,16 @@
 
   type MenuItem = { id: string; label: string; section: string };
 
+  const COMPACT_BREAKPOINT = 640;
+  let compact = $state(window.innerWidth < COMPACT_BREAKPOINT);
+
+  $effect(() => {
+    const mq = window.matchMedia(`(max-width: ${COMPACT_BREAKPOINT - 1}px)`);
+    const onChange = (e: MediaQueryListEvent) => { compact = e.matches; };
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  });
+
   const allMenu: MenuItem[] = [
     { id: "profiles", label: "Profiles", section: "连接" },
     { id: "credentials", label: "凭证管理", section: "连接" },
@@ -32,8 +42,8 @@
     { id: "help", label: "快捷键", section: "帮助" },
   ];
 
-  const hiddenOnMobile = new Set(["cli", "help"]);
-  const menu = app.isMobile ? allMenu.filter(m => !hiddenOnMobile.has(m.id)) : allMenu;
+  const hiddenOnCompact = new Set(["cli", "help"]);
+  let menu = $derived(compact ? allMenu.filter(m => !hiddenOnCompact.has(m.id)) : allMenu);
 
   let sections = $derived((() => {
     const seen = new Set<string>();
@@ -57,8 +67,8 @@
   }
 </script>
 
-<div class="settings-layout" class:mobile={app.isMobile}>
-  {#if !app.isMobile || app.settingsPage() === "menu"}
+<div class="settings-layout" class:compact>
+  {#if !compact || app.settingsPage() === "menu"}
   <nav class="settings-menu">
     <div class="menu-header">设置</div>
     {#each sections as s}
@@ -76,9 +86,9 @@
   </nav>
   {/if}
 
-  {#if !app.isMobile || app.settingsPage() !== "menu"}
+  {#if !compact || app.settingsPage() !== "menu"}
   <div class="settings-content">
-    {#if app.isMobile}
+    {#if compact}
       <button class="mobile-back" onclick={() => app.settingsBack()}>← 返回</button>
     {/if}
     {#if app.settingsPage() === "menu"}
@@ -186,11 +196,11 @@
   .welcome h2 { font-size: 20px; color: var(--text-sub); }
 
   /* ── Mobile: stack navigation ── */
-  .settings-layout.mobile .settings-menu {
+  .settings-layout.compact .settings-menu {
     width: 100%;
     border-right: none;
   }
-  .settings-layout.mobile .settings-content {
+  .settings-layout.compact .settings-content {
     width: 100%;
   }
   .mobile-back {

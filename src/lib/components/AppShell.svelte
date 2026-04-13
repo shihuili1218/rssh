@@ -6,6 +6,7 @@
     import HomeScreen from "./HomeScreen.svelte";
     import TerminalPane from "./TerminalPane.svelte";
     import ForwardPane from "./ForwardPane.svelte";
+    import EditPane from "./EditPane.svelte";
     import SettingsLayout from "./SettingsLayout.svelte";
     import SftpBrowser from "./SftpBrowser.svelte";
     import SnippetPicker from "./SnippetPicker.svelte";
@@ -34,10 +35,10 @@
         profiles.filter(p => app.pinnedProfileIds().includes(p.id))
     );
 
-    type NavItem = { kind: "pin"; profile: Profile } | { kind: "tab"; id: string } | { kind: "new-tab" } | { kind: "settings" };
+    type NavItem = { kind: "pin"; profile: Profile } | { kind: "tab"; id: string } | { kind: "new-tab" } | { kind: "new-edit" } | { kind: "settings" };
     let navItems = $derived<NavItem[]>([
         ...app.tabs().filter(t => t.type === "home").map(t => ({kind: "tab" as const, id: t.id})),
-        ...(app.isMobile ? [] : [{kind: "new-tab" as const}]),
+        ...(app.isMobile ? [] : [{kind: "new-tab" as const}, {kind: "new-edit" as const}]),
         ...pinnedProfiles.map(p => ({kind: "pin" as const, profile: p})),
         ...app.tabs().filter(t => t.type !== "home").map(t => ({kind: "tab" as const, id: t.id})),
         {kind: "settings" as const},
@@ -45,6 +46,7 @@
 
     function activateNavItem(item: NavItem) {
         if (item.kind === "new-tab") addLocalTab();
+        else if (item.kind === "new-edit") addEditTab();
         else if (item.kind === "pin") connectPinned(item.profile);
         else if (item.kind === "tab") selectTab(item.id);
         else selectSettings();
@@ -98,10 +100,17 @@
         closeDrawer();
     }
 
+    function addEditTab() {
+        const id = `edit:${crypto.randomUUID()}`;
+        app.addTab({ id, type: "edit", label: "Edit" });
+        closeDrawer();
+    }
+
     function tabIcon(tab: Tab): string {
-        if (tab.type === "home") return "H";
+        if (tab.type === "home") return "㋡";
         if (tab.type === "local") return "$";
         if (tab.type === "forward") return "F";
+        if (tab.type === "edit") return "ᝰ";
         return tab.label.charAt(0).toUpperCase();
     }
 
@@ -181,7 +190,7 @@
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <nav
         class="sidebar" class:open={drawerOpen}
-        bind:this={sidebarEl} tabindex="0"
+        bind:this={sidebarEl} tabindex="-1"
         onmouseenter={enterSidebar} onmouseleave={leaveSidebar}
     >
         <div class="sidebar-inner">
@@ -205,6 +214,10 @@
                 <span class="sb-icon">+</span>
                 <span class="sb-label">New Terminal</span>
             </button>
+            <button class="sb-item new-tab" class:focused={focusIdx === 2} onclick={addEditTab} title="New edit tab">
+                <span class="sb-icon">✎</span>
+                <span class="sb-label">New Edit</span>
+            </button>
             {/if}
 
             {#if pinnedProfiles.length > 0}
@@ -212,7 +225,7 @@
                     {#each pinnedProfiles as p, i (p.id)}
                         <button
                             class="sb-item pinned"
-                            class:focused={focusIdx === 2 + i}
+                            class:focused={focusIdx === 3 + i}
                             onclick={() => connectPinned(p)}
                             title={p.name}
                         >
@@ -225,7 +238,7 @@
 
             <div class="sidebar-list">
                 {#each app.tabs().filter(t => t.type !== "home") as tab, i (tab.id)}
-                    {@const idx = 2 + pinnedProfiles.length + i}
+                    {@const idx = 3 + pinnedProfiles.length + i}
                     <button
                         class="sb-item"
                         class:active={!app.settingsActive() && tab.id === app.activeTabId()}
@@ -253,7 +266,7 @@
                     onclick={selectSettings}
                     title="Settings"
                 >
-                    <span class="sb-icon">S</span>
+                    <span class="sb-icon">⚙</span>
                     <span class="sb-label">Settings</span>
                 </button>
             </div>
@@ -275,6 +288,8 @@
                     <TerminalPane tabId={tab.id} tabType={tab.type} meta={tab.meta ?? {}}/>
                 {:else if tab.type === "forward"}
                     <ForwardPane tabId={tab.id} meta={tab.meta ?? {}}/>
+                {:else if tab.type === "edit"}
+                    <EditPane tabId={tab.id} />
                 {/if}
             </div>
         {/each}
