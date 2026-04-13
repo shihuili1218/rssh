@@ -1,5 +1,6 @@
 <script lang="ts">
     import {onMount} from "svelte";
+    import {invoke} from "@tauri-apps/api/core";
     import {getCurrentWindow} from "@tauri-apps/api/window";
     import type {Profile, Tab} from "../stores/app.svelte.ts";
     import * as app from "../stores/app.svelte.ts";
@@ -10,16 +11,56 @@
     import SettingsLayout from "./SettingsLayout.svelte";
     import SftpBrowser from "./SftpBrowser.svelte";
     import SnippetPicker from "./SnippetPicker.svelte";
+    import TabContextMenu, {type CtxMenuItem} from "./TabContextMenu.svelte";
 
     let drawerOpen = $state(false);
     let focusIdx = $state(-1);
     let sidebarEl: HTMLElement;
     let profiles = $state<Profile[]>([]);
     let sidebarTimer = 0;
+    let menuCtx = $state<{ x: number; y: number; tab: Tab } | null>(null);
 
-    onMount(async () => {
-        profiles = await app.loadProfiles();
+    onMount(() => {
+        app.loadProfiles().then(p => profiles = p);
+        consumeCloneQuery();
+
+        // Ctrl/Cmd+W → close active tab (captures BEFORE xterm so Ctrl+W
+        // doesn't get forwarded to the remote shell). Resources are released
+        // via Svelte onDestroy in the unmounted TerminalPane / ForwardPane / EditPane.
+        const onCloseHotkey = (e: KeyboardEvent) => {
+            if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key === "w") {
+                if (app.settingsActive()) return;
+                const id = app.activeTabId();
+                if (id === "home") return;
+                e.preventDefault();
+                e.stopPropagation();
+                app.closeTab(id);
+            }
+        };
+        window.addEventListener("keydown", onCloseHotkey, {capture: true});
+        return () => window.removeEventListener("keydown", onCloseHotkey, {capture: true});
     });
+
+    /* Consume window.__rssh_clone injected by open_tab_in_new_window */
+    function consumeCloneQuery() {
+        const data = (window as any).__rssh_clone;
+        if (!data) return;
+        try {
+            const payload = JSON.parse(data) as Tab;
+            const newId = `${payload.type}:${crypto.randomUUID()}`;
+            app.addTab({...payload, id: newId});
+        } catch (e) {
+            console.error("Failed to parse clone payload:", e);
+        }
+        // Clear so a manual reload doesn't re-clone
+        delete (window as any).__rssh_clone;
+    }
+
+    function openInNewWindow(tab: Tab) {
+        const payload = {type: tab.type, label: tab.label, meta: tab.meta};
+        invoke("open_tab_in_new_window", {clone: JSON.stringify(payload)})
+            .catch(e => console.error("open_tab_in_new_window failed:", e));
+    }
 
     $effect(() => {
         if (drawerOpen) app.loadProfiles().then(p => profiles = p);
@@ -106,6 +147,70 @@
         closeDrawer();
     }
 
+    /* ── Tab context menu ── */
+    function openCtxMenu(e: MouseEvent, tab: Tab) {
+        e.preventDefault();
+        menuCtx = {x: e.clientX, y: e.clientY, tab};
+    }
+
+    function closeCtxMenu() {
+        menuCtx = null;
+    }
+
+    function cloneTab(tab: Tab) {
+        const newId = `${tab.type}:${crypto.randomUUID()}`;
+        app.addTab({
+            id: newId,
+            type: tab.type,
+            label: tab.label,
+            meta: tab.meta ? {...tab.meta} : undefined,
+        });
+    }
+
+    function buildMenu(tab: Tab): CtxMenuItem[][] {
+        const isTerminal = tab.type === "ssh" || tab.type === "local";
+        const isSsh = tab.type === "ssh";
+        const sections: CtxMenuItem[][] = [];
+
+        if (isTerminal) {
+            const items: CtxMenuItem[] = [
+                {
+                    label: "Search",
+                    shortcut: "⌘F",
+                    onClick: () => { app.setActiveTab(tab.id); app.requestSearch(tab.id); },
+                },
+                {
+                    label: "Snippets",
+                    shortcut: "⌘S",
+                    onClick: () => { app.setActiveTab(tab.id); app.openSnippetPicker(); },
+                },
+            ];
+            // SFTP requires native file dialogs — desktop only.
+            if (!app.isMobile) {
+                items.push({
+                    label: "SFTP Browser",
+                    shortcut: "⌘O",
+                    disabled: !isSsh,
+                    onClick: () => { app.setActiveTab(tab.id); app.openSftp(); },
+                });
+            }
+            sections.push(items);
+        }
+
+        sections.push([
+            {label: "Clone Tab", onClick: () => cloneTab(tab)},
+            {label: "Close Tab", shortcut: "⌘W", onClick: () => app.closeTab(tab.id)},
+        ]);
+
+        if (isTerminal) {
+            sections.push([
+                {label: "Open in New Window", onClick: () => openInNewWindow(tab)},
+            ]);
+        }
+
+        return sections;
+    }
+
     function tabIcon(tab: Tab): string {
         if (tab.type === "home") return "㋡";
         if (tab.type === "local") return "$";
@@ -164,6 +269,15 @@
 
 {#if app.snippetPickerOpen()}
     <SnippetPicker />
+{/if}
+
+{#if menuCtx}
+    <TabContextMenu
+        x={menuCtx.x}
+        y={menuCtx.y}
+        sections={buildMenu(menuCtx.tab)}
+        onClose={closeCtxMenu}
+    />
 {/if}
 
 {#if app.sftpOpen()}
@@ -244,6 +358,7 @@
                         class:active={!app.settingsActive() && tab.id === app.activeTabId()}
                         class:focused={focusIdx === idx}
                         onclick={() => selectTab(tab.id)}
+                        oncontextmenu={(e) => openCtxMenu(e, tab)}
                         title={tab.label}
                     >
                         <span class="sb-icon">{tabIcon(tab)}</span>

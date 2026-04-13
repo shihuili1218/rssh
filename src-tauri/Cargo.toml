@@ -38,9 +38,10 @@ base64 = "0.22"
 sha2 = "0.10"
 hmac = "0.12"
 
-# PTY — 桌面平台专用
+# PTY & native file dialogs — 桌面平台专用
 [target.'cfg(not(target_os = "android"))'.dependencies]
 portable-pty = "0.8"
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 
 # CLI
 clap = { version = "4", features = ["derive"], optional = true }

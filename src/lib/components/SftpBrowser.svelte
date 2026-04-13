@@ -11,6 +11,8 @@
   let entries = $state<RemoteEntry[]>([]);
   let loading = $state(true);
   let error = $state("");
+  let uploading = $state(false);
+  let notice = $state("");
 
   onMount(async () => {
     try {
@@ -49,15 +51,37 @@
   }
 
   async function download(e: RemoteEntry) {
+    error = ""; notice = "";
     try {
-      const path = cwd === "/" ? `/${e.name}` : `${cwd}/${e.name}`;
-      const data = await invoke<number[]>("sftp_download", { sftpId, path });
-      const blob = new Blob([new Uint8Array(data)]);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = e.name; a.click();
-      URL.revokeObjectURL(url);
-    } catch (e: any) { error = String(e); }
+      const remotePath = cwd === "/" ? `/${e.name}` : `${cwd}/${e.name}`;
+      const saved = await invoke<string | null>("sftp_save_file", {
+        sftpId,
+        remotePath,
+        defaultName: e.name,
+      });
+      if (saved) notice = `Saved to ${saved}`;
+    } catch (err: any) {
+      error = String(err);
+    }
+  }
+
+  async function upload() {
+    error = ""; notice = "";
+    uploading = true;
+    try {
+      const name = await invoke<string | null>("sftp_pick_and_upload", {
+        sftpId,
+        remoteDir: cwd,
+      });
+      if (name) {
+        notice = `Uploaded ${name}`;
+        await listDir(cwd);
+      }
+    } catch (err: any) {
+      error = String(err);
+    } finally {
+      uploading = false;
+    }
   }
 
   function formatSize(bytes: number): string {
@@ -70,15 +94,19 @@
 
 <div class="sftp">
   <div class="header">
-    <button class="btn btn-sm" onclick={() => app.navigate("main")}>← Terminal</button>
-    <h2>SFTP</h2>
-    <button class="btn btn-sm" onclick={goUp}>↑ Up</button>
+    <button class="btn btn-sm" onclick={goUp}>← Up</button>
     <button class="btn btn-sm" onclick={() => listDir(cwd)}>Refresh</button>
+    <button class="btn btn-sm" disabled={uploading || !sftpId} onclick={upload}>
+      {uploading ? "Uploading..." : "⬆ Upload"}
+    </button>
   </div>
   <div class="breadcrumb">{cwd}</div>
 
   {#if error}
     <div class="error-banner">{error}</div>
+  {/if}
+  {#if notice}
+    <div class="notice-banner">{notice}</div>
   {/if}
 
   {#if loading}
@@ -106,13 +134,13 @@
 <style>
   .sftp { padding: 16px; max-width: 700px; margin: 0 auto; }
   .header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-  .header h2 { flex: 1; font-size: 16px; }
   .breadcrumb {
     font-family: monospace; font-size: 12px; color: var(--text-sub);
     padding: 6px 10px; margin-bottom: 8px;
     background: var(--bg); box-shadow: var(--pressed); border-radius: var(--radius-sm);
   }
   .error-banner { background: rgba(214,68,68,0.1); border-left: 3px solid var(--error); color: var(--error); padding: 8px 12px; border-radius: var(--radius-sm); margin-bottom: 8px; font-size: 12px; }
+  .notice-banner { background: rgba(76,184,138,0.1); border-left: 3px solid #4cb88a; color: #4cb88a; padding: 8px 12px; border-radius: var(--radius-sm); margin-bottom: 8px; font-size: 12px; }
   .loading { text-align: center; color: var(--text-dim); padding: 24px; }
   .file-list { display: flex; flex-direction: column; gap: 2px; }
   .file-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-sm); transition: background 0.1s; }

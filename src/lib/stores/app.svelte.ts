@@ -91,9 +91,12 @@ export function addTab(tab: Tab) {
 export function closeTab(id: string) {
   const idx = _tabs.findIndex(t => t.id === id);
   if (idx < 0 || _tabs[idx].type === "home") return;
+  const wasActive = _activeTabId === id;
   _tabs.splice(idx, 1);
-  if (_activeTabId === id) {
+  if (wasActive) {
     _activeTabId = _tabs[Math.min(idx, _tabs.length - 1)]?.id ?? "home";
+    // SFTP overlay is bound to this tab's SSH session — close it too.
+    _sftpOpen = false;
   }
 }
 
@@ -175,8 +178,15 @@ export function snippetPickerOpen() { return _snippetPickerOpen; }
 export function openSnippetPicker() { _snippetPickerOpen = true; }
 export function closeSnippetPicker() { _snippetPickerOpen = false; }
 
-/* ─── SFTP overlay ─── */
-export function openSftp() { _sftpOpen = true; }
+/* ─── Per-tab search pulse (context menu → TerminalPane.openSearch) ─── */
+let _searchRequest = $state<{ tabId: string; n: number } | null>(null);
+export function searchRequest() { return _searchRequest; }
+export function requestSearch(tabId: string) {
+  _searchRequest = { tabId, n: (_searchRequest?.n ?? 0) + 1 };
+}
+
+/* ─── SFTP overlay (desktop only — rfd has no Android native dialog) ─── */
+export function openSftp() { if (!isMobile) _sftpOpen = true; }
 export function closeSftp() { _sftpOpen = false; }
 
 /* ─── Pinned profiles ─── */

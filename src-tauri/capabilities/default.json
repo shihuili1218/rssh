@@ -1,7 +1,7 @@
 {
   "identifier": "default",
   "description": "Default capabilities for RSSH",
-  "windows": ["main"],
+  "windows": ["main", "rssh-*"],
   "permissions": [
     "core:default",
     "core:window:allow-set-title"

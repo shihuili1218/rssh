@@ -109,6 +109,16 @@
         requestAnimationFrame(() => searchInputEl?.focus());
     }
 
+    /* Listen for external search requests (from tab context menu) */
+    let _lastSearchN = 0;
+    $effect(() => {
+        const req = app.searchRequest();
+        if (req && req.tabId === tabId && req.n !== _lastSearchN) {
+            _lastSearchN = req.n;
+            openSearch();
+        }
+    });
+
     function closeSearch() {
         showSearch = false;
         searchAddon?.clearDecorations();
@@ -162,7 +172,7 @@
                 openSearch();
                 return false;
             }
-            if (mod && e.key === "o" && !isLocal) {
+            if (mod && e.key === "o" && !isLocal && !app.isMobile) {
                 e.preventDefault();
                 app.navigate("sftp");
                 return false;

@@ -92,9 +92,17 @@ pub fn run() {
             commands::sftp::sftp_upload,
             commands::sftp::sftp_mkdir,
             commands::sftp::sftp_close,
+            // SFTP native file transfer (desktop only)
+            #[cfg(not(target_os = "android"))]
+            commands::sftp::sftp_save_file,
+            #[cfg(not(target_os = "android"))]
+            commands::sftp::sftp_pick_and_upload,
             // CLI install
             commands::cli::cli_status,
             commands::cli::cli_install,
+            // multi-window (desktop only)
+            #[cfg(not(target_os = "android"))]
+            commands::window::open_tab_in_new_window,
             // sync
             commands::sync::export_config,
             commands::sync::import_config,
