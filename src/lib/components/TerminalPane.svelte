@@ -3,6 +3,7 @@
     import {Terminal} from "@xterm/xterm";
     import {FitAddon} from "@xterm/addon-fit";
     import {SearchAddon} from "@xterm/addon-search";
+    import {Unicode11Addon} from "@xterm/addon-unicode11";
     import {invoke} from "@tauri-apps/api/core";
     import {listen, type UnlistenFn} from "@tauri-apps/api/event";
     import type {HighlightRule} from "../stores/app.svelte.ts";
@@ -130,7 +131,8 @@
         terminal = new Terminal({
             cursorBlink: true,
             fontSize: 13,
-            fontFamily: "Menlo, Monaco, 'Courier New', monospace",
+            fontFamily: "'JetBrainsMono Nerd Font', 'FiraCode Nerd Font', 'Hack Nerd Font', 'MesloLGS NF', 'Symbols Nerd Font Mono', Menlo, Monaco, 'Apple Color Emoji', 'Apple Symbols', 'PingFang SC', 'Courier New', monospace",
+            allowProposedApi: true,
             theme: {
                 background: "#2B2D3A", foreground: "#E0E5EC", cursor: "#4A6CF7",
                 selectionBackground: "rgba(74,108,247,0.3)",
@@ -146,7 +148,9 @@
         searchAddon = new SearchAddon();
         terminal.loadAddon(fitAddon);
         terminal.loadAddon(searchAddon);
+        terminal.loadAddon(new Unicode11Addon());
         terminal.open(containerEl);
+        terminal.unicode.activeVersion = "11";
         fitAddon.fit();
 
         // Intercept Ctrl/Cmd+F for search, Ctrl/Cmd+O for SFTP
@@ -189,14 +193,14 @@
         } catch { /* non-fatal */
         }
 
-        const decoder = new TextDecoder();
+        const decoder = new TextDecoder("utf-8");
 
         // Helper: wire data + close events for a session
         async function wireSession(sid: string) {
             unlisteners.push(await listen<number[]>(`${dataEvent}:${sid}`, (ev) => {
                 const raw = new Uint8Array(ev.payload);
                 if (hlRegex) {
-                    terminal.write(applyHighlights(decoder.decode(raw)));
+                    terminal.write(applyHighlights(decoder.decode(raw, { stream: true })));
                 } else {
                     terminal.write(raw);
                 }
@@ -313,7 +317,7 @@
                 const decoder = new TextDecoder();
                 unlisteners.push(await listen<number[]>(`pty:data:${sid}`, (ev) => {
                     const raw = new Uint8Array(ev.payload);
-                    terminal.write(hlRegex ? applyHighlights(decoder.decode(raw)) : raw);
+                    terminal.write(hlRegex ? applyHighlights(decoder.decode(raw, { stream: true })) : raw);
                 }));
                 unlisteners.push(await listen(`pty:close:${sid}`, () => {
                     disconnected = true;
@@ -349,7 +353,7 @@
                 const decoder = new TextDecoder();
                 unlisteners.push(await listen<number[]>(`ssh:data:${sid}`, (ev) => {
                     const raw = new Uint8Array(ev.payload);
-                    terminal.write(hlRegex ? applyHighlights(decoder.decode(raw)) : raw);
+                    terminal.write(hlRegex ? applyHighlights(decoder.decode(raw, { stream: true })) : raw);
                 }));
                 unlisteners.push(await listen(`ssh:close:${sid}`, () => {
                     disconnected = true;
