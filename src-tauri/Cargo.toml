@@ -2,7 +2,7 @@
 name = "rssh"
 version = "0.1.0"
 edition = "2021"
-default-run = "rssh"
+default-run = "rssh-gui"
 
 [lib]
 name = "rssh_lib"
@@ -53,7 +53,7 @@ cli = ["clap", "rpassword", "tempfile"]
 custom-protocol = ["tauri/custom-protocol"]
 
 [[bin]]
-name = "rssh"
+name = "rssh-gui"
 path = "src/main.rs"
 
 [[bin]]

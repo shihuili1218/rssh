@@ -4,39 +4,39 @@
 
   const sections = [
     {
-      title: "全局",
+      title: "Global",
       keys: [
-        [`${mod}+K`, "打开/关闭侧边栏"],
-        ["Esc", "关闭侧边栏 / 搜索栏 / SFTP"],
+        [`${mod}+K`, "Toggle sidebar"],
+        ["Esc", "Close sidebar / search bar / SFTP"],
       ],
     },
     {
-      title: "侧边栏",
+      title: "Sidebar",
       keys: [
-        ["↑ ↓", "选择 tab / pinned profile"],
-        ["Enter", "切换到选中项"],
+        ["↑ ↓", "Select tab / pinned profile"],
+        ["Enter", "Switch to selected item"],
       ],
     },
     {
-      title: "Home 页面",
+      title: "Home",
       keys: [
-        ["↑ ↓ ← →", "选择 Profile / Forward 卡片"],
-        ["Enter", "连接选中的 Profile 或打开 Forward"],
+        ["↑ ↓ ← →", "Select Profile / Forward card"],
+        ["Enter", "Connect selected Profile or open Forward"],
       ],
     },
     {
-      title: "终端",
+      title: "Terminal",
       keys: [
-        [`${mod}+F`, "搜索"],
-        [`${mod}+S`, "命令片段（选择后发送到终端）"],
-        [`${mod}+O`, "打开 SFTP（SSH 会话）"],
-        ["任意键", "断开后重连"],
+        [`${mod}+F`, "Search"],
+        [`${mod}+S`, "Command Snippet (send to terminal)"],
+        [`${mod}+O`, "Open SFTP (SSH session)"],
+        ["Any key", "Reconnect after disconnect"],
       ],
     },
     {
-      title: "端口转发",
+      title: "Port Forward",
       keys: [
-        ["任意键", "错误/停止后重连"],
+        ["Any key", "Reconnect after error/stop"],
       ],
     },
   ];

@@ -12,14 +12,14 @@
     try {
       await invoke("delete_credential", { id });
       items = await app.loadCredentials();
-    } catch (e: any) { alert("删除失败: " + String(e)); }
+    } catch (e: any) { alert("Delete failed: " + String(e)); }
     finally { deleting = null; }
   }
 </script>
 
 <div class="page">
   <div class="toolbar">
-    <button class="btn btn-accent btn-sm" onclick={() => app.navigate("credential-edit")}>+ 新建</button>
+    <button class="btn btn-accent btn-sm" onclick={() => app.navigate("credential-edit")}>+ New</button>
   </div>
   {#each items as c (c.id)}
     <div class="card item-row">
@@ -28,14 +28,14 @@
         <div class="item-sub">{c.username} · {c.type}</div>
       </div>
       <div class="item-actions">
-        <button class="btn btn-sm" onclick={() => app.navigate("credential-edit", c.id)}>编辑</button>
+        <button class="btn btn-sm" onclick={() => app.navigate("credential-edit", c.id)}>Edit</button>
         <button class="btn btn-sm btn-danger" onclick={() => remove(c.id)} disabled={deleting === c.id}>
-          {deleting === c.id ? "..." : "删除"}
+          {deleting === c.id ? "..." : "Delete"}
         </button>
       </div>
     </div>
   {:else}
-    <p class="empty">暂无凭证</p>
+    <p class="empty">No credentials</p>
   {/each}
 </div>
 

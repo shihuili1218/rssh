@@ -38,7 +38,7 @@
       await invoke("add_highlight", { rule: { keyword: newKw.trim(), color: newColor, enabled: true } });
       newKw = "";
       await refresh();
-    } catch (e: any) { alert("添加失败: " + String(e)); }
+    } catch (e: any) { alert("Add failed: " + String(e)); }
   }
 
   async function remove(kw: string) {
@@ -47,7 +47,7 @@
   }
 
   async function resetDefaults() {
-    if (!confirm("重置为默认高亮规则？现有规则将被清除。")) return;
+    if (!confirm("Reset to default highlight rules? Existing rules will be cleared.")) return;
     await invoke("reset_highlights");
     await refresh();
   }
@@ -55,7 +55,7 @@
 
 <div class="page">
   <div class="add-card neu-raised">
-    <input type="text" bind:value={newKw} placeholder="输入关键词..."
+    <input type="text" bind:value={newKw} placeholder="Enter keyword..."
       onkeydown={(e) => { if (e.key === "Enter") add(); }} />
     <div class="color-picker">
       {#each COLORS as c}
@@ -68,7 +68,7 @@
         ></button>
       {/each}
     </div>
-    <button class="btn btn-accent btn-sm" onclick={add} disabled={!newKw.trim()}>添加</button>
+    <button class="btn btn-accent btn-sm" onclick={add} disabled={!newKw.trim()}>Add</button>
   </div>
 
   <div class="rules-list">
@@ -80,11 +80,11 @@
         <button class="rule-del" onclick={() => remove(h.keyword)}>&times;</button>
       </div>
     {:else}
-      <p class="empty">暂无高亮规则</p>
+      <p class="empty">No highlight rules</p>
     {/each}
   </div>
 
-  <button class="btn btn-sm reset-btn" onclick={resetDefaults}>重置为默认</button>
+  <button class="btn btn-sm reset-btn" onclick={resetDefaults}>Reset to Defaults</button>
 </div>
 
 <style>

@@ -39,22 +39,22 @@
 
 <div class="page">
   <div class="form">
-    <label>名称</label>
+    <label>Name</label>
     <input type="text" bind:value={name} placeholder="prod-key" />
-    <label>用户名</label>
+    <label>Username</label>
     <input type="text" bind:value={username} placeholder="root" />
-    <label>认证方式</label>
+    <label>Auth Type</label>
     <select bind:value={credentialType}>
-      <option value="password">密码</option>
-      <option value="key">私钥 (PEM)</option>
-      <option value="none">无认证</option>
-      <option value="interactive">键盘交互</option>
+      <option value="password">Password</option>
+      <option value="key">Private Key (PEM)</option>
+      <option value="none">None</option>
+      <option value="interactive">Keyboard Interactive</option>
     </select>
     {#if credentialType === "password"}
-      <label>密码</label>
+      <label>Password</label>
       <input type="password" bind:value={secret} />
     {:else if credentialType === "key"}
-      <label>私钥内容</label>
+      <label>Private Key</label>
       <textarea bind:value={secret} rows="6" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
     {/if}
     <div class="switch-card">
@@ -68,7 +68,7 @@
       </label>
     </div>
     <button class="btn btn-accent" onclick={save} disabled={saving || !name || !username}>
-      {saving ? "保存中..." : "保存"}
+      {saving ? "Saving..." : "Save"}
     </button>
   </div>
 </div>

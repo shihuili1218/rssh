@@ -37,7 +37,7 @@
       </button>
     {/each}
     <div class="custom-shell">
-      <label>自定义路径</label>
+      <label>Custom Path</label>
       <input type="text" bind:value={selectedShell} placeholder="/usr/local/bin/fish" onblur={saveShell} />
     </div>
   </div>

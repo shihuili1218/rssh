@@ -1,6 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nickel-org/nickel.rs/master/examples/hello-world/src/main.rs",
   "productName": "RSSH",
+  "mainBinaryName": "rssh-gui",
   "version": "0.1.0",
   "identifier": "com.rssh.app",
   "build": {

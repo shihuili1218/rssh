@@ -126,15 +126,15 @@
 
 <div class="playback">
   <div class="controls">
-    <button class="btn btn-sm" onclick={() => app.settingsNavigate("recording-settings")}>← 录制列表</button>
+    <button class="btn btn-sm" onclick={() => app.settingsNavigate("recording-settings")}>← Recordings</button>
     <span class="file-name">{fileName}</span>
     <div class="spacer"></div>
     {#if playing}
-      <button class="btn btn-sm" onclick={pause}>暂停</button>
+      <button class="btn btn-sm" onclick={pause}>Pause</button>
     {:else}
-      <button class="btn btn-accent btn-sm" onclick={play}>播放</button>
+      <button class="btn btn-accent btn-sm" onclick={play}>Play</button>
     {/if}
-    <button class="btn btn-sm" onclick={stop}>重置</button>
+    <button class="btn btn-sm" onclick={stop}>Reset</button>
     <div class="speed-group">
       {#each [1, 2, 4, 8] as s}
         <button class="speed-btn" class:active={speed === s} onclick={() => setSpeed(s)}>{s}x</button>

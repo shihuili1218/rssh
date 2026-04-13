@@ -70,10 +70,10 @@
 
 <div class="sftp">
   <div class="header">
-    <button class="btn btn-sm" onclick={() => app.navigate("main")}>← 终端</button>
+    <button class="btn btn-sm" onclick={() => app.navigate("main")}>← Terminal</button>
     <h2>SFTP</h2>
-    <button class="btn btn-sm" onclick={goUp}>↑ 上级</button>
-    <button class="btn btn-sm" onclick={() => listDir(cwd)}>刷新</button>
+    <button class="btn btn-sm" onclick={goUp}>↑ Up</button>
+    <button class="btn btn-sm" onclick={() => listDir(cwd)}>Refresh</button>
   </div>
   <div class="breadcrumb">{cwd}</div>
 
@@ -82,7 +82,7 @@
   {/if}
 
   {#if loading}
-    <p class="loading">加载中...</p>
+    <p class="loading">Loading...</p>
   {:else}
     <div class="file-list">
       {#each entries as e (e.name)}
@@ -93,11 +93,11 @@
           </button>
           <span class="file-size">{e.is_dir ? "" : formatSize(e.size)}</span>
           {#if !e.is_dir}
-            <button class="btn btn-sm" onclick={() => download(e)}>下载</button>
+            <button class="btn btn-sm" onclick={() => download(e)}>Download</button>
           {/if}
         </div>
       {:else}
-        <p class="empty">空目录</p>
+        <p class="empty">Empty directory</p>
       {/each}
     </div>
   {/if}

@@ -46,25 +46,25 @@
 
 <div class="page">
   <div class="form">
-    <label>名称</label>
+    <label>Name</label>
     <input type="text" bind:value={name} placeholder="Web Forward" />
-    <label>关联 Profile</label>
+    <label>Profile</label>
     <select bind:value={profileId}>
-      <option value="">-- 选择 --</option>
+      <option value="">-- Select --</option>
       {#each profiles as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
     </select>
-    <label>类型</label>
+    <label>Type</label>
     <select bind:value={forwardType}>
-      <option value="local">本地转发 (Local)</option>
-      <option value="remote">远程转发 (Remote)</option>
+      <option value="local">Local Forward</option>
+      <option value="remote">Remote Forward</option>
     </select>
     <div class="row3">
-      <div class="field"><label>本地端口</label><input type="number" bind:value={localPort} /></div>
-      <div class="field"><label>远程主机</label><input type="text" bind:value={remoteHost} /></div>
-      <div class="field"><label>远程端口</label><input type="number" bind:value={remotePort} /></div>
+      <div class="field"><label>Local Port</label><input type="number" bind:value={localPort} /></div>
+      <div class="field"><label>Remote Host</label><input type="text" bind:value={remoteHost} /></div>
+      <div class="field"><label>Remote Port</label><input type="number" bind:value={remotePort} /></div>
     </div>
     <button class="btn btn-accent" onclick={save} disabled={saving || !name || !profileId}>
-      {saving ? "保存中..." : "保存"}
+      {saving ? "Saving..." : "Save"}
     </button>
   </div>
 </div>

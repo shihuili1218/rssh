@@ -21,14 +21,14 @@
     try {
       await invoke("delete_forward", { id });
       items = await app.loadForwards();
-    } catch (e: any) { alert("删除失败: " + String(e)); }
+    } catch (e: any) { alert("Delete failed: " + String(e)); }
     finally { deleting = null; }
   }
 </script>
 
 <div class="page">
   <div class="toolbar">
-    <button class="btn btn-accent btn-sm" onclick={() => app.navigate("forward-edit")}>+ 新建</button>
+    <button class="btn btn-accent btn-sm" onclick={() => app.navigate("forward-edit")}>+ New</button>
   </div>
   {#each items as f (f.id)}
     <div class="card item-row">
@@ -40,14 +40,14 @@
         </div>
       </div>
       <div class="item-actions">
-        <button class="btn btn-sm" onclick={() => app.navigate("forward-edit", f.id)}>编辑</button>
+        <button class="btn btn-sm" onclick={() => app.navigate("forward-edit", f.id)}>Edit</button>
         <button class="btn btn-sm btn-danger" onclick={() => remove(f.id)} disabled={deleting === f.id}>
-          {deleting === f.id ? "..." : "删除"}
+          {deleting === f.id ? "..." : "Delete"}
         </button>
       </div>
     </div>
   {:else}
-    <p class="empty">暂无端口转发规则</p>
+    <p class="empty">No port forward rules</p>
   {/each}
 </div>
 

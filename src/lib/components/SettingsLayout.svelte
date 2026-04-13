@@ -89,12 +89,12 @@
   {#if !compact || app.settingsPage() !== "menu"}
   <div class="settings-content">
     {#if compact}
-      <button class="mobile-back" onclick={() => app.settingsBack()}>← 返回</button>
+      <button class="mobile-back" onclick={() => app.settingsBack()}>← Back</button>
     {/if}
     {#if app.settingsPage() === "menu"}
       <div class="welcome">
-        <h2>设置</h2>
-        <p>从左侧菜单选择一个类别</p>
+        <h2>Settings</h2>
+        <p>Select a category from the menu</p>
       </div>
     {:else if app.settingsPage() === "profiles"}
       <ProfileManager />
