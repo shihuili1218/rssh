@@ -29,17 +29,17 @@
   });
 
   const allMenu: MenuItem[] = [
-    { id: "profiles", label: "Profiles", section: "连接" },
-    { id: "credentials", label: "凭证管理", section: "连接" },
-    { id: "forwards", label: "端口转发", section: "连接" },
-    { id: "import-export", label: "导入 & 导出", section: "连接" },
-    { id: "github-sync", label: "GitHub 同步", section: "连接" },
-    { id: "shell-settings", label: "Shell & 日志", section: "会话" },
-    { id: "recording-settings", label: "会话录制", section: "会话" },
-    { id: "highlights", label: "关键词高亮", section: "外观" },
-    { id: "snippets", label: "命令片段", section: "外观" },
-    { id: "cli", label: "CLI Tool", section: "工具" },
-    { id: "help", label: "快捷键", section: "帮助" },
+    { id: "profiles", label: "Profile", section: "Connections" },
+    { id: "credentials", label: "Credential", section: "Connections" },
+    { id: "forwards", label: "Port Forward", section: "Connections" },
+    { id: "import-export", label: "Import & Export", section: "Connections" },
+    { id: "github-sync", label: "GitHub Sync", section: "Connections" },
+    { id: "shell-settings", label: "Shell & Logs", section: "Sessions" },
+    { id: "recording-settings", label: "Session Record", section: "Sessions" },
+    { id: "highlights", label: "Key Word Highlight", section: "Appearance" },
+    { id: "snippets", label: "Command Snippet", section: "Appearance" },
+    { id: "cli", label: "CLI Tool", section: "Tools" },
+    { id: "help", label: "Shortcuts", section: "Help" },
   ];
 
   const hiddenOnCompact = new Set(["cli", "help"]);
@@ -70,7 +70,7 @@
 <div class="settings-layout" class:compact>
   {#if !compact || app.settingsPage() === "menu"}
   <nav class="settings-menu">
-    <div class="menu-header">设置</div>
+    <div class="menu-header">Setting</div>
     {#each sections as s}
       <div class="section-label">{s.section}</div>
       {#each s.items as item}
@@ -150,30 +150,34 @@
     font-size: 16px;
     font-weight: 700;
     color: var(--text);
-    padding: 8px 12px 16px;
+    padding: 4px 0px 4px;
   }
 
   .settings-menu .section-label {
-    padding: 12px 12px 4px;
+    padding: 8px 0px 8px;
+    font-size: 8px;
   }
 
   .menu-item {
     display: block;
     width: 100%;
     padding: 9px 12px;
+    margin-bottom: 10px;
     border: none;
     border-radius: var(--radius-sm);
-    background: transparent;
+    background: var(--bg);
+    box-shadow: var(--raised-sm);
     color: var(--text-sub);
     font-family: inherit;
     font-size: 13px;
     text-align: left;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: box-shadow 0.15s, color 0.15s, transform 0.1s;
   }
-  .menu-item:hover { background: var(--surface); color: var(--text); }
+  .menu-item:hover { box-shadow: var(--raised-sm); color: var(--text); }
+  .menu-item:active { box-shadow: var(--pressed); transform: scale(0.99); }
   .menu-item.active {
-    background: var(--accent-soft);
+    box-shadow: var(--pressed);
     color: var(--accent);
     font-weight: 600;
   }

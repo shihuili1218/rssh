@@ -420,7 +420,7 @@
                     bind:this={searchInputEl}
                     type="text"
                     bind:value={searchQuery}
-                    placeholder="搜索..."
+                    placeholder="Search..."
                     oninput={doSearch}
                     onkeydown={(e) => {
           if (e.key === "Enter") { e.shiftKey ? searchPrev() : searchNext(); }

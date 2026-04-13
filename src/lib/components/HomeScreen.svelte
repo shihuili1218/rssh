@@ -137,8 +137,8 @@
 
 <div class="home">
   <div class="home-header">
-    <h1 class="logo">SShell</h1>
-    <input class="search-input" type="text" bind:value={query} placeholder="搜索..." />
+    <h1 class="logo">RSSH ㋡</h1>
+    <input class="search-input" type="text" bind:value={query} placeholder="Search..." />
   </div>
 
   {#if filtered.length > 0}
