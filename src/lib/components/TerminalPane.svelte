@@ -110,6 +110,17 @@
             },
         });
     }
+    type AuthPromptData = { name: string; instructions: string; prompts: { prompt: string; echo: boolean }[] };
+    let authPrompt = $state<AuthPromptData | null>(null);
+    let authValues = $state<string[]>([]);
+
+    function submitAuth() {
+        if (!authPrompt) return;
+        invoke("ssh_auth_respond", { tabId, responses: authValues });
+        authPrompt = null;
+        authValues = [];
+    }
+
     let terminal: Terminal;
     let fitAddon: FitAddon;
     let searchAddon: SearchAddon;
@@ -259,6 +270,12 @@
                 terminal.write(new Uint8Array(ev.payload));
             });
 
+            // Keyboard-interactive auth prompts
+            const authUn = await listen<AuthPromptData>(`ssh:auth_prompt:${tabId}`, (ev) => {
+                authPrompt = ev.payload;
+                authValues = ev.payload.prompts.map(() => "");
+            });
+
             try {
                 sessionId = await invoke<string>("ssh_connect", {
                     profileId: meta.profileId || null,
@@ -271,14 +288,14 @@
                     cols: terminal.cols, rows: terminal.rows,
                 });
             } catch (e: any) {
-                logUn();
+                logUn(); authUn();
                 terminal.write(`\x1b[31mConnection failed: ${e}\x1b[0m\r\n`);
                 terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
                 disconnected = true;
                 setupReconnect();
                 return;
             }
-            logUn(); // stop log listener, switch to real session
+            logUn(); authUn();
             await wireSession(sessionId);
         }
 
@@ -297,11 +314,11 @@
 
         setupReconnect();
 
-        if (isLocal) {
-            terminal.onTitleChange((title) => {
-                if (title) app.updateTabLabel(tabId, title);
-            });
-        }
+        terminal.onTitleChange((title) => {
+            if (!title) return;
+            if (isLocal) app.updateTabLabel(tabId, title);
+            else app.setTerminalTitle(tabId, title);
+        });
 
         resizeObs = new ResizeObserver(() => fitAddon?.fit());
         resizeObs.observe(containerEl);
@@ -464,6 +481,25 @@
             <button class="search-btn" onclick={closeSearch} title="Close">&times;</button>
         </div>
     {/if}
+    {#if authPrompt}
+        <div class="auth-overlay">
+            <div class="auth-dialog">
+                {#if authPrompt.name}<div class="auth-title">{authPrompt.name}</div>{/if}
+                {#if authPrompt.instructions}<div class="auth-instructions">{authPrompt.instructions}</div>{/if}
+                {#each authPrompt.prompts as p, i}
+                    <label class="auth-label">
+                        <span>{p.prompt}</span>
+                        <input
+                            type={p.echo ? "text" : "password"}
+                            bind:value={authValues[i]}
+                            onkeydown={(e) => { if (e.key === "Enter") submitAuth(); }}
+                        />
+                    </label>
+                {/each}
+                <button class="auth-submit" onclick={submitAuth}>Submit</button>
+            </div>
+        </div>
+    {/if}
     <div class="term-wrap" bind:this={containerEl}></div>
     {#if app.isMobile}
         <MobileKeybar />
@@ -519,5 +555,63 @@
     .search-btn:hover {
         background: var(--divider);
         color: var(--text);
+    }
+
+    .auth-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0,0,0,0.5);
+    }
+
+    .auth-dialog {
+        background: var(--bg);
+        border: 1px solid var(--divider);
+        border-radius: 8px;
+        padding: 20px;
+        min-width: 300px;
+        max-width: 400px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .auth-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text);
+    }
+
+    .auth-instructions {
+        font-size: 12px;
+        color: var(--text-sub);
+    }
+
+    .auth-label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 12px;
+        color: var(--text-sub);
+    }
+
+    .auth-label input {
+        padding: 6px 8px;
+        border-radius: 4px;
+        font-size: 13px;
+    }
+
+    .auth-submit {
+        align-self: flex-end;
+        padding: 6px 16px;
+        border-radius: 4px;
+        border: none;
+        background: var(--accent);
+        color: var(--bg);
+        font-size: 13px;
+        cursor: pointer;
     }
 </style>

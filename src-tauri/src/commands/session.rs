@@ -160,6 +160,26 @@ pub async fn ssh_disconnect(
     session.close()
 }
 
+#[tauri::command]
+pub async fn ssh_auth_respond(
+    state: State<'_, AppState>,
+    tab_id: String,
+    responses: Vec<String>,
+) -> AppResult<()> {
+    let tx = {
+        let mut waiters = state
+            .auth_waiters
+            .lock()
+            .map_err(|_| AppError::Other("lock".into()))?;
+        waiters
+            .remove(&tab_id)
+            .ok_or_else(|| AppError::NotFound("无等待中的认证请求".into()))?
+    };
+    tx.send(responses)
+        .map_err(|_| AppError::Other("认证通道已关闭".into()))?;
+    Ok(())
+}
+
 fn get_session(
     state: &State<'_, AppState>,
     session_id: &str,

@@ -31,6 +31,7 @@ pub fn run() {
                 pty_sessions: Mutex::new(HashMap::new()),
                 sftp_sessions: Mutex::new(HashMap::new()),
                 active_forwards: Mutex::new(HashMap::new()),
+                auth_waiters: Mutex::new(HashMap::new()),
                 data_dir,
             });
             Ok(())
@@ -56,6 +57,7 @@ pub fn run() {
             commands::forward::delete_forward,
             // forward active
             commands::forward::forward_start,
+            commands::forward::forward_stats,
             commands::forward::forward_stop,
             // settings & snippets & highlights
             commands::settings::get_setting,
@@ -73,6 +75,7 @@ pub fn run() {
             commands::session::ssh_write,
             commands::session::ssh_resize,
             commands::session::ssh_disconnect,
+            commands::session::ssh_auth_respond,
             // PTY (desktop only)
             #[cfg(not(target_os = "android"))]
             commands::pty::list_shells,

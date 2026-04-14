@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use async_trait::async_trait;
 use russh::client;
 use russh::ChannelMsg;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 
@@ -169,13 +169,79 @@ pub async fn authenticate(
             .await
             .map_err(|e| AppError::Ssh(format!("认证失败: {e}")))?,
         CredentialType::Interactive => {
-            return Err(AppError::Ssh("键盘交互认证暂不支持".into()));
+            // Handled separately by authenticate_interactive()
+            return Ok(());
         }
     };
     if !ok {
         return Err(AppError::Ssh("认证被拒绝".into()));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 键盘交互认证
+// ---------------------------------------------------------------------------
+
+pub async fn authenticate_interactive(
+    handle: &mut client::Handle<SshHandler>,
+    username: &str,
+    app: &tauri::AppHandle,
+    tab_id: &str,
+) -> AppResult<()> {
+    use russh::client::KeyboardInteractiveAuthResponse;
+
+    let mut reply = handle
+        .authenticate_keyboard_interactive_start(username, None::<String>)
+        .await
+        .map_err(|e| AppError::Ssh(format!("键盘交互启动失败: {e}")))?;
+
+    loop {
+        match reply {
+            KeyboardInteractiveAuthResponse::Success => return Ok(()),
+            KeyboardInteractiveAuthResponse::Failure => {
+                return Err(AppError::Ssh("认证被拒绝".into()));
+            }
+            KeyboardInteractiveAuthResponse::InfoRequest {
+                name,
+                instructions,
+                prompts,
+            } => {
+                let (tx, rx) = tokio::sync::oneshot::channel::<Vec<String>>();
+
+                let prompt_data: Vec<serde_json::Value> = prompts
+                    .iter()
+                    .map(|p| serde_json::json!({ "prompt": p.prompt, "echo": p.echo }))
+                    .collect();
+                let _ = app.emit(
+                    &format!("ssh:auth_prompt:{tab_id}"),
+                    serde_json::json!({
+                        "name": name,
+                        "instructions": instructions,
+                        "prompts": prompt_data,
+                    }),
+                );
+
+                {
+                    let state = app.state::<crate::state::AppState>();
+                    let mut waiters = state
+                        .auth_waiters
+                        .lock()
+                        .map_err(|_| AppError::Other("lock".into()))?;
+                    waiters.insert(tab_id.to_string(), tx);
+                }
+
+                let responses = rx
+                    .await
+                    .map_err(|_| AppError::Ssh("用户取消了认证".into()))?;
+
+                reply = handle
+                    .authenticate_keyboard_interactive_respond(responses)
+                    .await
+                    .map_err(|e| AppError::Ssh(format!("认证响应失败: {e}")))?;
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -270,7 +336,12 @@ pub async fn connect(
     };
 
     log(&format!("Authenticating as {} ({}) ...", credential.username, credential.credential_type.as_str()));
-    authenticate(&mut handle, credential).await?;
+    if credential.credential_type == crate::models::CredentialType::Interactive {
+        let tab_id = log_session_id.unwrap_or("unknown");
+        authenticate_interactive(&mut handle, &credential.username, &app, tab_id).await?;
+    } else {
+        authenticate(&mut handle, credential).await?;
+    }
     log("Authenticated.");
 
     log("Requesting PTY + shell ...");

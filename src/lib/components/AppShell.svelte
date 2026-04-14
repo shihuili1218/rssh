@@ -102,8 +102,15 @@
 
     $effect(() => {
         const tab = app.activeTab();
-        const title = app.settingsActive() ? "Settings" : tab?.label ?? "RSSH";
-        getCurrentWindow().setTitle(title);
+        if (app.settingsActive()) {
+            getCurrentWindow().setTitle("Settings");
+        } else if (tab) {
+            const termTitle = app.terminalTitle(tab.id);
+            const title = termTitle ? `${tab.label} — ${termTitle}` : tab.label;
+            getCurrentWindow().setTitle(title);
+        } else {
+            getCurrentWindow().setTitle("RSSH");
+        }
     });
 
     let pinnedProfiles = $derived(

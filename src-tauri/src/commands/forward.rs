@@ -72,6 +72,21 @@ pub async fn forward_start(
 }
 
 #[tauri::command]
+pub fn forward_stats(
+    state: State<'_, AppState>,
+    active_id: String,
+) -> AppResult<fwd::ForwardStats> {
+    let forwards = state
+        .active_forwards
+        .lock()
+        .map_err(|_| AppError::Other("forward lock poisoned".into()))?;
+    let handle = forwards
+        .get(&active_id)
+        .ok_or(AppError::NotFound("转发不存在".into()))?;
+    Ok(handle.stats())
+}
+
+#[tauri::command]
 pub fn forward_stop(state: State<'_, AppState>, active_id: String) -> AppResult<()> {
     let handle = state
         .active_forwards

@@ -64,6 +64,9 @@ let _editingId = $state<string | null>(null);
 let _sftpOpen = $state(false);
 let _pinnedProfileIds = $state<string[]>(JSON.parse(localStorage.getItem("pinned_profiles") ?? "[]"));
 
+/* Terminal title (from remote shell OSC sequence), separate from tab label */
+let _terminalTitles = $state<Record<string, string>>({});
+
 /* ─── Getters ─── */
 export function tabs() { return _tabs; }
 export function activeTabId() { return _activeTabId; }
@@ -73,6 +76,7 @@ export function settingsPage() { return _settingsPage; }
 export function editingId() { return _editingId; }
 export function sftpOpen() { return _sftpOpen; }
 export function pinnedProfileIds() { return _pinnedProfileIds; }
+export function terminalTitle(tabId: string) { return _terminalTitles[tabId]; }
 
 /* ─── Tab Operations ─── */
 export function setActiveTab(id: string) {
@@ -93,9 +97,9 @@ export function closeTab(id: string) {
   if (idx < 0 || _tabs[idx].type === "home") return;
   const wasActive = _activeTabId === id;
   _tabs.splice(idx, 1);
+  delete _terminalTitles[id];
   if (wasActive) {
     _activeTabId = _tabs[Math.min(idx, _tabs.length - 1)]?.id ?? "home";
-    // SFTP overlay is bound to this tab's SSH session — close it too.
     _sftpOpen = false;
   }
 }
@@ -103,6 +107,10 @@ export function closeTab(id: string) {
 export function updateTabLabel(id: string, label: string) {
   const tab = _tabs.find(t => t.id === id);
   if (tab) tab.label = label;
+}
+
+export function setTerminalTitle(tabId: string, title: string) {
+  _terminalTitles[tabId] = title;
 }
 
 /* ─── Settings Navigation ─── */

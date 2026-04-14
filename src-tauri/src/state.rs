@@ -16,5 +16,6 @@ pub struct AppState {
     pub pty_sessions: Mutex<HashMap<String, PtyHandle>>,
     pub sftp_sessions: Mutex<HashMap<String, Arc<SftpHandle>>>,
     pub active_forwards: Mutex<HashMap<String, ForwardHandle>>,
+    pub auth_waiters: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Vec<String>>>>,
     pub data_dir: PathBuf,
 }
