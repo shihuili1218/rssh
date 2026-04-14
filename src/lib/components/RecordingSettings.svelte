@@ -42,17 +42,17 @@
   </div>
 
   <div class="field-group">
-    <label>保存目录</label>
+    <label>Save Directory</label>
     <input type="text" bind:value={saveDir} placeholder="~/Documents/rssh-recordings" onblur={saveSettings} />
-    <p class="hint">留空使用默认目录</p>
+    <p class="hint">Leave empty to use the default directory</p>
   </div>
 
   {#if recordings.length > 0}
-    <div class="section-label">录制文件</div>
+    <div class="section-label">Recordings</div>
     {#each recordings as rec}
       <div class="rec-row neu-sm">
         <span class="rec-name">{rec}</span>
-        <button class="btn btn-sm" onclick={() => playRecording(rec)}>回放</button>
+        <button class="btn btn-sm" onclick={() => playRecording(rec)}>Playback</button>
       </div>
     {/each}
   {/if}

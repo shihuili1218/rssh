@@ -17,7 +17,8 @@
         "height": 800,
         "resizable": true,
         "decorations": true,
-        "transparent": false
+        "transparent": false,
+        "theme": "Dark"
       }
     ],
     "security": {
@@ -29,6 +30,14 @@
     "targets": "all",
     "resources": {
       "bin/*": "bin/"
+    },
+    "linux": {
+      "deb": {
+        "desktopTemplate": "rssh.desktop"
+      },
+      "appimage": {
+        "files": {}
+      }
     },
     "icon": [
       "icons/32x32.png",

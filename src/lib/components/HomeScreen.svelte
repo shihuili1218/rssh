@@ -137,8 +137,8 @@
 
 <div class="home">
   <div class="home-header">
-    <h1 class="logo">SShell</h1>
-    <input class="search-input" type="text" bind:value={query} placeholder="搜索..." />
+    <h1 class="logo">RSSH ㋡</h1>
+    <input class="search-input" type="text" bind:value={query} placeholder="Search..." />
   </div>
 
   {#if filtered.length > 0}
@@ -161,7 +161,7 @@
           <button
             class="pin-btn"
             class:pinned={app.isProfilePinned(p.id)}
-            title={app.isProfilePinned(p.id) ? "取消固定" : "固定到侧栏"}
+            title={app.isProfilePinned(p.id) ? "Unpin" : "Pin to sidebar"}
             onclick={(e) => { e.stopPropagation(); app.isProfilePinned(p.id) ? app.unpinProfile(p.id) : app.pinProfile(p.id); }}
           >{app.isProfilePinned(p.id) ? "\u2605" : "\u2606"}</button>
         </div>
@@ -192,8 +192,8 @@
 
   {#if profiles.length === 0 && forwards.length === 0}
     <div class="empty-state">
-      <p>还没有 Profile 或端口转发</p>
-      <button class="btn btn-accent" onclick={() => app.navigate("settings")}>前往设置添加</button>
+      <p>No Profiles or Port Forwards yet</p>
+      <button class="btn btn-accent" onclick={() => app.navigate("settings")}>Go to Settings</button>
     </div>
   {/if}
 </div>

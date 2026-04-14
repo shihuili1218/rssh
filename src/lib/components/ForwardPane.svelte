@@ -60,13 +60,13 @@
 
     <div class="status-row">
       {#if status === "connecting"}
-        <span class="badge connecting">连接中...</span>
+        <span class="badge connecting">Connecting...</span>
       {:else if status === "active"}
-        <span class="badge active">运行中</span>
+        <span class="badge active">Active</span>
       {:else if status === "error"}
-        <span class="badge error">错误</span>
+        <span class="badge error">Error</span>
       {:else}
-        <span class="badge stopped">已停止</span>
+        <span class="badge stopped">Stopped</span>
       {/if}
     </div>
 
@@ -76,9 +76,9 @@
 
     <div class="actions">
       {#if status === "active"}
-        <button class="btn btn-danger btn-sm" onclick={stop}>停止</button>
+        <button class="btn btn-danger btn-sm" onclick={stop}>Stop</button>
       {:else if status === "error" || status === "stopped"}
-        <button class="btn btn-accent btn-sm" onclick={connect}>重连</button>
+        <button class="btn btn-accent btn-sm" onclick={connect}>Reconnect</button>
         <div class="hint">Press any key to reconnect</div>
       {/if}
     </div>

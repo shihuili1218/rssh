@@ -25,7 +25,7 @@
         await invoke("set_setting", {key: "github_token", value: githubToken});
         await invoke("set_setting", {key: "github_repo", value: githubRepo});
         await invoke("set_setting", {key: "github_branch", value: githubBranch});
-        msg = "配置已保存";
+        msg = "Settings saved";
         setTimeout(() => msg = "", 2000);
     }
 
@@ -39,11 +39,11 @@
 
     async function confirmPassword() {
         if (!pw1) {
-            pwError = "密码不能为空";
+            pwError = "Password cannot be empty";
             return;
         }
         if (pwMode === "push" && pw1 !== pw2) {
-            pwError = "两次密码不一致";
+            pwError = "Passwords do not match";
             return;
         }
 
@@ -53,13 +53,13 @@
         try {
             if (pwMode === "push") {
                 await invoke("github_push", {password: pw1});
-                msg = "推送成功";
+                msg = "Push successful";
             } else {
                 await invoke("github_pull", {password: pw1});
-                msg = "拉取成功";
+                msg = "Pull successful";
             }
         } catch (e: any) {
-            msg = "失败: " + String(e);
+            msg = "Failed: " + String(e);
         } finally {
             syncing = false;
         }
@@ -75,15 +75,15 @@
         </div>
         <label>Personal Access Token</label>
         <input type="password" bind:value={githubToken} placeholder="ghp_xxxx"/>
-        <label>仓库 (owner/repo)</label>
+        <label>Repository (owner/repo)</label>
         <input type="text" bind:value={githubRepo} placeholder="user/rssh-config"/>
-        <label>分支</label>
+        <label>Branch</label>
         <input type="text" bind:value={githubBranch} placeholder="main"/>
-        <button class="btn btn-sm" onclick={saveSettings}>保存配置</button>
+        <button class="btn btn-sm" onclick={saveSettings}>Save</button>
         <div class="divider"></div>
         <div class="btn-row">
-            <button class="btn btn-accent btn-sm" onclick={() => askPassword("push")} disabled={syncing}>推送到 GitHub</button>
-            <button class="btn btn-sm" onclick={() => askPassword("pull")} disabled={syncing}>从 GitHub 拉取</button>
+            <button class="btn btn-accent btn-sm" onclick={() => askPassword("push")} disabled={syncing}>Push to GitHub</button>
+            <button class="btn btn-sm" onclick={() => askPassword("pull")} disabled={syncing}>Pull from GitHub</button>
         </div>
         {#if msg}
             <div class="msg">{msg}</div>
@@ -97,19 +97,19 @@
     <div class="dialog-backdrop" onclick={() => showPwDialog = false}>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="dialog" onclick={(e) => e.stopPropagation()}>
-            <h3>{pwMode === "push" ? "设置加密密码" : "输入解密密码"}</h3>
-            <input type="password" bind:value={pw1} placeholder="密码"
+            <h3>{pwMode === "push" ? "Set Encryption Password" : "Enter Decryption Password"}</h3>
+            <input type="password" bind:value={pw1} placeholder="Password"
                    onkeydown={(e) => { if (e.key === "Enter") confirmPassword(); }}/>
             {#if pwMode === "push"}
-                <input type="password" bind:value={pw2} placeholder="确认密码"
+                <input type="password" bind:value={pw2} placeholder="Confirm Password"
                        onkeydown={(e) => { if (e.key === "Enter") confirmPassword(); }}/>
             {/if}
             {#if pwError}
                 <div class="pw-error">{pwError}</div>
             {/if}
             <div class="btn-row">
-                <button class="btn btn-sm" onclick={() => showPwDialog = false}>取消</button>
-                <button class="btn btn-accent btn-sm" onclick={confirmPassword}>确认</button>
+                <button class="btn btn-sm" onclick={() => showPwDialog = false}>Cancel</button>
+                <button class="btn btn-accent btn-sm" onclick={confirmPassword}>Confirm</button>
             </div>
         </div>
     </div>

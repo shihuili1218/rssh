@@ -46,30 +46,30 @@
 
 <div class="page">
   <div class="form">
-    <label>名称</label>
+    <label>Name</label>
     <input type="text" bind:value={name} placeholder="My Server" />
-    <label>主机</label>
+    <label>Host</label>
     <input type="text" bind:value={host} placeholder="192.168.1.1" />
-    <label>端口</label>
+    <label>Port</label>
     <input type="number" bind:value={port} min="1" max="65535" />
-    <label>凭证</label>
+    <label>Credential</label>
     <select bind:value={credentialId}>
-      <option value={null}>-- 选择凭证 --</option>
+      <option value={null}>-- Select Credential --</option>
       {#each credentials as c (c.id)}
         <option value={c.id}>{c.name} ({c.username})</option>
       {/each}
     </select>
-    <label>堡垒机（可选）</label>
+    <label>Bastion Host (optional)</label>
     <select bind:value={bastionId}>
-      <option value={null}>-- 无堡垒机 --</option>
+      <option value={null}>-- None --</option>
       {#each bastionProfiles as p (p.id)}
         <option value={p.id}>{p.name} ({p.host}:{p.port})</option>
       {/each}
     </select>
-    <label>初始命令（可选）</label>
+    <label>Init Command (optional)</label>
     <input type="text" bind:value={shellCommand} placeholder="cd /app && ls" />
     <button class="btn btn-accent" onclick={save} disabled={saving || !name || !host}>
-      {saving ? "保存中..." : "保存"}
+      {saving ? "Saving..." : "Save"}
     </button>
   </div>
 </div>

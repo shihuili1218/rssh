@@ -76,10 +76,10 @@
   <div class="editor-area" bind:this={editorEl}></div>
 
   <div class="session-panel">
-    <div class="panel-header">目标会话</div>
+    <div class="panel-header">Target Sessions</div>
 
     {#if sessions.length === 0}
-      <div class="empty-hint">暂无已连接会话</div>
+      <div class="empty-hint">No connected sessions</div>
     {:else}
       <div class="session-list">
         {#each sessions as s (s.tabId)}
@@ -91,8 +91,8 @@
         {/each}
       </div>
       <div class="select-actions">
-        <button class="link-btn" onclick={selectAll}>全选</button>
-        <button class="link-btn" onclick={selectNone}>清除</button>
+        <button class="link-btn" onclick={selectAll}>All</button>
+        <button class="link-btn" onclick={selectNone}>None</button>
       </div>
     {/if}
 
@@ -101,7 +101,7 @@
       disabled={selectedTabIds.size === 0}
       onclick={broadcast}
     >
-      广播执行 ({selectedTabIds.size})
+      Broadcast ({selectedTabIds.size})
     </button>
   </div>
 </div>

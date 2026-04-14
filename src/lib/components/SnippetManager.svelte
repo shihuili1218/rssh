@@ -23,9 +23,9 @@
 
 <div class="page">
   <div class="add-row">
-    <input type="text" bind:value={newName} placeholder="名称" />
-    <input type="text" bind:value={newCmd} placeholder="命令" style="flex:2" />
-    <button class="btn btn-accent btn-sm" onclick={add}>添加</button>
+    <input type="text" bind:value={newName} placeholder="Name" />
+    <input type="text" bind:value={newCmd} placeholder="Command" style="flex:2" />
+    <button class="btn btn-accent btn-sm" onclick={add}>Add</button>
   </div>
   {#each items as s, i (s.name + i)}
     <div class="card item-row">
@@ -36,7 +36,7 @@
       <button class="btn btn-sm btn-danger" onclick={() => remove(i)}>×</button>
     </div>
   {:else}
-    <p class="empty">暂无命令片段</p>
+    <p class="empty">No command snippets</p>
   {/each}
 </div>
 

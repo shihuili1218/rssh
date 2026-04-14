@@ -36,7 +36,7 @@
 <div class="picker-backdrop" onclick={() => app.closeSnippetPicker()}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="picker" onclick={(e) => e.stopPropagation()}>
-    <input bind:this={inputEl} type="text" bind:value={filter} placeholder="搜索命令片段..."
+    <input bind:this={inputEl} type="text" bind:value={filter} placeholder="Search snippets..."
       onkeydown={handleKey} />
     <div class="picker-list">
       {#each filtered as s, i (s.name)}
@@ -45,7 +45,7 @@
           <span class="picker-cmd">{s.command}</span>
         </button>
       {:else}
-        <div class="picker-empty">暂无命令片段</div>
+        <div class="picker-empty">No command snippets</div>
       {/each}
     </div>
   </div>

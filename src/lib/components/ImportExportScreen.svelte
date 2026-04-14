@@ -11,20 +11,20 @@
   async function doExport() {
     try {
       exportJson = await invoke<string>("export_config");
-      msg = "已导出，可复制保存";
-    } catch (e: any) { msg = "导出失败: " + String(e); }
+      msg = "Exported. Copy and save.";
+    } catch (e: any) { msg = "Export failed: " + String(e); }
     setTimeout(() => msg = "", 3000);
   }
 
   async function doImport() {
     if (!importJson.trim()) return;
-    if (!confirm("确认导入？这会覆盖本地所有 Profiles、凭证和端口转发！")) return;
+    if (!confirm("Confirm import? This will overwrite all local Profiles, Credentials, and Port Forwards!")) return;
     importing = true;
     try {
       await invoke("import_config", { json: importJson });
       importJson = "";
-      msg = "导入成功";
-    } catch (e: any) { msg = "导入失败: " + String(e); }
+      msg = "Import successful";
+    } catch (e: any) { msg = "Import failed: " + String(e); }
     finally { importing = false; }
     setTimeout(() => msg = "", 3000);
   }
@@ -33,9 +33,9 @@
     if (!sshConfig.trim()) return;
     try {
       const entries = await invoke<any[]>("import_ssh_config", { content: sshConfig });
-      msg = `解析到 ${entries.length} 个 Host 条目`;
+      msg = `Parsed ${entries.length} Host entries`;
       sshConfig = "";
-    } catch (e: any) { msg = "解析失败: " + String(e); }
+    } catch (e: any) { msg = "Parse failed: " + String(e); }
     setTimeout(() => msg = "", 3000);
   }
 </script>
@@ -48,10 +48,10 @@
   <!-- Export -->
   <div class="action-card neu-raised">
     <div class="action-info">
-      <div class="action-title">导出配置</div>
-      <div class="action-desc">将所有 Profiles、凭证和端口转发导出为 JSON 文本</div>
+      <div class="action-title">Export Config</div>
+      <div class="action-desc">Export all Profiles, Credentials, and Port Forwards as JSON</div>
     </div>
-    <button class="btn btn-accent btn-sm" onclick={doExport}>导出</button>
+    <button class="btn btn-accent btn-sm" onclick={doExport}>Export</button>
   </div>
   {#if exportJson}
     <textarea class="mono-area" readonly value={exportJson}
@@ -61,13 +61,13 @@
   <!-- Import JSON -->
   <div class="action-card neu-raised">
     <div class="action-info">
-      <div class="action-title">导入配置</div>
-      <div class="action-desc">粘贴之前导出的 JSON，将覆盖本地所有数据</div>
+      <div class="action-title">Import Config</div>
+      <div class="action-desc">Paste previously exported JSON. This will overwrite all local data.</div>
     </div>
   </div>
-  <textarea class="mono-area" bind:value={importJson} rows="4" placeholder="粘贴 JSON..."></textarea>
+  <textarea class="mono-area" bind:value={importJson} rows="4" placeholder="Paste JSON..."></textarea>
   <button class="btn btn-sm" onclick={doImport} disabled={importing || !importJson.trim()}>
-    {importing ? "导入中..." : "确认导入"}
+    {importing ? "Importing..." : "Confirm Import"}
   </button>
 
   <div class="divider"></div>
@@ -75,12 +75,12 @@
   <!-- SSH Config Import -->
   <div class="action-card neu-raised">
     <div class="action-info">
-      <div class="action-title">导入 SSH Config</div>
-      <div class="action-desc">粘贴 ~/.ssh/config 内容，自动解析 Host 条目为 Profiles</div>
+      <div class="action-title">Import SSH Config</div>
+      <div class="action-desc">Paste ~/.ssh/config contents to auto-parse Host entries into Profiles</div>
     </div>
   </div>
   <textarea class="mono-area" bind:value={sshConfig} rows="6" placeholder="Host myserver&#10;  HostName 192.168.1.1&#10;  User root&#10;  Port 22"></textarea>
-  <button class="btn btn-sm" onclick={importSshConfig} disabled={!sshConfig.trim()}>解析并导入</button>
+  <button class="btn btn-sm" onclick={importSshConfig} disabled={!sshConfig.trim()}>Parse & Import</button>
 </div>
 
 <style>

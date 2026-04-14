@@ -13,14 +13,14 @@
     try {
       await invoke("delete_profile", { id });
       profiles = await app.loadProfiles();
-    } catch (e: any) { alert("删除失败: " + String(e)); }
+    } catch (e: any) { alert("Delete failed: " + String(e)); }
     finally { deleting = null; }
   }
 </script>
 
 <div class="page">
   <div class="toolbar">
-    <button class="btn btn-accent btn-sm" onclick={() => app.navigate("profile-edit")}>+ 新建</button>
+    <button class="btn btn-accent btn-sm" onclick={() => app.navigate("profile-edit")}>+ New</button>
   </div>
   {#each profiles as p (p.id)}
     <div class="card item-row">
@@ -29,14 +29,14 @@
         <div class="item-sub">{p.host}:{p.port}</div>
       </div>
       <div class="item-actions">
-        <button class="btn btn-sm" onclick={() => app.navigate("profile-edit", p.id)}>编辑</button>
+        <button class="btn btn-sm" onclick={() => app.navigate("profile-edit", p.id)}>Edit</button>
         <button class="btn btn-sm btn-danger" onclick={() => remove(p.id)} disabled={deleting === p.id}>
-          {deleting === p.id ? "..." : "删除"}
+          {deleting === p.id ? "..." : "Delete"}
         </button>
       </div>
     </div>
   {:else}
-    <p class="empty">暂无 Profile</p>
+    <p class="empty">No profiles</p>
   {/each}
 </div>
 

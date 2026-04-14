@@ -1,0 +1,8 @@
+[Desktop Entry]
+Categories=Development;Network;
+Comment=SSH Connection Manager
+Exec=/usr/bin/rssh %u
+Icon=rssh
+Name=RSSH
+Terminal=false
+Type=Application

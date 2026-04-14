@@ -109,6 +109,16 @@
         requestAnimationFrame(() => searchInputEl?.focus());
     }
 
+    /* Listen for external search requests (from tab context menu) */
+    let _lastSearchN = 0;
+    $effect(() => {
+        const req = app.searchRequest();
+        if (req && req.tabId === tabId && req.n !== _lastSearchN) {
+            _lastSearchN = req.n;
+            openSearch();
+        }
+    });
+
     function closeSearch() {
         showSearch = false;
         searchAddon?.clearDecorations();
@@ -162,7 +172,7 @@
                 openSearch();
                 return false;
             }
-            if (mod && e.key === "o" && !isLocal) {
+            if (mod && e.key === "o" && !isLocal && !app.isMobile) {
                 e.preventDefault();
                 app.navigate("sftp");
                 return false;
@@ -207,7 +217,7 @@
             }));
             unlisteners.push(await listen(`${closeEvent}:${sid}`, () => {
                 disconnected = true;
-                terminal.write("\r\n\x1b[31m--- 连接已断开 ---\x1b[0m\r\n");
+                terminal.write("\r\n\x1b[31m--- Disconnected ---\x1b[0m\r\n");
                 terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
             }));
         }
@@ -217,7 +227,7 @@
             try {
                 sessionId = await invoke<string>("pty_spawn", {cols: terminal.cols, rows: terminal.rows});
             } catch (e: any) {
-                terminal.write(`\x1b[31m启动失败: ${e}\x1b[0m\r\n`);
+                terminal.write(`\x1b[31mLaunch failed: ${e}\x1b[0m\r\n`);
                 return;
             }
             await wireSession(sessionId);
@@ -321,7 +331,7 @@
                 }));
                 unlisteners.push(await listen(`pty:close:${sid}`, () => {
                     disconnected = true;
-                    terminal.write("\r\n\x1b[31m--- 连接已断开 ---\x1b[0m\r\n");
+                    terminal.write("\r\n\x1b[31m--- Disconnected ---\x1b[0m\r\n");
                     terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
                     setupReconnect();
                 }));
@@ -357,7 +367,7 @@
                 }));
                 unlisteners.push(await listen(`ssh:close:${sid}`, () => {
                     disconnected = true;
-                    terminal.write("\r\n\x1b[31m--- 连接已断开 ---\x1b[0m\r\n");
+                    terminal.write("\r\n\x1b[31m--- Disconnected ---\x1b[0m\r\n");
                     terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
                     setupReconnect();
                 }));
@@ -420,16 +430,16 @@
                     bind:this={searchInputEl}
                     type="text"
                     bind:value={searchQuery}
-                    placeholder="搜索..."
+                    placeholder="Search..."
                     oninput={doSearch}
                     onkeydown={(e) => {
           if (e.key === "Enter") { e.shiftKey ? searchPrev() : searchNext(); }
           if (e.key === "Escape") closeSearch();
         }}
             />
-            <button class="search-btn" onclick={searchPrev} title="上一个">&#x25B2;</button>
-            <button class="search-btn" onclick={searchNext} title="下一个">&#x25BC;</button>
-            <button class="search-btn" onclick={closeSearch} title="关闭">&times;</button>
+            <button class="search-btn" onclick={searchPrev} title="Previous">&#x25B2;</button>
+            <button class="search-btn" onclick={searchNext} title="Next">&#x25BC;</button>
+            <button class="search-btn" onclick={closeSearch} title="Close">&times;</button>
         </div>
     {/if}
     <div class="term-wrap" bind:this={containerEl}></div>
