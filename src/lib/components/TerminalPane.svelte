@@ -31,14 +31,36 @@
         hlRegex = new RegExp(escaped.join("|"), "gi");
     }
 
-    function applyHighlights(text: string): string {
-        if (!hlRegex || !hlRules.length) return text;
-        return text.replace(hlRegex, (match) => {
+    function hlReplace(plain: string): string {
+        if (!hlRegex) return plain;
+        return plain.replace(hlRegex, (match) => {
             const rule = hlRules.find(r => r.enabled && r.keyword.toLowerCase() === match.toLowerCase());
             if (!rule) return match;
             const code = ANSI[rule.color] ?? "";
             return code + match + RST;
         });
+    }
+
+    function applyHighlights(text: string): string {
+        if (!hlRegex || !hlRules.length) return text;
+        // Skip escape sequences — only highlight plain text between them.
+        // CSI: ESC [ params letter, OSC: ESC ] ... BEL/ST, simple: ESC + char
+        const escRe = /\x1b(?:\[[0-9;?]*[A-Za-z@`]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[^\[\]])/g;
+        let out = '', pos = 0, m;
+        while ((m = escRe.exec(text)) !== null) {
+            if (m.index > pos) out += hlReplace(text.slice(pos, m.index));
+            out += m[0];
+            pos = escRe.lastIndex;
+        }
+        const rest = text.slice(pos);
+        const esc = rest.indexOf('\x1b');
+        if (esc < 0) {
+            out += hlReplace(rest);
+        } else {
+            if (esc > 0) out += hlReplace(rest.slice(0, esc));
+            out += rest.slice(esc); // incomplete escape sequence — pass through untouched
+        }
+        return out;
     }
 
     let {tabId, tabType, meta = {}}: {

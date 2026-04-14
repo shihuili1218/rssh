@@ -16,7 +16,7 @@
   import ShellSettings from "./ShellSettings.svelte";
   import CliSettings from "./CliSettings.svelte";
 
-  type MenuItem = { id: string; label: string; section: string };
+  type MenuItem = { id: app.SettingsPage; label: string; section: string };
 
   const COMPACT_BREAKPOINT = 640;
   let compact = $state(window.innerWidth < COMPACT_BREAKPOINT);
@@ -77,7 +77,7 @@
         <button
           class="menu-item"
           class:active={isActive(item.id)}
-          onclick={() => app.settingsNavigate(item.id as any)}
+          onclick={() => app.settingsNavigate(item.id)}
         >
           {item.label}
         </button>

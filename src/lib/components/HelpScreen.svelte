@@ -30,12 +30,14 @@
         [`${mod}+F`, "Search"],
         [`${mod}+S`, "Command Snippet (send to terminal)"],
         [`${mod}+O`, "Open SFTP (SSH session)"],
+        [`${mod}+W`, "Close Current Tab"],
         ["Any key", "Reconnect after disconnect"],
       ],
     },
     {
       title: "Port Forward",
       keys: [
+        [`${mod}+W`, "Close Current Tab"],
         ["Any key", "Reconnect after error/stop"],
       ],
     },
