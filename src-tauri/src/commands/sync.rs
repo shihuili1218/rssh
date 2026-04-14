@@ -13,12 +13,14 @@ pub fn export_config(state: State<'_, AppState>) -> AppResult<String> {
     let profiles = crate::db::profile::list(&conn)?;
     let credentials = crate::db::credential::list(&conn)?;
     let forwards = crate::db::forward::list(&conn)?;
+    let groups = crate::db::group::list(&conn)?;
     serde_json::to_string_pretty(&serde_json::json!({
         "version": 1,
         "exported_at": chrono::Utc::now().to_rfc3339(),
         "profiles": profiles,
         "credentials": credentials,
         "forwards": forwards,
+        "groups": groups,
     }))
     .map_err(|e| AppError::Other(e.to_string()))
 }
@@ -32,6 +34,7 @@ pub fn import_config(state: State<'_, AppState>, json: String) -> AppResult<()> 
     crate::db::credential::clear_all(&conn)?;
     crate::db::profile::clear_all(&conn)?;
     crate::db::forward::clear_all(&conn)?;
+    crate::db::group::clear_all(&conn)?;
 
     let mut errors = Vec::new();
 
@@ -56,6 +59,14 @@ pub fn import_config(state: State<'_, AppState>, json: String) -> AppResult<()> 
             match serde_json::from_value::<crate::models::Forward>(item.clone()) {
                 Ok(f) => { if let Err(e) = crate::db::forward::insert(&conn, &f) { errors.push(format!("forward {}: {e}", f.name)); } }
                 Err(e) => errors.push(format!("forward parse: {e}")),
+            }
+        }
+    }
+    if let Some(arr) = data["groups"].as_array() {
+        for item in arr {
+            match serde_json::from_value::<crate::models::Group>(item.clone()) {
+                Ok(g) => { if let Err(e) = crate::db::group::insert(&conn, &g) { errors.push(format!("group {}: {e}", g.name)); } }
+                Err(e) => errors.push(format!("group parse: {e}")),
             }
         }
     }
@@ -87,6 +98,7 @@ pub async fn github_push(state: State<'_, AppState>, password: String) -> AppRes
         let profiles = crate::db::profile::list(&conn)?;
         let mut credentials = crate::db::credential::list(&conn)?;
         let forwards = crate::db::forward::list(&conn)?;
+        let groups = crate::db::group::list(&conn)?;
 
         // 尊重 save_to_remote：不同步的凭证清空 secret
         for c in credentials.iter_mut() {
@@ -101,6 +113,7 @@ pub async fn github_push(state: State<'_, AppState>, password: String) -> AppRes
             "profiles": profiles,
             "credentials": credentials,
             "forwards": forwards,
+            "groups": groups,
         }))
         .map_err(|e| AppError::Other(e.to_string()))?;
 
@@ -138,6 +151,7 @@ pub async fn github_pull(state: State<'_, AppState>, password: String) -> AppRes
     crate::db::credential::clear_all(&conn)?;
     crate::db::profile::clear_all(&conn)?;
     crate::db::forward::clear_all(&conn)?;
+    crate::db::group::clear_all(&conn)?;
 
     let mut errors = Vec::new();
 
@@ -162,6 +176,14 @@ pub async fn github_pull(state: State<'_, AppState>, password: String) -> AppRes
             match serde_json::from_value::<crate::models::Forward>(item.clone()) {
                 Ok(f) => { if let Err(e) = crate::db::forward::insert(&conn, &f) { errors.push(format!("forward {}: {e}", f.name)); } }
                 Err(e) => errors.push(format!("forward parse: {e}")),
+            }
+        }
+    }
+    if let Some(arr) = data["groups"].as_array() {
+        for item in arr {
+            match serde_json::from_value::<crate::models::Group>(item.clone()) {
+                Ok(g) => { if let Err(e) = crate::db::group::insert(&conn, &g) { errors.push(format!("group {}: {e}", g.name)); } }
+                Err(e) => errors.push(format!("group parse: {e}")),
             }
         }
     }

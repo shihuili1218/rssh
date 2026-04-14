@@ -9,6 +9,8 @@ pub struct Profile {
     pub credential_id: Option<String>,
     pub bastion_profile_id: Option<String>,
     pub init_command: Option<String>,
+    #[serde(default)]
+    pub group_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +52,8 @@ pub struct Credential {
     pub secret: Option<String>,
     #[serde(default)]
     pub save_to_remote: bool,
+    #[serde(default)]
+    pub passphrase: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +61,7 @@ pub struct Credential {
 pub enum ForwardType {
     Local,
     Remote,
+    Dynamic,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +74,16 @@ pub struct Forward {
     pub remote_host: String,
     pub remote_port: u16,
     pub profile_id: String,
+}
+
+// --- Group ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Group {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    pub sort_order: i32,
 }
 
 // --- Highlight ---

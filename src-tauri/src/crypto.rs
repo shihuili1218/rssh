@@ -50,15 +50,8 @@ pub fn encrypt(json: &str, password: &str) -> AppResult<String> {
 
     let salt = {
         let mut buf = [0u8; 16];
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let mut s = seed;
-        for b in buf.iter_mut() {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            *b = (s >> 33) as u8;
-        }
+        getrandom::getrandom(&mut buf)
+            .map_err(|e| AppError::Other(format!("RNG failed: {e}")))?;
         buf
     };
 

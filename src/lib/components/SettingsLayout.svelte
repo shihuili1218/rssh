@@ -6,6 +6,7 @@
   import CredentialEditor from "./CredentialEditor.svelte";
   import ForwardManager from "./ForwardManager.svelte";
   import ForwardEditor from "./ForwardEditor.svelte";
+  import GroupManager from "./GroupManager.svelte";
   import SnippetManager from "./SnippetManager.svelte";
   import HighlightManager from "./HighlightManager.svelte";
   import GitHubSyncScreen from "./GitHubSyncScreen.svelte";
@@ -32,6 +33,7 @@
     { id: "profiles", label: "Profile", section: "Connections" },
     { id: "credentials", label: "Credential", section: "Connections" },
     { id: "forwards", label: "Port Forward", section: "Connections" },
+    { id: "groups", label: "Groups", section: "Connections" },
     { id: "import-export", label: "Import & Export", section: "Connections" },
     { id: "github-sync", label: "GitHub Sync", section: "Connections" },
     { id: "shell-settings", label: "Shell & Logs", section: "Sessions" },
@@ -63,6 +65,7 @@
     if (id === "profiles" && p === "profile-edit") return true;
     if (id === "credentials" && p === "credential-edit") return true;
     if (id === "forwards" && p === "forward-edit") return true;
+    if (id === "groups" && p === "group-edit") return true;
     return false;
   }
 </script>
@@ -108,6 +111,8 @@
       <ForwardManager />
     {:else if app.settingsPage() === "forward-edit"}
       <ForwardEditor id={app.editingId()} />
+    {:else if app.settingsPage() === "groups"}
+      <GroupManager />
     {:else if app.settingsPage() === "snippets"}
       <SnippetManager />
     {:else if app.settingsPage() === "highlights"}

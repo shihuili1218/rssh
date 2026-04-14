@@ -2,11 +2,12 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
-  import type { Profile, Credential, Forward } from "../stores/app.svelte.ts";
+  import type { Profile, Credential, Forward, Group } from "../stores/app.svelte.ts";
 
   let profiles = $state<Profile[]>([]);
   let credentials = $state<Credential[]>([]);
   let forwards = $state<Forward[]>([]);
+  let groups = $state<Group[]>([]);
   let query = $state("");
 
   // Grid nav: "profile" or "forward" section + index within that section
@@ -20,6 +21,30 @@
       ? profiles.filter(p => p.name.toLowerCase().includes(query.toLowerCase()) || p.host.toLowerCase().includes(query.toLowerCase()))
       : profiles
   );
+
+  let groupedProfiles = $derived((() => {
+    const groupMap = new Map<string | null, Profile[]>();
+    for (const p of filtered) {
+      const gid = p.group_id ?? null;
+      if (!groupMap.has(gid)) groupMap.set(gid, []);
+      groupMap.get(gid)!.push(p);
+    }
+    const sections: { group: Group | null; profiles: Profile[] }[] = [];
+    // Groups sorted by sort_order
+    const sorted = [...groups].sort((a, b) => a.sort_order - b.sort_order);
+    for (const g of sorted) {
+      const ps = groupMap.get(g.id);
+      if (ps && ps.length > 0) {
+        sections.push({ group: g, profiles: ps });
+        groupMap.delete(g.id);
+      }
+    }
+    // Ungrouped profiles (null group_id or unknown group_id)
+    const ungrouped: Profile[] = [];
+    for (const [, ps] of groupMap) ungrouped.push(...ps);
+    if (ungrouped.length > 0) sections.push({ group: null, profiles: ungrouped });
+    return sections;
+  })());
 
   function getCols(gridEl: HTMLDivElement | undefined): number {
     if (!gridEl) return 3;
@@ -88,8 +113,8 @@
   });
 
   async function refresh() {
-    [profiles, credentials, forwards] = await Promise.all([
-      app.loadProfiles(), app.loadCredentials(), app.loadForwards(),
+    [profiles, credentials, forwards, groups] = await Promise.all([
+      app.loadProfiles(), app.loadCredentials(), app.loadForwards(), app.loadGroups(),
     ]);
   }
 
@@ -141,10 +166,12 @@
     <input class="search-input" type="text" bind:value={query} placeholder="Search..." />
   </div>
 
-  {#if filtered.length > 0}
-    <div class="section-label">PROFILES</div>
+  {#each groupedProfiles as section}
+    <div class="section-label" style={section.group ? `border-left: 3px solid ${section.group.color}; padding-left: 8px` : ''}>
+      {section.group?.name ?? 'PROFILES'}
+    </div>
     <div class="grid" bind:this={profileGridEl}>
-      {#each filtered as p, i (p.id)}
+      {#each section.profiles as p, i (p.id)}
         {@const cred = credentialFor(p)}
         <div class="card-wrap">
           <button
@@ -167,7 +194,7 @@
         </div>
       {/each}
     </div>
-  {/if}
+  {/each}
 
   {#if forwards.length > 0}
     <div class="section-label">PORT FORWARDS</div>
@@ -179,7 +206,7 @@
           class:selected={navSection === "forward" && navIdx === i}
           onclick={() => openForward(f)}
         >
-          <div class="card-icon fwd">{f.type === "local" ? "L" : "R"}</div>
+          <div class="card-icon fwd">{f.type === "dynamic" ? "D" : f.type === "local" ? "L" : "R"}</div>
           <div class="card-body">
             <div class="card-name">{f.name}</div>
             <div class="card-sub">:{f.local_port} → {f.remote_host}:{f.remote_port}</div>

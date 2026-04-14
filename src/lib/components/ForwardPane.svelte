@@ -81,9 +81,11 @@
   });
 
   const isRemote = $derived(meta.forwardType === "remote");
-  const dirLabel = $derived(isRemote ? "Remote" : "Local");
-  const arrow = $derived(isRemote
-    ? `remote:${meta.localPort} \u2192 localhost:${meta.remotePort}`
+  const isDynamic = $derived(meta.forwardType === "dynamic");
+  const dirLabel = $derived(isDynamic ? "SOCKS5" : isRemote ? "Remote" : "Local");
+  const arrow = $derived(
+    isDynamic ? `SOCKS5 proxy on localhost:${meta.localPort}`
+    : isRemote ? `remote:${meta.localPort} \u2192 localhost:${meta.remotePort}`
     : `localhost:${meta.localPort} \u2192 ${meta.remoteHost}:${meta.remotePort}`);
 </script>
 

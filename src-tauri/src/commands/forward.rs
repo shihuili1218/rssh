@@ -1,7 +1,7 @@
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::models::Forward;
+use crate::models::{Forward, ForwardType};
 use crate::ssh::forward as fwd;
 use crate::state::AppState;
 
@@ -44,7 +44,7 @@ pub async fn forward_start(
     state: State<'_, AppState>,
     forward_id: String,
 ) -> AppResult<String> {
-    let (fwd_config, host, port, cred) = {
+    let (fwd_config, host, port, cred, timeout_secs) = {
         let conn = state
             .db
             .lock()
@@ -55,11 +55,18 @@ pub async fn forward_start(
         let cred_id = p.credential_id.as_deref().unwrap_or("");
         let c = crate::db::credential::get(&conn, cred_id)
             .map_err(|_| AppError::NotFound("转发关联的凭证不存在".into()))?;
-        (f, p.host, p.port, c)
+        let timeout: u64 = crate::db::settings::get(&conn, "connect_timeout")?
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(crate::ssh::client::DEFAULT_CONNECT_TIMEOUT);
+        (f, p.host, p.port, c, timeout)
     };
 
     let known_hosts_path = state.data_dir.join("known_hosts");
-    let handle = fwd::start_local(&fwd_config, &host, port, &cred, known_hosts_path).await?;
+    let handle = match fwd_config.forward_type {
+        ForwardType::Local => fwd::start_local(&fwd_config, &host, port, &cred, known_hosts_path, timeout_secs).await?,
+        ForwardType::Remote => fwd::start_remote(&fwd_config, &host, port, &cred, known_hosts_path, timeout_secs).await?,
+        ForwardType::Dynamic => fwd::start_dynamic(&fwd_config, &host, port, &cred, known_hosts_path, timeout_secs).await?,
+    };
     let active_id = uuid::Uuid::new_v4().to_string();
 
     state

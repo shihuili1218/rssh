@@ -2,14 +2,14 @@ use rusqlite::Connection;
 
 use crate::error::AppResult;
 
-const SCHEMA_VERSION: u32 = 9;
+const SCHEMA_VERSION: u32 = 10;
 
 pub fn migrate(conn: &Connection) -> AppResult<()> {
     let version: u32 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap_or(0);
 
-    if version < SCHEMA_VERSION {
+    if version < 9 {
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS credentials (
@@ -54,7 +54,6 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
             );
             ",
         )?;
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
 
         // Seed default highlights if table is empty
         let count: u32 = conn.query_row(
@@ -70,6 +69,32 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
                 "
             )?;
         }
+    }
+
+    if version < 10 {
+        // Passphrase column for credentials
+        let _ = conn.execute_batch(
+            "ALTER TABLE credentials ADD COLUMN passphrase TEXT NOT NULL DEFAULT '';"
+        );
+        // Profile groups table
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS groups (
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                color      TEXT NOT NULL DEFAULT '#4A6CF7',
+                sort_order INTEGER NOT NULL DEFAULT 0
+            );
+            "
+        )?;
+        // group_id column on profiles
+        let _ = conn.execute_batch(
+            "ALTER TABLE profiles ADD COLUMN group_id TEXT DEFAULT NULL;"
+        );
+    }
+
+    if version < SCHEMA_VERSION {
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
 
     Ok(())

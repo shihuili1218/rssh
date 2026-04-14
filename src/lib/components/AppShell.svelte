@@ -2,7 +2,7 @@
     import {onMount} from "svelte";
     import {invoke} from "@tauri-apps/api/core";
     import {getCurrentWindow} from "@tauri-apps/api/window";
-    import type {Profile, Tab} from "../stores/app.svelte.ts";
+    import type {Profile, Tab, Group} from "../stores/app.svelte.ts";
     import * as app from "../stores/app.svelte.ts";
     import HomeScreen from "./HomeScreen.svelte";
     import TerminalPane from "./TerminalPane.svelte";
@@ -17,11 +17,17 @@
     let focusIdx = $state(-1);
     let tabCycling = $state(false);
     let profiles = $state<Profile[]>([]);
+    let groups = $state<Group[]>([]);
     let sidebarTimer = 0;
     let menuCtx = $state<{ x: number; y: number; tab: Tab } | null>(null);
 
+    // Tab drag-and-drop
+    let dragTabId = $state<string | null>(null);
+    let dropTabId = $state<string | null>(null);
+
     onMount(() => {
         app.loadProfiles().then(p => profiles = p);
+        app.loadGroups().then(g => groups = g);
         consumeCloneQuery();
 
         // Ctrl/Cmd+W → close active tab (captures BEFORE xterm so Ctrl+W
@@ -97,7 +103,10 @@
     }
 
     $effect(() => {
-        if (drawerOpen) app.loadProfiles().then(p => profiles = p);
+        if (drawerOpen) {
+            app.loadProfiles().then(p => profiles = p);
+            app.loadGroups().then(g => groups = g);
+        }
     });
 
     $effect(() => {
@@ -269,6 +278,45 @@
         return tab.label.charAt(0).toUpperCase();
     }
 
+    function tabGroupColor(tab: Tab): string | null {
+        if (tab.type !== "ssh") return null;
+        const profileId = tab.meta?.profileId;
+        if (!profileId) return null;
+        const profile = profiles.find(p => p.id === profileId);
+        if (!profile?.group_id) return null;
+        const group = groups.find(g => g.id === profile.group_id);
+        return group?.color ?? null;
+    }
+
+    /* ── Tab drag-and-drop reorder ── */
+    function handleDragStart(e: DragEvent, tabId: string) {
+        dragTabId = tabId;
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+    }
+
+    function handleDragOver(e: DragEvent, tabId: string) {
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+        dropTabId = tabId;
+    }
+
+    function handleDrop(e: DragEvent, tabId: string) {
+        e.preventDefault();
+        if (dragTabId && dragTabId !== tabId) {
+            const allTabs = app.tabs();
+            const fromIdx = allTabs.findIndex(t => t.id === dragTabId);
+            const toIdx = allTabs.findIndex(t => t.id === tabId);
+            if (fromIdx >= 0 && toIdx >= 0) app.moveTab(fromIdx, toIdx);
+        }
+        dragTabId = null;
+        dropTabId = null;
+    }
+
+    function handleDragEnd() {
+        dragTabId = null;
+        dropTabId = null;
+    }
+
     function handleTouchStart(e: TouchEvent) {
         touchStartX = e.touches[0].clientX;
         touchStartY = e.touches[0].clientY;
@@ -311,7 +359,7 @@
             <span class="sftp-title">SFTP</span>
         </div>
         <div class="sftp-body">
-            <SftpBrowser meta={app.activeTab()?.meta ?? {}}/>
+            <SftpBrowser meta={{...app.activeTab()?.meta ?? {}, sessionId: app.sessionIdForTab(app.activeTabId()) ?? ''}}/>
         </div>
     </div>
 {/if}
@@ -374,15 +422,22 @@
 
             <div class="sidebar-list">
                 {#each app.tabs().filter(t => t.type !== "home") as tab (tab.id)}
+                    {@const groupColor = tabGroupColor(tab)}
                     <button
                         class="sb-item"
                         class:active={!app.settingsActive() && tab.id === app.activeTabId()}
                         class:focused={isFocused("tab", tab.id)}
+                        class:drag-over={dropTabId === tab.id && dragTabId !== tab.id}
+                        draggable="true"
+                        ondragstart={(e) => handleDragStart(e, tab.id)}
+                        ondragover={(e) => handleDragOver(e, tab.id)}
+                        ondrop={(e) => handleDrop(e, tab.id)}
+                        ondragend={handleDragEnd}
                         onclick={() => selectTab(tab.id)}
                         oncontextmenu={(e) => openCtxMenu(e, tab)}
                         title={tab.label}
                     >
-                        <span class="sb-icon">{tabIcon(tab)}</span>
+                        <span class="sb-icon" style={groupColor ? `background: ${groupColor}; color: white` : ''}>{tabIcon(tab)}</span>
                         <span class="sb-label">{tab.label}</span>
                         <span
                             class="sb-close"
@@ -525,6 +580,10 @@
     .sb-item.focused {
         outline: 1px solid var(--accent);
         outline-offset: -1px;
+    }
+
+    .sb-item.drag-over {
+        border-top: 2px solid var(--accent);
     }
 
     .sb-item.pinned {

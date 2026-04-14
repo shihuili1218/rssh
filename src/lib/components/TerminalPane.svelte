@@ -1,6 +1,6 @@
 <script lang="ts">
     import {onDestroy, onMount, untrack} from "svelte";
-    import {Terminal} from "@xterm/xterm";
+    import {Terminal, type IDisposable} from "@xterm/xterm";
     import {FitAddon} from "@xterm/addon-fit";
     import {SearchAddon} from "@xterm/addon-search";
     import {Unicode11Addon} from "@xterm/addon-unicode11";
@@ -23,10 +23,7 @@
 
     function buildHighlightRegex(rules: HighlightRule[]) {
         const enabled = rules.filter(r => r.enabled && r.keyword);
-        if (!enabled.length) {
-            hlRegex = null;
-            return;
-        }
+        if (!enabled.length) { hlRegex = null; return; }
         const escaped = enabled.map(r => r.keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
         hlRegex = new RegExp(escaped.join("|"), "gi");
     }
@@ -43,8 +40,6 @@
 
     function applyHighlights(text: string): string {
         if (!hlRegex || !hlRules.length) return text;
-        // Skip escape sequences — only highlight plain text between them.
-        // CSI: ESC [ params letter, OSC: ESC ] ... BEL/ST, simple: ESC + char
         const escRe = /\x1b(?:\[[0-9;?]*[A-Za-z@`]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[^\[\]])/g;
         let out = '', pos = 0, m;
         while ((m = escRe.exec(text)) !== null) {
@@ -58,7 +53,7 @@
             out += hlReplace(rest);
         } else {
             if (esc > 0) out += hlReplace(rest.slice(0, esc));
-            out += rest.slice(esc); // incomplete escape sequence — pass through untouched
+            out += rest.slice(esc);
         }
         return out;
     }
@@ -83,11 +78,7 @@
         const tid = `ssh:${crypto.randomUUID()}`;
         app.addTab({
             id: tid, type: "ssh", label: p.name,
-            meta: {
-                profileId: p.id, host: p.host, port: String(p.port),
-                username: cred?.username ?? "", authType: cred?.type ?? "password",
-                secret: cred?.secret ?? "",
-            },
+            meta: { profileId: p.id, host: p.host, port: String(p.port), username: cred?.username ?? "", authType: cred?.type ?? "password", secret: cred?.secret ?? "" },
         });
     }
 
@@ -96,20 +87,14 @@
         const f = forwards.find(x => x.name.toLowerCase() === name.toLowerCase());
         if (!f) { terminal?.write(`\r\n\x1b[31mForward '${name}' not found\x1b[0m\r\n`); return; }
         let profileName = "?";
-        try {
-            const p = await invoke<any>("get_profile", {id: f.profile_id});
-            profileName = p.name;
-        } catch {}
+        try { const p = await invoke<any>("get_profile", {id: f.profile_id}); profileName = p.name; } catch {}
         const tid = `fwd:${f.id}:${Date.now()}`;
         app.addTab({
             id: tid, type: "forward", label: f.name,
-            meta: {
-                forwardId: f.id, name: f.name, forwardType: f.type,
-                localPort: String(f.local_port), remoteHost: f.remote_host,
-                remotePort: String(f.remote_port), profileName,
-            },
+            meta: { forwardId: f.id, name: f.name, forwardType: f.type, localPort: String(f.local_port), remoteHost: f.remote_host, remotePort: String(f.remote_port), profileName },
         });
     }
+
     type AuthPromptData = { name: string; instructions: string; prompts: { prompt: string; echo: boolean }[] };
     let authPrompt = $state<AuthPromptData | null>(null);
     let authValues = $state<string[]>([]);
@@ -128,7 +113,12 @@
     let disconnected = $state(false);
     let showSearch = $state(false);
     let searchQuery = $state("");
+
+    // Listener tracking — disposed on cleanup/reconnect
     let unlisteners: UnlistenFn[] = [];
+    let dataDisposable: IDisposable | undefined;
+    let resizeDisposable: IDisposable | undefined;
+    let reconnectDisposable: IDisposable | undefined;
     let resizeObs: ResizeObserver;
 
     const isLocal = $derived(tabType === "local");
@@ -142,7 +132,6 @@
         requestAnimationFrame(() => searchInputEl?.focus());
     }
 
-    /* Listen for external search requests (from tab context menu) */
     let _lastSearchN = 0;
     $effect(() => {
         const req = app.searchRequest();
@@ -152,22 +141,139 @@
         }
     });
 
-    function closeSearch() {
-        showSearch = false;
-        searchAddon?.clearDecorations();
-        terminal?.focus();
+    function closeSearch() { showSearch = false; searchAddon?.clearDecorations(); terminal?.focus(); }
+    function doSearch() { if (searchQuery) searchAddon?.findNext(searchQuery); }
+    function searchNext() { searchAddon?.findNext(searchQuery); }
+    function searchPrev() { searchAddon?.findPrevious(searchQuery); }
+
+    // ─── Shared connect/wire helpers ───
+
+    const decoder = new TextDecoder("utf-8");
+
+    /** Wire Tauri event listeners for session data + close. */
+    async function wireSessionEvents(sid: string) {
+        unlisteners.push(await listen<number[]>(`${dataEvent}:${sid}`, (ev) => {
+            const raw = new Uint8Array(ev.payload);
+            if (hlRegex) {
+                terminal.write(applyHighlights(decoder.decode(raw, { stream: true })));
+            } else {
+                terminal.write(raw);
+            }
+        }));
+        unlisteners.push(await listen(`${closeEvent}:${sid}`, () => {
+            disconnected = true;
+            terminal.write("\r\n\x1b[31m--- Disconnected ---\x1b[0m\r\n");
+            terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
+            setupReconnect();
+        }));
     }
 
-    function doSearch() {
-        if (searchQuery) searchAddon?.findNext(searchQuery);
+    /** Register terminal input + resize handlers (disposes old ones first). */
+    function wireSessionInput(sid: string) {
+        dataDisposable?.dispose();
+        resizeDisposable?.dispose();
+
+        dataDisposable = terminal.onData((data: string) => {
+            if (!disconnected) {
+                invoke(writeCmd, { sessionId: sid, data: Array.from(new TextEncoder().encode(processInput(data))) });
+            }
+        });
+        resizeDisposable = terminal.onResize(({ cols, rows }) => {
+            if (!disconnected) invoke(resizeCmd, { sessionId: sid, cols, rows });
+        });
     }
 
-    function searchNext() {
-        searchAddon?.findNext(searchQuery);
+    /** Full connect cycle: spawn session, wire events + input. */
+    async function connectAndWire(): Promise<boolean> {
+        // Cleanup previous
+        unlisteners.forEach(u => u());
+        unlisteners = [];
+        disconnected = false;
+        sessionId = null;
+
+        if (isLocal) {
+            try {
+                sessionId = await invoke<string>("pty_spawn", { cols: terminal.cols, rows: terminal.rows });
+            } catch (e: any) {
+                terminal.write(`\x1b[31mLaunch failed: ${e}\x1b[0m\r\n`);
+                return false;
+            }
+            await wireSessionEvents(sessionId);
+        } else {
+            // SSH: listen on tabId FIRST for connection logs
+            const logUn = await listen<number[]>(`ssh:data:${tabId}`, (ev) => {
+                terminal.write(new Uint8Array(ev.payload));
+            });
+            const authUn = await listen<AuthPromptData>(`ssh:auth_prompt:${tabId}`, (ev) => {
+                authPrompt = ev.payload;
+                authValues = ev.payload.prompts.map(() => "");
+            });
+
+            try {
+                sessionId = await invoke<string>("ssh_connect", {
+                    profileId: meta.profileId || null,
+                    host: meta.profileId ? null : meta.host,
+                    port: meta.profileId ? null : (Number(meta.port) || 22),
+                    username: meta.profileId ? null : meta.username,
+                    authType: meta.profileId ? null : meta.authType,
+                    secret: meta.profileId ? null : (meta.secret || null),
+                    logSessionId: tabId,
+                    cols: terminal.cols, rows: terminal.rows,
+                });
+            } catch (e: any) {
+                logUn(); authUn();
+                terminal.write(`\x1b[31mConnection failed: ${e}\x1b[0m\r\n`);
+                terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
+                disconnected = true;
+                return false;
+            }
+            logUn(); authUn();
+            await wireSessionEvents(sessionId);
+        }
+
+        wireSessionInput(sessionId!);
+
+        // Sync initial size
+        requestAnimationFrame(() => {
+            fitAddon.fit();
+            if (sessionId && !disconnected) {
+                invoke(resizeCmd, { sessionId, cols: terminal.cols, rows: terminal.rows });
+            }
+        });
+
+        return true;
     }
 
-    function searchPrev() {
-        searchAddon?.findPrevious(searchQuery);
+    function processInput(data: string): string {
+        const ctrl = app.ctrlActive();
+        const alt = app.altActive();
+        if (!ctrl && !alt) return data;
+        if (ctrl && data.length === 1) {
+            const code = data.toUpperCase().charCodeAt(0);
+            if (code >= 65 && code <= 90) data = String.fromCharCode(code - 64);
+        }
+        if (alt) data = '\x1b' + data;
+        app.clearModifiers();
+        return data;
+    }
+
+    function setupReconnect() {
+        reconnectDisposable?.dispose();
+        reconnectDisposable = terminal.onData(() => {
+            if (!disconnected) return;
+            reconnectDisposable?.dispose();
+            reconnectDisposable = undefined;
+            reconnect();
+        });
+    }
+
+    async function reconnect() {
+        terminal.write("\r\n\x1b[36mReconnecting ...\x1b[0m\r\n");
+        const ok = await connectAndWire();
+        setupReconnect();
+        if (!ok) {
+            disconnected = true;
+        }
     }
 
     onMount(async () => {
@@ -196,29 +302,17 @@
         terminal.unicode.activeVersion = "11";
         fitAddon.fit();
 
-        // Intercept Ctrl/Cmd+F for search, Ctrl/Cmd+O for SFTP
+        // Intercept Ctrl/Cmd+F for search, Ctrl/Cmd+O for SFTP, Ctrl/Cmd+S for snippets
         terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
             if (e.type !== "keydown") return true;
             const mod = e.metaKey || e.ctrlKey;
-            if (mod && e.key === "f") {
-                e.preventDefault();
-                openSearch();
-                return false;
-            }
-            if (mod && e.key === "o" && !isLocal && !app.isMobile) {
-                e.preventDefault();
-                app.navigate("sftp");
-                return false;
-            }
-            if (mod && e.key === "s") {
-                e.preventDefault();
-                app.openSnippetPicker();
-                return false;
-            }
+            if (mod && e.key === "f") { e.preventDefault(); openSearch(); return false; }
+            if (mod && e.key === "o" && !isLocal && !app.isMobile) { e.preventDefault(); app.navigate("sftp"); return false; }
+            if (mod && e.key === "s") { e.preventDefault(); app.openSnippetPicker(); return false; }
             return true;
         });
 
-        // OSC 7337: rssh CLI → app integration (open profile / forward)
+        // OSC 7337: rssh CLI → app integration
         terminal.parser.registerOscHandler(7337, (data: string) => {
             const sep = data.indexOf(":");
             if (sep < 0) return false;
@@ -230,88 +324,10 @@
         });
 
         // Load highlight rules
-        try {
-            hlRules = await app.loadHighlights();
-            buildHighlightRegex(hlRules);
-        } catch { /* non-fatal */
-        }
-
-        const decoder = new TextDecoder("utf-8");
-
-        // Helper: wire data + close events for a session
-        async function wireSession(sid: string) {
-            unlisteners.push(await listen<number[]>(`${dataEvent}:${sid}`, (ev) => {
-                const raw = new Uint8Array(ev.payload);
-                if (hlRegex) {
-                    terminal.write(applyHighlights(decoder.decode(raw, { stream: true })));
-                } else {
-                    terminal.write(raw);
-                }
-            }));
-            unlisteners.push(await listen(`${closeEvent}:${sid}`, () => {
-                disconnected = true;
-                terminal.write("\r\n\x1b[31m--- Disconnected ---\x1b[0m\r\n");
-                terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
-            }));
-        }
+        try { hlRules = await app.loadHighlights(); buildHighlightRegex(hlRules); } catch {}
 
         // Connect
-        if (isLocal) {
-            try {
-                sessionId = await invoke<string>("pty_spawn", {cols: terminal.cols, rows: terminal.rows});
-            } catch (e: any) {
-                terminal.write(`\x1b[31mLaunch failed: ${e}\x1b[0m\r\n`);
-                return;
-            }
-            await wireSession(sessionId);
-        } else {
-            // SSH: listen on tabId FIRST for connection logs, then connect
-            const logUn = await listen<number[]>(`ssh:data:${tabId}`, (ev) => {
-                terminal.write(new Uint8Array(ev.payload));
-            });
-
-            // Keyboard-interactive auth prompts
-            const authUn = await listen<AuthPromptData>(`ssh:auth_prompt:${tabId}`, (ev) => {
-                authPrompt = ev.payload;
-                authValues = ev.payload.prompts.map(() => "");
-            });
-
-            try {
-                sessionId = await invoke<string>("ssh_connect", {
-                    profileId: meta.profileId || null,
-                    host: meta.profileId ? null : meta.host,
-                    port: meta.profileId ? null : (Number(meta.port) || 22),
-                    username: meta.profileId ? null : meta.username,
-                    authType: meta.profileId ? null : meta.authType,
-                    secret: meta.profileId ? null : (meta.secret || null),
-                    logSessionId: tabId,
-                    cols: terminal.cols, rows: terminal.rows,
-                });
-            } catch (e: any) {
-                logUn(); authUn();
-                terminal.write(`\x1b[31mConnection failed: ${e}\x1b[0m\r\n`);
-                terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
-                disconnected = true;
-                setupReconnect();
-                return;
-            }
-            logUn(); authUn();
-            await wireSession(sessionId);
-        }
-
-        const sid = sessionId!;
-
-        // Wire input
-        terminal.onData((data: string) => {
-            if (!disconnected) {
-                const d = processInput(data);
-                invoke(writeCmd, {sessionId: sid, data: Array.from(new TextEncoder().encode(d))});
-            }
-        });
-        terminal.onResize(({cols, rows}) => {
-            if (!disconnected) invoke(resizeCmd, {sessionId: sid, cols, rows});
-        });
-
+        await connectAndWire();
         setupReconnect();
 
         terminal.onTitleChange((title) => {
@@ -322,114 +338,13 @@
 
         resizeObs = new ResizeObserver(() => fitAddon?.fit());
         resizeObs.observe(containerEl);
-        requestAnimationFrame(() => {
-            fitAddon.fit();
-            if (!disconnected) invoke(resizeCmd, {sessionId: sid, cols: terminal.cols, rows: terminal.rows});
-        });
     });
-
-    function processInput(data: string): string {
-        const ctrl = app.ctrlActive();
-        const alt = app.altActive();
-        if (!ctrl && !alt) return data;
-        if (ctrl && data.length === 1) {
-            const code = data.toUpperCase().charCodeAt(0);
-            if (code >= 65 && code <= 90) data = String.fromCharCode(code - 64);
-        }
-        if (alt) data = '\x1b' + data;
-        app.clearModifiers();
-        return data;
-    }
-
-    function setupReconnect() {
-        // On any keypress when disconnected → reconnect
-        const handler = terminal.onData(() => {
-            if (!disconnected) return;
-            handler.dispose();
-            reconnect();
-        });
-    }
-
-    async function reconnect() {
-        // Clean up old listeners
-        unlisteners.forEach(u => u());
-        unlisteners = [];
-        disconnected = false;
-        sessionId = null;
-
-        terminal.write("\r\n\x1b[36mReconnecting ...\x1b[0m\r\n");
-
-        if (isLocal) {
-            try {
-                sessionId = await invoke<string>("pty_spawn", {cols: terminal.cols, rows: terminal.rows});
-                const sid = sessionId;
-                const decoder = new TextDecoder();
-                unlisteners.push(await listen<number[]>(`pty:data:${sid}`, (ev) => {
-                    const raw = new Uint8Array(ev.payload);
-                    terminal.write(hlRegex ? applyHighlights(decoder.decode(raw, { stream: true })) : raw);
-                }));
-                unlisteners.push(await listen(`pty:close:${sid}`, () => {
-                    disconnected = true;
-                    terminal.write("\r\n\x1b[31m--- Disconnected ---\x1b[0m\r\n");
-                    terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
-                    setupReconnect();
-                }));
-                terminal.onData((data: string) => {
-                    if (!disconnected) invoke("pty_write", {sessionId: sid, data: Array.from(new TextEncoder().encode(processInput(data)))});
-                });
-            } catch (e: any) {
-                terminal.write(`\x1b[31mReconnect failed: ${e}\x1b[0m\r\n`);
-                disconnected = true;
-                setupReconnect();
-            }
-        } else {
-            const logUn = await listen<number[]>(`ssh:data:${tabId}`, (ev) => {
-                terminal.write(new Uint8Array(ev.payload));
-            });
-            try {
-                sessionId = await invoke<string>("ssh_connect", {
-                    profileId: meta.profileId || null,
-                    host: meta.profileId ? null : meta.host,
-                    port: meta.profileId ? null : (Number(meta.port) || 22),
-                    username: meta.profileId ? null : meta.username,
-                    authType: meta.profileId ? null : meta.authType,
-                    secret: meta.profileId ? null : (meta.secret || null),
-                    logSessionId: tabId,
-                    cols: terminal.cols, rows: terminal.rows,
-                });
-                logUn();
-                const sid = sessionId;
-                const decoder = new TextDecoder();
-                unlisteners.push(await listen<number[]>(`ssh:data:${sid}`, (ev) => {
-                    const raw = new Uint8Array(ev.payload);
-                    terminal.write(hlRegex ? applyHighlights(decoder.decode(raw, { stream: true })) : raw);
-                }));
-                unlisteners.push(await listen(`ssh:close:${sid}`, () => {
-                    disconnected = true;
-                    terminal.write("\r\n\x1b[31m--- Disconnected ---\x1b[0m\r\n");
-                    terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
-                    setupReconnect();
-                }));
-                terminal.onData((data: string) => {
-                    if (!disconnected) invoke("ssh_write", {sessionId: sid, data: Array.from(new TextEncoder().encode(processInput(data)))});
-                });
-                terminal.onResize(({cols, rows}) => {
-                    if (!disconnected) invoke("ssh_resize", {sessionId: sid, cols, rows});
-                });
-            } catch (e: any) {
-                logUn();
-                terminal.write(`\x1b[31mReconnect failed: ${e}\x1b[0m\r\n`);
-                terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
-                disconnected = true;
-                setupReconnect();
-            }
-        }
-    }
 
     // Register session in global registry for broadcast
     $effect(() => {
         if (sessionId && !disconnected) {
-            untrack(() => app.registerSession({ tabId, sessionId, type: tabType }));
+            const sid = sessionId;
+            untrack(() => app.registerSession({ tabId, sessionId: sid, type: tabType }));
         } else {
             untrack(() => app.unregisterSession(tabId));
         }
@@ -450,13 +365,15 @@
 
     onDestroy(() => {
         unlisteners.forEach(u => u());
+        dataDisposable?.dispose();
+        resizeDisposable?.dispose();
+        reconnectDisposable?.dispose();
         resizeObs?.disconnect();
         app.unregisterTerminalWriter();
         app.unregisterSession(tabId);
         if (sessionId && !disconnected) {
             const cmd = isLocal ? "pty_close" : "ssh_disconnect";
-            invoke(cmd, {sessionId}).catch(() => {
-            });
+            invoke(cmd, {sessionId}).catch(() => {});
         }
         terminal?.dispose();
     });

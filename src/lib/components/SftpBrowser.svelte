@@ -1,6 +1,7 @@
 <script lang="ts">
     import {onDestroy, onMount} from "svelte";
     import {invoke} from "@tauri-apps/api/core";
+    import {listen, type UnlistenFn} from "@tauri-apps/api/event";
     import type {RemoteEntry} from "../stores/app.svelte.ts";
 
     let {meta}: { meta: Record<string, string> } = $props();
@@ -12,13 +13,21 @@
     let error = $state("");
     let uploading = $state(false);
     let notice = $state("");
+    let transferProgress = $state<{ transferred: number; total: number } | null>(null);
+    let progressUnlisten: UnlistenFn | null = null;
 
     onMount(async () => {
         try {
-            const id = await invoke<string>("sftp_connect", {
-                host: meta.host, port: Number(meta.port),
-                username: meta.username, authType: meta.authType, secret: meta.secret || null,
-            });
+            let id: string;
+            if (meta.sessionId) {
+                // Reuse existing SSH connection — no re-authentication needed
+                id = await invoke<string>("sftp_connect_session", { sessionId: meta.sessionId });
+            } else {
+                id = await invoke<string>("sftp_connect", {
+                    host: meta.host, port: Number(meta.port),
+                    username: meta.username, authType: meta.authType, secret: meta.secret || null,
+                });
+            }
             sftpId = id;
             const home = await invoke<string>("sftp_home", {sftpId: id});
             cwd = home;
@@ -31,6 +40,7 @@
 
     onDestroy(() => {
         if (sftpId) invoke("sftp_close", {sftpId});
+        progressUnlisten?.();
     });
 
     async function listDir(path: string) {
@@ -54,9 +64,25 @@
         if (e.is_dir) listDir(cwd === "/" ? `/${e.name}` : `${cwd}/${e.name}`);
     }
 
+    async function startProgressListener() {
+        progressUnlisten?.();
+        // Listen for all sftp:progress events (wildcard via prefix matching)
+        progressUnlisten = await listen<{ transferred: number; total: number }>(
+            "sftp:progress",
+            (ev) => { transferProgress = ev.payload; },
+        );
+    }
+
+    function stopProgress() {
+        progressUnlisten?.();
+        progressUnlisten = null;
+        transferProgress = null;
+    }
+
     async function download(e: RemoteEntry) {
         error = "";
         notice = "";
+        transferProgress = { transferred: 0, total: e.size };
         try {
             const remotePath = cwd === "/" ? `/${e.name}` : `${cwd}/${e.name}`;
             const saved = await invoke<string | null>("sftp_save_file", {
@@ -67,6 +93,8 @@
             if (saved) notice = `Saved to ${saved}`;
         } catch (err: any) {
             error = String(err);
+        } finally {
+            stopProgress();
         }
     }
 
@@ -74,6 +102,7 @@
         error = "";
         notice = "";
         uploading = true;
+        transferProgress = { transferred: 0, total: 0 };
         try {
             const name = await invoke<string | null>("sftp_pick_and_upload", {
                 sftpId,
@@ -87,6 +116,7 @@
             error = String(err);
         } finally {
             uploading = false;
+            stopProgress();
         }
     }
 
@@ -107,6 +137,16 @@
         </button>
     </div>
     <div class="breadcrumb">{cwd}</div>
+
+    {#if transferProgress}
+        {@const pct = transferProgress.total > 0 ? Math.min(100, (transferProgress.transferred / transferProgress.total) * 100) : 0}
+        <div class="progress-row">
+            <div class="progress-track">
+                <div class="progress-fill" style="width: {pct.toFixed(1)}%"></div>
+            </div>
+            <span class="progress-text">{pct.toFixed(0)}% — {formatSize(transferProgress.transferred)} / {formatSize(transferProgress.total)}</span>
+        </div>
+    {/if}
 
     {#if error}
         <div class="error-banner">{error}</div>
@@ -241,5 +281,34 @@
         text-align: center;
         color: var(--text-dim);
         padding: 24px;
+    }
+
+    .progress-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 8px;
+    }
+
+    .progress-track {
+        flex: 1;
+        height: 6px;
+        background: var(--surface);
+        border-radius: 3px;
+        overflow: hidden;
+    }
+
+    .progress-fill {
+        height: 100%;
+        background: var(--accent);
+        border-radius: 3px;
+        transition: width 0.15s linear;
+    }
+
+    .progress-text {
+        font-size: 11px;
+        color: var(--text-sub);
+        white-space: nowrap;
+        min-width: 120px;
     }
 </style>

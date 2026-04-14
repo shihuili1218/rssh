@@ -32,16 +32,23 @@ export type SettingsPage =
   | "recording-settings"
   | "playback"
   | "shell-settings"
+  | "groups"
+  | "group-edit"
   | "cli"
   | "help";
 
+export interface Group {
+  id: string; name: string; color: string; sort_order: number;
+}
 export interface Profile {
   id: string; name: string; host: string; port: number;
   credential_id: string | null; bastion_profile_id: string | null; init_command: string | null;
+  group_id: string | null;
 }
 export interface Credential {
   id: string; name: string; username: string;
   type: string; secret: string | null; save_to_remote: boolean;
+  passphrase: string | null;
 }
 export interface Forward {
   id: string; name: string; type: string;
@@ -90,6 +97,15 @@ export function addTab(tab: Tab) {
   _activeTabId = tab.id;
   _settingsActive = false;
   _sftpOpen = false;
+}
+
+export function moveTab(fromIdx: number, toIdx: number) {
+  if (fromIdx === toIdx || fromIdx < 0 || toIdx < 0) return;
+  if (fromIdx >= _tabs.length || toIdx >= _tabs.length) return;
+  const next = [..._tabs];
+  const [tab] = next.splice(fromIdx, 1);
+  next.splice(toIdx, 0, tab);
+  _tabs = next;
 }
 
 export function closeTab(id: string) {
@@ -169,6 +185,9 @@ export function connectedSessions(): SessionInfo[] {
     label: _tabs.find(t => t.id === s.tabId)?.label ?? s.tabId,
   }));
 }
+export function sessionIdForTab(tabId: string): string | undefined {
+  return _sessions.find(s => s.tabId === tabId)?.sessionId;
+}
 
 export function broadcastToSessions(tabIds: string[], text: string) {
   const data = Array.from(new TextEncoder().encode(text));
@@ -234,4 +253,7 @@ export async function loadSnippets(): Promise<Snippet[]> {
 }
 export async function loadHighlights(): Promise<HighlightRule[]> {
   return invoke<HighlightRule[]>("list_highlights");
+}
+export async function loadGroups(): Promise<Group[]> {
+  return invoke<Group[]>("list_groups");
 }

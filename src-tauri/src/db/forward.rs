@@ -4,10 +4,18 @@ use crate::error::AppResult;
 use crate::models::{Forward, ForwardType};
 
 fn parse_type(s: &str) -> ForwardType {
-    match s { "remote" => ForwardType::Remote, _ => ForwardType::Local }
+    match s {
+        "remote" => ForwardType::Remote,
+        "dynamic" => ForwardType::Dynamic,
+        _ => ForwardType::Local,
+    }
 }
 fn type_str(ft: ForwardType) -> &'static str {
-    match ft { ForwardType::Local => "local", ForwardType::Remote => "remote" }
+    match ft {
+        ForwardType::Local => "local",
+        ForwardType::Remote => "remote",
+        ForwardType::Dynamic => "dynamic",
+    }
 }
 
 pub fn get(conn: &Connection, id: &str) -> AppResult<Forward> {

@@ -49,6 +49,11 @@ pub fn run() {
             commands::profile::update_credential,
             commands::profile::delete_credential,
             commands::profile::import_ssh_config,
+            // groups
+            commands::group::list_groups,
+            commands::group::create_group,
+            commands::group::update_group,
+            commands::group::delete_group,
             // forward CRUD
             commands::forward::list_forwards,
             commands::forward::get_forward,
@@ -89,6 +94,7 @@ pub fn run() {
             commands::pty::pty_close,
             // SFTP
             commands::sftp::sftp_connect,
+            commands::sftp::sftp_connect_session,
             commands::sftp::sftp_home,
             commands::sftp::sftp_list,
             commands::sftp::sftp_download,
