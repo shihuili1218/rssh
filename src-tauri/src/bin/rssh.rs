@@ -141,7 +141,7 @@ fn cmd_ls(conn: &Connection, query: Option<&str>) -> AppResult<()> {
             let profiles = db::profile::list(conn)?;
             for f in &list {
                 let pname = profiles.iter().find(|p| p.id == f.profile_id).map(|p| p.name.as_str()).unwrap_or("?");
-                let ft = match f.forward_type { ForwardType::Local => "L", ForwardType::Remote => "R" };
+                let ft = match f.forward_type { ForwardType::Local => "L", ForwardType::Remote => "R", ForwardType::Dynamic => "D" };
                 println!("{:<18} {:<6} {:<8} {}:{:<17} {}", f.name, ft, f.local_port, f.remote_host, f.remote_port, pname);
             }
         }
@@ -159,14 +159,22 @@ fn cmd_ls(conn: &Connection, query: Option<&str>) -> AppResult<()> {
                 return Ok(());
             }
             let creds = db::credential::list(conn)?;
-            println!("{:<20} {:<25} {:<6} {:<15}", "NAME", "HOST", "PORT", "USER");
-            println!("{}", "-".repeat(70));
+            let groups = db::group::list(conn)?;
+            println!("{:<20} {:<25} {:<6} {:<15} {}", "NAME", "HOST", "PORT", "USER", "GROUP");
+            println!("{}", "-".repeat(78));
             for p in &filtered {
                 let user = p.credential_id.as_deref()
                     .and_then(|id| creds.iter().find(|c| c.id == id))
                     .map(|c| c.username.as_str())
                     .unwrap_or("-");
-                println!("{:<20} {:<25} {:<6} {:<15}", p.name, p.host, p.port, user);
+                let group_display = p.group_id.as_deref()
+                    .and_then(|gid| groups.iter().find(|g| g.id == gid))
+                    .map(|g| {
+                        let (r, g_val, b) = hex_to_rgb(&g.color);
+                        format!("\x1b[38;2;{};{};{}m{}\x1b[0m", r, g_val, b, g.name)
+                    })
+                    .unwrap_or_else(|| "-".into());
+                println!("{:<20} {:<25} {:<6} {:<15} {}", p.name, p.host, p.port, user, group_display);
             }
         }
     }
@@ -293,11 +301,12 @@ fn cmd_open_fwd(conn: &Connection, name: &str) -> AppResult<()> {
     let mut cmd = Command::new("ssh");
     cmd.arg("-N");
 
-    let fwd_arg = match fwd.forward_type {
-        ForwardType::Local => format!("{}:{}:{}", fwd.local_port, fwd.remote_host, fwd.remote_port),
-        ForwardType::Remote => format!("{}:{}:{}", fwd.remote_port, fwd.remote_host, fwd.local_port),
+    let (flag, fwd_arg) = match fwd.forward_type {
+        ForwardType::Local => ("-L", format!("{}:{}:{}", fwd.local_port, fwd.remote_host, fwd.remote_port)),
+        ForwardType::Remote => ("-R", format!("{}:{}:{}", fwd.remote_port, fwd.remote_host, fwd.local_port)),
+        ForwardType::Dynamic => ("-D", format!("{}", fwd.local_port)),
     };
-    cmd.arg(if fwd.forward_type == ForwardType::Local { "-L" } else { "-R" }).arg(&fwd_arg);
+    cmd.arg(flag).arg(&fwd_arg);
 
     let mut _key_files: Vec<tempfile::NamedTempFile> = Vec::new();
 
@@ -318,7 +327,7 @@ fn cmd_open_fwd(conn: &Connection, name: &str) -> AppResult<()> {
 
     cmd.arg(&profile.host);
 
-    println!("Forwarding {} {} ...", if fwd.forward_type == ForwardType::Local { "-L" } else { "-R" }, fwd_arg);
+    println!("Forwarding {} {} ...", flag, fwd_arg);
     let status = cmd.status().map_err(|e| rssh_lib::error::AppError::Ssh(format!("{e}")))?;
     std::process::exit(status.code().unwrap_or(1));
 }
@@ -396,12 +405,28 @@ fn add_profile(conn: &Connection) -> AppResult<()> {
 
     let init_command = prompt_optional("Init command (optional): ");
 
+    let groups = db::group::list(conn)?;
+    let group_id = if groups.is_empty() {
+        None
+    } else {
+        println!("Group (optional):");
+        println!("  0 - none");
+        for (i, g) in groups.iter().enumerate() {
+            println!("  {} - {}", i + 1, g.name);
+        }
+        let choice = prompt_default("Group #", "0");
+        choice.parse::<usize>().ok()
+            .and_then(|n| groups.get(n.wrapping_sub(1)))
+            .map(|g| g.id.clone())
+    };
+
     let p = Profile {
         id: uuid::Uuid::new_v4().to_string(),
         name, host, port,
         credential_id,
         bastion_profile_id,
         init_command,
+        group_id,
     };
     db::profile::insert(conn, &p)?;
     println!("Profile '{}' created.", p.name);
@@ -417,16 +442,17 @@ fn add_credential(conn: &Connection) -> AppResult<()> {
     println!("  2 - key (PEM)");
     println!("  3 - none");
     let choice = prompt_default("Type #", "1");
-    let (credential_type, secret) = match choice.as_str() {
+    let (credential_type, secret, passphrase) = match choice.as_str() {
         "2" => {
             println!("Paste private key (end with empty line):");
             let key = read_multiline();
-            (CredentialType::Key, Some(key))
+            let pp = prompt_optional("Key passphrase (optional): ");
+            (CredentialType::Key, Some(key), pp)
         }
-        "3" => (CredentialType::None, None),
+        "3" => (CredentialType::None, None, None),
         _ => {
             let pw = read_password("Password: ");
-            (CredentialType::Password, Some(pw))
+            (CredentialType::Password, Some(pw), None)
         }
     };
 
@@ -435,6 +461,7 @@ fn add_credential(conn: &Connection) -> AppResult<()> {
     let c = Credential {
         id: uuid::Uuid::new_v4().to_string(),
         name, username, credential_type, secret, save_to_remote,
+        passphrase,
     };
     db::credential::insert(conn, &c)?;
     println!("Credential '{}' created.", c.name);
@@ -447,11 +474,19 @@ fn add_forward(conn: &Connection) -> AppResult<()> {
     println!("Type:");
     println!("  1 - local (-L)");
     println!("  2 - remote (-R)");
-    let ft = if prompt_default("Type #", "1") == "2" { ForwardType::Remote } else { ForwardType::Local };
+    println!("  3 - dynamic (-D, SOCKS5)");
+    let ft = match prompt_default("Type #", "1").as_str() {
+        "2" => ForwardType::Remote,
+        "3" => ForwardType::Dynamic,
+        _ => ForwardType::Local,
+    };
 
     let local_port: u16 = prompt("Local port: ").parse().unwrap_or(0);
-    let remote_host = prompt_default("Remote host", "127.0.0.1");
-    let remote_port: u16 = prompt("Remote port: ").parse().unwrap_or(0);
+    let (remote_host, remote_port) = if ft == ForwardType::Dynamic {
+        ("127.0.0.1".to_string(), 0u16)
+    } else {
+        (prompt_default("Remote host", "127.0.0.1"), prompt("Remote port: ").parse().unwrap_or(0))
+    };
 
     let profiles = db::profile::list(conn)?;
     if profiles.is_empty() {
@@ -523,6 +558,23 @@ fn edit_profile(conn: &Connection, name: &str) -> AppResult<()> {
         if v.is_empty() { None } else { Some(v) }
     };
 
+    let groups = db::group::list(conn)?;
+    if !groups.is_empty() {
+        let cur = p.group_id.as_deref()
+            .and_then(|id| groups.iter().position(|g| g.id == id))
+            .map(|i| (i + 1).to_string())
+            .unwrap_or("0".into());
+        println!("Group:");
+        println!("  0 - none");
+        for (i, g) in groups.iter().enumerate() {
+            println!("  {} - {}", i + 1, g.name);
+        }
+        let choice = prompt_default("Group #", &cur);
+        updated.group_id = choice.parse::<usize>().ok()
+            .and_then(|n| groups.get(n.wrapping_sub(1)))
+            .map(|g| g.id.clone());
+    }
+
     db::profile::update(conn, &updated)?;
     println!("Profile '{}' updated.", updated.name);
     Ok(())
@@ -545,17 +597,27 @@ fn edit_credential(conn: &Connection, name: &str) -> AppResult<()> {
         "1" => {
             updated.credential_type = CredentialType::Password;
             updated.secret = Some(read_password("Password: "));
+            updated.passphrase = None;
         }
         "2" => {
             updated.credential_type = CredentialType::Key;
             println!("Paste private key (end with empty line):");
             updated.secret = Some(read_multiline());
+            updated.passphrase = prompt_optional("Key passphrase (optional): ");
         }
         "3" => {
             updated.credential_type = CredentialType::None;
             updated.secret = None;
+            updated.passphrase = None;
         }
-        _ => {} // keep current
+        _ => {
+            // Keep current type; still allow editing passphrase if key type
+            if updated.credential_type == CredentialType::Key {
+                let cur = updated.passphrase.as_deref().unwrap_or("");
+                let v = prompt_default("Key passphrase", cur);
+                updated.passphrase = if v.is_empty() { None } else { Some(v) };
+            }
+        }
     }
 
     updated.save_to_remote = confirm("Sync secret to GitHub?", c.save_to_remote);
@@ -989,6 +1051,22 @@ complete -c rssh -n '__fish_seen_subcommand_from rm' -a 'profile cred fwd'
 complete -c rssh -n '__fish_seen_subcommand_from config' -a 'export import set push pull'
 complete -c rssh -n '__fish_seen_subcommand_from completions' -a 'zsh bash powershell fish'
 "#;
+
+// ═══════════════════════════════════════════════════════════════════
+// Color helpers
+// ═══════════════════════════════════════════════════════════════════
+
+fn hex_to_rgb(hex: &str) -> (u8, u8, u8) {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() >= 6 {
+        let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(128);
+        let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(128);
+        let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(128);
+        (r, g, b)
+    } else {
+        (128, 128, 128)
+    }
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // IO helpers
