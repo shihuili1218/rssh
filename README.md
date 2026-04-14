@@ -82,9 +82,10 @@ CLI and desktop app share the same database:
 
 | Key | Action |
 |---|---|
-| Cmd+K | Toggle sidebar |
+| Ctrl+Tab / Ctrl+Shift+Tab | Switch between tabs |
+| Cmd+W | Close current tab |
 | Cmd+F | Terminal search |
-| Cmd+E | Snippet picker |
+| Cmd+S | Command snippet |
 | Cmd+O | SFTP browser |
 
 ## Development
@@ -94,3 +95,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## License
 
 MIT
+

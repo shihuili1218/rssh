@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use async_trait::async_trait;
 use russh::client;
 use russh::ChannelMsg;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 
@@ -13,7 +13,10 @@ use crate::error::{AppError, AppResult};
 use crate::models::{Credential, CredentialType, Profile};
 use crate::terminal::recorder::Recorder;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub const DEFAULT_CONNECT_TIMEOUT: u64 = 10;
+
+/// Shared SSH connection handle for opening new channels (SFTP, forwarding).
+pub type SshHandle = Arc<tokio::sync::Mutex<client::Handle<SshHandler>>>;
 
 // ---------------------------------------------------------------------------
 // SSH handler — known_hosts TOFU 验证
@@ -23,6 +26,8 @@ pub struct SshHandler {
     host_port: String,
     known_hosts_path: PathBuf,
     key_mismatch: Arc<StdMutex<bool>>,
+    /// Sender for forwarded channels from remote port forwarding.
+    forwarded_channels: Arc<StdMutex<Option<mpsc::UnboundedSender<russh::Channel<client::Msg>>>>>,
 }
 
 /// 用 key 的 name + 各变体的核心字节生成紧凑指纹
@@ -50,6 +55,23 @@ fn save_known_hosts(path: &PathBuf, hosts: &HashMap<String, String>) {
 #[async_trait]
 impl client::Handler for SshHandler {
     type Error = russh::Error;
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        _connected_address: &str,
+        _connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        if let Ok(guard) = self.forwarded_channels.lock() {
+            if let Some(tx) = guard.as_ref() {
+                let _ = tx.send(channel);
+            }
+        }
+        Ok(())
+    }
 
     async fn check_server_key(
         &mut self,
@@ -83,14 +105,19 @@ impl client::Handler for SshHandler {
     }
 }
 
-fn new_handler(host: &str, port: u16, known_hosts_path: PathBuf) -> (SshHandler, Arc<StdMutex<bool>>) {
+/// Shared forwarded-channel sender, settable from outside.
+pub type ForwardedChannelSender = Arc<StdMutex<Option<mpsc::UnboundedSender<russh::Channel<client::Msg>>>>>;
+
+fn new_handler(host: &str, port: u16, known_hosts_path: PathBuf) -> (SshHandler, Arc<StdMutex<bool>>, ForwardedChannelSender) {
     let mismatch = Arc::new(StdMutex::new(false));
+    let fwd_channels: ForwardedChannelSender = Arc::new(StdMutex::new(None));
     let handler = SshHandler {
         host_port: format!("[{}]:{}", host, port),
         known_hosts_path,
         key_mismatch: mismatch.clone(),
+        forwarded_channels: fwd_channels.clone(),
     };
-    (handler, mismatch)
+    (handler, mismatch, fwd_channels)
 }
 
 fn map_connect_error(e: russh::Error, host: &str, port: u16, mismatch: &StdMutex<bool>) -> AppError {
@@ -110,12 +137,31 @@ pub async fn ssh_connect(
     host: &str,
     port: u16,
     known_hosts_path: PathBuf,
+    timeout_secs: u64,
 ) -> AppResult<client::Handle<SshHandler>> {
-    let (handler, mismatch) = new_handler(host, port, known_hosts_path);
-    match timeout(CONNECT_TIMEOUT, client::connect(config, (host, port), handler)).await {
+    let connect_timeout = Duration::from_secs(timeout_secs);
+    let (handler, mismatch, _fwd) = new_handler(host, port, known_hosts_path);
+    match timeout(connect_timeout, client::connect(config, (host, port), handler)).await {
         Ok(result) => result.map_err(|e| map_connect_error(e, host, port, &mismatch)),
-        Err(_) => Err(AppError::Ssh(format!("{}:{} 连接超时 ({}s)", host, port, CONNECT_TIMEOUT.as_secs()))),
+        Err(_) => Err(AppError::Ssh(format!("{}:{} 连接超时 ({}s)", host, port, timeout_secs))),
     }
+}
+
+/// SSH connect that also returns the forwarded channel sender (for remote forwarding).
+pub async fn ssh_connect_with_forward(
+    config: Arc<client::Config>,
+    host: &str,
+    port: u16,
+    known_hosts_path: PathBuf,
+    timeout_secs: u64,
+) -> AppResult<(client::Handle<SshHandler>, ForwardedChannelSender)> {
+    let connect_timeout = Duration::from_secs(timeout_secs);
+    let (handler, mismatch, fwd) = new_handler(host, port, known_hosts_path);
+    let handle = match timeout(connect_timeout, client::connect(config, (host, port), handler)).await {
+        Ok(result) => result.map_err(|e| map_connect_error(e, host, port, &mismatch))?,
+        Err(_) => return Err(AppError::Ssh(format!("{}:{} 连接超时 ({}s)", host, port, timeout_secs))),
+    };
+    Ok((handle, fwd))
 }
 
 /// 在已有 stream 上建立 SSH 连接（用于堡垒机隧道）。
@@ -125,12 +171,14 @@ pub async fn ssh_connect_stream<S>(
     host: &str,
     port: u16,
     known_hosts_path: PathBuf,
+    timeout_secs: u64,
 ) -> AppResult<client::Handle<SshHandler>>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    let (handler, mismatch) = new_handler(host, port, known_hosts_path);
-    match timeout(CONNECT_TIMEOUT, client::connect_stream(config, stream, handler)).await {
+    let connect_timeout = Duration::from_secs(timeout_secs);
+    let (handler, mismatch, _fwd) = new_handler(host, port, known_hosts_path);
+    match timeout(connect_timeout, client::connect_stream(config, stream, handler)).await {
         Ok(result) => result.map_err(|e| map_connect_error(e, host, port, &mismatch)),
         Err(_) => Err(AppError::Ssh(format!("{}:{} SSH 握手超时", host, port))),
     }
@@ -157,7 +205,7 @@ pub async fn authenticate(
                 .secret
                 .as_deref()
                 .ok_or_else(|| AppError::Ssh("缺少私钥数据".into()))?;
-            let kp = russh_keys::decode_secret_key(pem, None)
+            let kp = russh_keys::decode_secret_key(pem, credential.passphrase.as_deref())
                 .map_err(|e| AppError::Ssh(format!("私钥解析失败: {e}")))?;
             handle
                 .authenticate_publickey(&credential.username, Arc::new(kp))
@@ -169,13 +217,79 @@ pub async fn authenticate(
             .await
             .map_err(|e| AppError::Ssh(format!("认证失败: {e}")))?,
         CredentialType::Interactive => {
-            return Err(AppError::Ssh("键盘交互认证暂不支持".into()));
+            // Handled separately by authenticate_interactive()
+            return Ok(());
         }
     };
     if !ok {
         return Err(AppError::Ssh("认证被拒绝".into()));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 键盘交互认证
+// ---------------------------------------------------------------------------
+
+pub async fn authenticate_interactive(
+    handle: &mut client::Handle<SshHandler>,
+    username: &str,
+    app: &tauri::AppHandle,
+    tab_id: &str,
+) -> AppResult<()> {
+    use russh::client::KeyboardInteractiveAuthResponse;
+
+    let mut reply = handle
+        .authenticate_keyboard_interactive_start(username, None::<String>)
+        .await
+        .map_err(|e| AppError::Ssh(format!("键盘交互启动失败: {e}")))?;
+
+    loop {
+        match reply {
+            KeyboardInteractiveAuthResponse::Success => return Ok(()),
+            KeyboardInteractiveAuthResponse::Failure => {
+                return Err(AppError::Ssh("认证被拒绝".into()));
+            }
+            KeyboardInteractiveAuthResponse::InfoRequest {
+                name,
+                instructions,
+                prompts,
+            } => {
+                let (tx, rx) = tokio::sync::oneshot::channel::<Vec<String>>();
+
+                let prompt_data: Vec<serde_json::Value> = prompts
+                    .iter()
+                    .map(|p| serde_json::json!({ "prompt": p.prompt, "echo": p.echo }))
+                    .collect();
+                let _ = app.emit(
+                    &format!("ssh:auth_prompt:{tab_id}"),
+                    serde_json::json!({
+                        "name": name,
+                        "instructions": instructions,
+                        "prompts": prompt_data,
+                    }),
+                );
+
+                {
+                    let state = app.state::<crate::state::AppState>();
+                    let mut waiters = state
+                        .auth_waiters
+                        .lock()
+                        .map_err(|_| AppError::Other("lock".into()))?;
+                    waiters.insert(tab_id.to_string(), tx);
+                }
+
+                let responses = rx
+                    .await
+                    .map_err(|_| AppError::Ssh("用户取消了认证".into()))?;
+
+                reply = handle
+                    .authenticate_keyboard_interactive_respond(responses)
+                    .await
+                    .map_err(|e| AppError::Ssh(format!("认证响应失败: {e}")))?;
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +305,7 @@ pub enum SessionCmd {
 #[derive(Clone)]
 pub struct SessionHandle {
     tx: mpsc::UnboundedSender<SessionCmd>,
+    ssh_handle: SshHandle,
 }
 
 impl SessionHandle {
@@ -208,6 +323,9 @@ impl SessionHandle {
         self.tx
             .send(SessionCmd::Close)
             .map_err(|_| AppError::Ssh("会话已关闭".into()))
+    }
+    pub fn ssh_handle(&self) -> &SshHandle {
+        &self.ssh_handle
     }
 }
 
@@ -230,6 +348,7 @@ pub async fn connect(
     recording_path: Option<std::path::PathBuf>,
     log_session_id: Option<&str>,
     known_hosts_path: PathBuf,
+    timeout_secs: u64,
 ) -> AppResult<ConnectResult> {
     let log = |msg: &str| {
         if let Some(sid) = log_session_id {
@@ -247,6 +366,7 @@ pub async fn connect(
             &bastion_profile.host,
             bastion_profile.port,
             known_hosts_path.clone(),
+            timeout_secs,
         ).await?;
 
         log(&format!("Bastion connected. Authenticating as {} ({}) ...", bastion_cred.username, bastion_cred.credential_type.as_str()));
@@ -261,23 +381,33 @@ pub async fn connect(
 
         log("Tunnel established. SSH handshake with target ...");
         let stream = tunnel.into_stream();
-        ssh_connect_stream(config, stream, &profile.host, profile.port, known_hosts_path).await?
+        ssh_connect_stream(config, stream, &profile.host, profile.port, known_hosts_path, timeout_secs).await?
     } else {
         log(&format!("TCP connecting to {}:{} ...", profile.host, profile.port));
-        let h = ssh_connect(config, &profile.host, profile.port, known_hosts_path).await?;
+        let h = ssh_connect(config, &profile.host, profile.port, known_hosts_path, timeout_secs).await?;
         log("TCP connected. SSH handshake OK.");
         h
     };
 
     log(&format!("Authenticating as {} ({}) ...", credential.username, credential.credential_type.as_str()));
-    authenticate(&mut handle, credential).await?;
+    if credential.credential_type == crate::models::CredentialType::Interactive {
+        let tab_id = log_session_id.unwrap_or("unknown");
+        authenticate_interactive(&mut handle, &credential.username, &app, tab_id).await?;
+    } else {
+        authenticate(&mut handle, credential).await?;
+    }
     log("Authenticated.");
 
+    // Wrap handle for channel multiplexing (SFTP, forwarding on same connection)
+    let ssh_handle: SshHandle = Arc::new(tokio::sync::Mutex::new(handle));
+
     log("Requesting PTY + shell ...");
-    let channel = handle
-        .channel_open_session()
-        .await
-        .map_err(|e| AppError::Ssh(format!("打开 channel 失败: {e}")))?;
+    let channel = {
+        let h = ssh_handle.lock().await;
+        h.channel_open_session()
+            .await
+            .map_err(|e| AppError::Ssh(format!("打开 channel 失败: {e}")))?
+    };
 
     channel
         .request_pty(false, "xterm-256color", cols, rows, 0, 0, &[])
@@ -304,7 +434,7 @@ pub async fn connect(
 
     Ok(ConnectResult {
         session_id,
-        handle: SessionHandle { tx },
+        handle: SessionHandle { tx, ssh_handle },
     })
 }
 

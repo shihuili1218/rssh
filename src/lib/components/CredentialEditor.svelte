@@ -7,6 +7,7 @@
 
   let name = $state(""); let username = $state("");
   let credentialType = $state("password"); let secret = $state("");
+  let passphrase = $state("");
   let saveToRemote = $state(false);
   let saving = $state(false);
 
@@ -15,6 +16,7 @@
       const c = await invoke<any>("get_credential", { id });
       name = c.name; username = c.username;
       credentialType = c.type; secret = c.secret ?? "";
+      passphrase = c.passphrase ?? "";
       saveToRemote = c.save_to_remote;
     }
   });
@@ -28,6 +30,7 @@
         type: credentialType,
         secret: secret || null,
         save_to_remote: saveToRemote,
+        passphrase: passphrase || null,
       };
       if (id) await invoke("update_credential", { credential });
       else await invoke("create_credential", { credential });
@@ -56,6 +59,8 @@
     {:else if credentialType === "key"}
       <label>Private Key</label>
       <textarea bind:value={secret} rows="6" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+      <label>Passphrase (optional)</label>
+      <input type="password" bind:value={passphrase} placeholder="Key passphrase" />
     {/if}
     <div class="switch-card">
       <div class="switch-card-body">

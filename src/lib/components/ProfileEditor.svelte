@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
-  import type { Credential, Profile } from "../stores/app.svelte.ts";
+  import type { Credential, Profile, Group } from "../stores/app.svelte.ts";
 
   let { id = null }: { id: string | null } = $props();
 
@@ -12,17 +12,20 @@
   let shellCommand = $state("");
   let credentials = $state<Credential[]>([]);
   let profiles = $state<Profile[]>([]);
+  let groups = $state<Group[]>([]);
+  let groupId = $state<string | null>(null);
   let saving = $state(false);
 
   let bastionProfiles = $derived(profiles.filter(p => p.id !== id));
 
   onMount(async () => {
-    [credentials, profiles] = await Promise.all([app.loadCredentials(), app.loadProfiles()]);
+    [credentials, profiles, groups] = await Promise.all([app.loadCredentials(), app.loadProfiles(), app.loadGroups()]);
     if (id) {
       const p = await invoke<any>("get_profile", { id });
       name = p.name; host = p.host; port = p.port;
       credentialId = p.credential_id; bastionId = p.bastion_profile_id;
       shellCommand = p.init_command ?? "";
+      groupId = p.group_id ?? null;
     }
   });
 
@@ -35,6 +38,7 @@
         credential_id: credentialId || null,
         bastion_profile_id: bastionId || null,
         init_command: shellCommand || null,
+        group_id: groupId || null,
       };
       if (id) await invoke("update_profile", { profile });
       else await invoke("create_profile", { profile });
@@ -64,6 +68,13 @@
       <option value={null}>-- None --</option>
       {#each bastionProfiles as p (p.id)}
         <option value={p.id}>{p.name} ({p.host}:{p.port})</option>
+      {/each}
+    </select>
+    <label>Group (optional)</label>
+    <select bind:value={groupId}>
+      <option value={null}>-- None --</option>
+      {#each groups as g (g.id)}
+        <option value={g.id}>{g.name}</option>
       {/each}
     </select>
     <label>Init Command (optional)</label>

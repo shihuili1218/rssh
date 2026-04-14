@@ -57,12 +57,17 @@
     <select bind:value={forwardType}>
       <option value="local">Local Forward</option>
       <option value="remote">Remote Forward</option>
+      <option value="dynamic">Dynamic (SOCKS5)</option>
     </select>
-    <div class="row3">
-      <div class="field"><label>Local Port</label><input type="number" bind:value={localPort} /></div>
-      <div class="field"><label>Remote Host</label><input type="text" bind:value={remoteHost} /></div>
-      <div class="field"><label>Remote Port</label><input type="number" bind:value={remotePort} /></div>
-    </div>
+    {#if forwardType === "dynamic"}
+      <div class="field"><label>Local Port (SOCKS5 proxy)</label><input type="number" bind:value={localPort} /></div>
+    {:else}
+      <div class="row3">
+        <div class="field"><label>Local Port</label><input type="number" bind:value={localPort} /></div>
+        <div class="field"><label>Remote Host</label><input type="text" bind:value={remoteHost} /></div>
+        <div class="field"><label>Remote Port</label><input type="number" bind:value={remotePort} /></div>
+      </div>
+    {/if}
     <button class="btn btn-accent" onclick={save} disabled={saving || !name || !profileId}>
       {saving ? "Saving..." : "Save"}
     </button>

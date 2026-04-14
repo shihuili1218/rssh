@@ -37,6 +37,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 base64 = "0.22"
 sha2 = "0.10"
 hmac = "0.12"
+getrandom = "0.2"
 
 # PTY & native file dialogs — 桌面平台专用
 [target.'cfg(not(target_os = "android"))'.dependencies]

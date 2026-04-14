@@ -32,16 +32,23 @@ export type SettingsPage =
   | "recording-settings"
   | "playback"
   | "shell-settings"
+  | "groups"
+  | "group-edit"
   | "cli"
   | "help";
 
+export interface Group {
+  id: string; name: string; color: string; sort_order: number;
+}
 export interface Profile {
   id: string; name: string; host: string; port: number;
   credential_id: string | null; bastion_profile_id: string | null; init_command: string | null;
+  group_id: string | null;
 }
 export interface Credential {
   id: string; name: string; username: string;
   type: string; secret: string | null; save_to_remote: boolean;
+  passphrase: string | null;
 }
 export interface Forward {
   id: string; name: string; type: string;
@@ -64,6 +71,9 @@ let _editingId = $state<string | null>(null);
 let _sftpOpen = $state(false);
 let _pinnedProfileIds = $state<string[]>(JSON.parse(localStorage.getItem("pinned_profiles") ?? "[]"));
 
+/* Terminal title (from remote shell OSC sequence), separate from tab label */
+let _terminalTitles = $state<Record<string, string>>({});
+
 /* ─── Getters ─── */
 export function tabs() { return _tabs; }
 export function activeTabId() { return _activeTabId; }
@@ -73,6 +83,7 @@ export function settingsPage() { return _settingsPage; }
 export function editingId() { return _editingId; }
 export function sftpOpen() { return _sftpOpen; }
 export function pinnedProfileIds() { return _pinnedProfileIds; }
+export function terminalTitle(tabId: string) { return _terminalTitles[tabId]; }
 
 /* ─── Tab Operations ─── */
 export function setActiveTab(id: string) {
@@ -88,14 +99,23 @@ export function addTab(tab: Tab) {
   _sftpOpen = false;
 }
 
+export function moveTab(fromIdx: number, toIdx: number) {
+  if (fromIdx === toIdx || fromIdx < 0 || toIdx < 0) return;
+  if (fromIdx >= _tabs.length || toIdx >= _tabs.length) return;
+  const next = [..._tabs];
+  const [tab] = next.splice(fromIdx, 1);
+  next.splice(toIdx, 0, tab);
+  _tabs = next;
+}
+
 export function closeTab(id: string) {
   const idx = _tabs.findIndex(t => t.id === id);
   if (idx < 0 || _tabs[idx].type === "home") return;
   const wasActive = _activeTabId === id;
   _tabs.splice(idx, 1);
+  delete _terminalTitles[id];
   if (wasActive) {
     _activeTabId = _tabs[Math.min(idx, _tabs.length - 1)]?.id ?? "home";
-    // SFTP overlay is bound to this tab's SSH session — close it too.
     _sftpOpen = false;
   }
 }
@@ -103,6 +123,10 @@ export function closeTab(id: string) {
 export function updateTabLabel(id: string, label: string) {
   const tab = _tabs.find(t => t.id === id);
   if (tab) tab.label = label;
+}
+
+export function setTerminalTitle(tabId: string, title: string) {
+  _terminalTitles[tabId] = title;
 }
 
 /* ─── Settings Navigation ─── */
@@ -160,6 +184,9 @@ export function connectedSessions(): SessionInfo[] {
     ...s,
     label: _tabs.find(t => t.id === s.tabId)?.label ?? s.tabId,
   }));
+}
+export function sessionIdForTab(tabId: string): string | undefined {
+  return _sessions.find(s => s.tabId === tabId)?.sessionId;
 }
 
 export function broadcastToSessions(tabIds: string[], text: string) {
@@ -226,4 +253,7 @@ export async function loadSnippets(): Promise<Snippet[]> {
 }
 export async function loadHighlights(): Promise<HighlightRule[]> {
   return invoke<HighlightRule[]>("list_highlights");
+}
+export async function loadGroups(): Promise<Group[]> {
+  return invoke<Group[]>("list_groups");
 }

@@ -6,15 +6,10 @@
     {
       title: "Global",
       keys: [
-        [`${mod}+K`, "Toggle sidebar"],
+        ["Ctrl+Tab", "Switch to next tab"],
+        ["Ctrl+Shift+Tab", "Switch to previous tab"],
+        [`${mod}+W`, "Close current tab"],
         ["Esc", "Close sidebar / search bar / SFTP"],
-      ],
-    },
-    {
-      title: "Sidebar",
-      keys: [
-        ["↑ ↓", "Select tab / pinned profile"],
-        ["Enter", "Switch to selected item"],
       ],
     },
     {

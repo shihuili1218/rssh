@@ -5,11 +5,14 @@
   let shells = $state<string[]>([]);
   let selectedShell = $state("");
   let verboseLog = $state(true);
+  let connectTimeout = $state(10);
 
   onMount(async () => {
     try { shells = await invoke<string[]>("list_shells"); } catch { shells = []; }
     selectedShell = await invoke<string | null>("get_setting", { key: "local_shell" }) ?? "";
     verboseLog = (await invoke<string | null>("get_setting", { key: "verbose_log" })) !== "false";
+    const t = await invoke<string | null>("get_setting", { key: "connect_timeout" });
+    if (t) connectTimeout = parseInt(t, 10) || 10;
   });
 
   async function saveShell() {
@@ -18,6 +21,12 @@
 
   async function saveVerbose() {
     await invoke("set_setting", { key: "verbose_log", value: String(verboseLog) });
+  }
+
+  async function saveTimeout() {
+    const val = Math.max(1, Math.min(300, connectTimeout));
+    connectTimeout = val;
+    await invoke("set_setting", { key: "connect_timeout", value: String(val) });
   }
 </script>
 
@@ -40,6 +49,14 @@
       <label>Custom Path</label>
       <input type="text" bind:value={selectedShell} placeholder="/usr/local/bin/fish" onblur={saveShell} />
     </div>
+  </div>
+
+  <div class="section-label">CONNECTION TIMEOUT</div>
+  <div class="timeout-row">
+    <label>Timeout (seconds)</label>
+    <input type="number" bind:value={connectTimeout} min="1" max="300" onblur={saveTimeout}
+      onkeydown={(e) => { if (e.key === "Enter") saveTimeout(); }} />
+    <span class="timeout-hint">1–300s, default 10s</span>
   </div>
 
   <div class="section-label">CONNECTION LOGGING</div>
@@ -77,5 +94,15 @@
   .custom-shell {
     display: flex; flex-direction: column; gap: 4px;
     margin-top: 8px;
+  }
+
+  .timeout-row {
+    display: flex; align-items: center; gap: 10px;
+  }
+  .timeout-row input[type="number"] {
+    width: 80px;
+  }
+  .timeout-hint {
+    font-size: 11px; color: var(--text-dim);
   }
 </style>

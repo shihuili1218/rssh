@@ -2,7 +2,7 @@
     import {onMount} from "svelte";
     import {invoke} from "@tauri-apps/api/core";
     import {getCurrentWindow} from "@tauri-apps/api/window";
-    import type {Profile, Tab} from "../stores/app.svelte.ts";
+    import type {Profile, Tab, Group} from "../stores/app.svelte.ts";
     import * as app from "../stores/app.svelte.ts";
     import HomeScreen from "./HomeScreen.svelte";
     import TerminalPane from "./TerminalPane.svelte";
@@ -15,19 +15,25 @@
 
     let drawerOpen = $state(false);
     let focusIdx = $state(-1);
-    let sidebarEl: HTMLElement;
+    let tabCycling = $state(false);
     let profiles = $state<Profile[]>([]);
+    let groups = $state<Group[]>([]);
     let sidebarTimer = 0;
     let menuCtx = $state<{ x: number; y: number; tab: Tab } | null>(null);
 
+    // Tab drag-and-drop
+    let dragTabId = $state<string | null>(null);
+    let dropTabId = $state<string | null>(null);
+
     onMount(() => {
         app.loadProfiles().then(p => profiles = p);
+        app.loadGroups().then(g => groups = g);
         consumeCloneQuery();
 
         // Ctrl/Cmd+W → close active tab (captures BEFORE xterm so Ctrl+W
         // doesn't get forwarded to the remote shell). Resources are released
         // via Svelte onDestroy in the unmounted TerminalPane / ForwardPane / EditPane.
-        const onCloseHotkey = (e: KeyboardEvent) => {
+        const onGlobalHotkey = (e: KeyboardEvent) => {
             if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key === "w") {
                 if (app.settingsActive()) return;
                 const id = app.activeTabId();
@@ -36,9 +42,43 @@
                 e.stopPropagation();
                 app.closeTab(id);
             }
+            if (e.ctrlKey && e.key === "Tab") {
+                e.preventDefault();
+                e.stopPropagation();
+                const dir = e.shiftKey ? -1 : 1;
+                if (!tabCycling) {
+                    tabCycling = true;
+                    drawerOpen = true;
+                    const idx = navItems.findIndex(item =>
+                        item.kind === "tab" ? item.id === app.activeTabId() && !app.settingsActive()
+                        : item.kind === "settings" ? app.settingsActive()
+                        : false
+                    );
+                    focusIdx = (idx + dir + navItems.length) % navItems.length;
+                } else {
+                    focusIdx = (focusIdx + dir + navItems.length) % navItems.length;
+                }
+            }
+            if (tabCycling && e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                closeDrawer();
+            }
         };
-        window.addEventListener("keydown", onCloseHotkey, {capture: true});
-        return () => window.removeEventListener("keydown", onCloseHotkey, {capture: true});
+        const onGlobalKeyup = (e: KeyboardEvent) => {
+            if (tabCycling && e.key === "Control") {
+                const item = navItems[focusIdx];
+                tabCycling = false;
+                if (item) activateNavItem(item);
+                else closeDrawer();
+            }
+        };
+        window.addEventListener("keydown", onGlobalHotkey, {capture: true});
+        window.addEventListener("keyup", onGlobalKeyup, {capture: true});
+        return () => {
+            window.removeEventListener("keydown", onGlobalHotkey, {capture: true});
+            window.removeEventListener("keyup", onGlobalKeyup, {capture: true});
+        };
     });
 
     /* Consume window.__rssh_clone injected by open_tab_in_new_window */
@@ -63,13 +103,23 @@
     }
 
     $effect(() => {
-        if (drawerOpen) app.loadProfiles().then(p => profiles = p);
+        if (drawerOpen) {
+            app.loadProfiles().then(p => profiles = p);
+            app.loadGroups().then(g => groups = g);
+        }
     });
 
     $effect(() => {
         const tab = app.activeTab();
-        const title = app.settingsActive() ? "Settings" : tab?.label ?? "RSSH";
-        getCurrentWindow().setTitle(title);
+        if (app.settingsActive()) {
+            getCurrentWindow().setTitle("Settings");
+        } else if (tab) {
+            const termTitle = app.terminalTitle(tab.id);
+            const title = termTitle ? `${tab.label} — ${termTitle}` : tab.label;
+            getCurrentWindow().setTitle(title);
+        } else {
+            getCurrentWindow().setTitle("RSSH");
+        }
     });
 
     let pinnedProfiles = $derived(
@@ -84,6 +134,14 @@
         ...app.tabs().filter(t => t.type !== "home").map(t => ({kind: "tab" as const, id: t.id})),
         {kind: "settings" as const},
     ]);
+
+    function isFocused(kind: NavItem["kind"], id?: string): boolean {
+        const f = navItems[focusIdx];
+        if (!f || f.kind !== kind) return false;
+        if (kind === "tab" && "id" in f) return f.id === id;
+        if (kind === "pin" && "profile" in f) return f.profile.id === id;
+        return true;
+    }
 
     function activateNavItem(item: NavItem) {
         if (item.kind === "new-tab") addLocalTab();
@@ -107,12 +165,12 @@
 
     function openDrawer() {
         drawerOpen = true;
-        requestAnimationFrame(() => sidebarEl?.focus());
     }
 
     function closeDrawer() {
         drawerOpen = false;
         focusIdx = -1;
+        tabCycling = false;
     }
 
     function enterSidebar(e: MouseEvent) {
@@ -220,6 +278,53 @@
         return tab.label.charAt(0).toUpperCase();
     }
 
+    function tabGroupColor(tab: Tab): string | null {
+        if (tab.type !== "ssh") return null;
+        const profileId = tab.meta?.profileId;
+        if (!profileId) return null;
+        const profile = profiles.find(p => p.id === profileId);
+        if (!profile?.group_id) return null;
+        const group = groups.find(g => g.id === profile.group_id);
+        return group?.color ?? null;
+    }
+
+    /* ── Tab drag-and-drop reorder ── */
+    function handleDragStart(e: DragEvent, tabId: string) {
+        dragTabId = tabId;
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+    }
+
+    function handleDragOver(e: DragEvent, tabId: string) {
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+        dropTabId = tabId;
+    }
+
+    function handleDrop(e: DragEvent, tabId: string) {
+        e.preventDefault();
+        if (dragTabId && dragTabId !== tabId) {
+            const allTabs = app.tabs();
+            const fromIdx = allTabs.findIndex(t => t.id === dragTabId);
+            const toIdx = allTabs.findIndex(t => t.id === tabId);
+            if (fromIdx >= 0 && toIdx >= 0) app.moveTab(fromIdx, toIdx);
+        }
+        dragTabId = null;
+        dropTabId = null;
+    }
+
+    function handleDragEnd(e: DragEvent) {
+        // dropEffect === "none" means the drag was cancelled (Esc or invalid drop)
+        const cancelled = e.dataTransfer?.dropEffect === "none";
+        if (!cancelled && dragTabId && dropTabId && dragTabId !== dropTabId) {
+            const allTabs = app.tabs();
+            const fromIdx = allTabs.findIndex(t => t.id === dragTabId);
+            const toIdx = allTabs.findIndex(t => t.id === dropTabId);
+            if (fromIdx >= 0 && toIdx >= 0) app.moveTab(fromIdx, toIdx);
+        }
+        dragTabId = null;
+        dropTabId = null;
+    }
+
     function handleTouchStart(e: TouchEvent) {
         touchStartX = e.touches[0].clientX;
         touchStartY = e.touches[0].clientY;
@@ -233,35 +338,9 @@
     }
 
     function handleKeydown(e: KeyboardEvent) {
-        if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
-            e.preventDefault();
-            if (drawerOpen) { closeDrawer(); return; }
-            openDrawer();
-            const activeIdx = navItems.findIndex(
-                item => (item.kind === "tab" && item.id === app.activeTabId()) ||
-                    (item.kind === "settings" && app.settingsActive())
-            );
-            focusIdx = activeIdx >= 0 ? activeIdx : 0;
-            return;
-        }
-
         if (e.key === "Escape") {
             if (app.sftpOpen()) { app.closeSftp(); e.preventDefault(); }
             else if (drawerOpen) { closeDrawer(); e.preventDefault(); }
-            return;
-        }
-
-        if (drawerOpen) {
-            if (e.key === "ArrowDown" || e.key === "ArrowRight") {
-                e.preventDefault();
-                focusIdx = (focusIdx + 1) % navItems.length;
-            } else if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
-                e.preventDefault();
-                focusIdx = (focusIdx - 1 + navItems.length) % navItems.length;
-            } else if (e.key === "Enter" && focusIdx >= 0 && focusIdx < navItems.length) {
-                e.preventDefault();
-                activateNavItem(navItems[focusIdx]);
-            }
         }
     }
 </script>
@@ -288,7 +367,7 @@
             <span class="sftp-title">SFTP</span>
         </div>
         <div class="sftp-body">
-            <SftpBrowser meta={app.activeTab()?.meta ?? {}}/>
+            <SftpBrowser meta={{...app.activeTab()?.meta ?? {}, sessionId: app.sessionIdForTab(app.activeTabId()) ?? ''}}/>
         </div>
     </div>
 {/if}
@@ -301,11 +380,9 @@
         <div class="backdrop" onclick={closeDrawer}></div>
     {/if}
 
-    <!-- Sidebar: single component, 40px collapsed ↔ 260px expanded -->
-    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <!-- Sidebar: 40px collapsed ↔ 260px expanded -->
     <nav
         class="sidebar" class:open={drawerOpen}
-        bind:this={sidebarEl} tabindex="-1"
         onmouseenter={enterSidebar} onmouseleave={leaveSidebar}
     >
         <div class="sidebar-inner">
@@ -314,7 +391,7 @@
                 <button
                     class="sb-item"
                     class:active={!app.settingsActive() && tab.id === app.activeTabId()}
-                    class:focused={focusIdx === 0}
+                    class:focused={isFocused("tab", tab.id)}
                     onclick={() => selectTab(tab.id)}
                     title={tab.label}
                 >
@@ -325,11 +402,11 @@
 
             <!-- New Terminal (desktop only) -->
             {#if !app.isMobile}
-            <button class="sb-item new-tab" class:focused={focusIdx === 1} onclick={addLocalTab} title="New terminal">
+            <button class="sb-item new-tab" class:focused={isFocused("new-tab")} onclick={addLocalTab} title="New terminal">
                 <span class="sb-icon">+</span>
                 <span class="sb-label">New Terminal</span>
             </button>
-            <button class="sb-item new-tab" class:focused={focusIdx === 2} onclick={addEditTab} title="New edit tab">
+            <button class="sb-item new-tab" class:focused={isFocused("new-edit")} onclick={addEditTab} title="New edit tab">
                 <span class="sb-icon">✎</span>
                 <span class="sb-label">New Edit</span>
             </button>
@@ -340,7 +417,7 @@
                     {#each pinnedProfiles as p, i (p.id)}
                         <button
                             class="sb-item pinned"
-                            class:focused={focusIdx === 3 + i}
+                            class:focused={isFocused("pin", p.id)}
                             onclick={() => connectPinned(p)}
                             title={p.name}
                         >
@@ -352,17 +429,23 @@
             {/if}
 
             <div class="sidebar-list">
-                {#each app.tabs().filter(t => t.type !== "home") as tab, i (tab.id)}
-                    {@const idx = 3 + pinnedProfiles.length + i}
+                {#each app.tabs().filter(t => t.type !== "home") as tab (tab.id)}
+                    {@const groupColor = tabGroupColor(tab)}
                     <button
                         class="sb-item"
                         class:active={!app.settingsActive() && tab.id === app.activeTabId()}
-                        class:focused={focusIdx === idx}
+                        class:focused={isFocused("tab", tab.id)}
+                        class:drag-over={dropTabId === tab.id && dragTabId !== tab.id}
+                        draggable="true"
+                        ondragstart={(e) => handleDragStart(e, tab.id)}
+                        ondragover={(e) => handleDragOver(e, tab.id)}
+                        ondrop={(e) => handleDrop(e, tab.id)}
+                        ondragend={handleDragEnd}
                         onclick={() => selectTab(tab.id)}
                         oncontextmenu={(e) => openCtxMenu(e, tab)}
                         title={tab.label}
                     >
-                        <span class="sb-icon">{tabIcon(tab)}</span>
+                        <span class="sb-icon" style={groupColor ? `background: ${groupColor}; color: white` : ''}>{tabIcon(tab)}</span>
                         <span class="sb-label">{tab.label}</span>
                         <span
                             class="sb-close"
@@ -378,7 +461,7 @@
                 <button
                     class="sb-item"
                     class:active={app.settingsActive()}
-                    class:focused={focusIdx === navItems.length - 1}
+                    class:focused={isFocused("settings")}
                     onclick={selectSettings}
                     title="Settings"
                 >
@@ -437,9 +520,6 @@
         box-shadow: var(--raised);
     }
 
-    .sidebar:focus {
-        outline: none;
-    }
 
     /* Inner container always 260px — sidebar clips it */
     .sidebar-inner {
@@ -508,6 +588,10 @@
     .sb-item.focused {
         outline: 1px solid var(--accent);
         outline-offset: -1px;
+    }
+
+    .sb-item.drag-over {
+        border-top: 2px solid var(--accent);
     }
 
     .sb-item.pinned {

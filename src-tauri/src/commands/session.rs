@@ -54,6 +54,7 @@ pub async fn ssh_connect(
             credential_id: None,
             bastion_profile_id: None,
             init_command: None,
+            group_id: None,
         };
         let c = Credential {
             id: String::new(),
@@ -62,16 +63,20 @@ pub async fn ssh_connect(
             credential_type: CredentialType::from_str(&auth_type.unwrap_or("password".into())),
             secret,
             save_to_remote: false,
+            passphrase: None,
         };
         (p, c, None)
     };
 
-    // 检查 verbose log + 录制设置
-    let (verbose_log, recording_path) = {
+    // 检查 verbose log + 录制设置 + 连接超时
+    let (verbose_log, recording_path, timeout_secs) = {
         let conn = state.db.lock().map_err(|_| AppError::Other("lock".into()))?;
         let verbose = crate::db::settings::get(&conn, "verbose_log")?
             .map(|v| v == "true")
             .unwrap_or(true);
+        let timeout: u64 = crate::db::settings::get(&conn, "connect_timeout")?
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(crate::ssh::client::DEFAULT_CONNECT_TIMEOUT);
         let enabled = crate::db::settings::get(&conn, "recording_enabled")?
             .map(|v| v == "true")
             .unwrap_or(false);
@@ -96,7 +101,7 @@ pub async fn ssh_connect(
         } else {
             None
         };
-        (verbose, rec)
+        (verbose, rec, timeout)
     };
 
     // Only pass log_session_id if verbose logging is enabled
@@ -104,7 +109,7 @@ pub async fn ssh_connect(
 
     let known_hosts_path = state.data_dir.join("known_hosts");
     let bastion_refs = bastion.as_ref().map(|(bp, bc)| (bp, bc));
-    let result = client::connect(&profile, &credential, bastion_refs, cols, rows, app, recording_path, effective_log_id, known_hosts_path).await?;
+    let result = client::connect(&profile, &credential, bastion_refs, cols, rows, app, recording_path, effective_log_id, known_hosts_path, timeout_secs).await?;
 
     // 执行初始命令（shell 已就绪，直接写入）
     if let Some(ref cmd) = profile.init_command {
@@ -158,6 +163,26 @@ pub async fn ssh_disconnect(
             .ok_or_else(|| AppError::NotFound("会话不存在".into()))?
     };
     session.close()
+}
+
+#[tauri::command]
+pub async fn ssh_auth_respond(
+    state: State<'_, AppState>,
+    tab_id: String,
+    responses: Vec<String>,
+) -> AppResult<()> {
+    let tx = {
+        let mut waiters = state
+            .auth_waiters
+            .lock()
+            .map_err(|_| AppError::Other("lock".into()))?;
+        waiters
+            .remove(&tab_id)
+            .ok_or_else(|| AppError::NotFound("无等待中的认证请求".into()))?
+    };
+    tx.send(responses)
+        .map_err(|_| AppError::Other("认证通道已关闭".into()))?;
+    Ok(())
 }
 
 fn get_session(

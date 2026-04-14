@@ -1,7 +1,8 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::error::{AppError, AppResult};
 use crate::models::Credential;
@@ -19,14 +20,36 @@ pub struct SftpHandle {
 }
 
 impl SftpHandle {
+    /// Open SFTP subsystem on an existing SSH connection.
+    pub async fn from_handle(ssh_handle: &crate::ssh::client::SshHandle) -> AppResult<Self> {
+        let channel = {
+            let h = ssh_handle.lock().await;
+            h.channel_open_session()
+                .await
+                .map_err(|e| AppError::Sftp(format!("open channel: {e}")))?
+        };
+
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|e| AppError::Sftp(format!("{e}")))?;
+
+        let sftp = russh_sftp::client::SftpSession::new(channel.into_stream())
+            .await
+            .map_err(|e| AppError::Sftp(format!("SFTP 初始化失败: {e}")))?;
+
+        Ok(Self { sftp })
+    }
+
     pub async fn connect(
         host: &str,
         port: u16,
         credential: &Credential,
         known_hosts_path: PathBuf,
+        timeout_secs: u64,
     ) -> AppResult<Self> {
         let config = Arc::new(russh::client::Config::default());
-        let mut handle = client::ssh_connect(config, host, port, known_hosts_path).await
+        let mut handle = client::ssh_connect(config, host, port, known_hosts_path, timeout_secs).await
             .map_err(|e| AppError::Sftp(format!("SSH 连接失败: {e}")))?;
 
         client::authenticate(&mut handle, credential).await
@@ -100,5 +123,89 @@ impl SftpHandle {
             .create_dir(path)
             .await
             .map_err(|e| AppError::Sftp(format!("{e}")))
+    }
+
+    /// Stream-download a remote file to a local path, emitting progress events.
+    pub async fn download_streaming(
+        &self,
+        remote_path: &str,
+        local_path: &Path,
+        app: &tauri::AppHandle,
+        transfer_id: &str,
+    ) -> AppResult<u64> {
+        use tauri::Emitter;
+
+        // Get file size for progress
+        let meta = self.sftp.metadata(remote_path).await
+            .map_err(|e| AppError::Sftp(format!("{e}")))?;
+        let total = meta.size.unwrap_or(0);
+
+        let mut remote_file = self.sftp.open(remote_path).await
+            .map_err(|e| AppError::Sftp(format!("{e}")))?;
+
+        let mut local_file = tokio::fs::File::create(local_path).await?;
+
+        let mut transferred: u64 = 0;
+        let mut buf = vec![0u8; 32768];
+
+        loop {
+            let n = remote_file.read(&mut buf).await
+                .map_err(|e| AppError::Sftp(format!("read: {e}")))?;
+            if n == 0 { break; }
+
+            local_file.write_all(&buf[..n]).await?;
+            transferred += n as u64;
+
+            let _ = app.emit(
+                "sftp:progress",
+                serde_json::json!({ "id": transfer_id, "transferred": transferred, "total": total }),
+            );
+        }
+
+        remote_file.shutdown().await
+            .map_err(|e| AppError::Sftp(format!("close: {e}")))?;
+
+        Ok(transferred)
+    }
+
+    /// Stream-upload a local file to a remote path, emitting progress events.
+    pub async fn upload_streaming(
+        &self,
+        local_path: &Path,
+        remote_path: &str,
+        app: &tauri::AppHandle,
+        transfer_id: &str,
+    ) -> AppResult<u64> {
+        use tauri::Emitter;
+
+        let local_meta = tokio::fs::metadata(local_path).await?;
+        let total = local_meta.len();
+
+        let mut local_file = tokio::fs::File::open(local_path).await?;
+
+        let mut remote_file = self.sftp.create(remote_path).await
+            .map_err(|e| AppError::Sftp(format!("{e}")))?;
+
+        let mut transferred: u64 = 0;
+        let mut buf = vec![0u8; 32768];
+
+        loop {
+            let n = local_file.read(&mut buf).await?;
+            if n == 0 { break; }
+
+            remote_file.write_all(&buf[..n]).await
+                .map_err(|e| AppError::Sftp(format!("write: {e}")))?;
+            transferred += n as u64;
+
+            let _ = app.emit(
+                "sftp:progress",
+                serde_json::json!({ "id": transfer_id, "transferred": transferred, "total": total }),
+            );
+        }
+
+        remote_file.shutdown().await
+            .map_err(|e| AppError::Sftp(format!("close: {e}")))?;
+
+        Ok(transferred)
     }
 }

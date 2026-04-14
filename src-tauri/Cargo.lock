@@ -4071,6 +4071,7 @@ dependencies = [
  "clap",
  "dirs 5.0.1",
  "env_logger",
+ "getrandom 0.2.17",
  "hmac",
  "log",
  "portable-pty",
