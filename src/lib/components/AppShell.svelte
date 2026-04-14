@@ -312,7 +312,15 @@
         dropTabId = null;
     }
 
-    function handleDragEnd() {
+    function handleDragEnd(e: DragEvent) {
+        // dropEffect === "none" means the drag was cancelled (Esc or invalid drop)
+        const cancelled = e.dataTransfer?.dropEffect === "none";
+        if (!cancelled && dragTabId && dropTabId && dragTabId !== dropTabId) {
+            const allTabs = app.tabs();
+            const fromIdx = allTabs.findIndex(t => t.id === dragTabId);
+            const toIdx = allTabs.findIndex(t => t.id === dropTabId);
+            if (fromIdx >= 0 && toIdx >= 0) app.moveTab(fromIdx, toIdx);
+        }
         dragTabId = null;
         dropTabId = null;
     }
