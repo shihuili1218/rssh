@@ -6,15 +6,10 @@
     {
       title: "Global",
       keys: [
-        [`${mod}+K`, "Toggle sidebar"],
+        ["Ctrl+Tab", "Switch to next tab"],
+        ["Ctrl+Shift+Tab", "Switch to previous tab"],
+        [`${mod}+W`, "Close current tab"],
         ["Esc", "Close sidebar / search bar / SFTP"],
-      ],
-    },
-    {
-      title: "Sidebar",
-      keys: [
-        ["↑ ↓", "Select tab / pinned profile"],
-        ["Enter", "Switch to selected item"],
       ],
     },
     {
@@ -30,14 +25,12 @@
         [`${mod}+F`, "Search"],
         [`${mod}+S`, "Command Snippet (send to terminal)"],
         [`${mod}+O`, "Open SFTP (SSH session)"],
-        [`${mod}+W`, "Close Current Tab"],
         ["Any key", "Reconnect after disconnect"],
       ],
     },
     {
       title: "Port Forward",
       keys: [
-        [`${mod}+W`, "Close Current Tab"],
         ["Any key", "Reconnect after error/stop"],
       ],
     },
