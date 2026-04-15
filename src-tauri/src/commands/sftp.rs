@@ -26,14 +26,11 @@ pub async fn sftp_connect(
         passphrase: None,
     };
 
-    let timeout_secs: u64 = {
-        let conn = state.db.lock().map_err(|_| AppError::Other("lock".into()))?;
-        crate::db::settings::get(&conn, "connect_timeout")?
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(crate::ssh::client::DEFAULT_CONNECT_TIMEOUT)
-    };
+    let timeout_secs: u64 = crate::db::settings::get(&state.db, "connect_timeout")?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(crate::ssh::client::DEFAULT_CONNECT_TIMEOUT);
 
-    let known_hosts_path = state.data_dir.join("known_hosts");
+    let known_hosts_path = crate::ssh::known_hosts::path_for(&state.data_dir);
     let handle = SftpHandle::connect(&host, port, &cred, known_hosts_path, timeout_secs).await?;
     let id = uuid::Uuid::new_v4().to_string();
 

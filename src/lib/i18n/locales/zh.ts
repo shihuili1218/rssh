@@ -1,0 +1,110 @@
+import type { Messages } from "./en";
+
+/** 中文 UI 字符串。键必须与 en.ts 一致。 */
+const zh: Messages = {
+  // ── 通用 ──
+  "common.save": "保存",
+  "common.saving": "保存中…",
+  "common.cancel": "取消",
+  "common.delete": "删除",
+  "common.edit": "编辑",
+  "common.add": "新建",
+  "common.back": "返回",
+  "common.close": "关闭",
+  "common.confirm": "确认",
+  "common.yes": "是",
+  "common.no": "否",
+  "common.loading": "加载中…",
+  "common.connecting": "连接中…",
+  "common.connected": "已连接",
+  "common.disconnected": "已断开",
+  "common.disconnect": "断开",
+  "common.reconnect": "重连",
+  "common.copy": "复制",
+  "common.paste": "粘贴",
+  "common.search": "搜索",
+
+  // ── 侧边栏 / 标签页 ──
+  "tab.home": "首页",
+  "tab.local": "本地",
+  "tab.new_terminal": "新建终端",
+  "tab.new_edit": "新建编辑",
+  "tab.settings": "设置",
+  "tab.context.search": "搜索",
+  "tab.context.snippets": "片段",
+  "tab.context.sftp": "SFTP 文件浏览",
+  "tab.context.clone": "克隆 Tab",
+  "tab.context.close": "关闭 Tab",
+  "tab.context.open_new_window": "在新窗口打开",
+
+  // ── 设置菜单 ──
+  "settings.title": "设置",
+  "settings.section.profiles": "Profile",
+  "settings.section.credentials": "凭证",
+  "settings.section.forwards": "端口转发",
+  "settings.section.groups": "分组",
+  "settings.section.snippets": "命令片段",
+  "settings.section.highlights": "关键字高亮",
+  "settings.section.recording": "会话录制",
+  "settings.section.shell": "Shell",
+  "settings.section.github_sync": "GitHub 同步",
+  "settings.section.import_export": "导入 / 导出",
+  "settings.section.cli": "CLI 工具",
+  "settings.section.help": "帮助",
+  "settings.section.language": "语言",
+
+  // ── 语言选择 ──
+  "lang.english": "English",
+  "lang.chinese": "中文",
+
+  // ── 首页 ──
+  "home.empty.title": "还没有 Profile",
+  "home.empty.cta": "去 设置 → Profile 新建一个吧。",
+  "home.connect": "连接",
+
+  // ── Profile 编辑器 ──
+  "profile.name": "名称",
+  "profile.host": "主机",
+  "profile.port": "端口",
+  "profile.username": "用户名",
+  "profile.credential": "凭证",
+  "profile.bastion": "堡垒机（跳板）",
+  "profile.init_command": "登录后初始命令",
+  "profile.group": "分组",
+  "profile.none": "（无）",
+
+  // ── 凭证编辑器 ──
+  "credential.name": "名称",
+  "credential.username": "用户名",
+  "credential.auth_type": "认证方式",
+  "credential.type.password": "密码",
+  "credential.type.key": "私钥 (PEM)",
+  "credential.type.agent": "SSH Agent（$SSH_AUTH_SOCK / Pageant）",
+  "credential.type.none": "无",
+  "credential.type.interactive": "键盘交互",
+  "credential.password": "密码",
+  "credential.private_key": "私钥",
+  "credential.passphrase": "Passphrase（可选）",
+  "credential.passphrase_placeholder": "密钥 passphrase",
+  "credential.agent_hint": "认证将使用本地 SSH agent 中已加载的 key，不会保存任何 secret。",
+  "credential.sync_to_remote": "同步到远端",
+  "credential.sync_to_remote_desc": "推送到 GitHub 时，是否一并上传该凭证的 secret。",
+
+  // ── 端口转发编辑器 ──
+  "forward.name": "名称",
+  "forward.type": "类型",
+  "forward.type.local": "本地 (-L)",
+  "forward.type.remote": "远程 (-R)",
+  "forward.type.dynamic": "动态 (-D, SOCKS5)",
+  "forward.local_port": "本地端口",
+  "forward.remote_host": "远端主机",
+  "forward.remote_port": "远端端口",
+  "forward.profile": "Profile",
+  "forward.start": "启动",
+  "forward.stop": "停止",
+  "forward.bytes_sent": "发送字节",
+  "forward.bytes_received": "接收字节",
+  "forward.active_connections": "活跃连接",
+};
+
+export default zh;

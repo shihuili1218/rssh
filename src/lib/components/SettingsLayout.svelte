@@ -1,5 +1,6 @@
 <script lang="ts">
   import * as app from "../stores/app.svelte.ts";
+  import { t, locale, setLocale, AVAILABLE_LOCALES, type Locale } from "../i18n/index.svelte.ts";
   import ProfileManager from "./ProfileManager.svelte";
   import ProfileEditor from "./ProfileEditor.svelte";
   import CredentialManager from "./CredentialManager.svelte";
@@ -29,22 +30,23 @@
     return () => mq.removeEventListener("change", onChange);
   });
 
-  const allMenu: MenuItem[] = [
-    { id: "profiles", label: "Profile", section: "Connections" },
-    { id: "credentials", label: "Credential", section: "Connections" },
-    { id: "forwards", label: "Port Forward", section: "Connections" },
-    { id: "groups", label: "Groups", section: "Connections" },
-    { id: "import-export", label: "Import & Export", section: "Connections" },
-    { id: "github-sync", label: "GitHub Sync", section: "Connections" },
-    { id: "shell-settings", label: "Shell & Logs", section: "Sessions" },
-    { id: "recording-settings", label: "Session Record", section: "Sessions" },
-    { id: "highlights", label: "Key Word Highlight", section: "Appearance" },
-    { id: "snippets", label: "Command Snippet", section: "Appearance" },
-    { id: "cli", label: "CLI Tool", section: "Tools" },
-    { id: "help", label: "Shortcuts", section: "Help" },
-  ];
+  // 注：菜单数据用 t() 直接调用，配合 $derived 触发响应式更新
+  let allMenu = $derived<MenuItem[]>([
+    { id: "profiles", label: t("settings.section.profiles"), section: "Connections" },
+    { id: "credentials", label: t("settings.section.credentials"), section: "Connections" },
+    { id: "forwards", label: t("settings.section.forwards"), section: "Connections" },
+    { id: "groups", label: t("settings.section.groups"), section: "Connections" },
+    { id: "import-export", label: t("settings.section.import_export"), section: "Connections" },
+    { id: "github-sync", label: t("settings.section.github_sync"), section: "Connections" },
+    { id: "shell-settings", label: t("settings.section.shell"), section: "Sessions" },
+    { id: "recording-settings", label: t("settings.section.recording"), section: "Sessions" },
+    { id: "highlights", label: t("settings.section.highlights"), section: "Appearance" },
+    { id: "snippets", label: t("settings.section.snippets"), section: "Appearance" },
+    { id: "cli", label: t("settings.section.cli"), section: "Tools" },
+    { id: "help", label: t("settings.section.help"), section: "Help" },
+  ]);
 
-  const hiddenOnCompact = new Set(["cli", "help"]);
+  const hiddenOnCompact = new Set<string>(["cli", "help"]);
   let menu = $derived(compact ? allMenu.filter(m => !hiddenOnCompact.has(m.id)) : allMenu);
 
   let sections = $derived((() => {
@@ -73,7 +75,7 @@
 <div class="settings-layout" class:compact>
   {#if !compact || app.settingsPage() === "menu"}
   <nav class="settings-menu">
-    <div class="menu-header">Setting</div>
+    <div class="menu-header">{t("settings.title")}</div>
     {#each sections as s}
       <div class="section-label">{s.section}</div>
       {#each s.items as item}
@@ -86,17 +88,27 @@
         </button>
       {/each}
     {/each}
+    <div class="section-label">{t("settings.section.language")}</div>
+    <select
+      class="lang-select"
+      value={locale()}
+      onchange={(e) => setLocale((e.currentTarget as HTMLSelectElement).value as Locale)}
+    >
+      {#each AVAILABLE_LOCALES as l}
+        <option value={l.code}>{l.label}</option>
+      {/each}
+    </select>
   </nav>
   {/if}
 
   {#if !compact || app.settingsPage() !== "menu"}
   <div class="settings-content">
     {#if compact}
-      <button class="mobile-back" onclick={() => app.settingsBack()}>← Back</button>
+      <button class="mobile-back" onclick={() => app.settingsBack()}>← {t("common.back")}</button>
     {/if}
     {#if app.settingsPage() === "menu"}
       <div class="welcome">
-        <h2>Settings</h2>
+        <h2>{t("settings.title")}</h2>
         <p>Select a category from the menu</p>
       </div>
     {:else if app.settingsPage() === "profiles"}
@@ -203,6 +215,17 @@
     gap: 8px;
   }
   .welcome h2 { font-size: 20px; color: var(--text-sub); }
+  .lang-select {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid var(--divider);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
 
   /* ── Mobile: stack navigation ── */
   .settings-layout.compact .settings-menu {

@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::error::AppResult;
 
-const SCHEMA_VERSION: u32 = 10;
+const SCHEMA_VERSION: u32 = 11;
 
 pub fn migrate(conn: &Connection) -> AppResult<()> {
     let version: u32 = conn
@@ -91,6 +91,18 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
         let _ = conn.execute_batch(
             "ALTER TABLE profiles ADD COLUMN group_id TEXT DEFAULT NULL;"
         );
+    }
+
+    if version < 11 {
+        // 把 secret/passphrase 从 credentials 表移除，统一走 secrets 表（或系统 keychain）
+        let _ = conn.execute_batch("ALTER TABLE credentials DROP COLUMN secret;");
+        let _ = conn.execute_batch("ALTER TABLE credentials DROP COLUMN passphrase;");
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS secrets (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );"
+        )?;
     }
 
     if version < SCHEMA_VERSION {

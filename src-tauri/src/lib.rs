@@ -3,13 +3,14 @@ pub mod crypto;
 pub mod db;
 pub mod error;
 pub mod models;
+pub mod secret;
 mod ssh;
 mod state;
 pub mod sync;
 mod terminal;
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tauri::Manager;
 
@@ -17,15 +18,28 @@ use state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 默认 info；用 RUST_LOG=debug 等覆盖
+    let _ = env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info"),
+    ).try_init();
+
     tauri::Builder::default()
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                let state = window.state::<AppState>();
+                commands::lifecycle::close_all(&state);
+            }
+        })
         .setup(|app| {
             #[cfg(target_os = "android")]
             let data_dir = app.path().app_data_dir()?;
             #[cfg(not(target_os = "android"))]
             let data_dir = db::data_dir();
-            let conn = db::open(&data_dir)?;
+            let db = Arc::new(db::Db::open(&data_dir)?);
+            let secret_store = secret::open(db.clone());
             app.manage(AppState {
-                db: Mutex::new(conn),
+                db,
+                secret_store,
                 sessions: Mutex::new(HashMap::new()),
                 #[cfg(not(target_os = "android"))]
                 pty_sessions: Mutex::new(HashMap::new()),
@@ -75,12 +89,15 @@ pub fn run() {
             commands::settings::reset_highlights,
             commands::settings::list_recordings,
             commands::settings::read_recording,
+            commands::settings::secret_backend,
             // SSH session
             commands::session::ssh_connect,
             commands::session::ssh_write,
             commands::session::ssh_resize,
             commands::session::ssh_disconnect,
             commands::session::ssh_auth_respond,
+            // session lifecycle
+            commands::lifecycle::reconcile_sessions,
             // PTY (desktop only)
             #[cfg(not(target_os = "android"))]
             commands::pty::list_shells,

@@ -1,5 +1,6 @@
-use rusqlite::{params, Connection};
+use rusqlite::params;
 
+use super::Db;
 use crate::error::AppResult;
 use crate::models::Profile;
 
@@ -16,7 +17,8 @@ fn row_to_profile(row: &rusqlite::Row) -> rusqlite::Result<Profile> {
     })
 }
 
-pub fn list(conn: &Connection) -> AppResult<Vec<Profile>> {
+pub fn list(db: &Db) -> AppResult<Vec<Profile>> {
+    let conn = db.lock()?;
     let mut stmt = conn.prepare(
         "SELECT id, name, host, port, credential_id, bastion_profile_id, init_command, group_id FROM profiles ORDER BY name ASC",
     )?;
@@ -24,7 +26,8 @@ pub fn list(conn: &Connection) -> AppResult<Vec<Profile>> {
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-pub fn get(conn: &Connection, id: &str) -> AppResult<Profile> {
+pub fn get(db: &Db, id: &str) -> AppResult<Profile> {
+    let conn = db.lock()?;
     conn.query_row(
         "SELECT id, name, host, port, credential_id, bastion_profile_id, init_command, group_id FROM profiles WHERE id = ?1",
         params![id],
@@ -32,7 +35,8 @@ pub fn get(conn: &Connection, id: &str) -> AppResult<Profile> {
     ).map_err(Into::into)
 }
 
-pub fn insert(conn: &Connection, p: &Profile) -> AppResult<()> {
+pub fn insert(db: &Db, p: &Profile) -> AppResult<()> {
+    let conn = db.lock()?;
     conn.execute(
         "INSERT INTO profiles (id, name, host, port, credential_id, bastion_profile_id, init_command, group_id) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
@@ -45,7 +49,8 @@ pub fn insert(conn: &Connection, p: &Profile) -> AppResult<()> {
     Ok(())
 }
 
-pub fn update(conn: &Connection, p: &Profile) -> AppResult<()> {
+pub fn update(db: &Db, p: &Profile) -> AppResult<()> {
+    let conn = db.lock()?;
     conn.execute(
         "UPDATE profiles SET name=?1, host=?2, port=?3, credential_id=?4, bastion_profile_id=?5, init_command=?6, group_id=?7 WHERE id=?8",
         params![p.name, p.host, p.port as u32, p.credential_id, p.bastion_profile_id, p.init_command, p.group_id, p.id],
@@ -53,12 +58,14 @@ pub fn update(conn: &Connection, p: &Profile) -> AppResult<()> {
     Ok(())
 }
 
-pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
+pub fn delete(db: &Db, id: &str) -> AppResult<()> {
+    let conn = db.lock()?;
     conn.execute("DELETE FROM profiles WHERE id = ?1", params![id])?;
     Ok(())
 }
 
-pub fn clear_all(conn: &Connection) -> AppResult<()> {
+pub fn clear_all(db: &Db) -> AppResult<()> {
+    let conn = db.lock()?;
     conn.execute("DELETE FROM profiles", [])?;
     Ok(())
 }

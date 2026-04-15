@@ -11,10 +11,7 @@ pub fn pty_spawn(
     cols: u16,
     rows: u16,
 ) -> AppResult<String> {
-    let shell = {
-        let conn = state.db.lock().map_err(|_| AppError::Other("lock".into()))?;
-        crate::db::settings::get(&conn, "local_shell")?.filter(|s| !s.is_empty())
-    };
+    let shell = crate::db::settings::get(&state.db, "local_shell")?.filter(|s| !s.is_empty());
     let (id, handle) = pty::spawn(cols, rows, app, shell)?;
     state
         .pty_sessions

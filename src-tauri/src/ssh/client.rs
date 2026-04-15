@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -15,41 +14,28 @@ use crate::terminal::recorder::Recorder;
 
 pub const DEFAULT_CONNECT_TIMEOUT: u64 = 10;
 
+/// 默认 SSH 客户端配置：开启 keepalive，远端死了 90 秒内能断开。
+pub fn default_client_config() -> Arc<client::Config> {
+    let mut cfg = client::Config::default();
+    cfg.keepalive_interval = Some(Duration::from_secs(30));
+    cfg.keepalive_max = 3;
+    Arc::new(cfg)
+}
+
 /// Shared SSH connection handle for opening new channels (SFTP, forwarding).
 pub type SshHandle = Arc<tokio::sync::Mutex<client::Handle<SshHandler>>>;
 
 // ---------------------------------------------------------------------------
-// SSH handler — known_hosts TOFU 验证
+// SSH handler — known_hosts 验证（OpenSSH 标准格式）
 // ---------------------------------------------------------------------------
 
 pub struct SshHandler {
-    host_port: String,
+    host: String,
+    port: u16,
     known_hosts_path: PathBuf,
     key_mismatch: Arc<StdMutex<bool>>,
     /// Sender for forwarded channels from remote port forwarding.
     forwarded_channels: Arc<StdMutex<Option<mpsc::UnboundedSender<russh::Channel<client::Msg>>>>>,
-}
-
-/// 用 key 的 name + 各变体的核心字节生成紧凑指纹
-fn key_fingerprint(key: &russh_keys::key::PublicKey) -> String {
-    use russh_keys::key::PublicKey;
-    match key {
-        PublicKey::Ed25519(k) => format!("ed25519:{:x?}", k.as_bytes()),
-        _ => format!("{}", key.name()),
-    }
-}
-
-fn load_known_hosts(path: &PathBuf) -> HashMap<String, String> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-fn save_known_hosts(path: &PathBuf, hosts: &HashMap<String, String>) {
-    if let Ok(json) = serde_json::to_string_pretty(hosts) {
-        let _ = std::fs::write(path, json);
-    }
 }
 
 #[async_trait]
@@ -77,30 +63,33 @@ impl client::Handler for SshHandler {
         &mut self,
         server_public_key: &russh_keys::key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        let fp = key_fingerprint(server_public_key);
-        let path = self.known_hosts_path.clone();
-        let host_port = self.host_port.clone();
+        use russh_keys::known_hosts;
 
-        // 文件 I/O 放到 blocking 线程，不阻塞 async runtime
-        let result = tokio::task::spawn_blocking(move || {
-            let mut hosts = load_known_hosts(&path);
-            if let Some(stored) = hosts.get(&host_port) {
-                return if *stored == fp { Ok(true) } else { Ok(false) };
-            }
-            hosts.insert(host_port, fp);
-            save_known_hosts(&path, &hosts);
-            Ok(true)
-        })
-        .await
-        .unwrap_or(Ok(true));
-
-        match result {
+        match known_hosts::check_known_hosts_path(
+            &self.host,
+            self.port,
+            server_public_key,
+            &self.known_hosts_path,
+        ) {
+            // 已知且匹配
             Ok(true) => Ok(true),
+            // 完全未知 — TOFU：写入 known_hosts，接受
             Ok(false) => {
-                *self.key_mismatch.lock().unwrap() = true;
+                let _ = known_hosts::learn_known_hosts_path(
+                    &self.host,
+                    self.port,
+                    server_public_key,
+                    &self.known_hosts_path,
+                );
+                Ok(true)
+            }
+            // 已知但密钥变了 — 拒绝
+            Err(_) => {
+                if let Ok(mut m) = self.key_mismatch.lock() {
+                    *m = true;
+                }
                 Ok(false)
             }
-            Err(e) => Err(e),
         }
     }
 }
@@ -112,7 +101,8 @@ fn new_handler(host: &str, port: u16, known_hosts_path: PathBuf) -> (SshHandler,
     let mismatch = Arc::new(StdMutex::new(false));
     let fwd_channels: ForwardedChannelSender = Arc::new(StdMutex::new(None));
     let handler = SshHandler {
-        host_port: format!("[{}]:{}", host, port),
+        host: host.to_string(),
+        port,
         known_hosts_path,
         key_mismatch: mismatch.clone(),
         forwarded_channels: fwd_channels.clone(),
@@ -123,8 +113,8 @@ fn new_handler(host: &str, port: u16, known_hosts_path: PathBuf) -> (SshHandler,
 fn map_connect_error(e: russh::Error, host: &str, port: u16, mismatch: &StdMutex<bool>) -> AppError {
     if *mismatch.lock().unwrap() {
         AppError::Ssh(format!(
-            "{}:{} 的主机密钥已变更，连接已拒绝。如确认安全，请删除 ~/.rssh/known_hosts 中对应记录后重试。",
-            host, port
+            "{}:{} 的主机密钥已变更，连接已拒绝。如确认安全，请删除 ~/.ssh/known_hosts 中对应记录后重试（可用 ssh-keygen -R {} 删除）。",
+            host, port, host
         ))
     } else {
         AppError::Ssh(format!("连接失败: {e}"))
@@ -212,6 +202,9 @@ pub async fn authenticate(
                 .await
                 .map_err(|e| AppError::Ssh(format!("密钥认证失败: {e}")))?
         }
+        CredentialType::Agent => {
+            return authenticate_with_agent(handle, &credential.username).await;
+        }
         CredentialType::None => handle
             .authenticate_none(&credential.username)
             .await
@@ -225,6 +218,69 @@ pub async fn authenticate(
         return Err(AppError::Ssh("认证被拒绝".into()));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// SSH Agent 认证
+// ---------------------------------------------------------------------------
+
+/// 用系统 SSH agent（$SSH_AUTH_SOCK / Pageant）尝试逐个 identity 认证。
+pub async fn authenticate_with_agent(
+    handle: &mut client::Handle<SshHandler>,
+    username: &str,
+) -> AppResult<()> {
+    // 把内部具体到 platform 的逻辑放在独立 fn 里，外层走 Send 友好的具体 stream 类型
+    #[cfg(unix)]
+    {
+        let agent = russh_keys::agent::client::AgentClient::connect_env()
+            .await
+            .map_err(|e| AppError::Ssh(format!("无法连接 SSH agent (检查 $SSH_AUTH_SOCK): {e}")))?;
+        try_agent_identities(handle, username, agent).await
+    }
+    #[cfg(windows)]
+    {
+        let pipe = r"\\.\pipe\openssh-ssh-agent";
+        match russh_keys::agent::client::AgentClient::connect_named_pipe(pipe).await {
+            Ok(agent) => try_agent_identities(handle, username, agent).await,
+            Err(_) => {
+                let agent = russh_keys::agent::client::AgentClient::connect_pageant().await;
+                try_agent_identities(handle, username, agent).await
+            }
+        }
+    }
+}
+
+async fn try_agent_identities<S>(
+    handle: &mut client::Handle<SshHandler>,
+    username: &str,
+    mut agent: russh_keys::agent::client::AgentClient<S>,
+) -> AppResult<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin + 'static,
+{
+    let identities = agent
+        .request_identities()
+        .await
+        .map_err(|e| AppError::Ssh(format!("agent 请求 identity 列表失败: {e}")))?;
+
+    if identities.is_empty() {
+        return Err(AppError::Ssh(
+            "SSH agent 中没有 identity（先用 `ssh-add` 加 key）".into(),
+        ));
+    }
+
+    for pk in identities {
+        let (returned, result) = handle
+            .authenticate_future(username.to_string(), pk, agent)
+            .await;
+        agent = returned;
+        match result {
+            Ok(true) => return Ok(()),
+            Ok(false) => continue,
+            Err(e) => log::warn!("agent identity 签名失败: {e}"),
+        }
+    }
+    Err(AppError::Ssh("SSH agent 中所有 identity 都被服务器拒绝".into()))
 }
 
 // ---------------------------------------------------------------------------
@@ -357,7 +413,7 @@ pub async fn connect(
         }
     };
 
-    let config = Arc::new(client::Config::default());
+    let config = default_client_config();
 
     let mut handle = if let Some((bastion_profile, bastion_cred)) = bastion {
         log(&format!("Connecting to bastion {}:{} ...", bastion_profile.host, bastion_profile.port));

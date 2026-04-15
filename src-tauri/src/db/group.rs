@@ -1,9 +1,11 @@
-use rusqlite::{params, Connection};
+use rusqlite::params;
 
+use super::Db;
 use crate::error::AppResult;
 use crate::models::Group;
 
-pub fn list(conn: &Connection) -> AppResult<Vec<Group>> {
+pub fn list(db: &Db) -> AppResult<Vec<Group>> {
+    let conn = db.lock()?;
     let mut stmt = conn.prepare(
         "SELECT id, name, color, sort_order FROM groups ORDER BY sort_order ASC, name ASC",
     )?;
@@ -18,7 +20,8 @@ pub fn list(conn: &Connection) -> AppResult<Vec<Group>> {
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-pub fn get(conn: &Connection, id: &str) -> AppResult<Group> {
+pub fn get(db: &Db, id: &str) -> AppResult<Group> {
+    let conn = db.lock()?;
     conn.query_row(
         "SELECT id, name, color, sort_order FROM groups WHERE id = ?1",
         params![id],
@@ -34,7 +37,8 @@ pub fn get(conn: &Connection, id: &str) -> AppResult<Group> {
     .map_err(Into::into)
 }
 
-pub fn insert(conn: &Connection, g: &Group) -> AppResult<()> {
+pub fn insert(db: &Db, g: &Group) -> AppResult<()> {
+    let conn = db.lock()?;
     conn.execute(
         "INSERT INTO groups (id, name, color, sort_order) VALUES (?1, ?2, ?3, ?4) \
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, color=excluded.color, sort_order=excluded.sort_order",
@@ -43,7 +47,8 @@ pub fn insert(conn: &Connection, g: &Group) -> AppResult<()> {
     Ok(())
 }
 
-pub fn update(conn: &Connection, g: &Group) -> AppResult<()> {
+pub fn update(db: &Db, g: &Group) -> AppResult<()> {
+    let conn = db.lock()?;
     conn.execute(
         "UPDATE groups SET name=?1, color=?2, sort_order=?3 WHERE id=?4",
         params![g.name, g.color, g.sort_order, g.id],
@@ -51,14 +56,16 @@ pub fn update(conn: &Connection, g: &Group) -> AppResult<()> {
     Ok(())
 }
 
-pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
+pub fn delete(db: &Db, id: &str) -> AppResult<()> {
+    let conn = db.lock()?;
     conn.execute("DELETE FROM groups WHERE id = ?1", params![id])?;
     // Clear group_id references in profiles
     conn.execute("UPDATE profiles SET group_id = NULL WHERE group_id = ?1", params![id])?;
     Ok(())
 }
 
-pub fn clear_all(conn: &Connection) -> AppResult<()> {
+pub fn clear_all(db: &Db) -> AppResult<()> {
+    let conn = db.lock()?;
     conn.execute("DELETE FROM groups", [])?;
     Ok(())
 }

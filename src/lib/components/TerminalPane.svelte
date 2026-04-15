@@ -9,6 +9,7 @@
     import type {HighlightRule} from "../stores/app.svelte.ts";
     import * as app from "../stores/app.svelte.ts";
     import MobileKeybar from "./MobileKeybar.svelte";
+    import {registerRsshOscHandlers} from "../osc/handler.ts";
 
     const ANSI: Record<string, string> = {
         red: "\x1b[31m", green: "\x1b[32m", yellow: "\x1b[33m",
@@ -66,34 +67,6 @@
 
     let containerEl: HTMLDivElement;
     let searchInputEl: HTMLInputElement;
-
-    async function oscOpenProfile(name: string) {
-        const profiles = await invoke<any[]>("list_profiles");
-        const p = profiles.find(x => x.name.toLowerCase() === name.toLowerCase());
-        if (!p) { terminal?.write(`\r\n\x1b[31mProfile '${name}' not found\x1b[0m\r\n`); return; }
-        let cred: any = null;
-        if (p.credential_id) {
-            try { cred = await invoke<any>("get_credential", {id: p.credential_id}); } catch {}
-        }
-        const tid = `ssh:${crypto.randomUUID()}`;
-        app.addTab({
-            id: tid, type: "ssh", label: p.name,
-            meta: { profileId: p.id, host: p.host, port: String(p.port), username: cred?.username ?? "", authType: cred?.type ?? "password", secret: cred?.secret ?? "" },
-        });
-    }
-
-    async function oscOpenForward(name: string) {
-        const forwards = await invoke<any[]>("list_forwards");
-        const f = forwards.find(x => x.name.toLowerCase() === name.toLowerCase());
-        if (!f) { terminal?.write(`\r\n\x1b[31mForward '${name}' not found\x1b[0m\r\n`); return; }
-        let profileName = "?";
-        try { const p = await invoke<any>("get_profile", {id: f.profile_id}); profileName = p.name; } catch {}
-        const tid = `fwd:${f.id}:${Date.now()}`;
-        app.addTab({
-            id: tid, type: "forward", label: f.name,
-            meta: { forwardId: f.id, name: f.name, forwardType: f.type, localPort: String(f.local_port), remoteHost: f.remote_host, remotePort: String(f.remote_port), profileName },
-        });
-    }
 
     type AuthPromptData = { name: string; instructions: string; prompts: { prompt: string; echo: boolean }[] };
     let authPrompt = $state<AuthPromptData | null>(null);
@@ -312,15 +285,9 @@
             return true;
         });
 
-        // OSC 7337: rssh CLI → app integration
-        terminal.parser.registerOscHandler(7337, (data: string) => {
-            const sep = data.indexOf(":");
-            if (sep < 0) return false;
-            const kind = data.slice(0, sep);
-            const name = data.slice(sep + 1);
-            if (kind === "open") oscOpenProfile(name);
-            else if (kind === "fwd") oscOpenForward(name);
-            return true;
+        // OSC 7337: rssh CLI → app integration（处理逻辑见 lib/osc/handler.ts）
+        registerRsshOscHandlers(terminal.parser, {
+            error: (msg) => terminal?.write(`\r\n\x1b[31m${msg}\x1b[0m\r\n`),
         });
 
         // Load highlight rules

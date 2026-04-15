@@ -12,6 +12,8 @@
     import SftpBrowser from "./SftpBrowser.svelte";
     import SnippetPicker from "./SnippetPicker.svelte";
     import TabContextMenu, {type CtxMenuItem} from "./TabContextMenu.svelte";
+    import {attachShortcuts, attachKeyup, type Shortcut} from "../keyboard/registry.ts";
+    import {t} from "../i18n/index.svelte.ts";
 
     let drawerOpen = $state(false);
     let focusIdx = $state(-1);
@@ -25,60 +27,66 @@
     let dragTabId = $state<string | null>(null);
     let dropTabId = $state<string | null>(null);
 
+    /* ── 全局快捷键声明表 ── */
+    function shortcutsTable(): Shortcut[] {
+        return [
+            {
+                display: "⌘W / Ctrl+W",
+                description: "关闭当前 Tab",
+                skipInSettings: true,
+                match: e => (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key === "w",
+                handler: () => {
+                    const id = app.activeTabId();
+                    if (id === "home") return false;
+                    app.closeTab(id);
+                },
+            },
+            {
+                display: "Ctrl+Tab / Ctrl+Shift+Tab",
+                description: "在 Tab 之间循环切换",
+                match: e => e.ctrlKey && e.key === "Tab",
+                handler: e => {
+                    const dir = e.shiftKey ? -1 : 1;
+                    if (!tabCycling) {
+                        tabCycling = true;
+                        drawerOpen = true;
+                        const idx = navItems.findIndex(item =>
+                            item.kind === "tab" ? item.id === app.activeTabId() && !app.settingsActive()
+                            : item.kind === "settings" ? app.settingsActive()
+                            : false
+                        );
+                        focusIdx = (idx + dir + navItems.length) % navItems.length;
+                    } else {
+                        focusIdx = (focusIdx + dir + navItems.length) % navItems.length;
+                    }
+                },
+            },
+            {
+                display: "Esc",
+                description: "退出 Tab 切换模式",
+                match: e => tabCycling && e.key === "Escape",
+                handler: () => closeDrawer(),
+            },
+        ];
+    }
+
     onMount(() => {
         app.loadProfiles().then(p => profiles = p);
         app.loadGroups().then(g => groups = g);
+        // 前端启动时清掉所有上一轮残留的 backend session（前端崩溃 / 热重载场景）
+        invoke("reconcile_sessions", { activeIds: [] }).catch(() => {});
         consumeCloneQuery();
 
-        // Ctrl/Cmd+W → close active tab (captures BEFORE xterm so Ctrl+W
-        // doesn't get forwarded to the remote shell). Resources are released
-        // via Svelte onDestroy in the unmounted TerminalPane / ForwardPane / EditPane.
-        const onGlobalHotkey = (e: KeyboardEvent) => {
-            if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key === "w") {
-                if (app.settingsActive()) return;
-                const id = app.activeTabId();
-                if (id === "home") return;
-                e.preventDefault();
-                e.stopPropagation();
-                app.closeTab(id);
-            }
-            if (e.ctrlKey && e.key === "Tab") {
-                e.preventDefault();
-                e.stopPropagation();
-                const dir = e.shiftKey ? -1 : 1;
-                if (!tabCycling) {
-                    tabCycling = true;
-                    drawerOpen = true;
-                    const idx = navItems.findIndex(item =>
-                        item.kind === "tab" ? item.id === app.activeTabId() && !app.settingsActive()
-                        : item.kind === "settings" ? app.settingsActive()
-                        : false
-                    );
-                    focusIdx = (idx + dir + navItems.length) % navItems.length;
-                } else {
-                    focusIdx = (focusIdx + dir + navItems.length) % navItems.length;
-                }
-            }
-            if (tabCycling && e.key === "Escape") {
-                e.preventDefault();
-                e.stopPropagation();
-                closeDrawer();
-            }
-        };
-        const onGlobalKeyup = (e: KeyboardEvent) => {
+        const detachKeydown = attachShortcuts(shortcutsTable());
+        const detachKeyup = attachKeyup((e) => {
             if (tabCycling && e.key === "Control") {
                 const item = navItems[focusIdx];
                 tabCycling = false;
                 if (item) activateNavItem(item);
                 else closeDrawer();
             }
-        };
-        window.addEventListener("keydown", onGlobalHotkey, {capture: true});
-        window.addEventListener("keyup", onGlobalKeyup, {capture: true});
-        return () => {
-            window.removeEventListener("keydown", onGlobalHotkey, {capture: true});
-            window.removeEventListener("keyup", onGlobalKeyup, {capture: true});
-        };
+        });
+        return () => { detachKeydown(); detachKeyup(); };
     });
 
     /* Consume window.__rssh_clone injected by open_tab_in_new_window */
@@ -233,12 +241,12 @@
         if (isTerminal) {
             const items: CtxMenuItem[] = [
                 {
-                    label: "Search",
+                    label: t("tab.context.search"),
                     shortcut: "⌘F",
                     onClick: () => { app.setActiveTab(tab.id); app.requestSearch(tab.id); },
                 },
                 {
-                    label: "Snippets",
+                    label: t("tab.context.snippets"),
                     shortcut: "⌘S",
                     onClick: () => { app.setActiveTab(tab.id); app.openSnippetPicker(); },
                 },
@@ -246,7 +254,7 @@
             // SFTP requires native file dialogs — desktop only.
             if (!app.isMobile) {
                 items.push({
-                    label: "SFTP Browser",
+                    label: t("tab.context.sftp"),
                     shortcut: "⌘O",
                     disabled: !isSsh,
                     onClick: () => { app.setActiveTab(tab.id); app.openSftp(); },
@@ -256,14 +264,14 @@
         }
 
         sections.push([
-            {label: "Clone Tab", onClick: () => cloneTab(tab)},
-            {label: "Close Tab", shortcut: "⌘W", onClick: () => app.closeTab(tab.id)},
+            {label: t("tab.context.clone"), onClick: () => cloneTab(tab)},
+            {label: t("tab.context.close"), shortcut: "⌘W", onClick: () => app.closeTab(tab.id)},
         ]);
 
         // Multi-window requires Tauri WebviewWindowBuilder — desktop only.
         if (isTerminal && !app.isMobile) {
             sections.push([
-                {label: "Open in New Window", onClick: () => openInNewWindow(tab)},
+                {label: t("tab.context.open_new_window"), onClick: () => openInNewWindow(tab)},
             ]);
         }
 
@@ -402,13 +410,13 @@
 
             <!-- New Terminal (desktop only) -->
             {#if !app.isMobile}
-            <button class="sb-item new-tab" class:focused={isFocused("new-tab")} onclick={addLocalTab} title="New terminal">
+            <button class="sb-item new-tab" class:focused={isFocused("new-tab")} onclick={addLocalTab} title={t("tab.new_terminal")}>
                 <span class="sb-icon">+</span>
-                <span class="sb-label">New Terminal</span>
+                <span class="sb-label">{t("tab.new_terminal")}</span>
             </button>
-            <button class="sb-item new-tab" class:focused={isFocused("new-edit")} onclick={addEditTab} title="New edit tab">
+            <button class="sb-item new-tab" class:focused={isFocused("new-edit")} onclick={addEditTab} title={t("tab.new_edit")}>
                 <span class="sb-icon">✎</span>
-                <span class="sb-label">New Edit</span>
+                <span class="sb-label">{t("tab.new_edit")}</span>
             </button>
             {/if}
 
@@ -463,10 +471,10 @@
                     class:active={app.settingsActive()}
                     class:focused={isFocused("settings")}
                     onclick={selectSettings}
-                    title="Settings"
+                    title={t("tab.settings")}
                 >
                     <span class="sb-icon">⚙</span>
-                    <span class="sb-label">Settings</span>
+                    <span class="sb-label">{t("tab.settings")}</span>
                 </button>
             </div>
         </div>

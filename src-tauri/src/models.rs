@@ -19,6 +19,7 @@ pub enum CredentialType {
     Password,
     Key,
     Interactive,
+    Agent,
     None,
 }
 
@@ -28,6 +29,7 @@ impl CredentialType {
             Self::Password => "password",
             Self::Key => "key",
             Self::Interactive => "interactive",
+            Self::Agent => "agent",
             Self::None => "none",
         }
     }
@@ -37,6 +39,7 @@ impl CredentialType {
             "password" => Self::Password,
             "key" => Self::Key,
             "interactive" => Self::Interactive,
+            "agent" => Self::Agent,
             _ => Self::None,
         }
     }

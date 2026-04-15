@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
+  import { t } from "../i18n/index.svelte.ts";
 
   let { id = null }: { id: string | null } = $props();
 
@@ -42,30 +43,33 @@
 
 <div class="page">
   <div class="form">
-    <label>Name</label>
+    <label>{t("credential.name")}</label>
     <input type="text" bind:value={name} placeholder="prod-key" />
-    <label>Username</label>
+    <label>{t("credential.username")}</label>
     <input type="text" bind:value={username} placeholder="root" />
-    <label>Auth Type</label>
+    <label>{t("credential.auth_type")}</label>
     <select bind:value={credentialType}>
-      <option value="password">Password</option>
-      <option value="key">Private Key (PEM)</option>
-      <option value="none">None</option>
-      <option value="interactive">Keyboard Interactive</option>
+      <option value="password">{t("credential.type.password")}</option>
+      <option value="key">{t("credential.type.key")}</option>
+      <option value="agent">{t("credential.type.agent")}</option>
+      <option value="none">{t("credential.type.none")}</option>
+      <option value="interactive">{t("credential.type.interactive")}</option>
     </select>
     {#if credentialType === "password"}
-      <label>Password</label>
+      <label>{t("credential.password")}</label>
       <input type="password" bind:value={secret} />
     {:else if credentialType === "key"}
-      <label>Private Key</label>
+      <label>{t("credential.private_key")}</label>
       <textarea bind:value={secret} rows="6" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
-      <label>Passphrase (optional)</label>
-      <input type="password" bind:value={passphrase} placeholder="Key passphrase" />
+      <label>{t("credential.passphrase")}</label>
+      <input type="password" bind:value={passphrase} placeholder={t("credential.passphrase_placeholder")} />
+    {:else if credentialType === "agent"}
+      <p class="hint">{t("credential.agent_hint")}</p>
     {/if}
     <div class="switch-card">
       <div class="switch-card-body">
-        <div class="switch-card-title" class:on={saveToRemote} class:off={!saveToRemote}>SYNC TO REMOTE</div>
-        <div class="switch-card-desc">Include this credential's secret when pushing to GitHub.</div>
+        <div class="switch-card-title" class:on={saveToRemote} class:off={!saveToRemote}>{t("credential.sync_to_remote")}</div>
+        <div class="switch-card-desc">{t("credential.sync_to_remote_desc")}</div>
       </div>
       <label class="switch">
         <input type="checkbox" bind:checked={saveToRemote} />
@@ -73,7 +77,7 @@
       </label>
     </div>
     <button class="btn btn-accent" onclick={save} disabled={saving || !name || !username}>
-      {saving ? "Saving..." : "Save"}
+      {saving ? t("common.saving") : t("common.save")}
     </button>
   </div>
 </div>
@@ -82,4 +86,5 @@
   .page { padding: 24px; }
   .form { display: flex; flex-direction: column; gap: 10px; }
   textarea { font-family: monospace; font-size: 12px; resize: vertical; }
+  .hint { font-size: 13px; color: var(--text-muted, #888); margin: 4px 0; }
 </style>

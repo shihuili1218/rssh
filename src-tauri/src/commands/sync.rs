@@ -1,7 +1,39 @@
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
+use crate::models::Credential;
+use crate::secret::{cred_passphrase_key, cred_secret_key, setting_key};
 use crate::state::AppState;
+
+// ---------------------------------------------------------------------------
+// 取/写凭证 secret —— DB 不存 secret，统一走 SecretStore
+// ---------------------------------------------------------------------------
+
+/// 列出所有 credentials 并把 SecretStore 中的 secret/passphrase 灌进去。
+fn list_credentials_with_secrets(state: &State<'_, AppState>) -> AppResult<Vec<Credential>> {
+    let mut creds = crate::db::credential::list(&state.db)?;
+    for c in creds.iter_mut() {
+        c.secret = state.secret_store.get(&cred_secret_key(&c.id))?;
+        c.passphrase = state.secret_store.get(&cred_passphrase_key(&c.id))?;
+    }
+    Ok(creds)
+}
+
+/// 把一个反序列化出来的 Credential 完整写入（DB + SecretStore）。
+fn upsert_credential(state: &State<'_, AppState>, c: &Credential) -> AppResult<()> {
+    crate::db::credential::insert(&state.db, c)?;
+    let sk = cred_secret_key(&c.id);
+    let pk = cred_passphrase_key(&c.id);
+    match c.secret.as_deref() {
+        Some(s) if !s.is_empty() => state.secret_store.set(&sk, s)?,
+        _ => state.secret_store.delete(&sk)?,
+    }
+    match c.passphrase.as_deref() {
+        Some(s) if !s.is_empty() => state.secret_store.set(&pk, s)?,
+        _ => state.secret_store.delete(&pk)?,
+    }
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // 本地导入导出（全平台）
@@ -9,11 +41,10 @@ use crate::state::AppState;
 
 #[tauri::command]
 pub fn export_config(state: State<'_, AppState>) -> AppResult<String> {
-    let conn = state.db.lock().map_err(|_| AppError::Other("lock".into()))?;
-    let profiles = crate::db::profile::list(&conn)?;
-    let credentials = crate::db::credential::list(&conn)?;
-    let forwards = crate::db::forward::list(&conn)?;
-    let groups = crate::db::group::list(&conn)?;
+    let profiles = crate::db::profile::list(&state.db)?;
+    let credentials = list_credentials_with_secrets(&state)?;
+    let forwards = crate::db::forward::list(&state.db)?;
+    let groups = crate::db::group::list(&state.db)?;
     serde_json::to_string_pretty(&serde_json::json!({
         "version": 1,
         "exported_at": chrono::Utc::now().to_rfc3339(),
@@ -29,19 +60,28 @@ pub fn export_config(state: State<'_, AppState>) -> AppResult<String> {
 pub fn import_config(state: State<'_, AppState>, json: String) -> AppResult<()> {
     let data: serde_json::Value =
         serde_json::from_str(&json).map_err(|e| AppError::Config(format!("JSON 解析失败: {e}")))?;
-    let conn = state.db.lock().map_err(|_| AppError::Other("lock".into()))?;
+    apply_import(&state, &data)
+}
 
-    crate::db::credential::clear_all(&conn)?;
-    crate::db::profile::clear_all(&conn)?;
-    crate::db::forward::clear_all(&conn)?;
-    crate::db::group::clear_all(&conn)?;
+fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppResult<()> {
+    // 清空旧数据（凭证连带 secret 一起清）
+    if let Ok(old) = crate::db::credential::list(&state.db) {
+        for c in old {
+            let _ = state.secret_store.delete(&cred_secret_key(&c.id));
+            let _ = state.secret_store.delete(&cred_passphrase_key(&c.id));
+        }
+    }
+    crate::db::credential::clear_all(&state.db)?;
+    crate::db::profile::clear_all(&state.db)?;
+    crate::db::forward::clear_all(&state.db)?;
+    crate::db::group::clear_all(&state.db)?;
 
     let mut errors = Vec::new();
 
     if let Some(arr) = data["credentials"].as_array() {
         for item in arr {
             match serde_json::from_value::<crate::models::Credential>(item.clone()) {
-                Ok(c) => { if let Err(e) = crate::db::credential::insert(&conn, &c) { errors.push(format!("credential {}: {e}", c.name)); } }
+                Ok(c) => { if let Err(e) = upsert_credential(state, &c) { errors.push(format!("credential {}: {e}", c.name)); } }
                 Err(e) => errors.push(format!("credential parse: {e}")),
             }
         }
@@ -49,7 +89,7 @@ pub fn import_config(state: State<'_, AppState>, json: String) -> AppResult<()> 
     if let Some(arr) = data["profiles"].as_array() {
         for item in arr {
             match serde_json::from_value::<crate::models::Profile>(item.clone()) {
-                Ok(p) => { if let Err(e) = crate::db::profile::insert(&conn, &p) { errors.push(format!("profile {}: {e}", p.name)); } }
+                Ok(p) => { if let Err(e) = crate::db::profile::insert(&state.db, &p) { errors.push(format!("profile {}: {e}", p.name)); } }
                 Err(e) => errors.push(format!("profile parse: {e}")),
             }
         }
@@ -57,7 +97,7 @@ pub fn import_config(state: State<'_, AppState>, json: String) -> AppResult<()> 
     if let Some(arr) = data["forwards"].as_array() {
         for item in arr {
             match serde_json::from_value::<crate::models::Forward>(item.clone()) {
-                Ok(f) => { if let Err(e) = crate::db::forward::insert(&conn, &f) { errors.push(format!("forward {}: {e}", f.name)); } }
+                Ok(f) => { if let Err(e) = crate::db::forward::insert(&state.db, &f) { errors.push(format!("forward {}: {e}", f.name)); } }
                 Err(e) => errors.push(format!("forward parse: {e}")),
             }
         }
@@ -65,7 +105,7 @@ pub fn import_config(state: State<'_, AppState>, json: String) -> AppResult<()> 
     if let Some(arr) = data["groups"].as_array() {
         for item in arr {
             match serde_json::from_value::<crate::models::Group>(item.clone()) {
-                Ok(g) => { if let Err(e) = crate::db::group::insert(&conn, &g) { errors.push(format!("group {}: {e}", g.name)); } }
+                Ok(g) => { if let Err(e) = crate::db::group::insert(&state.db, &g) { errors.push(format!("group {}: {e}", g.name)); } }
                 Err(e) => errors.push(format!("group parse: {e}")),
             }
         }
@@ -82,63 +122,57 @@ pub fn import_config(state: State<'_, AppState>, json: String) -> AppResult<()> 
 // GitHub sync
 // ---------------------------------------------------------------------------
 
-
 #[tauri::command]
 pub async fn github_push(state: State<'_, AppState>, password: String) -> AppResult<()> {
     use crate::sync::github::GitHubSync;
 
-    let (token, repo, branch, json) = {
-        let conn = state.db.lock().map_err(|_| AppError::Other("lock".into()))?;
-        let token = crate::db::settings::get(&conn, "github_token")?
-            .ok_or_else(|| AppError::Config("未配置 GitHub Token".into()))?;
-        let repo = crate::db::settings::get(&conn, "github_repo")?
-            .ok_or_else(|| AppError::Config("未配置 GitHub Repo".into()))?;
-        let branch = crate::db::settings::get(&conn, "github_branch")?.unwrap_or("main".into());
+    let token = state
+        .secret_store
+        .get(&setting_key("github_token"))?
+        .ok_or_else(|| AppError::Config("未配置 GitHub Token".into()))?;
+    let repo = crate::db::settings::get(&state.db, "github_repo")?
+        .ok_or_else(|| AppError::Config("未配置 GitHub Repo".into()))?;
+    let branch = crate::db::settings::get(&state.db, "github_branch")?.unwrap_or("main".into());
 
-        let profiles = crate::db::profile::list(&conn)?;
-        let mut credentials = crate::db::credential::list(&conn)?;
-        let forwards = crate::db::forward::list(&conn)?;
-        let groups = crate::db::group::list(&conn)?;
+    let profiles = crate::db::profile::list(&state.db)?;
+    let mut credentials = list_credentials_with_secrets(&state)?;
+    let forwards = crate::db::forward::list(&state.db)?;
+    let groups = crate::db::group::list(&state.db)?;
 
-        // 尊重 save_to_remote：不同步的凭证清空 secret
-        for c in credentials.iter_mut() {
-            if !c.save_to_remote {
-                c.secret = None;
-            }
+    // 尊重 save_to_remote：不同步的凭证清空 secret/passphrase
+    for c in credentials.iter_mut() {
+        if !c.save_to_remote {
+            c.secret = None;
+            c.passphrase = None;
         }
+    }
 
-        let json = serde_json::to_string_pretty(&serde_json::json!({
-            "version": 1,
-            "exported_at": chrono::Utc::now().to_rfc3339(),
-            "profiles": profiles,
-            "credentials": credentials,
-            "forwards": forwards,
-            "groups": groups,
-        }))
-        .map_err(|e| AppError::Other(e.to_string()))?;
-
-        (token, repo, branch, json)
-    };
+    let json = serde_json::to_string_pretty(&serde_json::json!({
+        "version": 1,
+        "exported_at": chrono::Utc::now().to_rfc3339(),
+        "profiles": profiles,
+        "credentials": credentials,
+        "forwards": forwards,
+        "groups": groups,
+    }))
+    .map_err(|e| AppError::Other(e.to_string()))?;
 
     let encrypted = crate::crypto::encrypt(&json, &password)?;
     let sync = GitHubSync::from_settings(&token, &repo, &branch)?;
     sync.push(&encrypted).await
 }
 
-
 #[tauri::command]
 pub async fn github_pull(state: State<'_, AppState>, password: String) -> AppResult<()> {
     use crate::sync::github::GitHubSync;
 
-    let (token, repo, branch) = {
-        let conn = state.db.lock().map_err(|_| AppError::Other("lock".into()))?;
-        let token = crate::db::settings::get(&conn, "github_token")?
-            .ok_or_else(|| AppError::Config("未配置 GitHub Token".into()))?;
-        let repo = crate::db::settings::get(&conn, "github_repo")?
-            .ok_or_else(|| AppError::Config("未配置 GitHub Repo".into()))?;
-        let branch = crate::db::settings::get(&conn, "github_branch")?.unwrap_or("main".into());
-        (token, repo, branch)
-    };
+    let token = state
+        .secret_store
+        .get(&setting_key("github_token"))?
+        .ok_or_else(|| AppError::Config("未配置 GitHub Token".into()))?;
+    let repo = crate::db::settings::get(&state.db, "github_repo")?
+        .ok_or_else(|| AppError::Config("未配置 GitHub Repo".into()))?;
+    let branch = crate::db::settings::get(&state.db, "github_branch")?.unwrap_or("main".into());
 
     let sync = GitHubSync::from_settings(&token, &repo, &branch)?;
     let encrypted = sync.pull().await?;
@@ -146,51 +180,5 @@ pub async fn github_pull(state: State<'_, AppState>, password: String) -> AppRes
 
     let data: serde_json::Value =
         serde_json::from_str(&json).map_err(|e| AppError::Config(format!("JSON 解析失败: {e}")))?;
-    let conn = state.db.lock().map_err(|_| AppError::Other("lock".into()))?;
-
-    crate::db::credential::clear_all(&conn)?;
-    crate::db::profile::clear_all(&conn)?;
-    crate::db::forward::clear_all(&conn)?;
-    crate::db::group::clear_all(&conn)?;
-
-    let mut errors = Vec::new();
-
-    if let Some(arr) = data["credentials"].as_array() {
-        for item in arr {
-            match serde_json::from_value::<crate::models::Credential>(item.clone()) {
-                Ok(c) => { if let Err(e) = crate::db::credential::insert(&conn, &c) { errors.push(format!("credential {}: {e}", c.name)); } }
-                Err(e) => errors.push(format!("credential parse: {e}")),
-            }
-        }
-    }
-    if let Some(arr) = data["profiles"].as_array() {
-        for item in arr {
-            match serde_json::from_value::<crate::models::Profile>(item.clone()) {
-                Ok(p) => { if let Err(e) = crate::db::profile::insert(&conn, &p) { errors.push(format!("profile {}: {e}", p.name)); } }
-                Err(e) => errors.push(format!("profile parse: {e}")),
-            }
-        }
-    }
-    if let Some(arr) = data["forwards"].as_array() {
-        for item in arr {
-            match serde_json::from_value::<crate::models::Forward>(item.clone()) {
-                Ok(f) => { if let Err(e) = crate::db::forward::insert(&conn, &f) { errors.push(format!("forward {}: {e}", f.name)); } }
-                Err(e) => errors.push(format!("forward parse: {e}")),
-            }
-        }
-    }
-    if let Some(arr) = data["groups"].as_array() {
-        for item in arr {
-            match serde_json::from_value::<crate::models::Group>(item.clone()) {
-                Ok(g) => { if let Err(e) = crate::db::group::insert(&conn, &g) { errors.push(format!("group {}: {e}", g.name)); } }
-                Err(e) => errors.push(format!("group parse: {e}")),
-            }
-        }
-    }
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(AppError::Other(format!("部分导入失败: {}", errors.join("; "))))
-    }
+    apply_import(&state, &data)
 }

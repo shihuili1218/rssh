@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod forward;
 pub mod group;
+pub mod lifecycle;
 pub mod profile;
 #[cfg(not(target_os = "android"))]
 pub mod pty;
