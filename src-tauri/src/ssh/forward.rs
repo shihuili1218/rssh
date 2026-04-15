@@ -65,7 +65,7 @@ pub async fn start_local(
     known_hosts_path: PathBuf,
     timeout_secs: u64,
 ) -> AppResult<ForwardHandle> {
-    let config = Arc::new(russh::client::Config::default());
+    let config = crate::ssh::client::default_client_config();
     let mut handle = client::ssh_connect(config, host, port, known_hosts_path, timeout_secs).await?;
     client::authenticate(&mut handle, credential).await?;
 
@@ -139,7 +139,7 @@ pub async fn start_remote(
     known_hosts_path: PathBuf,
     timeout_secs: u64,
 ) -> AppResult<ForwardHandle> {
-    let config = Arc::new(russh::client::Config::default());
+    let config = crate::ssh::client::default_client_config();
     let (mut handle, fwd_sender) = client::ssh_connect_with_forward(config, host, port, known_hosts_path, timeout_secs).await?;
     client::authenticate(&mut handle, credential).await?;
 
@@ -292,7 +292,7 @@ pub async fn start_dynamic(
     known_hosts_path: PathBuf,
     timeout_secs: u64,
 ) -> AppResult<ForwardHandle> {
-    let config = Arc::new(russh::client::Config::default());
+    let config = crate::ssh::client::default_client_config();
     let mut handle = client::ssh_connect(config, host, port, known_hosts_path, timeout_secs).await?;
     client::authenticate(&mut handle, credential).await?;
 

@@ -2,8 +2,19 @@ use tauri::{AppHandle, State};
 
 use crate::error::{AppError, AppResult};
 use crate::models::{Credential, CredentialType, Profile};
+use crate::secret::{cred_passphrase_key, cred_secret_key};
 use crate::ssh::client;
 use crate::state::AppState;
+
+/// 把 SecretStore 里的 secret/passphrase 灌到 Credential 上。
+fn load_secrets(state: &State<'_, AppState>, c: &mut Credential) -> AppResult<()> {
+    if c.id.is_empty() {
+        return Ok(()); // 临时直连凭证，secret 已由前端传入
+    }
+    c.secret = state.secret_store.get(&cred_secret_key(&c.id))?;
+    c.passphrase = state.secret_store.get(&cred_passphrase_key(&c.id))?;
+    Ok(())
+}
 
 /// 通用 SSH 连接 — 支持直连和堡垒机。
 /// 前端可传原始参数（host/port/username），也可传 profile_id 从 DB 查。
@@ -25,20 +36,19 @@ pub async fn ssh_connect(
     rows: u32,
 ) -> AppResult<String> {
     let (profile, credential, bastion) = if let Some(pid) = profile_id {
-        // 从 DB 查 profile + credential + bastion
-        let conn = state.db.lock().map_err(|_| AppError::Other("lock".into()))?;
-        let p = crate::db::profile::get(&conn, &pid)?;
+        let p = crate::db::profile::get(&state.db, &pid)?;
         let cred_id = p.credential_id.as_deref().unwrap_or("");
-        let c = crate::db::credential::get(&conn, cred_id)
+        let mut c = crate::db::credential::get(&state.db, cred_id)
             .map_err(|_| AppError::NotFound("Profile 关联的凭证不存在".into()))?;
+        load_secrets(&state, &mut c)?;
 
-        // 查堡垒机
         let bastion = if let Some(ref bid) = p.bastion_profile_id {
-            let bp = crate::db::profile::get(&conn, bid)
+            let bp = crate::db::profile::get(&state.db, bid)
                 .map_err(|_| AppError::NotFound("堡垒机 Profile 不存在".into()))?;
             let bcid = bp.credential_id.as_deref().unwrap_or("");
-            let bc = crate::db::credential::get(&conn, bcid)
+            let mut bc = crate::db::credential::get(&state.db, bcid)
                 .map_err(|_| AppError::NotFound("堡垒机凭证不存在".into()))?;
+            load_secrets(&state, &mut bc)?;
             Some((bp, bc))
         } else {
             None
@@ -69,45 +79,41 @@ pub async fn ssh_connect(
     };
 
     // 检查 verbose log + 录制设置 + 连接超时
-    let (verbose_log, recording_path, timeout_secs) = {
-        let conn = state.db.lock().map_err(|_| AppError::Other("lock".into()))?;
-        let verbose = crate::db::settings::get(&conn, "verbose_log")?
-            .map(|v| v == "true")
-            .unwrap_or(true);
-        let timeout: u64 = crate::db::settings::get(&conn, "connect_timeout")?
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(crate::ssh::client::DEFAULT_CONNECT_TIMEOUT);
-        let enabled = crate::db::settings::get(&conn, "recording_enabled")?
-            .map(|v| v == "true")
-            .unwrap_or(false);
-        let rec = if enabled {
-            let dir_str = crate::db::settings::get(&conn, "recording_dir")?
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| {
-                    dirs::document_dir()
-                        .unwrap_or_else(|| std::path::PathBuf::from("."))
-                        .join("rssh-recordings")
-                        .to_string_lossy()
-                        .into_owned()
-                });
-            let dir = std::path::PathBuf::from(&dir_str);
-            std::fs::create_dir_all(&dir).ok();
-            let name = format!(
-                "{}_{}.cast",
-                profile.name.replace(' ', "_"),
-                chrono::Local::now().format("%Y%m%d_%H%M%S")
-            );
-            Some(dir.join(name))
-        } else {
-            None
-        };
-        (verbose, rec, timeout)
+    let verbose_log = crate::db::settings::get(&state.db, "verbose_log")?
+        .map(|v| v == "true")
+        .unwrap_or(true);
+    let timeout_secs: u64 = crate::db::settings::get(&state.db, "connect_timeout")?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(crate::ssh::client::DEFAULT_CONNECT_TIMEOUT);
+    let recording_enabled = crate::db::settings::get(&state.db, "recording_enabled")?
+        .map(|v| v == "true")
+        .unwrap_or(false);
+    let recording_path = if recording_enabled {
+        let dir_str = crate::db::settings::get(&state.db, "recording_dir")?
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                dirs::document_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join("rssh-recordings")
+                    .to_string_lossy()
+                    .into_owned()
+            });
+        let dir = std::path::PathBuf::from(&dir_str);
+        std::fs::create_dir_all(&dir).ok();
+        let name = format!(
+            "{}_{}.cast",
+            profile.name.replace(' ', "_"),
+            chrono::Local::now().format("%Y%m%d_%H%M%S")
+        );
+        Some(dir.join(name))
+    } else {
+        None
     };
 
     // Only pass log_session_id if verbose logging is enabled
     let effective_log_id = if verbose_log { log_session_id.as_deref() } else { None };
 
-    let known_hosts_path = state.data_dir.join("known_hosts");
+    let known_hosts_path = crate::ssh::known_hosts::path_for(&state.data_dir);
     let bastion_refs = bastion.as_ref().map(|(bp, bc)| (bp, bc));
     let result = client::connect(&profile, &credential, bastion_refs, cols, rows, app, recording_path, effective_log_id, known_hosts_path, timeout_secs).await?;
 

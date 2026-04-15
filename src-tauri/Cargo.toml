@@ -39,15 +39,23 @@ sha2 = "0.10"
 hmac = "0.12"
 getrandom = "0.2"
 
+# CLI（optional，靠 --features cli 启用）
+clap = { version = "4", features = ["derive"], optional = true }
+rpassword = { version = "7", optional = true }
+tempfile = { version = "3", optional = true }
+
 # PTY & native file dialogs — 桌面平台专用
 [target.'cfg(not(target_os = "android"))'.dependencies]
 portable-pty = "0.8"
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 
-# CLI
-clap = { version = "4", features = ["derive"], optional = true }
-rpassword = { version = "7", optional = true }
-tempfile = { version = "3", optional = true }
+# Keychain — 各平台用各自原生 backend；Android 没有支持，自动降级到 DB
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 
 [features]
 default = []

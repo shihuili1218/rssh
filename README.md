@@ -73,10 +73,14 @@ rssh completions <shell>          # zsh | bash | fish | powershell
 CLI and desktop app share the same database:
 
 ```
-~/.rssh/rssh.db        # SQLite
-~/.rssh/known_hosts    # SSH host keys
+~/.rssh/rssh.db        # SQLite (profiles, credentials, forwards, settings)
 ~/.rssh/snippets.json  # command snippets
+~/.ssh/known_hosts     # OpenSSH-standard host key store (shared with `ssh`)
 ```
+
+Host key trust is stored in the standard OpenSSH `known_hosts` file, so trust
+established with `ssh` is reused by rssh and vice versa. Use `ssh-keygen -R <host>`
+to remove an entry; use `ssh-keygen -F <host>` to inspect.
 
 ## Keyboard Shortcuts
 

@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -48,7 +47,7 @@ impl SftpHandle {
         known_hosts_path: PathBuf,
         timeout_secs: u64,
     ) -> AppResult<Self> {
-        let config = Arc::new(russh::client::Config::default());
+        let config = crate::ssh::client::default_client_config();
         let mut handle = client::ssh_connect(config, host, port, known_hosts_path, timeout_secs).await
             .map_err(|e| AppError::Sftp(format!("SSH 连接失败: {e}")))?;
 

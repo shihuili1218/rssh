@@ -1,68 +1,75 @@
-use rusqlite::{params, Connection};
+//! credentials 表 — 只存元数据（id/name/username/type/save_to_remote）。
+//! 实际的 secret / passphrase 由 SecretStore 管理（系统 keychain 或 secrets 表）。
 
+use rusqlite::params;
+
+use super::Db;
 use crate::error::AppResult;
 use crate::models::{Credential, CredentialType};
 
 fn row_to_credential(row: &rusqlite::Row) -> rusqlite::Result<Credential> {
-    let pp: String = row.get(6)?;
     Ok(Credential {
         id: row.get(0)?,
         name: row.get(1)?,
         username: row.get(2)?,
         credential_type: CredentialType::from_str(&row.get::<_, String>(3)?),
-        secret: row.get(4)?,
-        save_to_remote: row.get::<_, i32>(5)? != 0,
-        passphrase: if pp.is_empty() { None } else { Some(pp) },
+        secret: None,
+        save_to_remote: row.get::<_, i32>(4)? != 0,
+        passphrase: None,
     })
 }
 
-pub fn list(conn: &Connection) -> AppResult<Vec<Credential>> {
+pub fn list(db: &Db) -> AppResult<Vec<Credential>> {
+    let conn = db.lock()?;
     let mut stmt = conn.prepare(
-        "SELECT id, name, username, type, secret, save_to_remote, passphrase FROM credentials",
+        "SELECT id, name, username, type, save_to_remote FROM credentials",
     )?;
     let rows = stmt.query_map([], |row| row_to_credential(row))?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-pub fn get(conn: &Connection, id: &str) -> AppResult<Credential> {
+pub fn get(db: &Db, id: &str) -> AppResult<Credential> {
+    let conn = db.lock()?;
     conn.query_row(
-        "SELECT id, name, username, type, secret, save_to_remote, passphrase FROM credentials WHERE id = ?1",
+        "SELECT id, name, username, type, save_to_remote FROM credentials WHERE id = ?1",
         params![id],
         |row| row_to_credential(row),
     )
     .map_err(Into::into)
 }
 
-pub fn insert(conn: &Connection, cred: &Credential) -> AppResult<()> {
+pub fn insert(db: &Db, cred: &Credential) -> AppResult<()> {
+    let conn = db.lock()?;
     conn.execute(
-        "INSERT INTO credentials (id, name, username, type, secret, save_to_remote, passphrase) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO credentials (id, name, username, type, save_to_remote) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
             cred.id, cred.name, cred.username, cred.credential_type.as_str(),
-            cred.secret.as_deref().unwrap_or(""), cred.save_to_remote as i32,
-            cred.passphrase.as_deref().unwrap_or(""),
+            cred.save_to_remote as i32,
         ],
     )?;
     Ok(())
 }
 
-pub fn update(conn: &Connection, cred: &Credential) -> AppResult<()> {
+pub fn update(db: &Db, cred: &Credential) -> AppResult<()> {
+    let conn = db.lock()?;
     conn.execute(
-        "UPDATE credentials SET name=?1, username=?2, type=?3, secret=?4, save_to_remote=?5, passphrase=?6 WHERE id=?7",
+        "UPDATE credentials SET name=?1, username=?2, type=?3, save_to_remote=?4 WHERE id=?5",
         params![
             cred.name, cred.username, cred.credential_type.as_str(),
-            cred.secret.as_deref().unwrap_or(""), cred.save_to_remote as i32,
-            cred.passphrase.as_deref().unwrap_or(""), cred.id,
+            cred.save_to_remote as i32, cred.id,
         ],
     )?;
     Ok(())
 }
 
-pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
+pub fn delete(db: &Db, id: &str) -> AppResult<()> {
+    let conn = db.lock()?;
     conn.execute("DELETE FROM credentials WHERE id = ?1", params![id])?;
     Ok(())
 }
 
-pub fn clear_all(conn: &Connection) -> AppResult<()> {
+pub fn clear_all(db: &Db) -> AppResult<()> {
+    let conn = db.lock()?;
     conn.execute("DELETE FROM credentials", [])?;
     Ok(())
 }

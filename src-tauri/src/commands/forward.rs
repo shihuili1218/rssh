@@ -7,32 +7,27 @@ use crate::state::AppState;
 
 #[tauri::command]
 pub fn list_forwards(state: State<AppState>) -> Result<Vec<Forward>, AppError> {
-    let conn = state.db.lock().map_err(|e| AppError::Other(e.to_string()))?;
-    crate::db::forward::list(&conn)
+    crate::db::forward::list(&state.db)
 }
 
 #[tauri::command]
 pub fn get_forward(state: State<AppState>, id: String) -> Result<Forward, AppError> {
-    let conn = state.db.lock().map_err(|e| AppError::Other(e.to_string()))?;
-    crate::db::forward::get(&conn, &id)
+    crate::db::forward::get(&state.db, &id)
 }
 
 #[tauri::command]
 pub fn create_forward(state: State<AppState>, forward: Forward) -> Result<(), AppError> {
-    let conn = state.db.lock().map_err(|e| AppError::Other(e.to_string()))?;
-    crate::db::forward::insert(&conn, &forward)
+    crate::db::forward::insert(&state.db, &forward)
 }
 
 #[tauri::command]
 pub fn update_forward(state: State<AppState>, forward: Forward) -> Result<(), AppError> {
-    let conn = state.db.lock().map_err(|e| AppError::Other(e.to_string()))?;
-    crate::db::forward::update(&conn, &forward)
+    crate::db::forward::update(&state.db, &forward)
 }
 
 #[tauri::command]
 pub fn delete_forward(state: State<AppState>, id: String) -> Result<(), AppError> {
-    let conn = state.db.lock().map_err(|e| AppError::Other(e.to_string()))?;
-    crate::db::forward::delete(&conn, &id)
+    crate::db::forward::delete(&state.db, &id)
 }
 
 // ---------------------------------------------------------------------------
@@ -44,28 +39,25 @@ pub async fn forward_start(
     state: State<'_, AppState>,
     forward_id: String,
 ) -> AppResult<String> {
-    let (fwd_config, host, port, cred, timeout_secs) = {
-        let conn = state
-            .db
-            .lock()
-            .map_err(|_| AppError::Other("db lock poisoned".into()))?;
-        let f = crate::db::forward::get(&conn, &forward_id)?;
-        let p = crate::db::profile::get(&conn, &f.profile_id)
-            .map_err(|_| AppError::NotFound("转发关联的 Profile 不存在".into()))?;
-        let cred_id = p.credential_id.as_deref().unwrap_or("");
-        let c = crate::db::credential::get(&conn, cred_id)
-            .map_err(|_| AppError::NotFound("转发关联的凭证不存在".into()))?;
-        let timeout: u64 = crate::db::settings::get(&conn, "connect_timeout")?
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(crate::ssh::client::DEFAULT_CONNECT_TIMEOUT);
-        (f, p.host, p.port, c, timeout)
-    };
+    let f = crate::db::forward::get(&state.db, &forward_id)?;
+    let p = crate::db::profile::get(&state.db, &f.profile_id)
+        .map_err(|_| AppError::NotFound("转发关联的 Profile 不存在".into()))?;
+    let cred_id = p.credential_id.as_deref().unwrap_or("");
+    let mut c = crate::db::credential::get(&state.db, cred_id)
+        .map_err(|_| AppError::NotFound("转发关联的凭证不存在".into()))?;
+    if !c.id.is_empty() {
+        c.secret = state.secret_store.get(&crate::secret::cred_secret_key(&c.id))?;
+        c.passphrase = state.secret_store.get(&crate::secret::cred_passphrase_key(&c.id))?;
+    }
+    let timeout_secs: u64 = crate::db::settings::get(&state.db, "connect_timeout")?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(crate::ssh::client::DEFAULT_CONNECT_TIMEOUT);
 
-    let known_hosts_path = state.data_dir.join("known_hosts");
-    let handle = match fwd_config.forward_type {
-        ForwardType::Local => fwd::start_local(&fwd_config, &host, port, &cred, known_hosts_path, timeout_secs).await?,
-        ForwardType::Remote => fwd::start_remote(&fwd_config, &host, port, &cred, known_hosts_path, timeout_secs).await?,
-        ForwardType::Dynamic => fwd::start_dynamic(&fwd_config, &host, port, &cred, known_hosts_path, timeout_secs).await?,
+    let known_hosts_path = crate::ssh::known_hosts::path_for(&state.data_dir);
+    let handle = match f.forward_type {
+        ForwardType::Local => fwd::start_local(&f, &p.host, p.port, &c, known_hosts_path, timeout_secs).await?,
+        ForwardType::Remote => fwd::start_remote(&f, &p.host, p.port, &c, known_hosts_path, timeout_secs).await?,
+        ForwardType::Dynamic => fwd::start_dynamic(&f, &p.host, p.port, &c, known_hosts_path, timeout_secs).await?,
     };
     let active_id = uuid::Uuid::new_v4().to_string();
 

@@ -1,9 +1,11 @@
-use rusqlite::{params, Connection};
+use rusqlite::params;
 
+use super::Db;
 use crate::error::AppResult;
 use crate::models::HighlightRule;
 
-pub fn list(conn: &Connection) -> AppResult<Vec<HighlightRule>> {
+pub fn list(db: &Db) -> AppResult<Vec<HighlightRule>> {
+    let conn = db.lock()?;
     let mut stmt = conn.prepare("SELECT keyword, color, enabled FROM highlights")?;
     let rows = stmt.query_map([], |row| {
         Ok(HighlightRule {
@@ -15,7 +17,8 @@ pub fn list(conn: &Connection) -> AppResult<Vec<HighlightRule>> {
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-pub fn insert(conn: &Connection, rule: &HighlightRule) -> AppResult<()> {
+pub fn insert(db: &Db, rule: &HighlightRule) -> AppResult<()> {
+    let conn = db.lock()?;
     conn.execute(
         "INSERT INTO highlights (keyword, color, enabled) VALUES (?1, ?2, ?3)",
         params![rule.keyword, rule.color, rule.enabled],
@@ -23,7 +26,8 @@ pub fn insert(conn: &Connection, rule: &HighlightRule) -> AppResult<()> {
     Ok(())
 }
 
-pub fn delete_by_keyword(conn: &Connection, keyword: &str) -> AppResult<()> {
+pub fn delete_by_keyword(db: &Db, keyword: &str) -> AppResult<()> {
+    let conn = db.lock()?;
     conn.execute(
         "DELETE FROM highlights WHERE keyword = ?1",
         params![keyword],
@@ -31,7 +35,8 @@ pub fn delete_by_keyword(conn: &Connection, keyword: &str) -> AppResult<()> {
     Ok(())
 }
 
-pub fn reset_defaults(conn: &Connection) -> AppResult<()> {
+pub fn reset_defaults(db: &Db) -> AppResult<()> {
+    let conn = db.lock()?;
     conn.execute("DELETE FROM highlights", [])?;
     conn.execute_batch(
         "
