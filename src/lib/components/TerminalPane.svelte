@@ -12,13 +12,17 @@
     import {registerRsshOscHandlers} from "../osc/handler.ts";
     import {createCommandBlockTracker, type CommandBlockTracker} from "../terminal/command-blocks.ts";
 
-    const ANSI: Record<string, string> = {
-        red: "\x1b[31m", green: "\x1b[32m", yellow: "\x1b[33m",
-        blue: "\x1b[34m", magenta: "\x1b[35m", cyan: "\x1b[36m", white: "\x1b[37m",
-        brightRed: "\x1b[1;31m", brightGreen: "\x1b[1;32m", brightYellow: "\x1b[1;33m",
-        brightBlue: "\x1b[1;34m", brightMagenta: "\x1b[1;35m", brightCyan: "\x1b[1;36m", brightWhite: "\x1b[1;37m",
-    };
     const RST = "\x1b[0m";
+
+    /** Hex color → ANSI 24-bit true color escape. */
+    function ansiColor(hex: string): string {
+        const h = hex.replace("#", "");
+        if (h.length !== 6) return "";
+        const r = parseInt(h.slice(0, 2), 16);
+        const g = parseInt(h.slice(2, 4), 16);
+        const b = parseInt(h.slice(4, 6), 16);
+        return `\x1b[38;2;${r};${g};${b}m`;
+    }
 
     let hlRules = $state<HighlightRule[]>([]);
     let hlRegex: RegExp | null = null;
@@ -35,7 +39,7 @@
         return plain.replace(hlRegex, (match) => {
             const rule = hlRules.find(r => r.enabled && r.keyword.toLowerCase() === match.toLowerCase());
             if (!rule) return match;
-            const code = ANSI[rule.color] ?? "";
+            const code = ansiColor(rule.color);
             return code + match + RST;
         });
     }

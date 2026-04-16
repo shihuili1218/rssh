@@ -85,7 +85,23 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--accent);
 }
 input::placeholder, textarea::placeholder { color: var(--text-dim); }
-select { cursor: pointer; }
+select {
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%23A0A8BB' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px;
+  padding-right: 36px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+select:hover {
+  box-shadow: var(--raised-sm);
+}
+select:active {
+  box-shadow: var(--pressed);
+}
 
 label {
   color: var(--text-sub);

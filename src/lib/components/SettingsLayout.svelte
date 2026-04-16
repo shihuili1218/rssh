@@ -42,7 +42,7 @@
     { id: "recording-settings", label: t("settings.section.recording"), section: "Sessions" },
     { id: "highlights", label: t("settings.section.highlights"), section: "Appearance" },
     { id: "snippets", label: t("settings.section.snippets"), section: "Appearance" },
-    { id: "cli", label: t("settings.section.cli"), section: "Tools" },
+    { id: "cli", label: t("settings.section.cli"), section: "Help" },
     { id: "help", label: t("settings.section.help"), section: "Help" },
   ]);
 
@@ -88,7 +88,6 @@
         </button>
       {/each}
     {/each}
-    <div class="section-label">{t("settings.section.language")}</div>
     <select
       class="lang-select"
       value={locale()}
