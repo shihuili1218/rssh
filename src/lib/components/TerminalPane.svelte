@@ -10,6 +10,7 @@
     import * as app from "../stores/app.svelte.ts";
     import MobileKeybar from "./MobileKeybar.svelte";
     import {registerRsshOscHandlers} from "../osc/handler.ts";
+    import {createCommandBlockTracker, type CommandBlockTracker} from "../terminal/command-blocks.ts";
 
     const ANSI: Record<string, string> = {
         red: "\x1b[31m", green: "\x1b[32m", yellow: "\x1b[33m",
@@ -86,6 +87,48 @@
     let disconnected = $state(false);
     let showSearch = $state(false);
     let searchQuery = $state("");
+
+    // Command block overlay state. `paintTick` is a dumb counter we bump
+    // whenever something that affects the overlay changes — scroll, render,
+    // block list change. The $derived below recomputes svg rects from it.
+    let blockTracker: CommandBlockTracker | undefined;
+    let paintTick = $state(0);
+    let isAltBuffer = $state(false);
+
+    type BlockRect = { id: number; y: number; h: number; color: string };
+
+    const blockRects = $derived.by((): BlockRect[] => {
+        paintTick; // dependency
+        if (!app.commandBlockBar()) return [];
+        if (!terminal || !blockTracker || !containerEl || isAltBuffer) return [];
+        const firstRow = containerEl.querySelector(".xterm-rows")?.firstElementChild as HTMLElement | null;
+        const rowHeight = firstRow?.offsetHeight ?? 0;
+        if (!rowHeight) return [];
+        const buf = terminal.buffer.active;
+        const viewportY = buf.viewportY;
+        const rows = terminal.rows;
+        // For an unfinished block, its tail is wherever the cursor currently
+        // sits (absolute row = baseY + cursorY). This grows naturally as the
+        // shell writes output and stops at the real last line — not at the
+        // bottom of the viewport.
+        const cursorAbs = buf.baseY + buf.cursorY;
+        const out: BlockRect[] = [];
+        for (const b of blockTracker.blocks) {
+            if (b.start.isDisposed) continue;
+            const startLine = b.start.line;
+            const endLine = b.end && !b.end.isDisposed ? b.end.line : cursorAbs;
+            const top = Math.max(startLine, viewportY);
+            const bot = Math.min(endLine, viewportY + rows - 1);
+            if (top > bot) continue;
+            out.push({
+                id: b.id,
+                y: (top - viewportY) * rowHeight,
+                h: (bot - top + 1) * rowHeight,
+                color: b.color,
+            });
+        }
+        return out;
+    });
 
     // Listener tracking — disposed on cleanup/reconnect
     let unlisteners: UnlistenFn[] = [];
@@ -290,8 +333,21 @@
             error: (msg) => terminal?.write(`\r\n\x1b[31m${msg}\x1b[0m\r\n`),
         });
 
-        // Load highlight rules
+        // Command block tracker — marks Enter keypresses in normal buffer.
+        blockTracker = createCommandBlockTracker(terminal);
+        blockTracker.onChange(() => paintTick++);
+        terminal.onScroll(() => paintTick++);
+        terminal.onRender(() => paintTick++);
+        terminal.buffer.onBufferChange((buf) => {
+            isAltBuffer = buf.type === "alternate";
+            paintTick++;
+        });
+
+        // Load highlight rules + the command-block-bar toggle. Awaiting
+        // the toggle before `connectAndWire` runs avoids a first-frame
+        // flash of the bar when the user has it disabled.
         try { hlRules = await app.loadHighlights(); buildHighlightRegex(hlRules); } catch {}
+        await app.loadCommandBlockBar();
 
         // Connect
         await connectAndWire();
@@ -317,6 +373,16 @@
         }
     });
 
+    // When the block-bar toggle flips, xterm's left padding changes — it
+    // needs to refit so columns recompute. The refit triggers xterm's own
+    // render, which fires onRender → paintTick++, so the overlay resyncs
+    // without us writing paintTick here (writing it here would make this
+    // effect self-dependent via `++`, causing an update loop).
+    $effect(() => {
+        app.commandBlockBar(); // subscribe
+        fitAddon?.fit();
+    });
+
     // Focus terminal + register writer when this tab becomes active
     $effect(() => {
         if (app.activeTabId() === tabId && !app.settingsActive()) {
@@ -336,6 +402,7 @@
         resizeDisposable?.dispose();
         reconnectDisposable?.dispose();
         resizeObs?.disconnect();
+        blockTracker?.dispose();
         app.unregisterTerminalWriter();
         app.unregisterSession(tabId);
         if (sessionId && !disconnected) {
@@ -384,7 +451,20 @@
             </div>
         </div>
     {/if}
-    <div class="term-wrap" bind:this={containerEl}></div>
+    <div class="term-wrap" class:no-block-bar={!app.commandBlockBar()}>
+        <div class="xterm-host" bind:this={containerEl}></div>
+        {#if app.commandBlockBar()}
+            <svg class="block-bar" aria-hidden="true">
+                {#if isAltBuffer}
+                    <rect x="0" y="0" width="3" height="100%" rx="1.5" fill="#6B7A99" opacity="0.5" />
+                {:else}
+                    {#each blockRects as r (r.id)}
+                        <rect x="0" y={r.y} width="3" height={r.h} rx="1.5" fill={r.color} />
+                    {/each}
+                {/if}
+            </svg>
+        {/if}
+    </div>
     {#if app.isMobile}
         <MobileKeybar />
     {/if}
@@ -401,11 +481,34 @@
     .term-wrap {
         flex: 1;
         min-height: 0;
+        position: relative;
     }
 
+    .xterm-host {
+        width: 100%;
+        height: 100%;
+    }
+
+    /* Widen left padding 4px → 12px to make room for the block bar.
+       When the feature is off, restore the original symmetric 4px padding. */
     .term-wrap :global(.xterm) {
         height: 100%;
+        padding: 4px 4px 4px 12px;
+    }
+    .term-wrap.no-block-bar :global(.xterm) {
         padding: 4px;
+    }
+
+    /* Overlay painted inside the enlarged left padding. Sits above xterm's
+       canvas/DOM but ignores pointer events so text selection still works. */
+    .block-bar {
+        position: absolute;
+        left: 5px;
+        top: 4px;
+        width: 4px;
+        height: calc(100% - 8px);
+        pointer-events: none;
+        overflow: visible;
     }
 
     .search-bar {
