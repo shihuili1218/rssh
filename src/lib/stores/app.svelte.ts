@@ -205,6 +205,26 @@ export function snippetPickerOpen() { return _snippetPickerOpen; }
 export function openSnippetPicker() { _snippetPickerOpen = true; }
 export function closeSnippetPicker() { _snippetPickerOpen = false; }
 
+/* ─── Terminal command block side-bar ─── */
+let _commandBlockBar = $state(true);
+let _cbbLoaded = false;
+export function commandBlockBar() { return _commandBlockBar; }
+export async function loadCommandBlockBar(): Promise<boolean> {
+  if (!_cbbLoaded) {
+    _cbbLoaded = true;
+    try {
+      const v = await invoke<string | null>("get_setting", { key: "command_block_bar" });
+      _commandBlockBar = v !== "false";
+    } catch {}
+  }
+  return _commandBlockBar;
+}
+export async function setCommandBlockBar(v: boolean) {
+  _commandBlockBar = v;
+  _cbbLoaded = true;
+  await invoke("set_setting", { key: "command_block_bar", value: String(v) });
+}
+
 /* ─── Per-tab search pulse (context menu → TerminalPane.openSearch) ─── */
 let _searchRequest = $state<{ tabId: string; n: number } | null>(null);
 export function searchRequest() { return _searchRequest; }
