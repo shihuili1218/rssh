@@ -329,6 +329,23 @@
             if (mod && e.key === "f") { e.preventDefault(); openSearch(); return false; }
             if (mod && e.key === "o" && !isLocal && !app.isMobile) { e.preventDefault(); app.navigate("sftp"); return false; }
             if (mod && e.key === "s") { e.preventDefault(); app.openSnippetPicker(); return false; }
+            // Ctrl+Shift+V → paste, Ctrl+Shift+C → copy (Linux terminal convention)
+            if (e.ctrlKey && e.shiftKey && e.key === "V") {
+                e.preventDefault();
+                navigator.clipboard.readText().then(text => {
+                    if (!text || disconnected || !sessionId) return;
+                    const wrapped = terminal.modes.bracketedPasteMode
+                        ? `\x1b[200~${text}\x1b[201~` : text;
+                    invoke(writeCmd, { sessionId, data: Array.from(new TextEncoder().encode(wrapped)) });
+                }).catch(() => {});
+                return false;
+            }
+            if (e.ctrlKey && e.shiftKey && e.key === "C") {
+                e.preventDefault();
+                const sel = terminal.getSelection();
+                if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+                return false;
+            }
             return true;
         });
 
