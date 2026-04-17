@@ -1,0 +1,41 @@
+name: Windows Debug
+
+on: workflow_dispatch
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Build Tauri app
+        run: npx tauri build --target x86_64-pc-windows-msvc
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: rssh-windows-debug
+          path: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+
+      - name: SSH session (tmate)
+        if: always()
+        uses: mxschmitt/action-tmate@v3
+        timeout-minutes: 90
