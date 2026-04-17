@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 use std::ops::Deref;
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use clap::{Parser, Subcommand};
 
@@ -10,11 +10,19 @@ use rssh_lib::error::AppResult;
 use rssh_lib::models::*;
 use rssh_lib::secret::{self, cred_passphrase_key, cred_secret_key, setting_key, SecretStore};
 
-/// CLI 上下文：组合 DB + SecretStore。
+/// CLI 上下文：组合 DB + SecretStore（懒加载）。
 /// Deref<Target=Db> 让所有 `db::xxx::yyy(ctx, ...)` 调用零改动透传。
+/// `secret_store` 只在首次访问时探测系统 Keychain，避免 `rssh ls` 等
+/// 不需要密钥的命令付出 Keychain 探测延迟。
 struct CliCtx {
     db: Arc<Db>,
-    secret_store: Arc<dyn SecretStore>,
+    secret_store: OnceLock<Arc<dyn SecretStore>>,
+}
+
+impl CliCtx {
+    fn secret_store(&self) -> &Arc<dyn SecretStore> {
+        self.secret_store.get_or_init(|| secret::open(self.db.clone()))
+    }
 }
 
 impl Deref for CliCtx {
@@ -106,8 +114,7 @@ fn main() {
         eprintln!("Failed to open database: {e}");
         std::process::exit(1);
     }));
-    let secret_store = secret::open(db.clone());
-    let conn = CliCtx { db, secret_store };
+    let conn = CliCtx { db, secret_store: OnceLock::new() };
 
     let result = match cli.command {
         None => cmd_ls(&conn, None),
@@ -154,13 +161,15 @@ fn cmd_ls(conn: &CliCtx, query: Option<&str>) -> AppResult<()> {
                 println!("No forwards.");
                 return Ok(());
             }
-            println!("{:<18} {:<6} {:<8} {:<22} {}", "NAME", "TYPE", "LOCAL", "REMOTE", "PROFILE");
-            println!("{}", "-".repeat(70));
             let profiles = db::profile::list(conn)?;
             for f in &list {
                 let pname = profiles.iter().find(|p| p.id == f.profile_id).map(|p| p.name.as_str()).unwrap_or("?");
-                let ft = match f.forward_type { ForwardType::Local => "L", ForwardType::Remote => "R", ForwardType::Dynamic => "D" };
-                println!("{:<18} {:<6} {:<8} {}:{:<17} {}", f.name, ft, f.local_port, f.remote_host, f.remote_port, pname);
+                let arrow = match f.forward_type {
+                    ForwardType::Local   => format!("-L {} → {}:{}", f.local_port, f.remote_host, f.remote_port),
+                    ForwardType::Remote  => format!("-R {} → {}:{}", f.remote_port, f.remote_host, f.local_port),
+                    ForwardType::Dynamic => format!("-D {}", f.local_port),
+                };
+                println!("{} ({}) via {}", f.name, arrow, pname);
             }
         }
         _ => {
@@ -178,21 +187,18 @@ fn cmd_ls(conn: &CliCtx, query: Option<&str>) -> AppResult<()> {
             }
             let creds = db::credential::list(conn)?;
             let groups = db::group::list(conn)?;
-            println!("{:<20} {:<25} {:<6} {:<15} {}", "NAME", "HOST", "PORT", "USER", "GROUP");
-            println!("{}", "-".repeat(78));
             for p in &filtered {
                 let user = p.credential_id.as_deref()
                     .and_then(|id| creds.iter().find(|c| c.id == id))
                     .map(|c| c.username.as_str())
-                    .unwrap_or("-");
-                let group_display = p.group_id.as_deref()
-                    .and_then(|gid| groups.iter().find(|g| g.id == gid))
-                    .map(|g| {
-                        let (r, g_val, b) = hex_to_rgb(&g.color);
-                        format!("\x1b[38;2;{};{};{}m{}\x1b[0m", r, g_val, b, g.name)
-                    })
-                    .unwrap_or_else(|| "-".into());
-                println!("{:<20} {:<25} {:<6} {:<15} {}", p.name, p.host, p.port, user, group_display);
+                    .unwrap_or("?");
+                let label = format!("{} ({}@{}:{})", p.name, user, p.host, p.port);
+                if let Some(g) = p.group_id.as_deref().and_then(|gid| groups.iter().find(|g| g.id == gid)) {
+                    let (r, gv, b) = hex_to_rgb(&g.color);
+                    println!("\x1b[38;2;{};{};{}m{}\x1b[0m", r, gv, b, label);
+                } else {
+                    println!("{}", label);
+                }
             }
         }
     }
@@ -356,8 +362,8 @@ fn cmd_open_fwd(conn: &CliCtx, name: &str) -> AppResult<()> {
 /// 从 SecretStore 把 secret/passphrase 灌到 Credential 上。
 fn load_cred_secrets(conn: &CliCtx, mut c: Credential) -> Credential {
     if !c.id.is_empty() {
-        c.secret = conn.secret_store.get(&cred_secret_key(&c.id)).ok().flatten();
-        c.passphrase = conn.secret_store.get(&cred_passphrase_key(&c.id)).ok().flatten();
+        c.secret = conn.secret_store().get(&cred_secret_key(&c.id)).ok().flatten();
+        c.passphrase = conn.secret_store().get(&cred_passphrase_key(&c.id)).ok().flatten();
     }
     c
 }
@@ -368,12 +374,12 @@ fn upsert_cred_with_secrets(conn: &CliCtx, c: &Credential) -> AppResult<()> {
     let sk = cred_secret_key(&c.id);
     let pk = cred_passphrase_key(&c.id);
     match c.secret.as_deref() {
-        Some(s) if !s.is_empty() => conn.secret_store.set(&sk, s)?,
-        _ => conn.secret_store.delete(&sk)?,
+        Some(s) if !s.is_empty() => conn.secret_store().set(&sk, s)?,
+        _ => conn.secret_store().delete(&sk)?,
     }
     match c.passphrase.as_deref() {
-        Some(s) if !s.is_empty() => conn.secret_store.set(&pk, s)?,
-        _ => conn.secret_store.delete(&pk)?,
+        Some(s) if !s.is_empty() => conn.secret_store().set(&pk, s)?,
+        _ => conn.secret_store().delete(&pk)?,
     }
     Ok(())
 }
@@ -384,12 +390,12 @@ fn update_cred_with_secrets(conn: &CliCtx, c: &Credential) -> AppResult<()> {
     let sk = cred_secret_key(&c.id);
     let pk = cred_passphrase_key(&c.id);
     match c.secret.as_deref() {
-        Some(s) if !s.is_empty() => conn.secret_store.set(&sk, s)?,
-        _ => conn.secret_store.delete(&sk)?,
+        Some(s) if !s.is_empty() => conn.secret_store().set(&sk, s)?,
+        _ => conn.secret_store().delete(&sk)?,
     }
     match c.passphrase.as_deref() {
-        Some(s) if !s.is_empty() => conn.secret_store.set(&pk, s)?,
-        _ => conn.secret_store.delete(&pk)?,
+        Some(s) if !s.is_empty() => conn.secret_store().set(&pk, s)?,
+        _ => conn.secret_store().delete(&pk)?,
     }
     Ok(())
 }
@@ -730,8 +736,8 @@ fn cmd_rm(conn: &CliCtx, kind: &str, name: &str) -> AppResult<()> {
             let id = find_credential_id(conn, name)?;
             if !confirm(&format!("Delete credential '{name}'?"), false) { return Ok(()); }
             db::credential::delete(conn, &id)?;
-            let _ = conn.secret_store.delete(&cred_secret_key(&id));
-            let _ = conn.secret_store.delete(&cred_passphrase_key(&id));
+            let _ = conn.secret_store().delete(&cred_secret_key(&id));
+            let _ = conn.secret_store().delete(&cred_passphrase_key(&id));
             println!("Deleted.");
         }
         "fwd" => {
@@ -784,8 +790,8 @@ fn build_config_json(conn: &CliCtx) -> AppResult<String> {
     let profiles = db::profile::list(conn)?;
     let mut credentials = db::credential::list(conn)?;
     for c in credentials.iter_mut() {
-        c.secret = conn.secret_store.get(&cred_secret_key(&c.id))?;
-        c.passphrase = conn.secret_store.get(&cred_passphrase_key(&c.id))?;
+        c.secret = conn.secret_store().get(&cred_secret_key(&c.id))?;
+        c.passphrase = conn.secret_store().get(&cred_passphrase_key(&c.id))?;
     }
     let forwards = db::forward::list(conn)?;
     serde_json::to_string_pretty(&serde_json::json!({
@@ -804,8 +810,8 @@ fn import_config_json(conn: &CliCtx, json: &str) -> AppResult<()> {
     // 清空旧 secrets
     if let Ok(old) = db::credential::list(conn) {
         for c in old {
-            let _ = conn.secret_store.delete(&cred_secret_key(&c.id));
-            let _ = conn.secret_store.delete(&cred_passphrase_key(&c.id));
+            let _ = conn.secret_store().delete(&cred_secret_key(&c.id));
+            let _ = conn.secret_store().delete(&cred_passphrase_key(&c.id));
         }
     }
     db::credential::clear_all(conn)?;
@@ -860,7 +866,7 @@ fn config_import(conn: &CliCtx, file: &str) -> AppResult<()> {
 }
 
 fn config_set(conn: &CliCtx) -> AppResult<()> {
-    let cur_token = conn.secret_store.get(&setting_key("github_token"))?.unwrap_or_default();
+    let cur_token = conn.secret_store().get(&setting_key("github_token"))?.unwrap_or_default();
     let cur_repo = db::settings::get(conn, "github_repo")?.unwrap_or_default();
     let cur_branch = db::settings::get(conn, "github_branch")?.unwrap_or("main".into());
 
@@ -869,18 +875,18 @@ fn config_set(conn: &CliCtx) -> AppResult<()> {
     let branch = prompt_default("Branch", &cur_branch);
 
     if token.is_empty() {
-        conn.secret_store.delete(&setting_key("github_token"))?;
+        conn.secret_store().delete(&setting_key("github_token"))?;
     } else {
-        conn.secret_store.set(&setting_key("github_token"), &token)?;
+        conn.secret_store().set(&setting_key("github_token"), &token)?;
     }
     db::settings::set(conn, "github_repo", &repo)?;
     db::settings::set(conn, "github_branch", &branch)?;
-    println!("GitHub settings saved (token in {}).", conn.secret_store.backend_name());
+    println!("GitHub settings saved (token in {}).", conn.secret_store().backend_name());
     Ok(())
 }
 
 fn config_push(conn: &CliCtx) -> AppResult<()> {
-    let token = conn.secret_store.get(&setting_key("github_token"))?.ok_or_else(|| rssh_lib::error::AppError::Config("GitHub token not set. Run: rssh config set".into()))?;
+    let token = conn.secret_store().get(&setting_key("github_token"))?.ok_or_else(|| rssh_lib::error::AppError::Config("GitHub token not set. Run: rssh config set".into()))?;
     let repo = db::settings::get(conn, "github_repo")?.ok_or_else(|| rssh_lib::error::AppError::Config("GitHub repo not set".into()))?;
     let branch = db::settings::get(conn, "github_branch")?.unwrap_or("main".into());
 
@@ -888,8 +894,8 @@ fn config_push(conn: &CliCtx) -> AppResult<()> {
         let profiles = db::profile::list(conn)?;
         let mut credentials = db::credential::list(conn)?;
         for c in credentials.iter_mut() {
-            c.secret = conn.secret_store.get(&cred_secret_key(&c.id))?;
-            c.passphrase = conn.secret_store.get(&cred_passphrase_key(&c.id))?;
+            c.secret = conn.secret_store().get(&cred_secret_key(&c.id))?;
+            c.passphrase = conn.secret_store().get(&cred_passphrase_key(&c.id))?;
             if !c.save_to_remote {
                 c.secret = None;
                 c.passphrase = None;
@@ -915,7 +921,7 @@ fn config_push(conn: &CliCtx) -> AppResult<()> {
 }
 
 fn config_pull(conn: &CliCtx) -> AppResult<()> {
-    let token = conn.secret_store.get(&setting_key("github_token"))?.ok_or_else(|| rssh_lib::error::AppError::Config("GitHub token not set. Run: rssh config set".into()))?;
+    let token = conn.secret_store().get(&setting_key("github_token"))?.ok_or_else(|| rssh_lib::error::AppError::Config("GitHub token not set. Run: rssh config set".into()))?;
     let repo = db::settings::get(conn, "github_repo")?.ok_or_else(|| rssh_lib::error::AppError::Config("GitHub repo not set".into()))?;
     let branch = db::settings::get(conn, "github_branch")?.unwrap_or("main".into());
 

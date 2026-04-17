@@ -231,6 +231,14 @@
   .logo { font-size: 22px; color: var(--accent); font-weight: 700; white-space: nowrap; }
   .search-input { flex: 1; }
 
+  /* Override global section-label: move spacing from padding → margin so the
+     group color border-left only covers the text, not the full padded area.
+     The 12px bottom margin clears the card's neumorphism shadow (~10px). */
+  .home :global(.section-label) {
+    margin: 20px 0 12px;
+    padding: 2px 0;
+  }
+
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));

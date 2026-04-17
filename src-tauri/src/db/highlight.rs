@@ -40,10 +40,10 @@ pub fn reset_defaults(db: &Db) -> AppResult<()> {
     conn.execute("DELETE FROM highlights", [])?;
     conn.execute_batch(
         "
-        INSERT INTO highlights (keyword, color, enabled) VALUES ('ERROR', 'brightRed', 1);
-        INSERT INTO highlights (keyword, color, enabled) VALUES ('WARN', 'brightYellow', 1);
-        INSERT INTO highlights (keyword, color, enabled) VALUES ('INFO', 'brightGreen', 1);
-        INSERT INTO highlights (keyword, color, enabled) VALUES ('DEBUG', 'brightCyan', 1);
+        INSERT INTO highlights (keyword, color, enabled) VALUES ('ERROR', '#FF6B6B', 1);
+        INSERT INTO highlights (keyword, color, enabled) VALUES ('WARN', '#FFD060', 1);
+        INSERT INTO highlights (keyword, color, enabled) VALUES ('INFO', '#6EDAA0', 1);
+        INSERT INTO highlights (keyword, color, enabled) VALUES ('DEBUG', '#40C8E0', 1);
         "
     )?;
     Ok(())
