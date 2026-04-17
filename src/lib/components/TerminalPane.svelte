@@ -363,7 +363,13 @@
             else app.setTerminalTitle(tabId, title);
         });
 
-        resizeObs = new ResizeObserver(() => fitAddon?.fit());
+        resizeObs = new ResizeObserver((entries) => {
+            // Skip fitting when the container is hidden (display:none
+            // collapses dimensions to zero) — fitting at 0×0 corrupts
+            // xterm's column count and causes the narrow-tab bug.
+            const { width, height } = entries[0].contentRect;
+            if (width > 0 && height > 0) fitAddon?.fit();
+        });
         resizeObs.observe(containerEl);
     });
 
@@ -387,9 +393,13 @@
         fitAddon?.fit();
     });
 
-    // Focus terminal + register writer when this tab becomes active
+    // Focus terminal + register writer when this tab becomes active.
+    // Double-rAF: the first frame lets the browser apply layout after
+    // the pane switches from display:none → flex; the second frame
+    // ensures the computed dimensions are stable before we fit.
     $effect(() => {
         if (app.activeTabId() === tabId && !app.settingsActive()) {
+            requestAnimationFrame(() => requestAnimationFrame(() => fitAddon?.fit()));
             terminal?.focus();
             app.registerTerminalWriter((text: string) => {
                 if (sessionId && !disconnected) {

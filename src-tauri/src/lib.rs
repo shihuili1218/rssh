@@ -27,7 +27,9 @@ pub fn run() {
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 let state = window.state::<AppState>();
-                commands::lifecycle::close_all(&state);
+                let label = window.label();
+                // Close only sessions belonging to this window.
+                commands::lifecycle::close_window_sessions(&state, label);
             }
         })
         .setup(|app| {
@@ -46,6 +48,7 @@ pub fn run() {
                 sftp_sessions: Mutex::new(HashMap::new()),
                 active_forwards: Mutex::new(HashMap::new()),
                 auth_waiters: Mutex::new(HashMap::new()),
+                window_sessions: Mutex::new(HashMap::new()),
                 data_dir,
             });
             Ok(())

@@ -21,6 +21,7 @@ fn load_secrets(state: &State<'_, AppState>, c: &mut Credential) -> AppResult<()
 #[tauri::command]
 pub async fn ssh_connect(
     app: AppHandle,
+    window: tauri::Window,
     state: State<'_, AppState>,
     // 直连参数
     host: Option<String>,
@@ -131,6 +132,7 @@ pub async fn ssh_connect(
             .map_err(|_| AppError::Other("lock".into()))?;
         sessions.insert(result.session_id.clone(), result.handle);
     }
+    crate::commands::lifecycle::register_window_session(&state, window.label(), &result.session_id);
 
     Ok(result.session_id)
 }
@@ -159,6 +161,7 @@ pub async fn ssh_disconnect(
     state: State<'_, AppState>,
     session_id: String,
 ) -> AppResult<()> {
+    crate::commands::lifecycle::unregister_window_session(&state, &session_id);
     let session = {
         let mut sessions = state
             .sessions
