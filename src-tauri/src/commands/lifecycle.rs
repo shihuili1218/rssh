@@ -83,23 +83,57 @@ pub fn reconcile_sessions(
     Ok(closed)
 }
 
-/// 不带 reconcile 的全清理 —— 窗口销毁时调用。
-pub fn close_all(state: &AppState) {
-    if let Ok(mut sessions) = state.sessions.lock() {
-        for (_, h) in sessions.drain() {
-            let _ = h.close();
+/// 注册 session 归属窗口（session 创建时调用）。
+pub fn register_window_session(state: &AppState, window_label: &str, session_id: &str) {
+    if let Ok(mut ws) = state.window_sessions.lock() {
+        ws.entry(window_label.to_string())
+            .or_default()
+            .insert(session_id.to_string());
+    }
+}
+
+/// 取消 session 的窗口归属（session 单独关闭时调用）。
+pub fn unregister_window_session(state: &AppState, session_id: &str) {
+    if let Ok(mut ws) = state.window_sessions.lock() {
+        for set in ws.values_mut() {
+            set.remove(session_id);
         }
     }
-    if let Ok(mut sftp) = state.sftp_sessions.lock() {
-        sftp.clear();
+}
+
+/// 关闭指定窗口拥有的所有 session —— 窗口销毁时调用。
+pub fn close_window_sessions(state: &AppState, window_label: &str) {
+    let ids = match state.window_sessions.lock() {
+        Ok(mut ws) => ws.remove(window_label).unwrap_or_default(),
+        Err(_) => return,
+    };
+    if ids.is_empty() {
+        return;
     }
-    if let Ok(mut fwds) = state.active_forwards.lock() {
-        for (_, h) in fwds.drain() {
-            h.stop();
+
+    if let Ok(mut sessions) = state.sessions.lock() {
+        for id in &ids {
+            if let Some(h) = sessions.remove(id) {
+                let _ = h.close();
+            }
         }
     }
     #[cfg(not(target_os = "android"))]
     if let Ok(mut pty) = state.pty_sessions.lock() {
-        pty.clear();
+        for id in &ids {
+            pty.remove(id);
+        }
+    }
+    if let Ok(mut sftp) = state.sftp_sessions.lock() {
+        for id in &ids {
+            sftp.remove(id);
+        }
+    }
+    if let Ok(mut fwds) = state.active_forwards.lock() {
+        for id in &ids {
+            if let Some(h) = fwds.remove(id) {
+                h.stop();
+            }
+        }
     }
 }
