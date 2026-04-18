@@ -1,5 +1,15 @@
 # Contributing
 
+## Data
+
+CLI and desktop app share the same database:
+
+```
+~/.rssh/rssh.db        # SQLite (profiles, credentials, forwards, settings)
+~/.rssh/snippets.json  # command snippets
+~/.ssh/known_hosts     # OpenSSH-standard host key store (shared with `ssh`)
+```
+
 ## Prerequisites
 
 All platforms need:
