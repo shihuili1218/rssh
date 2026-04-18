@@ -1,536 +1,671 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RSSH - SSH Connection Manager</title>
-  <meta name="description" content="SSH connection manager with desktop GUI and CLI. Command block colors, keychain security, multi-platform sync. macOS, Windows, Linux, Android." />
-  <meta property="og:title" content="RSSH - SSH Connection Manager" />
-  <meta property="og:description" content="SSH connection manager with desktop GUI and CLI. Command block colors, keychain security, multi-platform sync." />
-  <meta property="og:type" content="website" />
-  <meta name="twitter:card" content="summary_large_image" />
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          colors: {
-            bg:      '#0f1117',
-            surface: '#1a1b26',
-            panel:   '#21222e',
-            accent:  '#4A6CF7',
-            term:    '#2B2D3A',
-            ok:      '#4CB88A',
-            err:     '#E05555',
-            warn:    '#DDAA33',
-            dim:     '#6B7A99',
-          },
-          fontFamily: {
-            sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'system-ui', 'sans-serif'],
-            mono: ['JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Menlo', 'monospace'],
-          },
-          animation: {
-            'fade-up':    'fadeUp 0.7s ease-out forwards',
-            'fade-in':    'fadeIn 0.8s ease-out forwards',
-            'blink':      'blink 1s step-end infinite',
-            'pulse-glow': 'pulseGlow 3s ease-in-out infinite',
-          },
-          keyframes: {
-            fadeUp:    { '0%': { opacity:'0', transform:'translateY(24px)' }, '100%': { opacity:'1', transform:'translateY(0)' } },
-            fadeIn:    { '0%': { opacity:'0' }, '100%': { opacity:'1' } },
-            blink:     { '0%,100%': { opacity:'1' }, '50%': { opacity:'0' } },
-            pulseGlow: { '0%,100%': { boxShadow:'0 0 30px rgba(74,108,247,0.1)' }, '50%': { boxShadow:'0 0 60px rgba(74,108,247,0.25)' } },
-          }
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>RSSH - SSH Connection Manager</title>
+    <meta name="description"
+          content="SSH connection manager with desktop GUI and CLI. Command block colors, keychain security, multi-platform sync. macOS, Windows, Linux, Android."/>
+    <meta property="og:title" content="RSSH - SSH Connection Manager"/>
+    <meta property="og:description" content="SSH connection manager with desktop GUI and CLI. Command block colors, keychain security, multi-platform sync."/>
+    <meta property="og:type" content="website"/>
+    <meta name="twitter:card" content="summary_large_image"/>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        bg: '#0f1117',
+                        surface: '#1a1b26',
+                        panel: '#21222e',
+                        accent: '#4A6CF7',
+                        term: '#2B2D3A',
+                        ok: '#4CB88A',
+                        err: '#E05555',
+                        warn: '#DDAA33',
+                        dim: '#6B7A99',
+                    },
+                    fontFamily: {
+                        sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'system-ui', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Menlo', 'monospace'],
+                    },
+                    animation: {
+                        'fade-up': 'fadeUp 0.7s ease-out forwards',
+                        'fade-in': 'fadeIn 0.8s ease-out forwards',
+                        'blink': 'blink 1s step-end infinite',
+                        'pulse-glow': 'pulseGlow 3s ease-in-out infinite',
+                    },
+                    keyframes: {
+                        fadeUp: {'0%': {opacity: '0', transform: 'translateY(24px)'}, '100%': {opacity: '1', transform: 'translateY(0)'}},
+                        fadeIn: {'0%': {opacity: '0'}, '100%': {opacity: '1'}},
+                        blink: {'0%,100%': {opacity: '1'}, '50%': {opacity: '0'}},
+                        pulseGlow: {'0%,100%': {boxShadow: '0 0 30px rgba(74,108,247,0.1)'}, '50%': {boxShadow: '0 0 60px rgba(74,108,247,0.25)'}},
+                    }
+                }
+            }
         }
-      }
-    }
-  </script>
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
-    .delay-100 { animation-delay: 100ms; }
-    .delay-200 { animation-delay: 200ms; }
-    .delay-300 { animation-delay: 300ms; }
-    .delay-400 { animation-delay: 400ms; }
-    .scroll-reveal { opacity: 0; transform: translateY(24px); transition: opacity 0.6s ease-out, transform 0.6s ease-out; }
-    .scroll-reveal.visible { opacity: 1; transform: translateY(0); }
-    .term-line { opacity: 0; transform: translateY(6px); }
-    .term-line.show { opacity: 1; transform: translateY(0); transition: opacity 0.25s, transform 0.25s; }
-    /* Command block bar */
-    .cmd-block { border-left: 3px solid transparent; padding-left: 12px; transition: border-color 0.4s; }
-    .cmd-block.show { border-color: var(--block-color); }
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #2a2c3a; border-radius: 3px; }
-    html { scroll-behavior: smooth; }
-    /* Security flow arrow animation */
-    @keyframes flowRight { 0% { transform: translateX(-4px); opacity: 0.4; } 50% { opacity: 1; } 100% { transform: translateX(4px); opacity: 0.4; } }
-    .flow-arrow { animation: flowRight 1.5s ease-in-out infinite; }
-  </style>
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+        .delay-100 {
+            animation-delay: 100ms;
+        }
+
+        .delay-200 {
+            animation-delay: 200ms;
+        }
+
+        .delay-300 {
+            animation-delay: 300ms;
+        }
+
+        .delay-400 {
+            animation-delay: 400ms;
+        }
+
+        .scroll-reveal {
+            opacity: 0;
+            transform: translateY(24px);
+            transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+        }
+
+        .scroll-reveal.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .term-line {
+            opacity: 0;
+            transform: translateY(6px);
+        }
+
+        .term-line.show {
+            opacity: 1;
+            transform: translateY(0);
+            transition: opacity 0.25s, transform 0.25s;
+        }
+
+        /* Command block bar */
+        .cmd-block {
+            border-left: 3px solid transparent;
+            padding-left: 12px;
+            transition: border-color 0.4s;
+        }
+
+        .cmd-block.show {
+            border-color: var(--block-color);
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #2a2c3a;
+            border-radius: 3px;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        /* Security flow arrow animation */
+        @keyframes flowRight {
+            0% {
+                transform: translateX(-4px);
+                opacity: 0.4;
+            }
+            50% {
+                opacity: 1;
+            }
+            100% {
+                transform: translateX(4px);
+                opacity: 0.4;
+            }
+        }
+
+        .flow-arrow {
+            animation: flowRight 1.5s ease-in-out infinite;
+        }
+    </style>
 </head>
 <body class="bg-bg text-gray-200 antialiased overflow-x-hidden font-sans">
 
-  <!-- ═══ Hero ═══ -->
-  <section class="flex flex-col items-start pt-16 sm:pt-24 px-6 sm:px-12 lg:px-20">
-    <div class="w-full max-w-6xl flex flex-col lg:flex-row gap-12 lg:gap-16 items-start">
-      <!-- Left: text -->
-      <div class="flex-1 min-w-0 pt-4 animate-fade-up">
-        <h1 class="text-5xl sm:text-7xl lg:text-8xl font-black tracking-tight leading-[1.05]">
-          <span class="bg-gradient-to-r from-gray-100 to-gray-300 bg-clip-text text-transparent">SSH,</span><br />
-          <span class="bg-gradient-to-r from-accent via-blue-400 to-emerald-400 bg-clip-text text-transparent">Reimagined</span>
-        </h1>
-        <p class="mt-6 text-lg sm:text-xl text-dim max-w-xl leading-relaxed animate-fade-up delay-200" style="opacity:0">
-          Color-coded command blocks. CLI-first workflow.<br class="hidden sm:block" />
-          Your keys stay in your keychain. Your config syncs to your repo.
-        </p>
-        <div class="mt-10 flex flex-col sm:flex-row items-start gap-4 animate-fade-up delay-300" style="opacity:0">
-          <a href="#download" class="inline-flex items-center gap-2.5 bg-accent hover:bg-accent/90 text-white px-8 py-4 rounded-2xl text-lg font-bold transition-all hover:scale-105 shadow-xl shadow-accent/25">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
-            Download
-          </a>
-          <span class="text-dim text-sm self-center">macOS / Windows / Linux / Android</span>
+<!-- ═══ Hero ═══ -->
+<section class="flex flex-col items-center pt-16 sm:pt-24 px-4">
+    <div class="w-full max-w-5xl flex flex-col items-center text-center">
+        <div class="mb-16 animate-fade-up">
+            <h1 class="text-5xl sm:text-7xl lg:text-8xl font-black tracking-tight leading-[1.05]">
+                <span class="bg-gradient-to-r from-gray-100 to-gray-300 bg-clip-text text-transparent">SSH,</span><br/>
+                <span class="bg-gradient-to-r from-accent via-blue-400 to-emerald-400 bg-clip-text text-transparent">Reimagined</span>
+            </h1>
+            <p class="mt-6 text-lg sm:text-xl text-dim max-w-2xl mx-auto leading-relaxed animate-fade-up delay-200" style="opacity:0">
+                Color-coded command blocks. CLI-first workflow.<br class="hidden sm:block"/>
+                Your keys stay in your keychain. Your config syncs to your repo.
+            </p>
+            <div class="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4 animate-fade-up delay-300" style="opacity:0">
+                <a href="#download"
+                   class="inline-flex items-center gap-2.5 bg-accent hover:bg-accent/90 text-white px-8 py-4 rounded-2xl text-lg font-bold transition-all hover:scale-105 shadow-xl shadow-accent/25">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round"
+                              d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+                    </svg>
+                    Download
+                </a>
+                <span class="text-dim text-sm">macOS / Windows / Linux / Android</span>
+            </div>
         </div>
-      </div>
 
-      <!-- Right: Terminal Demo — Command Blocks -->
-      <div class="w-full lg:w-[520px] shrink-0 animate-fade-up delay-400" style="opacity:0">
-        <div id="term-window" class="rounded-2xl border border-white/5 bg-term shadow-2xl animate-pulse-glow overflow-hidden">
-          <div class="h-10 bg-[#252734] border-b border-white/5 flex items-center px-4 gap-2">
-            <div class="w-3 h-3 rounded-full bg-err/80"></div>
-            <div class="w-3 h-3 rounded-full bg-warn/80"></div>
-            <div class="w-3 h-3 rounded-full bg-ok/80"></div>
-            <span class="ml-3 text-xs text-dim font-mono">rssh — production-server</span>
-          </div>
-          <div id="term-body" class="p-5 sm:p-6 font-mono text-[13px] sm:text-sm leading-6 min-h-[320px] sm:min-h-[360px]"></div>
+        <!-- ═══ Terminal Demo — Command Blocks ═══ -->
+        <div class="w-full max-w-4xl animate-fade-up delay-400" style="opacity:0">
+            <div id="term-window" class="rounded-2xl border border-white/5 bg-term shadow-2xl animate-pulse-glow overflow-hidden">
+                <div class="h-10 bg-[#252734] border-b border-white/5 flex items-center px-4 gap-2">
+                    <div class="w-3 h-3 rounded-full bg-err/80"></div>
+                    <div class="w-3 h-3 rounded-full bg-warn/80"></div>
+                    <div class="w-3 h-3 rounded-full bg-ok/80"></div>
+                    <span class="ml-3 text-xs text-dim font-mono">rssh — production-server</span>
+                </div>
+                <div id="term-body" class="p-5 sm:p-6 font-mono text-[13px] sm:text-sm leading-6 min-h-[320px] sm:min-h-[360px] text-left"></div>
+            </div>
         </div>
-      </div>
     </div>
-  </section>
+</section>
 
-  <!-- ═══════════════════════════════════════════════════
-       FEATURE 1 — Command Block Colors
-       ═══════════════════════════════════════════════════ -->
-  <section class="mt-32 sm:mt-48 px-4 max-w-5xl mx-auto">
+<!-- ═══════════════════════════════════════════════════
+     FEATURE 1 — Command Block Colors
+     ═══════════════════════════════════════════════════ -->
+<section class="mt-32 sm:mt-48 px-4 max-w-5xl mx-auto">
     <div class="scroll-reveal flex flex-col lg:flex-row gap-12 items-center">
-      <!-- Text -->
-      <div class="flex-1 min-w-0">
-        <div class="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-accent/70 mb-4">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12"/></svg>
-          Signature Feature
+        <!-- Text -->
+        <div class="flex-1 min-w-0">
+            <div class="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-accent/70 mb-4">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12"/>
+                </svg>
+                Signature Feature
+            </div>
+            <h2 class="text-3xl sm:text-4xl font-bold mb-4">Command Block Colors</h2>
+            <p class="text-dim leading-relaxed mb-6">
+                Every Enter keystroke opens a new block. Each block gets a unique color bar on the left edge — generated by <strong class="text-gray-300">golden-angle HSL
+                rotation</strong> (137.508&deg;), guaranteeing infinite non-colliding hues.
+            </p>
+            <p class="text-dim leading-relaxed mb-6">
+                Scroll through thousands of lines and instantly see where each command starts and ends. No parsing, no prompt detection, no remote dependency — pure client-side
+                xterm markers.
+            </p>
+            <div class="flex flex-wrap gap-3">
+                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-400 bg-emerald-400/10 px-3 py-1.5 rounded-full">Zero remote dependency</span>
+                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-accent bg-accent/10 px-3 py-1.5 rounded-full">Infinite palette</span>
+                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-400 bg-amber-400/10 px-3 py-1.5 rounded-full">Keyword highlighting</span>
+            </div>
         </div>
-        <h2 class="text-3xl sm:text-4xl font-bold mb-4">Command Block Colors</h2>
-        <p class="text-dim leading-relaxed mb-6">
-          Every Enter keystroke opens a new block. Each block gets a unique color bar on the left edge — generated by <strong class="text-gray-300">golden-angle HSL rotation</strong> (137.508&deg;), guaranteeing infinite non-colliding hues.
-        </p>
-        <p class="text-dim leading-relaxed mb-6">
-          Scroll through thousands of lines and instantly see where each command starts and ends. No parsing, no prompt detection, no remote dependency — pure client-side xterm markers.
-        </p>
-        <div class="flex flex-wrap gap-3">
-          <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-400 bg-emerald-400/10 px-3 py-1.5 rounded-full">Zero remote dependency</span>
-          <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-accent bg-accent/10 px-3 py-1.5 rounded-full">Infinite palette</span>
-          <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-400 bg-amber-400/10 px-3 py-1.5 rounded-full">Keyword highlighting</span>
+        <!-- Visual: color palette demo -->
+        <div class="w-full lg:w-[340px] shrink-0">
+            <div class="rounded-xl bg-term border border-white/5 p-4 font-mono text-xs sm:text-sm leading-7">
+                <div id="block-demo"></div>
+            </div>
+            <p class="text-center text-[11px] text-dim mt-3">Golden angle: each hue = previous + 137.508&deg;</p>
         </div>
-      </div>
-      <!-- Visual: color palette demo -->
-      <div class="w-full lg:w-[340px] shrink-0">
-        <div class="rounded-xl bg-term border border-white/5 p-4 font-mono text-xs sm:text-sm leading-7">
-          <div id="block-demo"></div>
-        </div>
-        <p class="text-center text-[11px] text-dim mt-3">Golden angle: each hue = previous + 137.508&deg;</p>
-      </div>
     </div>
-  </section>
+</section>
 
-  <!-- ═══════════════════════════════════════════════════
-       FEATURE 2 — CLI
-       ═══════════════════════════════════════════════════ -->
-  <section class="mt-32 sm:mt-48 px-4 max-w-5xl mx-auto">
+<!-- ═══════════════════════════════════════════════════
+     FEATURE 2 — CLI
+     ═══════════════════════════════════════════════════ -->
+<section class="mt-32 sm:mt-48 px-4 max-w-5xl mx-auto">
     <div class="scroll-reveal flex flex-col lg:flex-row-reverse gap-12 items-center">
-      <!-- Text -->
-      <div class="flex-1 min-w-0">
-        <div class="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-amber-400/70 mb-4">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3M3.75 3h16.5a.75.75 0 01.75.75v16.5a.75.75 0 01-.75.75H3.75a.75.75 0 01-.75-.75V3.75A.75.75 0 013.75 3z"/></svg>
-          CLI-First
+        <!-- Text -->
+        <div class="flex-1 min-w-0">
+            <div class="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-amber-400/70 mb-4">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round"
+                          d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3M3.75 3h16.5a.75.75 0 01.75.75v16.5a.75.75 0 01-.75.75H3.75a.75.75 0 01-.75-.75V3.75A.75.75 0 013.75 3z"/>
+                </svg>
+                CLI-First
+            </div>
+            <h2 class="text-3xl sm:text-4xl font-bold mb-4">One database, two interfaces</h2>
+            <p class="text-dim leading-relaxed mb-6">
+                The bundled CLI reads the <strong class="text-gray-300">same SQLite database</strong> as the desktop app. Create a profile in the GUI, <code
+                    class="text-amber-400/80 text-xs bg-amber-400/5 px-1.5 py-0.5 rounded">rssh open prod</code> from your terminal. No sync, no export — they share one source of
+                truth.
+            </p>
+            <p class="text-dim leading-relaxed mb-6">
+                One-click install from Settings. Auto-configures shell completions for zsh, bash, fish, and PowerShell.
+            </p>
+            <div class="flex flex-wrap gap-3">
+                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-400 bg-amber-400/10 px-3 py-1.5 rounded-full">Shared SQLite</span>
+                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-purple-400 bg-purple-400/10 px-3 py-1.5 rounded-full">Shell completions</span>
+                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-cyan-400 bg-cyan-400/10 px-3 py-1.5 rounded-full">GitHub sync from CLI</span>
+            </div>
         </div>
-        <h2 class="text-3xl sm:text-4xl font-bold mb-4">One database, two interfaces</h2>
-        <p class="text-dim leading-relaxed mb-6">
-          The bundled CLI reads the <strong class="text-gray-300">same SQLite database</strong> as the desktop app. Create a profile in the GUI, <code class="text-amber-400/80 text-xs bg-amber-400/5 px-1.5 py-0.5 rounded">rssh open prod</code> from your terminal. No sync, no export — they share one source of truth.
-        </p>
-        <p class="text-dim leading-relaxed mb-6">
-          One-click install from Settings. Auto-configures shell completions for zsh, bash, fish, and PowerShell.
-        </p>
-        <div class="flex flex-wrap gap-3">
-          <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-400 bg-amber-400/10 px-3 py-1.5 rounded-full">Shared SQLite</span>
-          <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-purple-400 bg-purple-400/10 px-3 py-1.5 rounded-full">Shell completions</span>
-          <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-cyan-400 bg-cyan-400/10 px-3 py-1.5 rounded-full">GitHub sync from CLI</span>
+        <!-- Visual: CLI demo -->
+        <div class="w-full lg:w-[380px] shrink-0">
+            <div class="rounded-xl bg-term border border-white/5 overflow-hidden">
+                <div class="h-8 bg-[#252734] border-b border-white/5 flex items-center px-3 gap-1.5">
+                    <div class="w-2.5 h-2.5 rounded-full bg-err/70"></div>
+                    <div class="w-2.5 h-2.5 rounded-full bg-warn/70"></div>
+                    <div class="w-2.5 h-2.5 rounded-full bg-ok/70"></div>
+                    <span class="ml-2 text-[10px] text-dim font-mono">zsh</span>
+                </div>
+                <div class="p-4 font-mono text-xs sm:text-[13px] leading-6 space-y-1" id="cli-demo">
+                    <div><span class="text-emerald-400">~</span> <span class="text-accent">rssh</span> ls</div>
+                    <div class="text-dim"> prod-api 10.0.1.42 deploy</div>
+                    <div class="text-dim"> staging 10.0.2.10 ubuntu</div>
+                    <div class="text-dim"> bastion-01 jump.co:22 ops</div>
+                    <div class="mt-2"><span class="text-emerald-400">~</span> <span class="text-accent">rssh</span> open prod-api</div>
+                    <div><span class="text-ok">&#10003;</span> Connected via bastion-01</div>
+                    <div class="mt-2"><span class="text-emerald-400">~</span> <span class="text-accent">rssh</span> open fwd postgres-tunnel</div>
+                    <div><span class="text-ok">&#10003;</span> <span class="text-dim">127.0.0.1:5432 &#8594; db:5432</span></div>
+                    <div class="mt-2"><span class="text-emerald-400">~</span> <span class="text-accent">rssh</span> config push</div>
+                    <div><span class="text-ok">&#10003;</span> Pushed to github.com/you/rssh-backup</div>
+                </div>
+            </div>
         </div>
-      </div>
-      <!-- Visual: CLI demo -->
-      <div class="w-full lg:w-[380px] shrink-0">
-        <div class="rounded-xl bg-term border border-white/5 overflow-hidden">
-          <div class="h-8 bg-[#252734] border-b border-white/5 flex items-center px-3 gap-1.5">
-            <div class="w-2.5 h-2.5 rounded-full bg-err/70"></div>
-            <div class="w-2.5 h-2.5 rounded-full bg-warn/70"></div>
-            <div class="w-2.5 h-2.5 rounded-full bg-ok/70"></div>
-            <span class="ml-2 text-[10px] text-dim font-mono">zsh</span>
-          </div>
-          <div class="p-4 font-mono text-xs sm:text-[13px] leading-6 space-y-1" id="cli-demo">
-            <div><span class="text-emerald-400">~</span> <span class="text-accent">rssh</span> ls</div>
-            <div class="text-dim">  prod-api        10.0.1.42    deploy</div>
-            <div class="text-dim">  staging          10.0.2.10    ubuntu</div>
-            <div class="text-dim">  bastion-01      jump.co:22   ops</div>
-            <div class="mt-2"><span class="text-emerald-400">~</span> <span class="text-accent">rssh</span> open prod-api</div>
-            <div><span class="text-ok">&#10003;</span> Connected via bastion-01</div>
-            <div class="mt-2"><span class="text-emerald-400">~</span> <span class="text-accent">rssh</span> open fwd postgres-tunnel</div>
-            <div><span class="text-ok">&#10003;</span> <span class="text-dim">127.0.0.1:5432 &#8594; db:5432</span></div>
-            <div class="mt-2"><span class="text-emerald-400">~</span> <span class="text-accent">rssh</span> config push</div>
-            <div><span class="text-ok">&#10003;</span> Pushed to github.com/you/rssh-backup</div>
-          </div>
-        </div>
-      </div>
     </div>
-  </section>
+</section>
 
-  <!-- ═══════════════════════════════════════════════════
-       FEATURE 3 — Security & Sync
-       ═══════════════════════════════════════════════════ -->
-  <section class="mt-32 sm:mt-48 px-4 max-w-5xl mx-auto">
+<!-- ═══════════════════════════════════════════════════
+     FEATURE 3 — Security & Sync
+     ═══════════════════════════════════════════════════ -->
+<section class="mt-32 sm:mt-48 px-4 max-w-5xl mx-auto">
     <div class="scroll-reveal flex flex-col items-center text-center">
-      <div class="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-emerald-400/70 mb-4">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>
-        Security Model
-      </div>
-      <h2 class="text-3xl sm:text-4xl font-bold mb-4">Your keys never leave your machine</h2>
-      <p class="text-dim leading-relaxed max-w-2xl mb-12">
-        Secrets live in your platform keychain. You decide <strong class="text-gray-300">per credential</strong> what syncs to remote. And "remote" means <strong class="text-gray-300">your own private GitHub repo</strong> — not our servers. We don't have servers.
-      </p>
+        <div class="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-emerald-400/70 mb-4">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                      d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/>
+            </svg>
+            Security Model
+        </div>
+        <h2 class="text-3xl sm:text-4xl font-bold mb-4">Your keys never leave your machine</h2>
+        <p class="text-dim leading-relaxed max-w-2xl mb-12">
+            Secrets live in your platform keychain. You decide <strong class="text-gray-300">per credential</strong> what syncs to remote. And "remote" means <strong
+                class="text-gray-300">your own private GitHub repo</strong> — not our servers. We don't have servers.
+        </p>
 
-      <!-- Security flow diagram -->
-      <div class="w-full max-w-3xl grid grid-cols-1 sm:grid-cols-5 gap-4 sm:gap-2 items-center">
-        <!-- Step 1: Keychain -->
-        <div class="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-5 flex flex-col items-center gap-3 sm:col-span-1">
-          <div class="w-12 h-12 rounded-xl bg-emerald-500/15 flex items-center justify-center">
-            <svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
-          </div>
-          <div class="text-sm font-bold text-emerald-400">Keychain</div>
-          <div class="text-[11px] text-dim leading-snug">macOS Keychain<br/>Win Credential Mgr<br/>Linux Secret Service</div>
+        <!-- Security flow diagram -->
+        <div class="w-full max-w-3xl grid grid-cols-1 sm:grid-cols-5 gap-4 sm:gap-2 items-center">
+            <!-- Step 1: Keychain -->
+            <div class="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-5 flex flex-col items-center gap-3 sm:col-span-1">
+                <div class="w-12 h-12 rounded-xl bg-emerald-500/15 flex items-center justify-center">
+                    <svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round"
+                              d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/>
+                    </svg>
+                </div>
+                <div class="text-sm font-bold text-emerald-400">Keychain</div>
+                <div class="text-[11px] text-dim leading-snug">macOS Keychain<br/>Win Credential Mgr<br/>Linux Secret Service</div>
+            </div>
+
+            <!-- Arrow -->
+            <div class="hidden sm:flex items-center justify-center">
+                <svg class="w-6 h-6 text-dim flow-arrow" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/>
+                </svg>
+            </div>
+
+            <!-- Step 2: Per-credential filter -->
+            <div class="rounded-2xl border border-accent/20 bg-accent/5 p-5 flex flex-col items-center gap-3 sm:col-span-1">
+                <div class="w-12 h-12 rounded-xl bg-accent/15 flex items-center justify-center">
+                    <svg class="w-6 h-6 text-accent" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round"
+                              d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 01-.659 1.591l-5.432 5.432a2.25 2.25 0 00-.659 1.591v2.927a2.25 2.25 0 01-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 00-.659-1.591L3.659 7.409A2.25 2.25 0 013 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0112 3z"/>
+                    </svg>
+                </div>
+                <div class="text-sm font-bold text-accent">Per-Key Filter</div>
+                <div class="text-[11px] text-dim leading-snug"><code class="text-accent/70">save_to_remote</code><br/>flag on each credential</div>
+            </div>
+
+            <!-- Arrow -->
+            <div class="hidden sm:flex items-center justify-center">
+                <svg class="w-6 h-6 text-dim flow-arrow" style="animation-delay:0.5s" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/>
+                </svg>
+            </div>
+
+            <!-- Step 3: Your GitHub -->
+            <div class="rounded-2xl border border-purple-500/20 bg-purple-500/5 p-5 flex flex-col items-center gap-3 sm:col-span-1">
+                <div class="w-12 h-12 rounded-xl bg-purple-500/15 flex items-center justify-center">
+                    <svg class="w-6 h-6 text-purple-400" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                    </svg>
+                </div>
+                <div class="text-sm font-bold text-purple-400">Your Repo</div>
+                <div class="text-[11px] text-dim leading-snug">Private GitHub repo<br/>Encrypted backup<br/>You own the data</div>
+            </div>
         </div>
 
-        <!-- Arrow -->
-        <div class="hidden sm:flex items-center justify-center">
-          <svg class="w-6 h-6 text-dim flow-arrow" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/></svg>
+        <!-- Detail cards -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-10 w-full max-w-3xl text-left">
+            <div class="rounded-xl border border-white/5 bg-surface p-5">
+                <div class="text-sm font-bold mb-2">Local secrets</div>
+                <p class="text-xs text-dim leading-relaxed">Private keys and passwords stored in your OS keychain. Never written to disk unencrypted. Android falls back to
+                    encrypted SQLite.</p>
+            </div>
+            <div class="rounded-xl border border-white/5 bg-surface p-5">
+                <div class="text-sm font-bold mb-2">Granular sync control</div>
+                <p class="text-xs text-dim leading-relaxed">Each credential has a <code class="text-accent/70 text-[11px]">save_to_remote</code> toggle. Production root key? Keep
+                    it local. Dev password? Let it sync.</p>
+            </div>
+            <div class="rounded-xl border border-white/5 bg-surface p-5">
+                <div class="text-sm font-bold mb-2">No third-party cloud</div>
+                <p class="text-xs text-dim leading-relaxed">Sync target is your own private GitHub repo. Payload encrypted before upload. We have no servers, no accounts, no
+                    telemetry.</p>
+            </div>
         </div>
-
-        <!-- Step 2: Per-credential filter -->
-        <div class="rounded-2xl border border-accent/20 bg-accent/5 p-5 flex flex-col items-center gap-3 sm:col-span-1">
-          <div class="w-12 h-12 rounded-xl bg-accent/15 flex items-center justify-center">
-            <svg class="w-6 h-6 text-accent" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 01-.659 1.591l-5.432 5.432a2.25 2.25 0 00-.659 1.591v2.927a2.25 2.25 0 01-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 00-.659-1.591L3.659 7.409A2.25 2.25 0 013 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0112 3z"/></svg>
-          </div>
-          <div class="text-sm font-bold text-accent">Per-Key Filter</div>
-          <div class="text-[11px] text-dim leading-snug"><code class="text-accent/70">save_to_remote</code><br/>flag on each credential</div>
-        </div>
-
-        <!-- Arrow -->
-        <div class="hidden sm:flex items-center justify-center">
-          <svg class="w-6 h-6 text-dim flow-arrow" style="animation-delay:0.5s" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/></svg>
-        </div>
-
-        <!-- Step 3: Your GitHub -->
-        <div class="rounded-2xl border border-purple-500/20 bg-purple-500/5 p-5 flex flex-col items-center gap-3 sm:col-span-1">
-          <div class="w-12 h-12 rounded-xl bg-purple-500/15 flex items-center justify-center">
-            <svg class="w-6 h-6 text-purple-400" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-          </div>
-          <div class="text-sm font-bold text-purple-400">Your Repo</div>
-          <div class="text-[11px] text-dim leading-snug">Private GitHub repo<br/>Encrypted backup<br/>You own the data</div>
-        </div>
-      </div>
-
-      <!-- Detail cards -->
-      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-10 w-full max-w-3xl text-left">
-        <div class="rounded-xl border border-white/5 bg-surface p-5">
-          <div class="text-sm font-bold mb-2">Local secrets</div>
-          <p class="text-xs text-dim leading-relaxed">Private keys and passwords stored in your OS keychain. Never written to disk unencrypted. Android falls back to encrypted SQLite.</p>
-        </div>
-        <div class="rounded-xl border border-white/5 bg-surface p-5">
-          <div class="text-sm font-bold mb-2">Granular sync control</div>
-          <p class="text-xs text-dim leading-relaxed">Each credential has a <code class="text-accent/70 text-[11px]">save_to_remote</code> toggle. Production root key? Keep it local. Dev password? Let it sync.</p>
-        </div>
-        <div class="rounded-xl border border-white/5 bg-surface p-5">
-          <div class="text-sm font-bold mb-2">No third-party cloud</div>
-          <p class="text-xs text-dim leading-relaxed">Sync target is your own private GitHub repo. Payload encrypted before upload. We have no servers, no accounts, no telemetry.</p>
-        </div>
-      </div>
     </div>
-  </section>
+</section>
 
-  <!-- ═══════════════════════════════════════════════════
-       Also included
-       ═══════════════════════════════════════════════════ -->
-  <section class="mt-32 px-4 max-w-4xl mx-auto">
+<!-- ═══════════════════════════════════════════════════
+     Also included
+     ═══════════════════════════════════════════════════ -->
+<section class="mt-32 px-4 max-w-4xl mx-auto">
     <div class="scroll-reveal rounded-2xl border border-white/5 bg-surface p-8 sm:p-10">
-      <h3 class="text-2xl font-bold mb-8 text-center">Also included</h3>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-12 gap-y-4 text-sm">
-        <div class="flex items-center gap-3 py-2 border-b border-white/5">
-          <span class="text-accent">&#10003;</span>
-          <span>SFTP file browser with upload/download</span>
+        <h3 class="text-2xl font-bold mb-8 text-center">Also included</h3>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-12 gap-y-4 text-sm">
+            <div class="flex items-center gap-3 py-2 border-b border-white/5">
+                <span class="text-accent">&#10003;</span>
+                <span>SFTP file browser with upload/download</span>
+            </div>
+            <div class="flex items-center gap-3 py-2 border-b border-white/5">
+                <span class="text-accent">&#10003;</span>
+                <span>Port forwarding (local, remote, SOCKS5)</span>
+            </div>
+            <div class="flex items-center gap-3 py-2 border-b border-white/5">
+                <span class="text-accent">&#10003;</span>
+                <span>Session recording &amp; playback (asciicast v2)</span>
+            </div>
+            <div class="flex items-center gap-3 py-2 border-b border-white/5">
+                <span class="text-accent">&#10003;</span>
+                <span>Keyword highlighting (ERROR, WARN, INFO...)</span>
+            </div>
+            <div class="flex items-center gap-3 py-2 border-b border-white/5">
+                <span class="text-accent">&#10003;</span>
+                <span>Import from <code class="text-xs text-accent/70">~/.ssh/config</code></span>
+            </div>
+            <div class="flex items-center gap-3 py-2 border-b border-white/5">
+                <span class="text-accent">&#10003;</span>
+                <span>ProxyJump through bastion hosts</span>
+            </div>
+            <div class="flex items-center gap-3 py-2 border-b border-white/5">
+                <span class="text-accent">&#10003;</span>
+                <span>Command snippets (Cmd+E)</span>
+            </div>
+            <div class="flex items-center gap-3 py-2 border-b border-white/5">
+                <span class="text-accent">&#10003;</span>
+                <span>Broadcast to multiple sessions</span>
+            </div>
+            <div class="flex items-center gap-3 py-2 border-b border-white/5">
+                <span class="text-accent">&#10003;</span>
+                <span>Local terminal (zsh / bash / PowerShell)</span>
+            </div>
+            <div class="flex items-center gap-3 py-2 border-b border-white/5">
+                <span class="text-accent">&#10003;</span>
+                <span>Mobile virtual keybar (Ctrl/Alt/Esc)</span>
+            </div>
+            <div class="flex items-center gap-3 py-2 border-b border-white/5">
+                <span class="text-accent">&#10003;</span>
+                <span>Profile groups with color coding</span>
+            </div>
+            <div class="flex items-center gap-3 py-2 border-b border-white/5">
+                <span class="text-accent">&#10003;</span>
+                <span>Tauri 2 + Rust — not Electron</span>
+            </div>
         </div>
-        <div class="flex items-center gap-3 py-2 border-b border-white/5">
-          <span class="text-accent">&#10003;</span>
-          <span>Port forwarding (local, remote, SOCKS5)</span>
-        </div>
-        <div class="flex items-center gap-3 py-2 border-b border-white/5">
-          <span class="text-accent">&#10003;</span>
-          <span>Session recording &amp; playback (asciicast v2)</span>
-        </div>
-        <div class="flex items-center gap-3 py-2 border-b border-white/5">
-          <span class="text-accent">&#10003;</span>
-          <span>Keyword highlighting (ERROR, WARN, INFO...)</span>
-        </div>
-        <div class="flex items-center gap-3 py-2 border-b border-white/5">
-          <span class="text-accent">&#10003;</span>
-          <span>Import from <code class="text-xs text-accent/70">~/.ssh/config</code></span>
-        </div>
-        <div class="flex items-center gap-3 py-2 border-b border-white/5">
-          <span class="text-accent">&#10003;</span>
-          <span>ProxyJump through bastion hosts</span>
-        </div>
-        <div class="flex items-center gap-3 py-2 border-b border-white/5">
-          <span class="text-accent">&#10003;</span>
-          <span>Command snippets (Cmd+E)</span>
-        </div>
-        <div class="flex items-center gap-3 py-2 border-b border-white/5">
-          <span class="text-accent">&#10003;</span>
-          <span>Broadcast to multiple sessions</span>
-        </div>
-        <div class="flex items-center gap-3 py-2 border-b border-white/5">
-          <span class="text-accent">&#10003;</span>
-          <span>Local terminal (zsh / bash / PowerShell)</span>
-        </div>
-        <div class="flex items-center gap-3 py-2 border-b border-white/5">
-          <span class="text-accent">&#10003;</span>
-          <span>Mobile virtual keybar (Ctrl/Alt/Esc)</span>
-        </div>
-        <div class="flex items-center gap-3 py-2 border-b border-white/5">
-          <span class="text-accent">&#10003;</span>
-          <span>Profile groups with color coding</span>
-        </div>
-        <div class="flex items-center gap-3 py-2 border-b border-white/5">
-          <span class="text-accent">&#10003;</span>
-          <span>Tauri 2 + Rust — not Electron</span>
-        </div>
-      </div>
     </div>
-  </section>
+</section>
 
-  <!-- ═══ Download ═══ -->
-  <section id="download" class="mt-32 sm:mt-48 px-4 max-w-4xl mx-auto">
+<!-- ═══ Download ═══ -->
+<section id="download" class="mt-32 sm:mt-48 px-4 max-w-4xl mx-auto">
     <h2 class="text-3xl sm:text-4xl font-bold text-center mb-4 scroll-reveal">Download</h2>
     <p class="text-dim text-center mb-12 scroll-reveal">Free and open source. MIT license.</p>
     <div class="scroll-reveal grid grid-cols-1 sm:grid-cols-2 gap-4" id="download-grid">
 
-      <a href="#" data-platform="macos-aarch64" class="dl-card group flex items-center gap-4 rounded-2xl border border-white/5 bg-surface p-5 transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5">
-        <div class="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center text-2xl shrink-0">&#63743;</div>
-        <div>
-          <div class="font-semibold group-hover:text-accent transition-colors">macOS (Apple Silicon)</div>
-          <div class="text-xs text-dim mt-0.5">.dmg &middot; aarch64</div>
-        </div>
-      </a>
-      <a href="#" data-platform="macos-x86_64" class="dl-card group flex items-center gap-4 rounded-2xl border border-white/5 bg-surface p-5 transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5">
-        <div class="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center text-2xl shrink-0">&#63743;</div>
-        <div>
-          <div class="font-semibold group-hover:text-accent transition-colors">macOS (Intel)</div>
-          <div class="text-xs text-dim mt-0.5">.dmg &middot; x86_64</div>
-        </div>
-      </a>
-      <a href="#" data-platform="windows-msi" class="dl-card group flex items-center gap-4 rounded-2xl border border-white/5 bg-surface p-5 transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5">
-        <div class="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
-          <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M3 12V6.75l8-1.25V12H3zm0 .5h8v6.5l-8-1.25V12.5zM11.5 5.4l9.5-1.4v8h-9.5V5.4zM11.5 12.5H21V20l-9.5-1.4v-6.1z"/></svg>
-        </div>
-        <div>
-          <div class="font-semibold group-hover:text-accent transition-colors">Windows</div>
-          <div class="text-xs text-dim mt-0.5">.msi &middot; x86_64</div>
-        </div>
-      </a>
-      <a href="#" data-platform="linux-appimage" class="dl-card group flex items-center gap-4 rounded-2xl border border-white/5 bg-surface p-5 transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5">
-        <div class="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
-          <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M12.504 0c-.155 0-.311.015-.466.046-3.08.639-5.42 3.94-4.95 7.02.27 1.778 1.236 3.236 2.617 4.152-.22.188-.428.39-.624.603C7.36 13.73 6.37 16.15 7.09 18.71c.43 1.53 1.46 2.75 2.83 3.42.38.18.79.31 1.21.38.82.14 1.59.06 2.3-.17 1.53-.5 2.71-1.68 3.27-3.23.46-1.27.35-2.63-.23-3.87l-.04-.07c-.23-.44-.5-.85-.81-1.23-.24-.3-.5-.58-.77-.83 1.15-.92 1.93-2.26 2.17-3.77.46-3.08-1.88-6.38-4.97-7.02-.15-.03-.31-.046-.47-.046zm-.004 1.093c.088 0 .177.008.264.025 2.39.497 4.18 3.18 3.8 5.66-.2 1.3-.94 2.4-2.01 3.1l-.25.15c-.09-.06-.19-.11-.28-.17-.88-.53-1.62-1.27-2.13-2.16-.53-.93-.82-2.01-.68-3.08.17-1.23.89-2.34 1.9-3.04.33-.23.68-.39 1.04-.46.11-.02.22-.03.33-.03zM8.59 14.42c.21-.04.42-.06.63-.05.72.04 1.4.33 1.93.82.32.29.59.63.82 1 .24.39.43.81.56 1.24.06.18.1.36.13.55.06.43.02.86-.1 1.27-.42 1.19-1.35 2.1-2.55 2.49-.54.18-1.07.22-1.59.12-.32-.06-.63-.16-.92-.31-1.07-.52-1.87-1.47-2.2-2.63-.56-2.01.17-3.89 1.59-5.01.35-.26.74-.45 1.14-.53l.01-.01c.17-.04.34-.06.52-.06l-.01.01z"/></svg>
-        </div>
-        <div>
-          <div class="font-semibold group-hover:text-accent transition-colors">Linux</div>
-          <div class="text-xs text-dim mt-0.5">.AppImage / .deb / .rpm</div>
-        </div>
-      </a>
-      <a href="#" data-platform="android" class="dl-card group flex items-center gap-4 rounded-2xl border border-white/5 bg-surface p-5 transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5 sm:col-span-2 sm:max-w-md sm:mx-auto sm:w-full">
-        <div class="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
-          <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M17.523 15.341a.96.96 0 00-.001 1.919.96.96 0 00.001-1.919zm-11.046 0a.96.96 0 000 1.919.96.96 0 000-1.919zm11.405-6.02l1.997-3.46a.416.416 0 00-.152-.567.416.416 0 00-.568.152L17.12 8.95c-1.46-.669-3.1-1.044-4.87-1.044-1.77 0-3.41.375-4.87 1.044L5.34 5.446a.416.416 0 00-.568-.152.416.416 0 00-.152.567l1.997 3.46C3.42 11.318 1.2 14.554 1.2 18.24h21.6c0-3.686-2.22-6.922-5.318-8.919z"/></svg>
-        </div>
-        <div>
-          <div class="font-semibold group-hover:text-accent transition-colors">Android</div>
-          <div class="text-xs text-dim mt-0.5">.apk &middot; universal</div>
-        </div>
-      </a>
+        <a href="#" data-platform="macos-aarch64"
+           class="dl-card group flex items-center gap-4 rounded-2xl border border-white/5 bg-surface p-5 transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5">
+            <div class="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center text-2xl shrink-0">&#63743;</div>
+            <div>
+                <div class="font-semibold group-hover:text-accent transition-colors">macOS (Apple Silicon)</div>
+                <div class="text-xs text-dim mt-0.5">.dmg &middot; aarch64</div>
+            </div>
+        </a>
+        <a href="#" data-platform="macos-x86_64"
+           class="dl-card group flex items-center gap-4 rounded-2xl border border-white/5 bg-surface p-5 transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5">
+            <div class="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center text-2xl shrink-0">&#63743;</div>
+            <div>
+                <div class="font-semibold group-hover:text-accent transition-colors">macOS (Intel)</div>
+                <div class="text-xs text-dim mt-0.5">.dmg &middot; x86_64</div>
+            </div>
+        </a>
+        <a href="#" data-platform="windows-msi"
+           class="dl-card group flex items-center gap-4 rounded-2xl border border-white/5 bg-surface p-5 transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5">
+            <div class="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
+                <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M3 12V6.75l8-1.25V12H3zm0 .5h8v6.5l-8-1.25V12.5zM11.5 5.4l9.5-1.4v8h-9.5V5.4zM11.5 12.5H21V20l-9.5-1.4v-6.1z"/>
+                </svg>
+            </div>
+            <div>
+                <div class="font-semibold group-hover:text-accent transition-colors">Windows</div>
+                <div class="text-xs text-dim mt-0.5">.msi &middot; x86_64</div>
+            </div>
+        </a>
+        <a href="#" data-platform="linux-appimage"
+           class="dl-card group flex items-center gap-4 rounded-2xl border border-white/5 bg-surface p-5 transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5">
+            <div class="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
+                <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12.504 0c-.155 0-.311.015-.466.046-3.08.639-5.42 3.94-4.95 7.02.27 1.778 1.236 3.236 2.617 4.152-.22.188-.428.39-.624.603C7.36 13.73 6.37 16.15 7.09 18.71c.43 1.53 1.46 2.75 2.83 3.42.38.18.79.31 1.21.38.82.14 1.59.06 2.3-.17 1.53-.5 2.71-1.68 3.27-3.23.46-1.27.35-2.63-.23-3.87l-.04-.07c-.23-.44-.5-.85-.81-1.23-.24-.3-.5-.58-.77-.83 1.15-.92 1.93-2.26 2.17-3.77.46-3.08-1.88-6.38-4.97-7.02-.15-.03-.31-.046-.47-.046zm-.004 1.093c.088 0 .177.008.264.025 2.39.497 4.18 3.18 3.8 5.66-.2 1.3-.94 2.4-2.01 3.1l-.25.15c-.09-.06-.19-.11-.28-.17-.88-.53-1.62-1.27-2.13-2.16-.53-.93-.82-2.01-.68-3.08.17-1.23.89-2.34 1.9-3.04.33-.23.68-.39 1.04-.46.11-.02.22-.03.33-.03zM8.59 14.42c.21-.04.42-.06.63-.05.72.04 1.4.33 1.93.82.32.29.59.63.82 1 .24.39.43.81.56 1.24.06.18.1.36.13.55.06.43.02.86-.1 1.27-.42 1.19-1.35 2.1-2.55 2.49-.54.18-1.07.22-1.59.12-.32-.06-.63-.16-.92-.31-1.07-.52-1.87-1.47-2.2-2.63-.56-2.01.17-3.89 1.59-5.01.35-.26.74-.45 1.14-.53l.01-.01c.17-.04.34-.06.52-.06l-.01.01z"/>
+                </svg>
+            </div>
+            <div>
+                <div class="font-semibold group-hover:text-accent transition-colors">Linux</div>
+                <div class="text-xs text-dim mt-0.5">.AppImage / .deb / .rpm</div>
+            </div>
+        </a>
+        <a href="#" data-platform="android"
+           class="dl-card group flex items-center gap-4 rounded-2xl border border-white/5 bg-surface p-5 transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5 sm:col-span-2 sm:max-w-md sm:mx-auto sm:w-full">
+            <div class="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
+                <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M17.523 15.341a.96.96 0 00-.001 1.919.96.96 0 00.001-1.919zm-11.046 0a.96.96 0 000 1.919.96.96 0 000-1.919zm11.405-6.02l1.997-3.46a.416.416 0 00-.152-.567.416.416 0 00-.568.152L17.12 8.95c-1.46-.669-3.1-1.044-4.87-1.044-1.77 0-3.41.375-4.87 1.044L5.34 5.446a.416.416 0 00-.568-.152.416.416 0 00-.152.567l1.997 3.46C3.42 11.318 1.2 14.554 1.2 18.24h21.6c0-3.686-2.22-6.922-5.318-8.919z"/>
+                </svg>
+            </div>
+            <div>
+                <div class="font-semibold group-hover:text-accent transition-colors">Android</div>
+                <div class="text-xs text-dim mt-0.5">.apk &middot; universal</div>
+            </div>
+        </a>
 
     </div>
-  </section>
+</section>
 
-  <!-- ═══ Footer ═══ -->
-  <footer class="mt-32 pb-12 flex flex-col items-center gap-6 px-4">
+<!-- ═══ Footer ═══ -->
+<footer class="mt-32 pb-12 flex flex-col items-center gap-6 px-4">
     <div class="flex items-center gap-4">
-      <a href="https://github.com/shihuili1218/rssh" target="_blank" rel="noopener" class="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-dim hover:text-gray-200 hover:bg-white/10 transition-all">
-        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-      </a>
+        <a href="https://github.com/shihuili1218/rssh" target="_blank" rel="noopener"
+           class="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-dim hover:text-gray-200 hover:bg-white/10 transition-all">
+            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+            </svg>
+        </a>
     </div>
     <div class="text-dim text-xs">MIT License &middot; RSSH</div>
-    <div class="pointer-events-none select-none bg-gradient-to-b from-white/[0.06] to-transparent bg-clip-text text-[18vw] font-black leading-none text-transparent tracking-tighter translate-y-[10%]">RSSH</div>
-  </footer>
+    <div class="pointer-events-none select-none bg-gradient-to-b from-white/[0.06] to-transparent bg-clip-text text-[18vw] font-black leading-none text-transparent tracking-tighter translate-y-[10%]">
+        RSSH
+    </div>
+</footer>
 
-  <!-- ═══ Tab button styles ═══ -->
-  <style>
+<!-- ═══ Tab button styles ═══ -->
+<style>
     .tab-btn {
-      display: inline-flex; align-items: center; gap: 0.5rem;
-      padding: 0.625rem 1.25rem; border-radius: 9999px;
-      font-size: 0.875rem; font-weight: 600;
-      border: 1px solid rgba(255,255,255,0.05);
-      background: rgba(255,255,255,0.03); color: #6B7A99;
-      cursor: pointer; transition: all 0.3s;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.625rem 1.25rem;
+        border-radius: 9999px;
+        font-size: 0.875rem;
+        font-weight: 600;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        background: rgba(255, 255, 255, 0.03);
+        color: #6B7A99;
+        cursor: pointer;
+        transition: all 0.3s;
     }
-    .tab-btn:hover { background: rgba(255,255,255,0.06); color: #A0A8BB; }
-    .tab-btn.active { background: #4A6CF7; color: #fff; border-color: #4A6CF7; box-shadow: 0 4px 20px rgba(74,108,247,0.3); }
-  </style>
 
-  <!-- ═══ Scripts ═══ -->
-  <script>
+    .tab-btn:hover {
+        background: rgba(255, 255, 255, 0.06);
+        color: #A0A8BB;
+    }
+
+    .tab-btn.active {
+        background: #4A6CF7;
+        color: #fff;
+        border-color: #4A6CF7;
+        box-shadow: 0 4px 20px rgba(74, 108, 247, 0.3);
+    }
+</style>
+
+<!-- ═══ Scripts ═══ -->
+<script>
     // --- Golden angle color function (same as the real app) ---
     function blockColor(i) {
-      const hue = (i * 137.508) % 360;
-      return 'hsl(' + hue.toFixed(1) + ', 65%, 58%)';
+        const hue = (i * 137.508) % 360;
+        return 'hsl(' + hue.toFixed(1) + ', 65%, 58%)';
     }
 
     // --- Hero terminal: command blocks with colored bars ---
     const BLOCKS = [
-      { prompt: '<span class="text-emerald-400">deploy@prod</span>:<span class="text-accent">~</span>$',
-        cmd: 'systemctl status nginx',
-        output: [
-          '<span class="text-ok">&#9679;</span> nginx.service - A high performance web server',
-          '   Active: <span class="text-ok">active (running)</span> since Mon; 14 days ago',
-          '   Main PID: 1842 (nginx)',
-        ]
-      },
-      { prompt: '<span class="text-emerald-400">deploy@prod</span>:<span class="text-accent">~</span>$',
-        cmd: 'tail -5 /var/log/app.log',
-        output: [
-          '<span class="text-dim">09:41:02</span> <span class="text-accent font-bold">INFO</span>  Request handled in 3ms — 200 OK',
-          '<span class="text-dim">09:41:03</span> <span class="text-amber-400 font-bold">WARN</span>  Cache miss rate 12%',
-          '<span class="text-dim">09:41:07</span> <span class="text-red-400 font-bold">ERROR</span> Connection refused: redis:6379',
-          '<span class="text-dim">09:41:08</span> <span class="text-accent font-bold">INFO</span>  Retry succeeded, reconnected',
-        ]
-      },
-      { prompt: '<span class="text-emerald-400">deploy@prod</span>:<span class="text-accent">~</span>$',
-        cmd: 'df -h / | tail -1',
-        output: [
-          '/dev/sda1    50G   <span class="text-ok">18G</span>   30G  38% /',
-        ]
-      },
-      { prompt: '<span class="text-emerald-400">deploy@prod</span>:<span class="text-accent">~</span>$',
-        cmd: '<span class="animate-blink">&#9608;</span>',
-        output: []
-      },
+        {
+            prompt: '<span class="text-emerald-400">deploy@prod</span>:<span class="text-accent">~</span>$',
+            cmd: 'systemctl status nginx',
+            output: [
+                '<span class="text-ok">&#9679;</span> nginx.service - A high performance web server',
+                '   Active: <span class="text-ok">active (running)</span> since Mon; 14 days ago',
+                '   Main PID: 1842 (nginx)',
+            ]
+        },
+        {
+            prompt: '<span class="text-emerald-400">deploy@prod</span>:<span class="text-accent">~</span>$',
+            cmd: 'tail -5 /var/log/app.log',
+            output: [
+                '<span class="text-dim">09:41:02</span> <span class="text-accent font-bold">INFO</span>  Request handled in 3ms — 200 OK',
+                '<span class="text-dim">09:41:03</span> <span class="text-amber-400 font-bold">WARN</span>  Cache miss rate 12%',
+                '<span class="text-dim">09:41:07</span> <span class="text-red-400 font-bold">ERROR</span> Connection refused: redis:6379',
+                '<span class="text-dim">09:41:08</span> <span class="text-accent font-bold">INFO</span>  Retry succeeded, reconnected',
+            ]
+        },
+        {
+            prompt: '<span class="text-emerald-400">deploy@prod</span>:<span class="text-accent">~</span>$',
+            cmd: 'df -h / | tail -1',
+            output: [
+                '/dev/sda1    50G   <span class="text-ok">18G</span>   30G  38% /',
+            ]
+        },
+        {
+            prompt: '<span class="text-emerald-400">deploy@prod</span>:<span class="text-accent">~</span>$',
+            cmd: '<span class="animate-blink">&#9608;</span>',
+            output: []
+        },
     ];
 
     let heroTimeouts = [];
 
     function renderHero() {
-      heroTimeouts.forEach(clearTimeout);
-      heroTimeouts = [];
-      const body = document.getElementById('term-body');
-      body.innerHTML = '';
-      let delay = 0;
+        heroTimeouts.forEach(clearTimeout);
+        heroTimeouts = [];
+        const body = document.getElementById('term-body');
+        body.innerHTML = '';
+        let delay = 0;
 
-      BLOCKS.forEach((block, bi) => {
-        const color = blockColor(bi);
-        const wrapper = document.createElement('div');
-        wrapper.className = 'cmd-block term-line';
-        wrapper.style.setProperty('--block-color', color);
+        BLOCKS.forEach((block, bi) => {
+            const color = blockColor(bi);
+            const wrapper = document.createElement('div');
+            wrapper.className = 'cmd-block term-line';
+            wrapper.style.setProperty('--block-color', color);
 
-        // prompt + command
-        const promptLine = document.createElement('div');
-        promptLine.innerHTML = block.prompt + ' ' + block.cmd;
-        wrapper.appendChild(promptLine);
+            // prompt + command
+            const promptLine = document.createElement('div');
+            promptLine.innerHTML = block.prompt + ' ' + block.cmd;
+            wrapper.appendChild(promptLine);
 
-        // output lines
-        block.output.forEach(line => {
-          const div = document.createElement('div');
-          div.innerHTML = line;
-          wrapper.appendChild(div);
+            // output lines
+            block.output.forEach(line => {
+                const div = document.createElement('div');
+                div.innerHTML = line;
+                wrapper.appendChild(div);
+            });
+
+            body.appendChild(wrapper);
+            const d = delay;
+            heroTimeouts.push(setTimeout(() => wrapper.classList.add('show'), d));
+            delay += 600 + block.output.length * 150;
         });
-
-        body.appendChild(wrapper);
-        const d = delay;
-        heroTimeouts.push(setTimeout(() => wrapper.classList.add('show'), d));
-        delay += 600 + block.output.length * 150;
-      });
     }
 
     renderHero();
 
     // --- Block color palette demo (Feature 1 sidebar) ---
     (function renderBlockDemo() {
-      const el = document.getElementById('block-demo');
-      const cmds = [
-        { cmd: 'ls -la', out: 'drwxr-xr-x  12 deploy ...' },
-        { cmd: 'git status', out: 'On branch main, clean' },
-        { cmd: 'docker ps', out: 'nginx  Up 14d  :80->80' },
-        { cmd: 'free -h', out: 'Mem: 7.8G / 16G (48%)' },
-        { cmd: 'uptime', out: '14 days, load: 0.42' },
-      ];
-      cmds.forEach((c, i) => {
-        const color = blockColor(i);
-        const div = document.createElement('div');
-        div.className = 'cmd-block show';
-        div.style.setProperty('--block-color', color);
-        div.innerHTML = '<div><span class="text-emerald-400">$</span> ' + c.cmd + '</div><div class="text-dim">' + c.out + '</div>';
-        if (i < cmds.length - 1) div.style.marginBottom = '4px';
-        el.appendChild(div);
-      });
+        const el = document.getElementById('block-demo');
+        const cmds = [
+            {cmd: 'ls -la', out: 'drwxr-xr-x  12 deploy ...'},
+            {cmd: 'git status', out: 'On branch main, clean'},
+            {cmd: 'docker ps', out: 'nginx  Up 14d  :80->80'},
+            {cmd: 'free -h', out: 'Mem: 7.8G / 16G (48%)'},
+            {cmd: 'uptime', out: '14 days, load: 0.42'},
+        ];
+        cmds.forEach((c, i) => {
+            const color = blockColor(i);
+            const div = document.createElement('div');
+            div.className = 'cmd-block show';
+            div.style.setProperty('--block-color', color);
+            div.innerHTML = '<div><span class="text-emerald-400">$</span> ' + c.cmd + '</div><div class="text-dim">' + c.out + '</div>';
+            if (i < cmds.length - 1) div.style.marginBottom = '4px';
+            el.appendChild(div);
+        });
     })();
 
     // --- Scroll reveal ---
     const observer = new IntersectionObserver((entries) => {
-      entries.forEach((entry, i) => {
-        if (entry.isIntersecting) {
-          setTimeout(() => entry.target.classList.add('visible'), i * 80);
-          observer.unobserve(entry.target);
-        }
-      });
-    }, { threshold: 0.15 });
+        entries.forEach((entry, i) => {
+            if (entry.isIntersecting) {
+                setTimeout(() => entry.target.classList.add('visible'), i * 80);
+                observer.unobserve(entry.target);
+            }
+        });
+    }, {threshold: 0.15});
     document.querySelectorAll('.scroll-reveal').forEach(el => observer.observe(el));
 
     // --- Download links ---
     const REPO = 'shihuili1218/rssh';
     const PLATFORM_MAP = {
-      'macos-aarch64': '-macos-aarch64.dmg',
-      'macos-x86_64':  '-macos-x86_64.dmg',
-      'windows-msi':   '-windows-x86_64.msi',
-      'linux-appimage':'-linux-x86_64.AppImage',
-      'android':       '-android-universal.apk',
+        'macos-aarch64': '-macos-aarch64.dmg',
+        'macos-x86_64': '-macos-x86_64.dmg',
+        'windows-msi': '-windows-x86_64.msi',
+        'linux-appimage': '-linux-x86_64.AppImage',
+        'android': '-android-universal.apk',
     };
     fetch('https://api.github.com/repos/' + REPO + '/releases/latest')
-      .then(r => r.json())
-      .then(release => {
-        const assets = release.assets || [];
-        document.querySelectorAll('.dl-card').forEach(card => {
-          const suffix = PLATFORM_MAP[card.dataset.platform];
-          if (!suffix) return;
-          const asset = assets.find(a => a.name.endsWith(suffix));
-          if (asset) card.href = asset.browser_download_url;
+        .then(r => r.json())
+        .then(release => {
+            const assets = release.assets || [];
+            document.querySelectorAll('.dl-card').forEach(card => {
+                const suffix = PLATFORM_MAP[card.dataset.platform];
+                if (!suffix) return;
+                const asset = assets.find(a => a.name.endsWith(suffix));
+                if (asset) card.href = asset.browser_download_url;
+            });
+        })
+        .catch(() => {
+            document.querySelectorAll('.dl-card').forEach(card => {
+                card.href = 'https://github.com/' + REPO + '/releases/latest';
+            });
         });
-      })
-      .catch(() => {
-        document.querySelectorAll('.dl-card').forEach(card => {
-          card.href = 'https://github.com/' + REPO + '/releases/latest';
-        });
-      });
-  </script>
+</script>
 
 </body>
 </html>
