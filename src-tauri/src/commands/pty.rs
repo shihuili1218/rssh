@@ -7,6 +7,7 @@ use crate::terminal::pty;
 #[tauri::command]
 pub fn pty_spawn(
     app: AppHandle,
+    window: tauri::Window,
     state: State<'_, AppState>,
     cols: u16,
     rows: u16,
@@ -18,6 +19,7 @@ pub fn pty_spawn(
         .lock()
         .map_err(|_| AppError::Other("pty lock poisoned".into()))?
         .insert(id.clone(), handle);
+    crate::commands::lifecycle::register_window_session(&state, window.label(), &id);
     Ok(id)
 }
 
@@ -61,6 +63,7 @@ pub fn pty_resize(
 
 #[tauri::command]
 pub fn pty_close(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
+    crate::commands::lifecycle::unregister_window_session(&state, &session_id);
     state
         .pty_sessions
         .lock()

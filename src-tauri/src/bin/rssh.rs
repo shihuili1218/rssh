@@ -107,8 +107,42 @@ enum ConfigCmd {
 // main
 // ═══════════════════════════════════════════════════════════════════
 
+/// On Linux the CLI is installed as `/usr/local/bin/rssh`, which shadows the
+/// GUI binary at `/usr/bin/rssh`.  When invoked without a subcommand, detect
+/// the GUI binary and launch it instead — so `rssh` opens the app, while
+/// `rssh ls`, `rssh open …` etc. still go through the CLI path.
+#[cfg(target_os = "linux")]
+fn try_launch_gui() -> bool {
+    if in_rssh_app() { return false; }
+    // No display server → headless / SSH session, stay in CLI.
+    if std::env::var("DISPLAY").is_err() && std::env::var("WAYLAND_DISPLAY").is_err() {
+        return false;
+    }
+    let gui = std::path::PathBuf::from("/usr/bin/rssh");
+    if !gui.exists() { return false; }
+    // Don't loop when the user runs the GUI binary directly.
+    if let Ok(me) = std::env::current_exe() {
+        if me.canonicalize().ok() == gui.canonicalize().ok() { return false; }
+    }
+    use std::os::unix::process::CommandExt;
+    Command::new(&gui)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn()
+        .is_ok()
+}
+
 fn main() {
     let cli = Cli::parse();
+
+    // No subcommand → try launching GUI on Linux.
+    #[cfg(target_os = "linux")]
+    if cli.command.is_none() && try_launch_gui() {
+        return;
+    }
+
     let data_dir = db::data_dir();
     let db = Arc::new(Db::open(&data_dir).unwrap_or_else(|e| {
         eprintln!("Failed to open database: {e}");

@@ -73,8 +73,16 @@
     onMount(() => {
         app.loadProfiles().then(p => profiles = p);
         app.loadGroups().then(g => groups = g);
-        // 前端启动时清掉所有上一轮残留的 backend session（前端崩溃 / 热重载场景）
-        invoke("reconcile_sessions", { activeIds: [] }).catch(() => {});
+        // Crash recovery: reconcile with empty list tells the backend
+        // "no sessions are alive" so it cleans up any orphaned resources
+        // from a previous crash or hot-reload.
+        //
+        // Skip this in cloned windows (window.__rssh_clone is set by
+        // open_tab_in_new_window): passing activeIds=[] would nuke every
+        // session in the shared AppState, including other windows' tabs.
+        if (!(window as any).__rssh_clone) {
+            invoke("reconcile_sessions", { activeIds: [] }).catch(() => {});
+        }
         consumeCloneQuery();
 
         const detachKeydown = attachShortcuts(shortcutsTable());

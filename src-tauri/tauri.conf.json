@@ -33,9 +33,6 @@
       "bin/*": "bin/"
     },
     "linux": {
-      "deb": {
-        "desktopTemplate": "rssh.desktop"
-      },
       "appimage": {
         "files": {}
       }
