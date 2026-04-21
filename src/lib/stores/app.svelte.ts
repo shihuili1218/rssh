@@ -35,7 +35,8 @@ export type SettingsPage =
   | "groups"
   | "group-edit"
   | "cli"
-  | "help";
+  | "shortcuts"
+  | "about";
 
 export interface Group {
   id: string; name: string; color: string; sort_order: number;

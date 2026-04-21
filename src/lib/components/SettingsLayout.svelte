@@ -14,7 +14,8 @@
   import ImportExportScreen from "./ImportExportScreen.svelte";
   import RecordingSettings from "./RecordingSettings.svelte";
   import PlaybackScreen from "./PlaybackScreen.svelte";
-  import HelpScreen from "./HelpScreen.svelte";
+  import ShortcutsScreen from "./ShortcutsScreen.svelte";
+  import AboutScreen from "./AboutScreen.svelte";
   import ShellSettings from "./ShellSettings.svelte";
   import CliSettings from "./CliSettings.svelte";
 
@@ -43,10 +44,11 @@
     { id: "highlights", label: t("settings.section.highlights"), section: "Appearance" },
     { id: "snippets", label: t("settings.section.snippets"), section: "Appearance" },
     { id: "cli", label: t("settings.section.cli"), section: "Help" },
-    { id: "help", label: t("settings.section.help"), section: "Help" },
+    { id: "shortcuts", label: t("settings.section.shortcuts"), section: "Help" },
+    { id: "about", label: t("settings.section.about"), section: "Help" },
   ]);
 
-  const hiddenOnCompact = new Set<string>(["cli", "help"]);
+  const hiddenOnCompact = new Set<string>(["cli", "shortcuts", "about"]);
   let menu = $derived(compact ? allMenu.filter(m => !hiddenOnCompact.has(m.id)) : allMenu);
 
   let sections = $derived((() => {
@@ -140,8 +142,10 @@
       <PlaybackScreen />
     {:else if app.settingsPage() === "cli"}
       <CliSettings />
-    {:else if app.settingsPage() === "help"}
-      <HelpScreen />
+    {:else if app.settingsPage() === "shortcuts"}
+      <ShortcutsScreen />
+    {:else if app.settingsPage() === "about"}
+      <AboutScreen />
     {/if}
   </div>
   {/if}

@@ -22,6 +22,15 @@
     let groups = $state<Group[]>([]);
     let sidebarTimer = 0;
     let menuCtx = $state<{ x: number; y: number; tab: Tab } | null>(null);
+    let pinned = $state(false);
+
+    function togglePin() {
+        pinned = !pinned;
+        getCurrentWindow().setAlwaysOnTop(pinned).catch(e => {
+            console.error("setAlwaysOnTop failed:", e);
+            pinned = !pinned;
+        });
+    }
 
     // Tab drag-and-drop
     let dragTabId = $state<string | null>(null);
@@ -142,12 +151,13 @@
         profiles.filter(p => app.pinnedProfileIds().includes(p.id))
     );
 
-    type NavItem = { kind: "pin"; profile: Profile } | { kind: "tab"; id: string } | { kind: "new-tab" } | { kind: "new-edit" } | { kind: "settings" };
+    type NavItem = { kind: "pin"; profile: Profile } | { kind: "tab"; id: string } | { kind: "new-tab" } | { kind: "new-edit" } | { kind: "pin-window" } | { kind: "settings" };
     let navItems = $derived<NavItem[]>([
         ...app.tabs().filter(t => t.type === "home").map(t => ({kind: "tab" as const, id: t.id})),
         ...(app.isMobile ? [] : [{kind: "new-tab" as const}, {kind: "new-edit" as const}]),
         ...pinnedProfiles.map(p => ({kind: "pin" as const, profile: p})),
         ...app.tabs().filter(t => t.type !== "home").map(t => ({kind: "tab" as const, id: t.id})),
+        ...(app.isMobile ? [] : [{kind: "pin-window" as const}]),
         {kind: "settings" as const},
     ]);
 
@@ -164,6 +174,7 @@
         else if (item.kind === "new-edit") addEditTab();
         else if (item.kind === "pin") connectPinned(item.profile);
         else if (item.kind === "tab") selectTab(item.id);
+        else if (item.kind === "pin-window") { togglePin(); closeDrawer(); }
         else selectSettings();
     }
 
@@ -474,6 +485,18 @@
             </div>
 
             <div class="sidebar-footer">
+                {#if !app.isMobile}
+                    <button
+                        class="sb-item"
+                        class:pinned
+                        class:focused={isFocused("pin-window")}
+                        onclick={togglePin}
+                        title={t("window.pin")}
+                    >
+                        <span class="sb-icon">📌</span>
+                        <span class="sb-label">{t("window.pin")}</span>
+                    </button>
+                {/if}
                 <button
                     class="sb-item"
                     class:active={app.settingsActive()}

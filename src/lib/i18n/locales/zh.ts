@@ -30,6 +30,7 @@ const zh: Messages = {
   "tab.new_terminal": "新建终端",
   "tab.new_edit": "新建编辑",
   "tab.settings": "设置",
+  "window.pin": "窗口置顶",
   "tab.context.search": "搜索",
   "tab.context.snippets": "片段",
   "tab.context.sftp": "SFTP 文件浏览",
@@ -50,7 +51,14 @@ const zh: Messages = {
   "settings.section.github_sync": "GitHub 同步",
   "settings.section.import_export": "导入 / 导出",
   "settings.section.cli": "CLI 工具",
-  "settings.section.help": "帮助",
+  "settings.section.shortcuts": "快捷键",
+  "settings.section.about": "关于",
+  "about.repo": "GitHub 仓库",
+  "about.issues": "报告问题",
+  "about.license": "许可证",
+  "about.diagnostics": "复制诊断信息",
+  "about.diagnostics.hint": "报告问题时可附带此信息",
+  "about.copied": "已复制",
   "settings.section.language": "语言",
 
   // ── 语言选择 ──

@@ -28,6 +28,7 @@ const en = {
   "tab.new_terminal": "New Terminal",
   "tab.new_edit": "New Edit",
   "tab.settings": "Settings",
+  "window.pin": "Pin on Top",
   "tab.context.search": "Search",
   "tab.context.snippets": "Snippets",
   "tab.context.sftp": "SFTP Browser",
@@ -48,7 +49,14 @@ const en = {
   "settings.section.github_sync": "GitHub Sync",
   "settings.section.import_export": "Import / Export",
   "settings.section.cli": "CLI Tool",
-  "settings.section.help": "Help",
+  "settings.section.shortcuts": "Shortcuts",
+  "settings.section.about": "About",
+  "about.repo": "GitHub Repo",
+  "about.issues": "Report an Issue",
+  "about.license": "License",
+  "about.diagnostics": "Copy Diagnostics",
+  "about.diagnostics.hint": "Attach this when reporting an issue",
+  "about.copied": "Copied",
   "settings.section.language": "Language",
 
   // ── Language picker ──
