@@ -37,6 +37,9 @@ const zh: Messages = {
   "tab.context.clone": "克隆 Tab",
   "tab.context.close": "关闭 Tab",
   "tab.context.open_new_window": "在新窗口打开",
+  "tab.context.copy": "复制",
+  "tab.context.paste": "粘贴",
+  "tab.context.copy_utc": "复制为 UTC",
 
   // ── 设置菜单 ──
   "settings.title": "设置",

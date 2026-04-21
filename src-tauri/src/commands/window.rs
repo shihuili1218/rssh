@@ -48,3 +48,16 @@ pub fn open_external_url(url: String) -> AppResult<()> {
         .map(|_| ())
         .map_err(|e| AppError::Other(format!("Failed to open URL: {e}")))
 }
+
+/// Read the system clipboard as text.
+/// Goes through Rust (arboard) to bypass WebKit's permission prompt on
+/// externally-sourced clipboard content — `navigator.clipboard.readText()`
+/// pops a dialog every time on macOS unless the content was written by the
+/// same page in this session.
+#[tauri::command]
+pub fn clipboard_read() -> AppResult<String> {
+    let mut cb = arboard::Clipboard::new()
+        .map_err(|e| AppError::Other(format!("Clipboard init: {e}")))?;
+    cb.get_text()
+        .map_err(|e| AppError::Other(format!("Clipboard read: {e}")))
+}

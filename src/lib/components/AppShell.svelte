@@ -238,6 +238,18 @@
         menuCtx = {x: e.clientX, y: e.clientY, tab};
     }
 
+    /** Detect 10-digit Unix seconds or 13-digit Unix ms timestamp. */
+    function tryParseTimestamp(s: string): Date | null {
+        const t = s.trim();
+        if (/^\d{10}$/.test(t)) return new Date(parseInt(t, 10) * 1000);
+        if (/^\d{13}$/.test(t)) return new Date(parseInt(t, 10));
+        return null;
+    }
+
+    function formatUtc(d: Date): string {
+        return d.toISOString().replace("T", " ").slice(0, 19) + "Z";
+    }
+
     function closeCtxMenu() {
         menuCtx = null;
     }
@@ -256,6 +268,31 @@
         const isTerminal = tab.type === "ssh" || tab.type === "local";
         const isSsh = tab.type === "ssh";
         const sections: CtxMenuItem[][] = [];
+
+        // Copy / Paste (+ UTC if selection is a timestamp).
+        if (isTerminal) {
+            const selection = app.terminalGetSelection(tab.id);
+            const ts = selection ? tryParseTimestamp(selection) : null;
+            const copyPaste: CtxMenuItem[] = [
+                {
+                    label: t("tab.context.copy"),
+                    disabled: !selection,
+                    onClick: () => { if (selection) navigator.clipboard.writeText(selection).catch(() => {}); },
+                },
+                {
+                    label: t("tab.context.paste"),
+                    onClick: () => { app.readClipboard().then(text => { if (text) app.terminalPaste(tab.id, text); }); },
+                },
+            ];
+            if (ts) {
+                const utc = formatUtc(ts);
+                copyPaste.push({
+                    label: `${t("tab.context.copy_utc")}: ${utc}`,
+                    onClick: () => { navigator.clipboard.writeText(utc).catch(() => {}); },
+                });
+            }
+            sections.push(copyPaste);
+        }
 
         if (isTerminal) {
             const items: CtxMenuItem[] = [
@@ -469,7 +506,6 @@
                         ondrop={(e) => handleDrop(e, tab.id)}
                         ondragend={handleDragEnd}
                         onclick={() => selectTab(tab.id)}
-                        oncontextmenu={(e) => openCtxMenu(e, tab)}
                         title={tab.label}
                     >
                         <span class="sb-icon" style={groupColor ? `background: ${groupColor}; color: white` : ''}>{tabIcon(tab)}</span>
@@ -519,7 +555,9 @@
         {/if}
 
         {#each app.tabs() as tab (tab.id)}
-            <div class="pane" class:visible={!app.settingsActive() && tab.id === app.activeTabId()}>
+            <div class="pane"
+                 class:visible={!app.settingsActive() && tab.id === app.activeTabId()}
+                 oncontextmenu={app.isMobile ? undefined : (e) => openCtxMenu(e, tab)}>
                 {#if tab.type === "home"}
                     <HomeScreen/>
                 {:else if tab.type === "ssh" || tab.type === "local"}

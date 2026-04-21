@@ -147,6 +147,13 @@
     const dataEvent = $derived(isLocal ? "pty:data" : "ssh:data");
     const closeEvent = $derived(isLocal ? "pty:close" : "ssh:close");
 
+    function pasteText(text: string) {
+        if (!text || disconnected || !sessionId) return;
+        const wrapped = terminal.modes.bracketedPasteMode
+            ? `\x1b[200~${text}\x1b[201~` : text;
+        invoke(writeCmd, { sessionId, data: Array.from(new TextEncoder().encode(wrapped)) });
+    }
+
     function openSearch() {
         showSearch = true;
         requestAnimationFrame(() => searchInputEl?.focus());
@@ -322,6 +329,11 @@
         terminal.unicode.activeVersion = "11";
         fitAddon.fit();
 
+        app.registerTerminalControls(tabId, {
+            getSelection: () => terminal.getSelection(),
+            paste: pasteText,
+        });
+
         // Intercept Ctrl/Cmd+F for search, Ctrl/Cmd+O for SFTP, Ctrl/Cmd+S for snippets
         terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
             if (e.type !== "keydown") return true;
@@ -332,12 +344,7 @@
             // Ctrl+Shift+V → paste, Ctrl+Shift+C → copy (Linux terminal convention)
             if (e.ctrlKey && e.shiftKey && e.key === "V") {
                 e.preventDefault();
-                navigator.clipboard.readText().then(text => {
-                    if (!text || disconnected || !sessionId) return;
-                    const wrapped = terminal.modes.bracketedPasteMode
-                        ? `\x1b[200~${text}\x1b[201~` : text;
-                    invoke(writeCmd, { sessionId, data: Array.from(new TextEncoder().encode(wrapped)) });
-                }).catch(() => {});
+                app.readClipboard().then(pasteText);
                 return false;
             }
             if (e.ctrlKey && e.shiftKey && e.key === "C") {
@@ -435,6 +442,7 @@
         resizeObs?.disconnect();
         blockTracker?.dispose();
         app.unregisterTerminalWriter();
+        app.unregisterTerminalControls(tabId);
         app.unregisterSession(tabId);
         if (sessionId && !disconnected) {
             const cmd = isLocal ? "pty_close" : "ssh_disconnect";

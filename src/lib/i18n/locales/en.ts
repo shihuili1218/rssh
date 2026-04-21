@@ -35,6 +35,9 @@ const en = {
   "tab.context.clone": "Clone Tab",
   "tab.context.close": "Close Tab",
   "tab.context.open_new_window": "Open in New Window",
+  "tab.context.copy": "Copy",
+  "tab.context.paste": "Paste",
+  "tab.context.copy_utc": "UTC",
 
   // ── Settings menu ──
   "settings.title": "Settings",

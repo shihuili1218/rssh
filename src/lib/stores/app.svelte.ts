@@ -163,6 +163,34 @@ export function registerTerminalWriter(fn: (text: string) => void) { _terminalWr
 export function unregisterTerminalWriter() { _terminalWriter = null; }
 export function sendToTerminal(text: string) { _terminalWriter?.(text); }
 
+/* ─── Per-tab terminal copy/paste controls ─── */
+interface TerminalControls {
+  getSelection(): string;
+  paste(text: string): void;
+}
+const _terminalControls = new Map<string, TerminalControls>();
+export function registerTerminalControls(tabId: string, controls: TerminalControls) {
+  _terminalControls.set(tabId, controls);
+}
+export function unregisterTerminalControls(tabId: string) {
+  _terminalControls.delete(tabId);
+}
+export function terminalGetSelection(tabId: string): string {
+  return _terminalControls.get(tabId)?.getSelection() ?? "";
+}
+export function terminalPaste(tabId: string, text: string) {
+  _terminalControls.get(tabId)?.paste(text);
+}
+
+/** Read system clipboard. On desktop, goes through Rust to bypass
+ *  WebKit's permission prompt for externally-sourced content. */
+export async function readClipboard(): Promise<string> {
+  if (isMobile) {
+    return navigator.clipboard.readText().catch(() => "");
+  }
+  return invoke<string>("clipboard_read").catch(() => "");
+}
+
 /* ─── Session registry (for broadcast) ─── */
 interface SessionEntry {
   tabId: string;
