@@ -476,51 +476,25 @@ fn add_profile(conn: &CliCtx) -> AppResult<()> {
     let port: u16 = prompt_default("Port", "22").parse().unwrap_or(22);
 
     let creds = db::credential::list(conn)?;
-    let credential_id = if creds.is_empty() {
-        println!("(no credentials, use 'rssh add cred' first)");
-        None
-    } else {
-        println!("Credentials:");
-        for (i, c) in creds.iter().enumerate() {
-            println!("  {} - {} ({})", i + 1, c.name, c.username);
-        }
-        let choice = prompt_default("Credential #", "0");
-        choice.parse::<usize>().ok()
-            .and_then(|n| creds.get(n.wrapping_sub(1)))
-            .map(|c| c.id.clone())
-    };
+    let credential_id = menu_select(
+        "Credentials:", "Credential", &creds,
+        "(no credentials, use 'rssh add cred' first)",
+        |c| format!("{} ({})", c.name, c.username),
+    ).map(|c| c.id.clone());
 
     let profiles = db::profile::list(conn)?;
-    let bastion_profile_id = if profiles.is_empty() {
-        None
-    } else {
-        println!("Bastion (optional):");
-        println!("  0 - none");
-        for (i, p) in profiles.iter().enumerate() {
-            println!("  {} - {} ({})", i + 1, p.name, p.host);
-        }
-        let choice = prompt_default("Bastion #", "0");
-        choice.parse::<usize>().ok()
-            .and_then(|n| profiles.get(n.wrapping_sub(1)))
-            .map(|p| p.id.clone())
-    };
+    let bastion_profile_id = menu_select(
+        "Bastion (optional):", "Bastion", &profiles, "",
+        |p| format!("{} ({})", p.name, p.host),
+    ).map(|p| p.id.clone());
 
     let init_command = prompt_optional("Init command (optional): ");
 
     let groups = db::group::list(conn)?;
-    let group_id = if groups.is_empty() {
-        None
-    } else {
-        println!("Group (optional):");
-        println!("  0 - none");
-        for (i, g) in groups.iter().enumerate() {
-            println!("  {} - {}", i + 1, g.name);
-        }
-        let choice = prompt_default("Group #", "0");
-        choice.parse::<usize>().ok()
-            .and_then(|n| groups.get(n.wrapping_sub(1)))
-            .map(|g| g.id.clone())
-    };
+    let group_id = menu_select(
+        "Group (optional):", "Group", &groups, "",
+        |g| g.name.clone(),
+    ).map(|g| g.id.clone());
 
     let p = Profile {
         id: uuid::Uuid::new_v4().to_string(),
@@ -1224,6 +1198,31 @@ fn prompt_default(label: &str, default: &str) -> String {
 fn prompt_optional(label: &str) -> Option<String> {
     let val = prompt(label);
     if val.is_empty() { None } else { Some(val) }
+}
+
+/// 打印编号列表让用户选一项。`0` 或无效输入返回 `None`（跳过）。
+fn menu_select<'a, T, F>(
+    header: &str,
+    label: &str,
+    items: &'a [T],
+    empty_hint: &str,
+    fmt: F,
+) -> Option<&'a T>
+where
+    F: Fn(&T) -> String,
+{
+    if items.is_empty() {
+        if !empty_hint.is_empty() { println!("{}", empty_hint); }
+        return None;
+    }
+    println!("{}", header);
+    println!("  0 - none");
+    for (i, item) in items.iter().enumerate() {
+        println!("  {} - {}", i + 1, fmt(item));
+    }
+    let choice = prompt_default(&format!("{} #", label), "0");
+    choice.parse::<usize>().ok()
+        .and_then(|n| if n == 0 { None } else { items.get(n - 1) })
 }
 
 fn read_password(label: &str) -> String {

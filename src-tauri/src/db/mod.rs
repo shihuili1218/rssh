@@ -13,7 +13,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use rusqlite::Connection;
 
-use crate::error::{AppError, AppResult};
+use crate::error::{locked, AppResult};
 
 /// 数据库句柄。封装 Mutex<Connection>，对外只暴露领域方法（在子模块里），
 /// `lock()` 仅对 `crate::db` 内部可见，禁止泄漏到 command 层。
@@ -33,9 +33,7 @@ impl Db {
 
     /// 仅 db 模块内部使用，用于锁住 Connection。
     pub(in crate::db) fn lock(&self) -> AppResult<MutexGuard<'_, Connection>> {
-        self.conn
-            .lock()
-            .map_err(|_| AppError::Other("db lock poisoned".into()))
+        locked(&self.conn)
     }
 }
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Component } from "svelte";
   import * as app from "../stores/app.svelte.ts";
   import { t, locale, setLocale, AVAILABLE_LOCALES, type Locale } from "../i18n/index.svelte.ts";
   import ProfileManager from "./ProfileManager.svelte";
@@ -20,6 +21,27 @@
   import CliSettings from "./CliSettings.svelte";
 
   type MenuItem = { id: app.SettingsPage; label: string; section: string };
+
+  type PageRoute = { component: Component<any>; needsId?: boolean };
+  const routes: Partial<Record<app.SettingsPage, PageRoute>> = {
+    "profiles":           { component: ProfileManager },
+    "profile-edit":       { component: ProfileEditor, needsId: true },
+    "credentials":        { component: CredentialManager },
+    "credential-edit":    { component: CredentialEditor, needsId: true },
+    "forwards":           { component: ForwardManager },
+    "forward-edit":       { component: ForwardEditor, needsId: true },
+    "groups":             { component: GroupManager },
+    "snippets":           { component: SnippetManager },
+    "highlights":         { component: HighlightManager },
+    "github-sync":        { component: GitHubSyncScreen },
+    "import-export":      { component: ImportExportScreen },
+    "shell-settings":     { component: ShellSettings },
+    "recording-settings": { component: RecordingSettings },
+    "playback":           { component: PlaybackScreen },
+    "cli":                { component: CliSettings },
+    "shortcuts":          { component: ShortcutsScreen },
+    "about":              { component: AboutScreen },
+  };
 
   const COMPACT_BREAKPOINT = 640;
   let compact = $state(window.innerWidth < COMPACT_BREAKPOINT);
@@ -112,40 +134,16 @@
         <h2>{t("settings.title")}</h2>
         <p>Select a category from the menu</p>
       </div>
-    {:else if app.settingsPage() === "profiles"}
-      <ProfileManager />
-    {:else if app.settingsPage() === "profile-edit"}
-      <ProfileEditor id={app.editingId()} />
-    {:else if app.settingsPage() === "credentials"}
-      <CredentialManager />
-    {:else if app.settingsPage() === "credential-edit"}
-      <CredentialEditor id={app.editingId()} />
-    {:else if app.settingsPage() === "forwards"}
-      <ForwardManager />
-    {:else if app.settingsPage() === "forward-edit"}
-      <ForwardEditor id={app.editingId()} />
-    {:else if app.settingsPage() === "groups"}
-      <GroupManager />
-    {:else if app.settingsPage() === "snippets"}
-      <SnippetManager />
-    {:else if app.settingsPage() === "highlights"}
-      <HighlightManager />
-    {:else if app.settingsPage() === "github-sync"}
-      <GitHubSyncScreen />
-    {:else if app.settingsPage() === "import-export"}
-      <ImportExportScreen />
-    {:else if app.settingsPage() === "shell-settings"}
-      <ShellSettings />
-    {:else if app.settingsPage() === "recording-settings"}
-      <RecordingSettings />
-    {:else if app.settingsPage() === "playback"}
-      <PlaybackScreen />
-    {:else if app.settingsPage() === "cli"}
-      <CliSettings />
-    {:else if app.settingsPage() === "shortcuts"}
-      <ShortcutsScreen />
-    {:else if app.settingsPage() === "about"}
-      <AboutScreen />
+    {:else}
+      {@const route = routes[app.settingsPage()]}
+      {#if route}
+        {@const C = route.component}
+        {#if route.needsId}
+          <C id={app.editingId()} />
+        {:else}
+          <C />
+        {/if}
+      {/if}
     {/if}
   </div>
   {/if}

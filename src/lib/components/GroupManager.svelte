@@ -3,6 +3,8 @@
   import { invoke } from "@tauri-apps/api/core";
   import type { Group } from "../stores/app.svelte.ts";
   import * as app from "../stores/app.svelte.ts";
+  import { toast } from "../stores/toast.svelte.ts";
+  import { t } from "../i18n/index.svelte.ts";
 
   let groups = $state<Group[]>([]);
   let adding = $state(false);
@@ -54,7 +56,7 @@
       await invoke("create_group", { group });
       adding = false;
       await refresh();
-    } catch (e: any) { alert(String(e)); }
+    } catch (e: any) { toast.error(`${t("toast.error.add")}: ${String(e)}`); }
   }
 
   async function saveEdit() {
@@ -69,7 +71,7 @@
       await invoke("update_group", { group });
       editId = null;
       await refresh();
-    } catch (e: any) { alert(String(e)); }
+    } catch (e: any) { toast.error(`${t("toast.error.save")}: ${String(e)}`); }
   }
 
   async function remove(id: string) {
@@ -78,7 +80,7 @@
       await invoke("delete_group", { id });
       if (editId === id) editId = null;
       await refresh();
-    } catch (e: any) { alert("Delete failed: " + String(e)); }
+    } catch (e: any) { toast.error(`${t("toast.error.delete")}: ${String(e)}`); }
     finally { deleting = null; }
   }
 </script>

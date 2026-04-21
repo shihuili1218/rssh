@@ -59,6 +59,12 @@ const zh: Messages = {
   "about.diagnostics": "复制诊断信息",
   "about.diagnostics.hint": "报告问题时可附带此信息",
   "about.copied": "已复制",
+
+  // ── Toast 通用文案 ──
+  "toast.error.delete": "删除失败",
+  "toast.error.add": "添加失败",
+  "toast.error.save": "保存失败",
+  "toast.error.reset": "重置失败",
   "settings.section.language": "语言",
 
   // ── 语言选择 ──

@@ -57,6 +57,12 @@ const en = {
   "about.diagnostics": "Copy Diagnostics",
   "about.diagnostics.hint": "Attach this when reporting an issue",
   "about.copied": "Copied",
+
+  // ── Toast shared ──
+  "toast.error.delete": "Delete failed",
+  "toast.error.add": "Add failed",
+  "toast.error.save": "Save failed",
+  "toast.error.reset": "Reset failed",
   "settings.section.language": "Language",
 
   // ── Language picker ──

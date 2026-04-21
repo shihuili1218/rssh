@@ -89,7 +89,7 @@
         // Skip this in cloned windows (window.__rssh_clone is set by
         // open_tab_in_new_window): passing activeIds=[] would nuke every
         // session in the shared AppState, including other windows' tabs.
-        if (!(window as any).__rssh_clone) {
+        if (!window.__rssh_clone) {
             invoke("reconcile_sessions", { activeIds: [] }).catch(() => {});
         }
         consumeCloneQuery();
@@ -108,7 +108,7 @@
 
     /* Consume window.__rssh_clone injected by open_tab_in_new_window */
     function consumeCloneQuery() {
-        const data = (window as any).__rssh_clone;
+        const data = window.__rssh_clone;
         if (!data) return;
         try {
             const payload = JSON.parse(data) as Tab;
@@ -118,7 +118,7 @@
             console.error("Failed to parse clone payload:", e);
         }
         // Clear so a manual reload doesn't re-clone
-        delete (window as any).__rssh_clone;
+        delete window.__rssh_clone;
     }
 
     function openInNewWindow(tab: Tab) {

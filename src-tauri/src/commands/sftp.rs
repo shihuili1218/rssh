@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::error::{AppError, AppResult};
+use crate::error::{locked, AppError, AppResult};
 use crate::models::{Credential, CredentialType};
 use crate::ssh::sftp::{RemoteEntry, SftpHandle};
 use crate::state::AppState;
@@ -34,11 +34,7 @@ pub async fn sftp_connect(
     let handle = SftpHandle::connect(&host, port, &cred, known_hosts_path, timeout_secs).await?;
     let id = uuid::Uuid::new_v4().to_string();
 
-    state
-        .sftp_sessions
-        .lock()
-        .map_err(|_| AppError::Other("sftp lock poisoned".into()))?
-        .insert(id.clone(), Arc::new(handle));
+    locked(&state.sftp_sessions)?.insert(id.clone(), Arc::new(handle));
 
     Ok(id)
 }
@@ -50,10 +46,7 @@ pub async fn sftp_connect_session(
     session_id: String,
 ) -> AppResult<String> {
     let ssh_handle = {
-        let sessions = state
-            .sessions
-            .lock()
-            .map_err(|_| AppError::Other("lock".into()))?;
+        let sessions = locked(&state.sessions)?;
         sessions
             .get(&session_id)
             .ok_or_else(|| AppError::NotFound("SSH 会话不存在".into()))?
@@ -64,21 +57,14 @@ pub async fn sftp_connect_session(
     let handle = SftpHandle::from_handle(&ssh_handle).await?;
     let id = uuid::Uuid::new_v4().to_string();
 
-    state
-        .sftp_sessions
-        .lock()
-        .map_err(|_| AppError::Other("sftp lock poisoned".into()))?
-        .insert(id.clone(), Arc::new(handle));
+    locked(&state.sftp_sessions)?.insert(id.clone(), Arc::new(handle));
 
     Ok(id)
 }
 
 /// 从 Mutex 中 clone 出 Arc<SftpHandle>，释放锁后再 await。
 fn get_sftp(state: &State<'_, AppState>, sftp_id: &str) -> AppResult<Arc<SftpHandle>> {
-    state
-        .sftp_sessions
-        .lock()
-        .map_err(|_| AppError::Other("sftp lock poisoned".into()))?
+    locked(&state.sftp_sessions)?
         .get(sftp_id)
         .cloned()
         .ok_or(AppError::NotFound("SFTP 会话不存在".into()))
@@ -133,11 +119,7 @@ pub async fn sftp_mkdir(
 
 #[tauri::command]
 pub async fn sftp_close(state: State<'_, AppState>, sftp_id: String) -> AppResult<()> {
-    state
-        .sftp_sessions
-        .lock()
-        .map_err(|_| AppError::Other("sftp lock poisoned".into()))?
-        .remove(&sftp_id);
+    locked(&state.sftp_sessions)?.remove(&sftp_id);
     Ok(())
 }
 

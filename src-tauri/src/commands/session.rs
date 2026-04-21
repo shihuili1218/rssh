@@ -1,6 +1,6 @@
 use tauri::{AppHandle, State};
 
-use crate::error::{AppError, AppResult};
+use crate::error::{locked, AppError, AppResult};
 use crate::models::{Credential, CredentialType, Profile};
 use crate::secret::{cred_passphrase_key, cred_secret_key};
 use crate::ssh::client;
@@ -125,13 +125,7 @@ pub async fn ssh_connect(
         }
     }
 
-    {
-        let mut sessions = state
-            .sessions
-            .lock()
-            .map_err(|_| AppError::Other("lock".into()))?;
-        sessions.insert(result.session_id.clone(), result.handle);
-    }
+    locked(&state.sessions)?.insert(result.session_id.clone(), result.handle);
     crate::commands::lifecycle::register_window_session(&state, window.label(), &result.session_id);
 
     Ok(result.session_id)
@@ -162,15 +156,9 @@ pub async fn ssh_disconnect(
     session_id: String,
 ) -> AppResult<()> {
     crate::commands::lifecycle::unregister_window_session(&state, &session_id);
-    let session = {
-        let mut sessions = state
-            .sessions
-            .lock()
-            .map_err(|_| AppError::Other("lock".into()))?;
-        sessions
-            .remove(&session_id)
-            .ok_or_else(|| AppError::NotFound("会话不存在".into()))?
-    };
+    let session = locked(&state.sessions)?
+        .remove(&session_id)
+        .ok_or_else(|| AppError::NotFound("会话不存在".into()))?;
     session.close()
 }
 
@@ -180,15 +168,9 @@ pub async fn ssh_auth_respond(
     tab_id: String,
     responses: Vec<String>,
 ) -> AppResult<()> {
-    let tx = {
-        let mut waiters = state
-            .auth_waiters
-            .lock()
-            .map_err(|_| AppError::Other("lock".into()))?;
-        waiters
-            .remove(&tab_id)
-            .ok_or_else(|| AppError::NotFound("无等待中的认证请求".into()))?
-    };
+    let tx = locked(&state.auth_waiters)?
+        .remove(&tab_id)
+        .ok_or_else(|| AppError::NotFound("无等待中的认证请求".into()))?;
     tx.send(responses)
         .map_err(|_| AppError::Other("认证通道已关闭".into()))?;
     Ok(())
@@ -198,10 +180,7 @@ fn get_session(
     state: &State<'_, AppState>,
     session_id: &str,
 ) -> AppResult<client::SessionHandle> {
-    state
-        .sessions
-        .lock()
-        .map_err(|_| AppError::Other("lock".into()))?
+    locked(&state.sessions)?
         .get(session_id)
         .cloned()
         .ok_or_else(|| AppError::NotFound("会话不存在".into()))

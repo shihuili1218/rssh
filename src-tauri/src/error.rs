@@ -1,3 +1,5 @@
+use std::sync::{Mutex, MutexGuard};
+
 use serde::Serialize;
 
 #[derive(Debug, thiserror::Error)]
@@ -23,8 +25,17 @@ pub enum AppError {
     #[error("配置错误: {0}")]
     Config(String),
 
+    #[error("锁已中毒")]
+    Lock,
+
     #[error("{0}")]
     Other(String),
+}
+
+/// Acquire a std::sync::Mutex lock, mapping PoisonError to AppError::Lock.
+/// Replaces the repeated `.lock().map_err(|_| AppError::Other("..lock..".into()))` pattern.
+pub fn locked<T>(m: &Mutex<T>) -> AppResult<MutexGuard<'_, T>> {
+    m.lock().map_err(|_| AppError::Lock)
 }
 
 impl Serialize for AppError {

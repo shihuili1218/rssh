@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use tauri::State;
 
-use crate::error::{AppError, AppResult};
+use crate::error::{locked, AppResult};
 use crate::state::AppState;
 
 /// 前端启动 / 重连后调用：把不在 `active_ids` 列表里的所有 session 全部清掉。
@@ -21,10 +21,7 @@ pub fn reconcile_sessions(
 
     // SSH sessions
     {
-        let mut sessions = state
-            .sessions
-            .lock()
-            .map_err(|_| AppError::Other("sessions lock poisoned".into()))?;
+        let mut sessions = locked(&state.sessions)?;
         let stale: Vec<String> = sessions
             .keys()
             .filter(|k| !alive.contains(*k))
@@ -40,10 +37,7 @@ pub fn reconcile_sessions(
 
     // SFTP sessions（Drop 自动断）
     {
-        let mut sftp = state
-            .sftp_sessions
-            .lock()
-            .map_err(|_| AppError::Other("sftp lock poisoned".into()))?;
+        let mut sftp = locked(&state.sftp_sessions)?;
         let before = sftp.len();
         sftp.retain(|k, _| alive.contains(k));
         closed += before - sftp.len();
@@ -51,10 +45,7 @@ pub fn reconcile_sessions(
 
     // Active forwards
     {
-        let mut fwds = state
-            .active_forwards
-            .lock()
-            .map_err(|_| AppError::Other("forward lock poisoned".into()))?;
+        let mut fwds = locked(&state.active_forwards)?;
         let stale: Vec<String> = fwds
             .keys()
             .filter(|k| !alive.contains(*k))
@@ -71,10 +62,7 @@ pub fn reconcile_sessions(
     // PTY（桌面平台）
     #[cfg(not(target_os = "android"))]
     {
-        let mut pty = state
-            .pty_sessions
-            .lock()
-            .map_err(|_| AppError::Other("pty lock poisoned".into()))?;
+        let mut pty = locked(&state.pty_sessions)?;
         let before = pty.len();
         pty.retain(|k, _| alive.contains(k));
         closed += before - pty.len();
