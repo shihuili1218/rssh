@@ -51,6 +51,28 @@
                 },
             },
             {
+                display: "⌘⇧D / Ctrl+Shift+D",
+                description: "克隆当前 Tab",
+                skipInSettings: true,
+                match: e => (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "d",
+                handler: () => {
+                    const tab = app.activeTab();
+                    if (!tab || tab.type === "home") return false;
+                    cloneTab(tab);
+                },
+            },
+            {
+                display: "⌘⇧N / Ctrl+Shift+N",
+                description: "在新窗口打开当前 Tab",
+                skipInSettings: true,
+                match: e => (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "n",
+                handler: () => {
+                    const tab = app.activeTab();
+                    if (!tab || (tab.type !== "ssh" && tab.type !== "local") || app.isMobile) return false;
+                    openInNewWindow(tab);
+                },
+            },
+            {
                 display: "Ctrl+Tab / Ctrl+Shift+Tab",
                 description: "在 Tab 之间循环切换",
                 match: e => e.ctrlKey && e.key === "Tab",
@@ -320,14 +342,19 @@
         }
 
         sections.push([
-            {label: t("tab.context.clone"), onClick: () => cloneTab(tab)},
+            {
+                label: t("tab.context.clone"),
+                shortcut: tab.type === "home" ? undefined : "⌘⇧D",
+                disabled: tab.type === "home",
+                onClick: () => cloneTab(tab),
+            },
             {label: t("tab.context.close"), shortcut: "⌘W", onClick: () => app.closeTab(tab.id)},
         ]);
 
         // Multi-window requires Tauri WebviewWindowBuilder — desktop only.
         if (isTerminal && !app.isMobile) {
             sections.push([
-                {label: t("tab.context.open_new_window"), onClick: () => openInNewWindow(tab)},
+                {label: t("tab.context.open_new_window"), shortcut: "⌘⇧N", onClick: () => openInNewWindow(tab)},
             ]);
         }
 
