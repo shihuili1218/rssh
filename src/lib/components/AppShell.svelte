@@ -662,10 +662,11 @@
     .content.top {
         margin-left: 0;
         margin-top: 44px;
+        height: calc(100% - 44px);
     }
     .content.bottom {
         margin-left: 0;
-        margin-bottom: 44px;
+        height: calc(100% - 44px);
     }
 
     .pane {
