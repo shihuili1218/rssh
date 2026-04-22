@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tauri::Emitter;
 
-use crate::error::{AppError, AppResult};
+use crate::error::{locked, AppError, AppResult};
 
 /// 本地 PTY 会话句柄，Clone + Send + Sync。
 #[derive(Clone)]
@@ -15,17 +15,13 @@ pub struct PtyHandle {
 
 impl PtyHandle {
     pub fn write(&self, data: &[u8]) -> AppResult<()> {
-        self.writer
-            .lock()
-            .map_err(|_| AppError::Pty("writer lock poisoned".into()))?
+        locked(&self.writer)?
             .write_all(data)
             .map_err(|e| AppError::Pty(e.to_string()))
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> AppResult<()> {
-        self.master
-            .lock()
-            .map_err(|_| AppError::Pty("master lock poisoned".into()))?
+        locked(&self.master)?
             .resize(PtySize {
                 rows,
                 cols,

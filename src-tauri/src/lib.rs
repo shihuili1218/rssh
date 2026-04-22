@@ -132,6 +132,10 @@ pub fn run() {
             // multi-window (desktop only)
             #[cfg(not(target_os = "android"))]
             commands::window::open_tab_in_new_window,
+            #[cfg(not(target_os = "android"))]
+            commands::window::open_external_url,
+            #[cfg(not(target_os = "android"))]
+            commands::window::clipboard_read,
             // sync
             commands::sync::export_config,
             commands::sync::import_config,

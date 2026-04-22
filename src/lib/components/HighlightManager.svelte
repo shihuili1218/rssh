@@ -3,6 +3,8 @@
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
   import type { HighlightRule } from "../stores/app.svelte.ts";
+  import { toast } from "../stores/toast.svelte.ts";
+  import { t } from "../i18n/index.svelte.ts";
 
   let items = $state<HighlightRule[]>([]);
   let newKw = $state("");
@@ -17,7 +19,7 @@
       await invoke("add_highlight", { rule: { keyword: newKw.trim(), color: newColor, enabled: true } });
       newKw = "";
       await refresh();
-    } catch (e: any) { alert("Add failed: " + String(e)); }
+    } catch (e: any) { toast.error(`${t("toast.error.add")}: ${String(e)}`); }
   }
 
   async function remove(kw: string) {
@@ -29,7 +31,7 @@
     try {
       await invoke("reset_highlights");
       await refresh();
-    } catch (e: any) { alert("Reset failed: " + String(e)); }
+    } catch (e: any) { toast.error(`${t("toast.error.reset")}: ${String(e)}`); }
   }
 </script>
 

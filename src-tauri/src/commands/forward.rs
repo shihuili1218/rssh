@@ -1,6 +1,6 @@
 use tauri::State;
 
-use crate::error::{AppError, AppResult};
+use crate::error::{locked, AppError, AppResult};
 use crate::models::{Forward, ForwardType};
 use crate::ssh::forward as fwd;
 use crate::state::AppState;
@@ -61,11 +61,7 @@ pub async fn forward_start(
     };
     let active_id = uuid::Uuid::new_v4().to_string();
 
-    state
-        .active_forwards
-        .lock()
-        .map_err(|_| AppError::Other("forward lock poisoned".into()))?
-        .insert(active_id.clone(), handle);
+    locked(&state.active_forwards)?.insert(active_id.clone(), handle);
 
     Ok(active_id)
 }
@@ -75,10 +71,7 @@ pub fn forward_stats(
     state: State<'_, AppState>,
     active_id: String,
 ) -> AppResult<fwd::ForwardStats> {
-    let forwards = state
-        .active_forwards
-        .lock()
-        .map_err(|_| AppError::Other("forward lock poisoned".into()))?;
+    let forwards = locked(&state.active_forwards)?;
     let handle = forwards
         .get(&active_id)
         .ok_or(AppError::NotFound("转发不存在".into()))?;
@@ -87,10 +80,7 @@ pub fn forward_stats(
 
 #[tauri::command]
 pub fn forward_stop(state: State<'_, AppState>, active_id: String) -> AppResult<()> {
-    let handle = state
-        .active_forwards
-        .lock()
-        .map_err(|_| AppError::Other("forward lock poisoned".into()))?
+    let handle = locked(&state.active_forwards)?
         .remove(&active_id)
         .ok_or(AppError::NotFound("转发不存在".into()))?;
     handle.stop();

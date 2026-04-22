@@ -1,3 +1,5 @@
+use std::process::Command;
+
 use tauri::{AppHandle, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
 
@@ -25,4 +27,37 @@ pub fn open_tab_in_new_window(app: AppHandle, clone: String) -> AppResult<()> {
         .build()
         .map_err(|e| AppError::Other(format!("Failed to open window: {e}")))?;
     Ok(())
+}
+
+/// Open an external http(s) URL in the user's default browser.
+/// Refuses non-http(s) schemes to prevent abuse (file://, javascript:, …).
+#[tauri::command]
+pub fn open_external_url(url: String) -> AppResult<()> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err(AppError::Other(format!("Refusing non-http(s) URL: {url}")));
+    }
+
+    #[cfg(target_os = "macos")]
+    let result = Command::new("open").arg(&url).spawn();
+    #[cfg(target_os = "linux")]
+    let result = Command::new("xdg-open").arg(&url).spawn();
+    #[cfg(target_os = "windows")]
+    let result = Command::new("cmd").args(["/C", "start", "", &url]).spawn();
+
+    result
+        .map(|_| ())
+        .map_err(|e| AppError::Other(format!("Failed to open URL: {e}")))
+}
+
+/// Read the system clipboard as text.
+/// Goes through Rust (arboard) to bypass WebKit's permission prompt on
+/// externally-sourced clipboard content — `navigator.clipboard.readText()`
+/// pops a dialog every time on macOS unless the content was written by the
+/// same page in this session.
+#[tauri::command]
+pub fn clipboard_read() -> AppResult<String> {
+    let mut cb = arboard::Clipboard::new()
+        .map_err(|e| AppError::Other(format!("Clipboard init: {e}")))?;
+    cb.get_text()
+        .map_err(|e| AppError::Other(format!("Clipboard read: {e}")))
 }

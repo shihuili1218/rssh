@@ -3,6 +3,8 @@
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
   import type { Profile } from "../stores/app.svelte.ts";
+  import { toast } from "../stores/toast.svelte.ts";
+  import { t } from "../i18n/index.svelte.ts";
 
   let profiles = $state<Profile[]>([]);
   onMount(async () => { profiles = await app.loadProfiles(); });
@@ -13,7 +15,7 @@
     try {
       await invoke("delete_profile", { id });
       profiles = await app.loadProfiles();
-    } catch (e: any) { alert("Delete failed: " + String(e)); }
+    } catch (e: any) { toast.error(`${t("toast.error.delete")}: ${String(e)}`); }
     finally { deleting = null; }
   }
 </script>

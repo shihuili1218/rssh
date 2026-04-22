@@ -9,6 +9,8 @@
         ["Ctrl+Tab", "Switch to next tab"],
         ["Ctrl+Shift+Tab", "Switch to previous tab"],
         [`${mod}+W`, "Close current tab"],
+        [`${mod}+Shift+D`, "Clone current tab"],
+        [`${mod}+Shift+N`, "Open current tab in new window"],
         ["Esc", "Close sidebar / search bar / SFTP"],
       ],
     },

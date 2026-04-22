@@ -35,7 +35,9 @@ export type SettingsPage =
   | "groups"
   | "group-edit"
   | "cli"
-  | "help";
+  | "shortcuts"
+  | "appearance"
+  | "about";
 
 export interface Group {
   id: string; name: string; color: string; sort_order: number;
@@ -147,6 +149,29 @@ export function settingsBack() {
   else _settingsPage = "menu";
 }
 
+/* ─── Sidebar position (per-device) ─── */
+export type SidebarPosition = "left" | "right" | "top" | "bottom";
+const _SB_KEY_DESKTOP = "sidebar.position.desktop";
+const _SB_KEY_MOBILE = "sidebar.position.mobile";
+function _loadSidebarPos(key: string, fallback: SidebarPosition): SidebarPosition {
+  const v = localStorage.getItem(key);
+  return v === "left" || v === "right" || v === "top" || v === "bottom" ? v : fallback;
+}
+let _sidebarPosDesktop = $state<SidebarPosition>(_loadSidebarPos(_SB_KEY_DESKTOP, "left"));
+let _sidebarPosMobile = $state<SidebarPosition>(_loadSidebarPos(_SB_KEY_MOBILE, "top"));
+export function sidebarPosition(): SidebarPosition {
+  return isMobile ? _sidebarPosMobile : _sidebarPosDesktop;
+}
+export function setSidebarPosition(pos: SidebarPosition) {
+  if (isMobile) {
+    _sidebarPosMobile = pos;
+    localStorage.setItem(_SB_KEY_MOBILE, pos);
+  } else {
+    _sidebarPosDesktop = pos;
+    localStorage.setItem(_SB_KEY_DESKTOP, pos);
+  }
+}
+
 /* ─── Mobile key modifiers (sticky Ctrl/Alt) ─── */
 let _ctrlActive = $state(false);
 let _altActive = $state(false);
@@ -161,6 +186,42 @@ let _terminalWriter: ((text: string) => void) | null = null;
 export function registerTerminalWriter(fn: (text: string) => void) { _terminalWriter = fn; }
 export function unregisterTerminalWriter() { _terminalWriter = null; }
 export function sendToTerminal(text: string) { _terminalWriter?.(text); }
+
+/** Arrow keys need DECCKM-aware encoding (CSI vs SS3). The terminal owner
+ *  holds that state, so it registers an encoder-sender here. */
+export type ArrowDir = "A" | "B" | "C" | "D";
+let _terminalArrowSender: ((dir: ArrowDir, mod: number) => void) | null = null;
+export function registerTerminalArrowSender(fn: (dir: ArrowDir, mod: number) => void) { _terminalArrowSender = fn; }
+export function unregisterTerminalArrowSender() { _terminalArrowSender = null; }
+export function sendArrow(dir: ArrowDir, mod: number) { _terminalArrowSender?.(dir, mod); }
+
+/* ─── Per-tab terminal copy/paste controls ─── */
+interface TerminalControls {
+  getSelection(): string;
+  paste(text: string): void;
+}
+const _terminalControls = new Map<string, TerminalControls>();
+export function registerTerminalControls(tabId: string, controls: TerminalControls) {
+  _terminalControls.set(tabId, controls);
+}
+export function unregisterTerminalControls(tabId: string) {
+  _terminalControls.delete(tabId);
+}
+export function terminalGetSelection(tabId: string): string {
+  return _terminalControls.get(tabId)?.getSelection() ?? "";
+}
+export function terminalPaste(tabId: string, text: string) {
+  _terminalControls.get(tabId)?.paste(text);
+}
+
+/** Read system clipboard. On desktop, goes through Rust to bypass
+ *  WebKit's permission prompt for externally-sourced content. */
+export async function readClipboard(): Promise<string> {
+  if (isMobile) {
+    return navigator.clipboard.readText().catch(() => "");
+  }
+  return invoke<string>("clipboard_read").catch(() => "");
+}
 
 /* ─── Session registry (for broadcast) ─── */
 interface SessionEntry {

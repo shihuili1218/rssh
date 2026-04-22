@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Component } from "svelte";
   import * as app from "../stores/app.svelte.ts";
   import { t, locale, setLocale, AVAILABLE_LOCALES, type Locale } from "../i18n/index.svelte.ts";
   import ProfileManager from "./ProfileManager.svelte";
@@ -14,11 +15,35 @@
   import ImportExportScreen from "./ImportExportScreen.svelte";
   import RecordingSettings from "./RecordingSettings.svelte";
   import PlaybackScreen from "./PlaybackScreen.svelte";
-  import HelpScreen from "./HelpScreen.svelte";
+  import ShortcutsScreen from "./ShortcutsScreen.svelte";
+  import AboutScreen from "./AboutScreen.svelte";
   import ShellSettings from "./ShellSettings.svelte";
   import CliSettings from "./CliSettings.svelte";
+  import AppearanceSettings from "./AppearanceSettings.svelte";
 
   type MenuItem = { id: app.SettingsPage; label: string; section: string };
+
+  type PageRoute = { component: Component<any>; needsId?: boolean };
+  const routes: Partial<Record<app.SettingsPage, PageRoute>> = {
+    "profiles":           { component: ProfileManager },
+    "profile-edit":       { component: ProfileEditor, needsId: true },
+    "credentials":        { component: CredentialManager },
+    "credential-edit":    { component: CredentialEditor, needsId: true },
+    "forwards":           { component: ForwardManager },
+    "forward-edit":       { component: ForwardEditor, needsId: true },
+    "groups":             { component: GroupManager },
+    "snippets":           { component: SnippetManager },
+    "highlights":         { component: HighlightManager },
+    "github-sync":        { component: GitHubSyncScreen },
+    "import-export":      { component: ImportExportScreen },
+    "shell-settings":     { component: ShellSettings },
+    "recording-settings": { component: RecordingSettings },
+    "playback":           { component: PlaybackScreen },
+    "cli":                { component: CliSettings },
+    "appearance":         { component: AppearanceSettings },
+    "shortcuts":          { component: ShortcutsScreen },
+    "about":              { component: AboutScreen },
+  };
 
   const COMPACT_BREAKPOINT = 640;
   let compact = $state(window.innerWidth < COMPACT_BREAKPOINT);
@@ -40,13 +65,15 @@
     { id: "github-sync", label: t("settings.section.github_sync"), section: "Connections" },
     { id: "shell-settings", label: t("settings.section.shell"), section: "Sessions" },
     { id: "recording-settings", label: t("settings.section.recording"), section: "Sessions" },
+    { id: "appearance", label: t("settings.section.appearance"), section: "Appearance" },
     { id: "highlights", label: t("settings.section.highlights"), section: "Appearance" },
     { id: "snippets", label: t("settings.section.snippets"), section: "Appearance" },
     { id: "cli", label: t("settings.section.cli"), section: "Help" },
-    { id: "help", label: t("settings.section.help"), section: "Help" },
+    { id: "shortcuts", label: t("settings.section.shortcuts"), section: "Help" },
+    { id: "about", label: t("settings.section.about"), section: "Help" },
   ]);
 
-  const hiddenOnCompact = new Set<string>(["cli", "help"]);
+  const hiddenOnCompact = new Set<string>(["cli", "shortcuts", "about"]);
   let menu = $derived(compact ? allMenu.filter(m => !hiddenOnCompact.has(m.id)) : allMenu);
 
   let sections = $derived((() => {
@@ -110,38 +137,16 @@
         <h2>{t("settings.title")}</h2>
         <p>Select a category from the menu</p>
       </div>
-    {:else if app.settingsPage() === "profiles"}
-      <ProfileManager />
-    {:else if app.settingsPage() === "profile-edit"}
-      <ProfileEditor id={app.editingId()} />
-    {:else if app.settingsPage() === "credentials"}
-      <CredentialManager />
-    {:else if app.settingsPage() === "credential-edit"}
-      <CredentialEditor id={app.editingId()} />
-    {:else if app.settingsPage() === "forwards"}
-      <ForwardManager />
-    {:else if app.settingsPage() === "forward-edit"}
-      <ForwardEditor id={app.editingId()} />
-    {:else if app.settingsPage() === "groups"}
-      <GroupManager />
-    {:else if app.settingsPage() === "snippets"}
-      <SnippetManager />
-    {:else if app.settingsPage() === "highlights"}
-      <HighlightManager />
-    {:else if app.settingsPage() === "github-sync"}
-      <GitHubSyncScreen />
-    {:else if app.settingsPage() === "import-export"}
-      <ImportExportScreen />
-    {:else if app.settingsPage() === "shell-settings"}
-      <ShellSettings />
-    {:else if app.settingsPage() === "recording-settings"}
-      <RecordingSettings />
-    {:else if app.settingsPage() === "playback"}
-      <PlaybackScreen />
-    {:else if app.settingsPage() === "cli"}
-      <CliSettings />
-    {:else if app.settingsPage() === "help"}
-      <HelpScreen />
+    {:else}
+      {@const route = routes[app.settingsPage()]}
+      {#if route}
+        {@const C = route.component}
+        {#if route.needsId}
+          <C id={app.editingId()} />
+        {:else}
+          <C />
+        {/if}
+      {/if}
     {/if}
   </div>
   {/if}

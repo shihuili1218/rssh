@@ -8,7 +8,7 @@ use tauri::{Emitter, Manager};
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 
-use crate::error::{AppError, AppResult};
+use crate::error::{locked, AppError, AppResult};
 use crate::models::{Credential, CredentialType, Profile};
 use crate::terminal::recorder::Recorder;
 
@@ -328,11 +328,7 @@ pub async fn authenticate_interactive(
 
                 {
                     let state = app.state::<crate::state::AppState>();
-                    let mut waiters = state
-                        .auth_waiters
-                        .lock()
-                        .map_err(|_| AppError::Other("lock".into()))?;
-                    waiters.insert(tab_id.to_string(), tx);
+                    locked(&state.auth_waiters)?.insert(tab_id.to_string(), tx);
                 }
 
                 let responses = rx

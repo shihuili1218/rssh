@@ -3,14 +3,16 @@
 
     function prevent(e: Event) { e.preventDefault(); }
 
-    function send(seq: string, arrow = false) {
+    function send(seq: string) {
+        app.sendToTerminal(seq);
+        app.clearModifiers();
+    }
+
+    function arrow(dir: app.ArrowDir) {
         const ctrl = app.ctrlActive();
         const alt = app.altActive();
-        if (arrow && (ctrl || alt)) {
-            const mod = (ctrl && alt) ? 7 : ctrl ? 5 : 3;
-            seq = seq.replace(/\x1b\[([A-D])/, `\x1b[1;${mod}$1`);
-        }
-        app.sendToTerminal(seq);
+        const mod = (ctrl && alt) ? 7 : ctrl ? 5 : alt ? 3 : 0;
+        app.sendArrow(dir, mod);
         app.clearModifiers();
     }
 </script>
@@ -20,10 +22,10 @@
     <button class="key mod" class:active={app.altActive()} onpointerdown={prevent} onclick={() => app.setAlt(!app.altActive())}>Alt</button>
     <button class="key" onpointerdown={prevent} onclick={() => send('\x1b')}>Esc</button>
     <button class="key" onpointerdown={prevent} onclick={() => send('\t')}>Tab</button>
-    <button class="key" onpointerdown={prevent} onclick={() => send('\x1b[A', true)}>↑</button>
-    <button class="key" onpointerdown={prevent} onclick={() => send('\x1b[B', true)}>↓</button>
-    <button class="key" onpointerdown={prevent} onclick={() => send('\x1b[D', true)}>←</button>
-    <button class="key" onpointerdown={prevent} onclick={() => send('\x1b[C', true)}>→</button>
+    <button class="key" onpointerdown={prevent} onclick={() => arrow('A')}>↑</button>
+    <button class="key" onpointerdown={prevent} onclick={() => arrow('B')}>↓</button>
+    <button class="key" onpointerdown={prevent} onclick={() => arrow('D')}>←</button>
+    <button class="key" onpointerdown={prevent} onclick={() => arrow('C')}>→</button>
 </div>
 
 <style>

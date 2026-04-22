@@ -61,6 +61,7 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          npm version "${VERSION}" --no-git-tag-version --allow-same-version
           cd src-tauri
           sed -i.bak "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" tauri.conf.json && rm -f tauri.conf.json.bak
           sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml && rm -f Cargo.toml.bak
@@ -144,6 +145,7 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          npm version "${VERSION}" --no-git-tag-version --allow-same-version
           cd src-tauri
           sed -i "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" tauri.conf.json
           sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml

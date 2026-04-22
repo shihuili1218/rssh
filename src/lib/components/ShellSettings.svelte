@@ -1,13 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import * as app from "../stores/app.svelte.ts";
 
   let shells = $state<string[]>([]);
   let selectedShell = $state("");
   let verboseLog = $state(true);
   let connectTimeout = $state(10);
-  let commandBlockBar = $state(true);
 
   onMount(async () => {
     try { shells = await invoke<string[]>("list_shells"); } catch { shells = []; }
@@ -15,7 +13,6 @@
     verboseLog = (await invoke<string | null>("get_setting", { key: "verbose_log" })) !== "false";
     const t = await invoke<string | null>("get_setting", { key: "connect_timeout" });
     if (t) connectTimeout = parseInt(t, 10) || 10;
-    commandBlockBar = await app.loadCommandBlockBar();
   });
 
   async function saveShell() {
@@ -30,10 +27,6 @@
     const val = Math.max(1, Math.min(300, connectTimeout));
     connectTimeout = val;
     await invoke("set_setting", { key: "connect_timeout", value: String(val) });
-  }
-
-  async function saveCommandBlockBar() {
-    await app.setCommandBlockBar(commandBlockBar);
   }
 </script>
 
@@ -78,17 +71,6 @@
     </label>
   </div>
 
-  <div class="section-label">TERMINAL DISPLAY</div>
-  <div class="switch-card">
-    <div class="switch-card-body">
-      <div class="switch-card-title" class:on={commandBlockBar} class:off={!commandBlockBar}>COMMAND BLOCK BAR</div>
-      <div class="switch-card-desc">Show a colored side bar next to each command to visually group its input and output. A gray bar marks full-screen programs (vim, top, less).</div>
-    </div>
-    <label class="switch">
-      <input type="checkbox" bind:checked={commandBlockBar} onchange={saveCommandBlockBar} />
-      <span class="slider"></span>
-    </label>
-  </div>
 </div>
 
 <style>

@@ -3,6 +3,8 @@
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
   import type { Profile } from "../stores/app.svelte.ts";
+  import { toast } from "../stores/toast.svelte.ts";
+  import { t } from "../i18n/index.svelte.ts";
 
   let { id = null }: { id: string | null } = $props();
 
@@ -39,7 +41,7 @@
       if (id) await invoke("update_forward", { forward });
       else await invoke("create_forward", { forward });
       app.navigate("forwards");
-    } catch (e: any) { alert(String(e)); }
+    } catch (e: any) { toast.error(`${t("toast.error.save")}: ${String(e)}`); }
     finally { saving = false; }
   }
 </script>

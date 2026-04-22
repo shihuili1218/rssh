@@ -3,6 +3,8 @@
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
   import type { Credential, Profile, Group } from "../stores/app.svelte.ts";
+  import { toast } from "../stores/toast.svelte.ts";
+  import { t } from "../i18n/index.svelte.ts";
 
   let { id = null }: { id: string | null } = $props();
 
@@ -43,7 +45,7 @@
       if (id) await invoke("update_profile", { profile });
       else await invoke("create_profile", { profile });
       app.navigate("profiles");
-    } catch (e: any) { alert(String(e)); }
+    } catch (e: any) { toast.error(`${t("toast.error.save")}: ${String(e)}`); }
     finally { saving = false; }
   }
 </script>
