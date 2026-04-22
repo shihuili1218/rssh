@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { onMount } from "svelte";
     import * as app from "../stores/app.svelte.ts";
     import { t } from "../i18n/index.svelte.ts";
 
@@ -21,10 +22,14 @@
     }
 
     let current = $derived(app.sidebarPosition());
+
+    let commandBlockBar = $state(true);
+    onMount(async () => { commandBlockBar = await app.loadCommandBlockBar(); });
+    async function saveCommandBlockBar() { await app.setCommandBlockBar(commandBlockBar); }
 </script>
 
 <div class="page">
-    <h3>{t("settings.appearance.sidebar_position")}</h3>
+    <div class="section-label">{t("settings.appearance.sidebar_position")}</div>
     <div class="segmented">
         {#each positions as p}
             <button
@@ -37,6 +42,18 @@
             </button>
         {/each}
     </div>
+
+    <div class="section-label">TERMINAL DISPLAY</div>
+    <div class="switch-card">
+        <div class="switch-card-body">
+            <div class="switch-card-title" class:on={commandBlockBar} class:off={!commandBlockBar}>COMMAND BLOCK BAR</div>
+            <div class="switch-card-desc">Show a colored side bar next to each command to visually group its input and output. A gray bar marks full-screen programs (vim, top, less).</div>
+        </div>
+        <label class="switch">
+            <input type="checkbox" bind:checked={commandBlockBar} onchange={saveCommandBlockBar} />
+            <span class="slider"></span>
+        </label>
+    </div>
 </div>
 
 <style>
@@ -45,12 +62,6 @@
         display: flex;
         flex-direction: column;
         gap: 12px;
-    }
-    h3 {
-        font-size: 15px;
-        font-weight: 700;
-        color: var(--text);
-        margin: 0;
     }
     .segmented {
         display: inline-flex;

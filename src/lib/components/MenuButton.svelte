@@ -104,6 +104,7 @@
     ondrop={onDrop}
     ondragend={onDragEnd}
     title={label}
+    style={horizontal && showActive && groupColor ? `--accent: ${groupColor}; --accent-soft: color-mix(in srgb, ${groupColor} 15%, transparent)` : null}
 >
     <span class="sb-icon" style={groupColor ? `background: ${groupColor}; color: white` : ''}>{icon}</span>
     <span class="sb-label">{label}</span>
