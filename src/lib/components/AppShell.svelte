@@ -12,6 +12,8 @@
     import SftpBrowser from "./SftpBrowser.svelte";
     import SnippetPicker from "./SnippetPicker.svelte";
     import TabContextMenu, {type CtxMenuItem} from "./TabContextMenu.svelte";
+    import MenuButton, {type NavItem, navItemKey} from "./MenuButton.svelte";
+    import StripBar from "./StripBar.svelte";
     import {attachShortcuts, attachKeyup, type Shortcut} from "../keyboard/registry.ts";
     import {t} from "../i18n/index.svelte.ts";
 
@@ -82,7 +84,7 @@
                         tabCycling = true;
                         drawerOpen = true;
                         const idx = navItems.findIndex(item =>
-                            item.kind === "tab" ? item.id === app.activeTabId() && !app.settingsActive()
+                            item.kind === "tab" ? item.tab.id === app.activeTabId() && !app.settingsActive()
                             : item.kind === "settings" ? app.settingsActive()
                             : false
                         );
@@ -172,30 +174,43 @@
     let pinnedProfiles = $derived(
         profiles.filter(p => app.pinnedProfileIds().includes(p.id))
     );
+    let sbPos = $derived(app.sidebarPosition());
 
-    type NavItem = { kind: "pin"; profile: Profile } | { kind: "tab"; id: string } | { kind: "new-tab" } | { kind: "new-edit" } | { kind: "pin-window" } | { kind: "settings" };
-    let navItems = $derived<NavItem[]>([
-        ...app.tabs().filter(t => t.type === "home").map(t => ({kind: "tab" as const, id: t.id})),
-        ...(app.isMobile ? [] : [{kind: "new-tab" as const}, {kind: "new-edit" as const}]),
-        ...pinnedProfiles.map(p => ({kind: "pin" as const, profile: p})),
-        ...app.tabs().filter(t => t.type !== "home").map(t => ({kind: "tab" as const, id: t.id})),
-        ...(app.isMobile ? [] : [{kind: "pin-window" as const}]),
-        {kind: "settings" as const},
-    ]);
+    /* Menu data — sections describe layout (header / scrollable list / footer),
+       flat navItems is what the keyboard shortcut cycles through. */
+    let navSections = $derived<{ header: NavItem[]; middle: NavItem[]; footer: NavItem[] }>({
+        header: [
+            ...app.tabs().filter(t => t.type === "home").map(t => ({kind: "tab" as const, tab: t})),
+            ...(app.isMobile ? [] : [{kind: "new-tab" as const}, {kind: "new-edit" as const}]),
+            ...pinnedProfiles.map(p => ({kind: "pin" as const, profile: p})),
+        ],
+        middle: app.tabs().filter(t => t.type !== "home").map(t => ({kind: "tab" as const, tab: t})),
+        footer: [
+            ...(app.isMobile ? [] : [{kind: "pin-window" as const}]),
+            {kind: "settings" as const},
+        ],
+    });
+    let navItems = $derived<NavItem[]>([...navSections.header, ...navSections.middle, ...navSections.footer]);
 
-    function isFocused(kind: NavItem["kind"], id?: string): boolean {
+    function isFocusedItem(item: NavItem): boolean {
         const f = navItems[focusIdx];
-        if (!f || f.kind !== kind) return false;
-        if (kind === "tab" && "id" in f) return f.id === id;
-        if (kind === "pin" && "profile" in f) return f.profile.id === id;
+        if (!f || f.kind !== item.kind) return false;
+        if (f.kind === "tab" && item.kind === "tab") return f.tab.id === item.tab.id;
+        if (f.kind === "pin" && item.kind === "pin") return f.profile.id === item.profile.id;
         return true;
+    }
+
+    function isActiveItem(item: NavItem): boolean {
+        if (item.kind === "tab") return !app.settingsActive() && item.tab.id === app.activeTabId();
+        if (item.kind === "settings") return app.settingsActive();
+        return false;
     }
 
     function activateNavItem(item: NavItem) {
         if (item.kind === "new-tab") addLocalTab();
         else if (item.kind === "new-edit") addEditTab();
         else if (item.kind === "pin") connectPinned(item.profile);
-        else if (item.kind === "tab") selectTab(item.id);
+        else if (item.kind === "tab") selectTab(item.tab.id);
         else if (item.kind === "pin-window") { togglePin(); closeDrawer(); }
         else selectSettings();
     }
@@ -361,14 +376,6 @@
         return sections;
     }
 
-    function tabIcon(tab: Tab): string {
-        if (tab.type === "home") return "㋡";
-        if (tab.type === "local") return "$";
-        if (tab.type === "forward") return "F";
-        if (tab.type === "edit") return "ᝰ";
-        return tab.label.charAt(0).toUpperCase();
-    }
-
     function tabGroupColor(tab: Tab): string | null {
         if (tab.type !== "ssh") return null;
         const profileId = tab.meta?.profileId;
@@ -424,8 +431,13 @@
     function handleTouchEnd(e: TouchEvent) {
         const dx = e.changedTouches[0].clientX - touchStartX;
         const dy = Math.abs(e.changedTouches[0].clientY - touchStartY);
-        if (!drawerOpen && touchStartX < 50 && dx > 60 && dy < dx) openDrawer();
-        if (drawerOpen && dx < -60 && dy < Math.abs(dx)) closeDrawer();
+        const pos = app.sidebarPosition();
+        if (pos !== "left" && pos !== "right") return;
+        // Mirror edge-swipe direction based on which side the sidebar lives on.
+        const sign = pos === "left" ? 1 : -1;
+        const nearEdge = pos === "left" ? touchStartX < 50 : touchStartX > window.innerWidth - 50;
+        if (!drawerOpen && nearEdge && sign * dx > 60 && dy < Math.abs(dx)) openDrawer();
+        if (drawerOpen && sign * dx < -60 && dy < Math.abs(dx)) closeDrawer();
     }
 
     function handleKeydown(e: KeyboardEvent) {
@@ -471,110 +483,76 @@
         <div class="backdrop" onclick={closeDrawer}></div>
     {/if}
 
-    <!-- Sidebar: 40px collapsed ↔ 260px expanded -->
+    <!-- Sidebar: 40px collapsed ↔ 260px expanded. Position = left | right. -->
+    {#if sbPos === "left" || sbPos === "right"}
     <nav
-        class="sidebar" class:open={drawerOpen}
+        class="sidebar" class:open={drawerOpen} class:right={sbPos === "right"}
         onmouseenter={enterSidebar} onmouseleave={leaveSidebar}
     >
         <div class="sidebar-inner">
-            <!-- Home tab -->
-            {#each app.tabs().filter(t => t.type === "home") as tab (tab.id)}
-                <button
-                    class="sb-item"
-                    class:active={!app.settingsActive() && tab.id === app.activeTabId()}
-                    class:focused={isFocused("tab", tab.id)}
-                    onclick={() => selectTab(tab.id)}
-                    title={tab.label}
-                >
-                    <span class="sb-icon">{tabIcon(tab)}</span>
-                    <span class="sb-label">{tab.label}</span>
-                </button>
+            {#each navSections.header as item (navItemKey(item))}
+                <MenuButton
+                    {item}
+                    active={isActiveItem(item)}
+                    focused={isFocusedItem(item)}
+                    pinnedState={pinned}
+                    onActivate={() => activateNavItem(item)}
+                />
             {/each}
 
-            <!-- New Terminal (desktop only) -->
-            {#if !app.isMobile}
-            <button class="sb-item new-tab" class:focused={isFocused("new-tab")} onclick={addLocalTab} title={t("tab.new_terminal")}>
-                <span class="sb-icon">+</span>
-                <span class="sb-label">{t("tab.new_terminal")}</span>
-            </button>
-            <button class="sb-item new-tab" class:focused={isFocused("new-edit")} onclick={addEditTab} title={t("tab.new_edit")}>
-                <span class="sb-icon">✎</span>
-                <span class="sb-label">{t("tab.new_edit")}</span>
-            </button>
-            {/if}
-
-            {#if pinnedProfiles.length > 0}
-                <div class="sidebar-section">
-                    {#each pinnedProfiles as p, i (p.id)}
-                        <button
-                            class="sb-item pinned"
-                            class:focused={isFocused("pin", p.id)}
-                            onclick={() => connectPinned(p)}
-                            title={p.name}
-                        >
-                            <span class="sb-icon">{p.name.charAt(0).toUpperCase()}</span>
-                            <span class="sb-label">{p.name}</span>
-                        </button>
-                    {/each}
-                </div>
-            {/if}
-
             <div class="sidebar-list">
-                {#each app.tabs().filter(t => t.type !== "home") as tab (tab.id)}
-                    {@const groupColor = tabGroupColor(tab)}
-                    <button
-                        class="sb-item"
-                        class:active={!app.settingsActive() && tab.id === app.activeTabId()}
-                        class:focused={isFocused("tab", tab.id)}
-                        class:drag-over={dropTabId === tab.id && dragTabId !== tab.id}
-                        draggable="true"
-                        ondragstart={(e) => handleDragStart(e, tab.id)}
-                        ondragover={(e) => handleDragOver(e, tab.id)}
-                        ondrop={(e) => handleDrop(e, tab.id)}
-                        ondragend={handleDragEnd}
-                        onclick={() => selectTab(tab.id)}
-                        title={tab.label}
-                    >
-                        <span class="sb-icon" style={groupColor ? `background: ${groupColor}; color: white` : ''}>{tabIcon(tab)}</span>
-                        <span class="sb-label">{tab.label}</span>
-                        <span
-                            class="sb-close"
-                            role="button"
-                            tabindex="-1"
-                            onclick={(e) => { e.stopPropagation(); app.closeTab(tab.id); }}
-                        >&times;</span>
-                    </button>
+                {#each navSections.middle as item (navItemKey(item))}
+                    {@const tab = item.kind === "tab" ? item.tab : null}
+                    <MenuButton
+                        {item}
+                        active={isActiveItem(item)}
+                        focused={isFocusedItem(item)}
+                        dragOver={tab !== null && dropTabId === tab.id && dragTabId !== tab.id}
+                        groupColor={tab ? tabGroupColor(tab) : null}
+                        showClose={tab !== null}
+                        onActivate={() => activateNavItem(item)}
+                        onClose={tab ? () => app.closeTab(tab.id) : undefined}
+                        onDragStart={tab ? (e) => handleDragStart(e, tab.id) : undefined}
+                        onDragOver={tab ? (e) => handleDragOver(e, tab.id) : undefined}
+                        onDrop={tab ? (e) => handleDrop(e, tab.id) : undefined}
+                        onDragEnd={tab ? handleDragEnd : undefined}
+                    />
                 {/each}
             </div>
 
             <div class="sidebar-footer">
-                {#if !app.isMobile}
-                    <button
-                        class="sb-item"
-                        class:pinned
-                        class:focused={isFocused("pin-window")}
-                        onclick={togglePin}
-                        title={t("window.pin")}
-                    >
-                        <span class="sb-icon">📌</span>
-                        <span class="sb-label">{t("window.pin")}</span>
-                    </button>
-                {/if}
-                <button
-                    class="sb-item"
-                    class:active={app.settingsActive()}
-                    class:focused={isFocused("settings")}
-                    onclick={selectSettings}
-                    title={t("tab.settings")}
-                >
-                    <span class="sb-icon">⚙</span>
-                    <span class="sb-label">{t("tab.settings")}</span>
-                </button>
+                {#each navSections.footer as item (navItemKey(item))}
+                    <MenuButton
+                        {item}
+                        active={isActiveItem(item)}
+                        focused={isFocusedItem(item)}
+                        pinnedState={pinned}
+                        onActivate={() => activateNavItem(item)}
+                    />
+                {/each}
             </div>
         </div>
     </nav>
+    {:else}
+        <StripBar
+            sections={[navSections.header, navSections.middle, navSections.footer]}
+            position={sbPos}
+            pinned={pinned}
+            dragTabId={dragTabId}
+            dropTabId={dropTabId}
+            isActiveItem={isActiveItem}
+            isFocusedItem={isFocusedItem}
+            groupColorOf={tabGroupColor}
+            onActivate={activateNavItem}
+            onClose={(id) => app.closeTab(id)}
+            onDragStart={handleDragStart}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+            onDragEnd={handleDragEnd}
+        />
+    {/if}
 
-    <div class="content">
+    <div class="content" class:right={sbPos === "right"} class:top={sbPos === "top"} class:bottom={sbPos === "bottom"}>
         {#if app.settingsActive()}
             <div class="pane visible">
                 <SettingsLayout/>
@@ -619,6 +597,13 @@
         transition: width 0.15s ease;
     }
 
+    .sidebar.right {
+        left: auto;
+        right: 0;
+        border-right: none;
+        border-left: 1px solid var(--divider);
+    }
+
     .sidebar.open {
         width: 260px;
         box-shadow: var(--raised);
@@ -634,9 +619,6 @@
         flex-direction: column;
         padding: 6px;
         gap: 2px;
-    }
-
-    .sidebar-section {
     }
 
     .sidebar-list {
@@ -658,95 +640,6 @@
         gap: 2px;
     }
 
-    /* ── Sidebar item ── */
-    .sb-item {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        width: 100%;
-        height: 30px;
-        padding: 0 4px;
-        border: none;
-        border-radius: 6px;
-        background: transparent;
-        color: var(--text-sub);
-        font-family: inherit;
-        font-size: 13px;
-        cursor: pointer;
-        transition: all 0.15s;
-        text-align: left;
-        flex-shrink: 0;
-    }
-
-    .sb-item:hover, .sb-item.focused {
-        background: var(--surface);
-        color: var(--text);
-    }
-
-    .sb-item.active {
-        background: var(--accent-soft);
-        color: var(--accent);
-        font-weight: 600;
-    }
-
-    .sb-item.focused {
-        outline: 1px solid var(--accent);
-        outline-offset: -1px;
-    }
-
-    .sb-item.drag-over {
-        border-top: 2px solid var(--accent);
-    }
-
-    .sb-item.pinned {
-        color: var(--warning);
-    }
-
-    .sb-icon {
-        width: 22px;
-        height: 22px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
-        font-family: monospace;
-        font-size: 12px;
-        font-weight: 700;
-        border-radius: 4px;
-        background: var(--surface);
-    }
-
-    .sb-item.active .sb-icon {
-        background: var(--accent);
-        color: var(--bg);
-    }
-
-    .sb-label {
-        flex: 1;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        min-width: 0;
-    }
-
-    .sb-close {
-        font-size: 14px;
-        line-height: 1;
-        opacity: 0;
-        transition: opacity 0.1s;
-        flex-shrink: 0;
-        padding: 0 2px;
-    }
-
-    .sb-item:hover .sb-close {
-        opacity: 0.4;
-    }
-
-    .sb-close:hover {
-        opacity: 1 !important;
-        color: var(--error);
-    }
-
     /* ── Backdrop ── */
     .backdrop {
         position: fixed;
@@ -760,6 +653,19 @@
         height: 100%;
         position: relative;
         margin-left: 40px;
+    }
+
+    .content.right {
+        margin-left: 0;
+        margin-right: 40px;
+    }
+    .content.top {
+        margin-left: 0;
+        margin-top: 44px;
+    }
+    .content.bottom {
+        margin-left: 0;
+        margin-bottom: 44px;
     }
 
     .pane {

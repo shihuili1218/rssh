@@ -36,6 +36,7 @@ export type SettingsPage =
   | "group-edit"
   | "cli"
   | "shortcuts"
+  | "appearance"
   | "about";
 
 export interface Group {
@@ -146,6 +147,29 @@ export function settingsBack() {
   else if (_settingsPage === "credential-edit") _settingsPage = "credentials";
   else if (_settingsPage === "forward-edit") _settingsPage = "forwards";
   else _settingsPage = "menu";
+}
+
+/* ─── Sidebar position (per-device) ─── */
+export type SidebarPosition = "left" | "right" | "top" | "bottom";
+const _SB_KEY_DESKTOP = "sidebar.position.desktop";
+const _SB_KEY_MOBILE = "sidebar.position.mobile";
+function _loadSidebarPos(key: string, fallback: SidebarPosition): SidebarPosition {
+  const v = localStorage.getItem(key);
+  return v === "left" || v === "right" || v === "top" || v === "bottom" ? v : fallback;
+}
+let _sidebarPosDesktop = $state<SidebarPosition>(_loadSidebarPos(_SB_KEY_DESKTOP, "left"));
+let _sidebarPosMobile = $state<SidebarPosition>(_loadSidebarPos(_SB_KEY_MOBILE, "top"));
+export function sidebarPosition(): SidebarPosition {
+  return isMobile ? _sidebarPosMobile : _sidebarPosDesktop;
+}
+export function setSidebarPosition(pos: SidebarPosition) {
+  if (isMobile) {
+    _sidebarPosMobile = pos;
+    localStorage.setItem(_SB_KEY_MOBILE, pos);
+  } else {
+    _sidebarPosDesktop = pos;
+    localStorage.setItem(_SB_KEY_DESKTOP, pos);
+  }
 }
 
 /* ─── Mobile key modifiers (sticky Ctrl/Alt) ─── */
