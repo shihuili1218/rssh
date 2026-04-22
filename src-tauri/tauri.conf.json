@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nickel-org/nickel.rs/master/examples/hello-world/src/main.rs",
   "productName": "RSSH",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "identifier": "com.rssh.app",
   "build": {
     "frontendDist": "../dist",
