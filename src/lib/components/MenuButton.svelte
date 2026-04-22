@@ -79,8 +79,10 @@
 
     let icon = $derived(iconOf(item));
     let label = $derived(labelOf(item));
-    // "Pinned" tint: profile pins always; window-pin only when active.
-    let tinted = $derived(item.kind === "pin" || (item.kind === "pin-window" && pinnedState));
+    // Pin-on-top, when ON, uses the selected/active style (it *is* a toggle);
+    // pinned profiles keep the warning tint because they're shortcuts, not state.
+    let tinted = $derived(item.kind === "pin");
+    let showActive = $derived(active || (item.kind === "pin-window" && pinnedState));
     let draggable = $derived(!!onDragStart);
     // In horizontal mode, static function entries show icon; content items
     // (tabs, pinned profiles) show the user-supplied label.
@@ -89,7 +91,7 @@
 
 <button
     class="sb-item"
-    class:active
+    class:active={showActive}
     class:focused
     class:drag-over={dragOver}
     class:pinned={tinted}
