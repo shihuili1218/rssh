@@ -163,6 +163,14 @@ export function registerTerminalWriter(fn: (text: string) => void) { _terminalWr
 export function unregisterTerminalWriter() { _terminalWriter = null; }
 export function sendToTerminal(text: string) { _terminalWriter?.(text); }
 
+/** Arrow keys need DECCKM-aware encoding (CSI vs SS3). The terminal owner
+ *  holds that state, so it registers an encoder-sender here. */
+export type ArrowDir = "A" | "B" | "C" | "D";
+let _terminalArrowSender: ((dir: ArrowDir, mod: number) => void) | null = null;
+export function registerTerminalArrowSender(fn: (dir: ArrowDir, mod: number) => void) { _terminalArrowSender = fn; }
+export function unregisterTerminalArrowSender() { _terminalArrowSender = null; }
+export function sendArrow(dir: ArrowDir, mod: number) { _terminalArrowSender?.(dir, mod); }
+
 /* ─── Per-tab terminal copy/paste controls ─── */
 interface TerminalControls {
   getSelection(): string;
