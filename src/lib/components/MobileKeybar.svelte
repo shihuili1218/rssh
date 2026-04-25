@@ -26,6 +26,7 @@
     <button class="key" onpointerdown={prevent} onclick={() => arrow('B')}>↓</button>
     <button class="key" onpointerdown={prevent} onclick={() => arrow('D')}>←</button>
     <button class="key" onpointerdown={prevent} onclick={() => arrow('C')}>→</button>
+    <button class="key" title="Snippets" onpointerdown={prevent} onclick={() => app.openSnippetPicker()}>⚡</button>
 </div>
 
 <style>
