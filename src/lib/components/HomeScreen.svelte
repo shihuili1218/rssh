@@ -271,7 +271,7 @@
 </div>
 
 <style>
-  .home { padding: 24px; }
+  .home { padding: 24px; flex: 1; overflow-y: auto; min-height: 0; }
   .home-header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
   .logo { font-size: 22px; color: var(--accent); font-weight: 700; white-space: nowrap; }
   .search-input { flex: 1; }
