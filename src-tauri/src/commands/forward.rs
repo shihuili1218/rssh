@@ -1,7 +1,7 @@
 use tauri::State;
 
 use crate::error::{locked, AppError, AppResult};
-use crate::models::{Forward, ForwardType};
+use crate::models::{Credential, Forward, ForwardType, Profile};
 use crate::ssh::forward as fwd;
 use crate::state::AppState;
 
@@ -53,11 +53,26 @@ pub async fn forward_start(
         .and_then(|v| v.parse().ok())
         .unwrap_or(crate::ssh::client::DEFAULT_CONNECT_TIMEOUT);
 
+    // 解析 forward target profile 的堡垒机链，每一跳加载 secret
+    let chain_profiles = crate::ssh::bastion::resolve_chain(&state.db, &p)?;
+    let mut chain: Vec<(Profile, Credential)> = Vec::with_capacity(chain_profiles.len());
+    for hop in chain_profiles {
+        let bcid = hop.credential_id.as_deref().unwrap_or("");
+        let mut bc = crate::db::credential::get(&state.db, bcid)
+            .map_err(|_| AppError::NotFound(format!("堡垒机 '{}' 凭证不存在", hop.name)))?;
+        if !bc.id.is_empty() {
+            bc.secret = state.secret_store.get(&crate::secret::cred_secret_key(&bc.id))?;
+            bc.passphrase = state.secret_store.get(&crate::secret::cred_passphrase_key(&bc.id))?;
+        }
+        chain.push((hop, bc));
+    }
+    let chain_refs: Vec<(&Profile, &Credential)> = chain.iter().map(|(p, c)| (p, c)).collect();
+
     let known_hosts_path = crate::ssh::known_hosts::path_for(&state.data_dir);
     let handle = match f.forward_type {
-        ForwardType::Local => fwd::start_local(&f, &p.host, p.port, &c, known_hosts_path, timeout_secs).await?,
-        ForwardType::Remote => fwd::start_remote(&f, &p.host, p.port, &c, known_hosts_path, timeout_secs).await?,
-        ForwardType::Dynamic => fwd::start_dynamic(&f, &p.host, p.port, &c, known_hosts_path, timeout_secs).await?,
+        ForwardType::Local => fwd::start_local(&f, &p.host, p.port, &c, &chain_refs, known_hosts_path, timeout_secs).await?,
+        ForwardType::Remote => fwd::start_remote(&f, &p.host, p.port, &c, &chain_refs, known_hosts_path, timeout_secs).await?,
+        ForwardType::Dynamic => fwd::start_dynamic(&f, &p.host, p.port, &c, &chain_refs, known_hosts_path, timeout_secs).await?,
     };
     let active_id = uuid::Uuid::new_v4().to_string();
 

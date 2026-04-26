@@ -36,25 +36,24 @@ pub async fn ssh_connect(
     cols: u32,
     rows: u32,
 ) -> AppResult<String> {
-    let (profile, credential, bastion) = if let Some(pid) = profile_id {
+    let (profile, credential, chain) = if let Some(pid) = profile_id {
         let p = crate::db::profile::get(&state.db, &pid)?;
         let cred_id = p.credential_id.as_deref().unwrap_or("");
         let mut c = crate::db::credential::get(&state.db, cred_id)
             .map_err(|_| AppError::NotFound("Profile 关联的凭证不存在".into()))?;
         load_secrets(&state, &mut c)?;
 
-        let bastion = if let Some(ref bid) = p.bastion_profile_id {
-            let bp = crate::db::profile::get(&state.db, bid)
-                .map_err(|_| AppError::NotFound("堡垒机 Profile 不存在".into()))?;
-            let bcid = bp.credential_id.as_deref().unwrap_or("");
+        // 解析整条堡垒机链 + 给每一跳加载凭证（含 secret）
+        let chain_profiles = crate::ssh::bastion::resolve_chain(&state.db, &p)?;
+        let mut chain: Vec<(Profile, Credential)> = Vec::with_capacity(chain_profiles.len());
+        for hop in chain_profiles {
+            let bcid = hop.credential_id.as_deref().unwrap_or("");
             let mut bc = crate::db::credential::get(&state.db, bcid)
-                .map_err(|_| AppError::NotFound("堡垒机凭证不存在".into()))?;
+                .map_err(|_| AppError::NotFound(format!("堡垒机 '{}' 凭证不存在", hop.name)))?;
             load_secrets(&state, &mut bc)?;
-            Some((bp, bc))
-        } else {
-            None
-        };
-        (p, c, bastion)
+            chain.push((hop, bc));
+        }
+        (p, c, chain)
     } else {
         // 原始参数直连（无堡垒机）
         let p = Profile {
@@ -76,7 +75,7 @@ pub async fn ssh_connect(
             save_to_remote: false,
             passphrase: None,
         };
-        (p, c, None)
+        (p, c, Vec::new())
     };
 
     // 检查 verbose log + 录制设置 + 连接超时
@@ -115,8 +114,8 @@ pub async fn ssh_connect(
     let effective_log_id = if verbose_log { log_session_id.as_deref() } else { None };
 
     let known_hosts_path = crate::ssh::known_hosts::path_for(&state.data_dir);
-    let bastion_refs = bastion.as_ref().map(|(bp, bc)| (bp, bc));
-    let result = client::connect(&profile, &credential, bastion_refs, cols, rows, app, recording_path, effective_log_id, known_hosts_path, timeout_secs).await?;
+    let chain_refs: Vec<(&Profile, &Credential)> = chain.iter().map(|(p, c)| (p, c)).collect();
+    let result = client::connect(&profile, &credential, &chain_refs, cols, rows, app, recording_path, effective_log_id, known_hosts_path, timeout_secs).await?;
 
     // 执行初始命令（shell 已就绪，直接写入）
     if let Some(ref cmd) = profile.init_command {

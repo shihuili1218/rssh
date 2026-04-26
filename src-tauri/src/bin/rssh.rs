@@ -5,6 +5,7 @@ use std::sync::{Arc, OnceLock};
 
 use clap::{Parser, Subcommand};
 
+use rssh_lib::bastion;
 use rssh_lib::db::{self, Db};
 use rssh_lib::error::AppResult;
 use rssh_lib::models::*;
@@ -279,40 +280,41 @@ fn cmd_open_ssh(conn: &CliCtx, name: &str) -> AppResult<()> {
         .and_then(|id| db::credential::get(conn, id).ok())
         .map(|c| load_cred_secrets(conn, c));
 
-    let bastion = profile.bastion_profile_id.as_deref()
-        .and_then(|bid| db::profile::get(conn, bid).ok())
-        .and_then(|bp| {
-            let bc = bp.credential_id.as_deref()
-                .filter(|id| !id.is_empty())
-                .and_then(|id| db::credential::get(conn, id).ok())
-                .map(|c| load_cred_secrets(conn, c));
-            Some((bp, bc))
-        });
+    // 解析整条堡垒机链（入口 → 倒数第二跳）
+    let chain = bastion::resolve_chain(conn, profile)?;
 
     let mut cmd = Command::new("ssh");
 
-    // Key temp files — kept alive until ssh exits
+    // Key temp files — 必须挂在 cmd 之外，活到 ssh 退出
     let mut _key_files: Vec<tempfile::NamedTempFile> = Vec::new();
 
-    if let Some((ref bp, ref bc)) = bastion {
-        let mut jump = String::new();
-        if let Some(ref c) = bc {
-            jump.push_str(&c.username);
-            jump.push('@');
-
-            if c.credential_type == CredentialType::Key {
-                if let Some(ref secret) = c.secret {
-                    let f = write_temp_key(secret)?;
-                    cmd.arg("-o").arg(format!("IdentityFile={}", f.path().display()));
-                    _key_files.push(f);
+    if !chain.is_empty() {
+        let mut hops: Vec<String> = Vec::with_capacity(chain.len());
+        for hop in &chain {
+            let bc = hop.credential_id.as_deref()
+                .filter(|id| !id.is_empty())
+                .and_then(|id| db::credential::get(conn, id).ok())
+                .map(|c| load_cred_secrets(conn, c));
+            let mut s = String::new();
+            if let Some(ref c) = bc {
+                s.push_str(&c.username);
+                s.push('@');
+                // 链上每一跳的 key 走 IdentityFile，让 OpenSSH 自己挑
+                if c.credential_type == CredentialType::Key {
+                    if let Some(ref secret) = c.secret {
+                        let f = write_temp_key(secret)?;
+                        cmd.arg("-o").arg(format!("IdentityFile={}", f.path().display()));
+                        _key_files.push(f);
+                    }
                 }
             }
+            s.push_str(&hop.host);
+            if hop.port != 22 {
+                s = format!("{}:{}", s, hop.port);
+            }
+            hops.push(s);
         }
-        jump.push_str(&bp.host);
-        if bp.port != 22 {
-            jump = format!("{}:{}", jump, bp.port);
-        }
-        cmd.arg("-J").arg(&jump);
+        cmd.arg("-J").arg(hops.join(","));
     }
 
     if let Some(ref cred) = cred {
@@ -359,6 +361,9 @@ fn cmd_open_fwd(conn: &CliCtx, name: &str) -> AppResult<()> {
         .and_then(|id| db::credential::get(conn, id).ok())
         .map(|c| load_cred_secrets(conn, c));
 
+    // 解析 forward target 的堡垒机链
+    let chain = bastion::resolve_chain(conn, &profile)?;
+
     let mut cmd = Command::new("ssh");
     cmd.arg("-N");
 
@@ -370,6 +375,34 @@ fn cmd_open_fwd(conn: &CliCtx, name: &str) -> AppResult<()> {
     cmd.arg(flag).arg(&fwd_arg);
 
     let mut _key_files: Vec<tempfile::NamedTempFile> = Vec::new();
+
+    if !chain.is_empty() {
+        let mut hops: Vec<String> = Vec::with_capacity(chain.len());
+        for hop in &chain {
+            let bc = hop.credential_id.as_deref()
+                .filter(|id| !id.is_empty())
+                .and_then(|id| db::credential::get(conn, id).ok())
+                .map(|c| load_cred_secrets(conn, c));
+            let mut s = String::new();
+            if let Some(ref c) = bc {
+                s.push_str(&c.username);
+                s.push('@');
+                if c.credential_type == CredentialType::Key {
+                    if let Some(ref secret) = c.secret {
+                        let f = write_temp_key(secret)?;
+                        cmd.arg("-o").arg(format!("IdentityFile={}", f.path().display()));
+                        _key_files.push(f);
+                    }
+                }
+            }
+            s.push_str(&hop.host);
+            if hop.port != 22 {
+                s = format!("{}:{}", s, hop.port);
+            }
+            hops.push(s);
+        }
+        cmd.arg("-J").arg(hops.join(","));
+    }
 
     if let Some(ref cred) = cred {
         cmd.arg("-l").arg(&cred.username);
