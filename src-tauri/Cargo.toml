@@ -26,18 +26,20 @@ env_logger = "0.11"
 # SSH
 russh = "0.46"
 russh-keys = "0.46"
-tokio = { version = "1", features = ["sync", "macros", "net", "io-util", "rt"] }
+tokio = { version = "1", features = ["sync", "macros", "net", "io-util", "rt", "process", "time"] }
 async-trait = "0.1"
 
 # SFTP
 russh-sftp = "2"
 
 # HTTP + crypto
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 base64 = "0.22"
 sha2 = "0.10"
 hmac = "0.12"
 getrandom = "0.2"
+regex = "1"
+futures-util = "0.3"
 
 # CLI（optional，靠 --features cli 启用）
 clap = { version = "4", features = ["derive"], optional = true }

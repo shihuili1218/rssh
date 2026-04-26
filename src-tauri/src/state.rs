@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use crate::ai::session::DiagnoseSession;
 use crate::db::Db;
 use crate::secret::SecretStore;
 use crate::ssh::client::SessionHandle;
@@ -21,5 +22,7 @@ pub struct AppState {
     pub auth_waiters: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Vec<String>>>>,
     /// window_label → session IDs owned by that window (for per-window cleanup)
     pub window_sessions: Mutex<HashMap<String, HashSet<String>>>,
+    /// AI 排障会话表（ai_session_id → DiagnoseSession）
+    pub ai_sessions: Mutex<HashMap<String, DiagnoseSession>>,
     pub data_dir: PathBuf,
 }

@@ -1,3 +1,4 @@
+pub mod ai_skill;
 pub mod credential;
 pub mod forward;
 pub mod group;

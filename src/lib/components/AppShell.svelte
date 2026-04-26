@@ -14,6 +14,8 @@
     import TabContextMenu, {type CtxMenuItem} from "./TabContextMenu.svelte";
     import MenuButton, {type NavItem, navItemKey} from "./MenuButton.svelte";
     import StripBar from "./StripBar.svelte";
+    import ChatPanel from "../ai/ChatPanel.svelte";
+    import * as ai from "../ai/store.svelte.ts";
     import {attachShortcuts, attachKeyup, type Shortcut} from "../keyboard/registry.ts";
     import {t} from "../i18n/index.svelte.ts";
 
@@ -175,6 +177,19 @@
         profiles.filter(p => app.pinnedProfileIds().includes(p.id))
     );
     let sbPos = $derived(app.sidebarPosition());
+
+    // AI 面板：仅在终端 tab 已连接时可见；位置走 ai.position()
+    let aiTabId = $derived(app.activeTabId());
+    let aiActiveTab = $derived(app.activeTab());
+    let aiSessionId = $derived(aiActiveTab ? app.sessionIdForTab(aiActiveTab.id) : undefined);
+    let aiVisible = $derived(
+        ai.isOpen()
+        && !!aiActiveTab
+        && (aiActiveTab.type === "ssh" || aiActiveTab.type === "local")
+        && !!aiSessionId
+        && !app.settingsActive()
+    );
+    let aiPos = $derived(ai.position());
 
     /* Menu data — sections describe layout (header / scrollable list / footer),
        flat navItems is what the keyboard shortcut cycles through. */
@@ -366,6 +381,18 @@
             {label: t("tab.context.close"), shortcut: "⌘W", onClick: () => app.closeTab(tab.id)},
         ]);
 
+        // AI 排障入口（ssh/local tab 才有，且需要已经连上 = 有 sessionId）
+        if (isTerminal) {
+            const sid = app.sessionIdForTab(tab.id);
+            sections.push([
+                {
+                    label: t("tab.context.ai"),
+                    disabled: !sid,
+                    onClick: () => { app.setActiveTab(tab.id); ai.openPanel(); },
+                },
+            ]);
+        }
+
         // Multi-window requires Tauri WebviewWindowBuilder — desktop only.
         if (isTerminal && !app.isMobile) {
             sections.push([
@@ -552,7 +579,24 @@
         />
     {/if}
 
-    <div class="content" class:right={sbPos === "right"} class:top={sbPos === "top"} class:bottom={sbPos === "bottom"}>
+    {#if aiVisible && aiActiveTab && aiSessionId}
+        <aside class="ai-side" class:left={aiPos === "left"} class:right={aiPos === "right"}>
+            <ChatPanel
+                tabId={aiActiveTab.id}
+                targetKind={aiActiveTab.type as "ssh" | "local"}
+                targetId={aiSessionId}
+            />
+        </aside>
+    {/if}
+
+    <div
+        class="content"
+        class:right={sbPos === "right"}
+        class:top={sbPos === "top"}
+        class:bottom={sbPos === "bottom"}
+        class:ai-left={aiVisible && aiPos === "left"}
+        class:ai-right={aiVisible && aiPos === "right"}
+    >
         {#if app.settingsActive()}
             <div class="pane visible">
                 <SettingsLayout/>
@@ -667,6 +711,28 @@
     .content.bottom {
         margin-left: 0;
         height: calc(100% - 44px);
+    }
+
+    /* AI 侧边面板 */
+    .ai-side {
+        position: fixed;
+        top: env(safe-area-inset-top, 0px);
+        bottom: 0;
+        width: 380px;
+        z-index: 150;
+        background: var(--bg);
+    }
+    .ai-side.left { left: 40px; }
+    .ai-side.right { right: 0; }
+
+    .content.ai-left { margin-left: 420px; }      /* 40 sidebar + 380 ai */
+    .content.ai-right { margin-right: 380px; }
+    .content.ai-left.right { margin-left: 380px; margin-right: 40px; }  /* sidebar 在右、ai 在左：从左推 ai 面板 */
+    .content.ai-right.right { margin-right: 380px; }
+    @media (max-width: 800px) {
+        .ai-side { width: 320px; }
+        .content.ai-left { margin-left: 360px; }
+        .content.ai-right { margin-right: 320px; }
     }
 
     .pane {

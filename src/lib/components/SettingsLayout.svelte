@@ -20,6 +20,7 @@
   import ShellSettings from "./ShellSettings.svelte";
   import CliSettings from "./CliSettings.svelte";
   import AppearanceSettings from "./AppearanceSettings.svelte";
+  import AiSettings from "./AiSettings.svelte";
 
   type MenuItem = { id: app.SettingsPage; label: string; section: string };
 
@@ -41,6 +42,7 @@
     "playback":           { component: PlaybackScreen },
     "cli":                { component: CliSettings },
     "appearance":         { component: AppearanceSettings },
+    "ai":                 { component: AiSettings },
     "shortcuts":          { component: ShortcutsScreen },
     "about":              { component: AboutScreen },
   };
@@ -65,6 +67,7 @@
     { id: "github-sync", label: t("settings.section.github_sync"), section: "Connections" },
     { id: "shell-settings", label: t("settings.section.shell"), section: "Sessions" },
     { id: "recording-settings", label: t("settings.section.recording"), section: "Sessions" },
+    { id: "ai", label: t("settings.section.ai"), section: "Sessions" },
     { id: "appearance", label: t("settings.section.appearance"), section: "Appearance" },
     { id: "highlights", label: t("settings.section.highlights"), section: "Appearance" },
     { id: "snippets", label: t("settings.section.snippets"), section: "Appearance" },
