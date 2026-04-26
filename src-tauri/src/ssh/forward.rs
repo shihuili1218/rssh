@@ -62,11 +62,13 @@ pub async fn start_local(
     host: &str,
     port: u16,
     credential: &Credential,
+    bastion_chain: &[(&crate::models::Profile, &Credential)],
     known_hosts_path: PathBuf,
     timeout_secs: u64,
 ) -> AppResult<ForwardHandle> {
-    let config = crate::ssh::client::default_client_config();
-    let mut handle = client::ssh_connect(config, host, port, known_hosts_path, timeout_secs).await?;
+    let (mut handle, _fwd) = client::establish_via_chain(
+        bastion_chain, host, port, known_hosts_path, timeout_secs, |_| {},
+    ).await?;
     client::authenticate(&mut handle, credential).await?;
 
     let remote_host = forward.remote_host.clone();
@@ -136,11 +138,13 @@ pub async fn start_remote(
     host: &str,
     port: u16,
     credential: &Credential,
+    bastion_chain: &[(&crate::models::Profile, &Credential)],
     known_hosts_path: PathBuf,
     timeout_secs: u64,
 ) -> AppResult<ForwardHandle> {
-    let config = crate::ssh::client::default_client_config();
-    let (mut handle, fwd_sender) = client::ssh_connect_with_forward(config, host, port, known_hosts_path, timeout_secs).await?;
+    let (mut handle, fwd_sender) = client::establish_via_chain(
+        bastion_chain, host, port, known_hosts_path, timeout_secs, |_| {},
+    ).await?;
     client::authenticate(&mut handle, credential).await?;
 
     // Register a channel to receive forwarded connections from the Handler
@@ -289,11 +293,13 @@ pub async fn start_dynamic(
     host: &str,
     port: u16,
     credential: &Credential,
+    bastion_chain: &[(&crate::models::Profile, &Credential)],
     known_hosts_path: PathBuf,
     timeout_secs: u64,
 ) -> AppResult<ForwardHandle> {
-    let config = crate::ssh::client::default_client_config();
-    let mut handle = client::ssh_connect(config, host, port, known_hosts_path, timeout_secs).await?;
+    let (mut handle, _fwd) = client::establish_via_chain(
+        bastion_chain, host, port, known_hosts_path, timeout_secs, |_| {},
+    ).await?;
     client::authenticate(&mut handle, credential).await?;
 
     let local_port = forward.local_port;

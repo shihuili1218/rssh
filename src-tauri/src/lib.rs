@@ -5,6 +5,7 @@ pub mod error;
 pub mod models;
 pub mod secret;
 mod ssh;
+pub use ssh::bastion;
 mod state;
 pub mod sync;
 mod terminal;

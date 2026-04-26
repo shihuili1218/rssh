@@ -154,7 +154,8 @@ pub async fn ssh_connect_with_forward(
     Ok((handle, fwd))
 }
 
-/// 在已有 stream 上建立 SSH 连接（用于堡垒机隧道）。
+/// 在已有 stream 上建立 SSH 连接（用于堡垒机隧道）。同时返回 forward channel sender，
+/// 让远程转发能注册到末跳 handler。普通调用方丢 `_` 即可。
 pub async fn ssh_connect_stream<S>(
     config: Arc<client::Config>,
     stream: S,
@@ -162,15 +163,99 @@ pub async fn ssh_connect_stream<S>(
     port: u16,
     known_hosts_path: PathBuf,
     timeout_secs: u64,
-) -> AppResult<client::Handle<SshHandler>>
+) -> AppResult<(client::Handle<SshHandler>, ForwardedChannelSender)>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     let connect_timeout = Duration::from_secs(timeout_secs);
-    let (handler, mismatch, _fwd) = new_handler(host, port, known_hosts_path);
-    match timeout(connect_timeout, client::connect_stream(config, stream, handler)).await {
-        Ok(result) => result.map_err(|e| map_connect_error(e, host, port, &mismatch)),
-        Err(_) => Err(AppError::Ssh(format!("{}:{} SSH 握手超时", host, port))),
+    let (handler, mismatch, fwd) = new_handler(host, port, known_hosts_path);
+    let handle = match timeout(connect_timeout, client::connect_stream(config, stream, handler)).await {
+        Ok(result) => result.map_err(|e| map_connect_error(e, host, port, &mismatch))?,
+        Err(_) => return Err(AppError::Ssh(format!("{}:{} SSH 握手超时", host, port))),
+    };
+    Ok((handle, fwd))
+}
+
+/// 通过堡垒机链建立到 target 的 SSH 连接。链空则直连 target。
+/// 链中每一跳直接 authenticate；target 的 authenticate 由调用方负责。
+/// 返回 `(target_handle, target_fwd_sender)` —— remote 转发用 fwd_sender，其余可丢弃。
+pub async fn establish_via_chain<L: Fn(&str)>(
+    bastion_chain: &[(&Profile, &Credential)],
+    target_host: &str,
+    target_port: u16,
+    known_hosts_path: PathBuf,
+    timeout_secs: u64,
+    log: L,
+) -> AppResult<(client::Handle<SshHandler>, ForwardedChannelSender)> {
+    let config = default_client_config();
+
+    if bastion_chain.is_empty() {
+        log(&format!("TCP connecting to {}:{} ...", target_host, target_port));
+        let (h, fwd) = ssh_connect_with_forward(config, target_host, target_port, known_hosts_path, timeout_secs).await?;
+        log("TCP connected. SSH handshake OK.");
+        return Ok((h, fwd));
+    }
+
+    // 第一跳：直连
+    let (first_p, first_c) = bastion_chain[0];
+    log(&format!("Connecting to bastion {} ({}:{}) ...", first_p.name, first_p.host, first_p.port));
+    let mut hop = ssh_connect(
+        config.clone(), &first_p.host, first_p.port,
+        known_hosts_path.clone(), timeout_secs,
+    ).await?;
+    log(&format!("Bastion {} connected. Authenticating as {} ({}) ...", first_p.name, first_c.username, first_c.credential_type.as_str()));
+    authenticate(&mut hop, first_c).await?;
+    log(&format!("Bastion {} authenticated.", first_p.name));
+
+    // 中间跳：穿上一跳到下一跳
+    for pair in bastion_chain.windows(2) {
+        let prev_p = pair[0].0;
+        let (next_p, next_c) = pair[1];
+        log(&format!("Opening tunnel through {} to bastion {} ({}:{}) ...", prev_p.name, next_p.name, next_p.host, next_p.port));
+        let tunnel = open_tunnel_with_timeout(
+            &hop, &next_p.host, next_p.port,
+            timeout_secs,
+            &format!("{} → {}", prev_p.name, next_p.name),
+        ).await?;
+        let (new_hop, _) = ssh_connect_stream(
+            config.clone(), tunnel.into_stream(),
+            &next_p.host, next_p.port,
+            known_hosts_path.clone(), timeout_secs,
+        ).await?;
+        hop = new_hop;
+        log(&format!("Bastion {} connected. Authenticating as {} ({}) ...", next_p.name, next_c.username, next_c.credential_type.as_str()));
+        authenticate(&mut hop, next_c).await?;
+        log(&format!("Bastion {} authenticated.", next_p.name));
+    }
+
+    // 末跳：穿最后一个 bastion 到 target
+    let last_p = bastion_chain.last().unwrap().0;
+    log(&format!("Opening tunnel through {} to target {}:{} ...", last_p.name, target_host, target_port));
+    let tunnel = open_tunnel_with_timeout(
+        &hop, target_host, target_port,
+        timeout_secs,
+        &format!("{} → target", last_p.name),
+    ).await?;
+    log("Tunnel established. SSH handshake with target ...");
+    ssh_connect_stream(config, tunnel.into_stream(), target_host, target_port, known_hosts_path, timeout_secs).await
+}
+
+/// 在已建好的 SSH 连接上开 direct-tcpip 隧道，带超时。
+/// 没有这个超时，bastion 拨号 target 失败时（VPC 不通 / target 防火墙拒绝 / target 离线）
+/// 客户端会一直等 server 返回 `CHANNEL_OPEN_FAILURE`，挂数十秒甚至更久。
+async fn open_tunnel_with_timeout(
+    hop: &client::Handle<SshHandler>,
+    target_host: &str,
+    target_port: u16,
+    timeout_secs: u64,
+    label: &str,
+) -> AppResult<russh::Channel<client::Msg>> {
+    let fut = hop.channel_open_direct_tcpip(target_host, target_port as u32, "127.0.0.1", 0);
+    match timeout(Duration::from_secs(timeout_secs), fut).await {
+        Ok(r) => r.map_err(|e| AppError::Ssh(format!("堡垒机隧道建立失败 ({label}): {e}"))),
+        Err(_) => Err(AppError::Ssh(format!(
+            "堡垒机隧道超时 ({label} → {target_host}:{target_port}, {timeout_secs}s)。常见原因：bastion 拨不到 target（VPC 不通 / target 防火墙 / target 离线）。",
+        ))),
     }
 }
 
@@ -393,7 +478,7 @@ pub struct ConnectResult {
 pub async fn connect(
     profile: &Profile,
     credential: &Credential,
-    bastion: Option<(&Profile, &Credential)>,
+    bastion_chain: &[(&Profile, &Credential)],
     cols: u32,
     rows: u32,
     app: tauri::AppHandle,
@@ -409,37 +494,10 @@ pub async fn connect(
         }
     };
 
-    let config = default_client_config();
-
-    let mut handle = if let Some((bastion_profile, bastion_cred)) = bastion {
-        log(&format!("Connecting to bastion {}:{} ...", bastion_profile.host, bastion_profile.port));
-        let mut bastion_handle = ssh_connect(
-            config.clone(),
-            &bastion_profile.host,
-            bastion_profile.port,
-            known_hosts_path.clone(),
-            timeout_secs,
-        ).await?;
-
-        log(&format!("Bastion connected. Authenticating as {} ({}) ...", bastion_cred.username, bastion_cred.credential_type.as_str()));
-        authenticate(&mut bastion_handle, bastion_cred).await?;
-        log("Bastion authenticated.");
-
-        log(&format!("Opening tunnel to {}:{} ...", profile.host, profile.port));
-        let tunnel = bastion_handle
-            .channel_open_direct_tcpip(&profile.host, profile.port as u32, "127.0.0.1", 0)
-            .await
-            .map_err(|e| AppError::Ssh(format!("堡垒机隧道建立失败: {e}")))?;
-
-        log("Tunnel established. SSH handshake with target ...");
-        let stream = tunnel.into_stream();
-        ssh_connect_stream(config, stream, &profile.host, profile.port, known_hosts_path, timeout_secs).await?
-    } else {
-        log(&format!("TCP connecting to {}:{} ...", profile.host, profile.port));
-        let h = ssh_connect(config, &profile.host, profile.port, known_hosts_path, timeout_secs).await?;
-        log("TCP connected. SSH handshake OK.");
-        h
-    };
+    let (mut handle, _fwd) = establish_via_chain(
+        bastion_chain, &profile.host, profile.port,
+        known_hosts_path, timeout_secs, &log,
+    ).await?;
 
     log(&format!("Authenticating as {} ({}) ...", credential.username, credential.credential_type.as_str()));
     if credential.credential_type == crate::models::CredentialType::Interactive {
