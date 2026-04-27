@@ -329,6 +329,26 @@
         terminal.unicode.activeVersion = "11";
         fitAddon.fit();
 
+        // 移动端：用 `inert` 属性把 helper-textarea 设为浏览器级不可 focus。
+        // iOS 上 focused 空 textarea 会让长按弹"粘贴/键盘"压掉文本选择手柄；
+        // 改成显式控制：用户通过 MobileKeybar 的 ⌨ 按钮主动 toggle，
+        // toggle 时临时解除 inert + focus 召键盘，再 toggle 回 blur + inert。
+        if (app.isMobile) {
+            const helper = containerEl.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea");
+            if (helper) {
+                helper.inert = true;
+                helper.blur();
+                helper.addEventListener("blur", () => {
+                    helper.inert = true;
+                    app.notifyKeyboardBlurred();
+                });
+                app.registerKeyboardControl({
+                    show: () => { helper.inert = false; helper.focus(); },
+                    hide: () => { helper.blur(); helper.inert = true; },
+                });
+            }
+        }
+
         app.registerTerminalControls(tabId, {
             getSelection: () => terminal.getSelection(),
             paste: pasteText,
@@ -451,6 +471,7 @@
         resizeDisposable?.dispose();
         reconnectDisposable?.dispose();
         resizeObs?.disconnect();
+        if (app.isMobile) app.unregisterKeyboardControl();
         blockTracker?.dispose();
         app.unregisterTerminalWriter();
         app.unregisterTerminalArrowSender();

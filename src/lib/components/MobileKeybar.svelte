@@ -27,6 +27,7 @@
     <button class="key" onpointerdown={prevent} onclick={() => arrow('D')}>←</button>
     <button class="key" onpointerdown={prevent} onclick={() => arrow('C')}>→</button>
     <button class="key" title="Snippets" onpointerdown={prevent} onclick={() => app.openSnippetPicker()}>⚡</button>
+    <button class="key" class:active={app.keyboardVisible()} title="Keyboard" onpointerdown={prevent} onclick={() => app.toggleKeyboard()}>⌨</button>
 </div>
 
 <style>
@@ -55,7 +56,7 @@
     .key:active {
         background: var(--divider);
     }
-    .key.mod.active {
+    .key.mod.active, .key.active {
         background: var(--accent);
         color: #fff;
     }
