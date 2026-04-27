@@ -92,6 +92,15 @@ pub async fn ai_delete_skill(state: State<'_, AppState>, id: String) -> AppResul
     skills::delete_user(&state.db, &id)
 }
 
+/// 把前端 locale code 映射为给 LLM 的语言名称（用于 prompt 末尾的 "Respond in X"）。
+fn locale_label(locale: &str) -> &'static str {
+    match locale {
+        "zh" | "zh-CN" | "zh-Hans" => "Chinese (Simplified)",
+        "zh-TW" | "zh-Hant" => "Chinese (Traditional)",
+        _ => "English",
+    }
+}
+
 #[tauri::command]
 pub async fn ai_session_start(
     app: AppHandle,
@@ -101,6 +110,7 @@ pub async fn ai_session_start(
     skill: String,
     provider: String,
     model: String,
+    locale: Option<String>,
 ) -> AppResult<AiSessionInfo> {
     {
         let g = locked(&state.ai_sessions)?;
@@ -147,11 +157,13 @@ pub async fn ai_session_start(
 
     let client = llm::build_client(&provider, api_key, endpoint)?;
 
-    // 启动 prompt 只包含 skill 目录（description）和通用规则；
-    // LLM 用 load_skill 工具按需拉详细工作流（参考 Anthropic Skills 模式）。
+    // system prompt = 内置 general 规则集 + user-skill 目录（id + description）。
+    // user-skill 详细内容走 load_skill 工具按需加载（claude skills 模式），
+    // 用户写多个 skill 也不会让启动 prompt 爆炸。
     let _ = skill; // 前端不再选；保留参数兼容
-    let system_prompt = skills::build_catalog_prompt(&state.db)?;
-    let skills_cache = skills::list_all(&state.db)?;
+    let locale_lbl = locale_label(locale.as_deref().unwrap_or("en"));
+    let system_prompt = skills::build_catalog_prompt(&state.db, locale_lbl)?;
+    let user_skills_cache = skills::list_user(&state.db)?;
 
     let session_id = uuid::Uuid::new_v4().to_string();
     let cfg = session::SessionConfig {
@@ -159,7 +171,7 @@ pub async fn ai_session_start(
         target_id,
         skill: "general".to_string(),
         system_prompt,
-        skills_cache,
+        user_skills_cache,
         model,
         client,
         redact_rules: sanitize::default_rules(),

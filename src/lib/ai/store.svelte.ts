@@ -7,7 +7,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { t } from "../i18n/index.svelte.ts";
+import { t, locale as currentLocale } from "../i18n/index.svelte.ts";
 import type {
   AiSessionInfo,
   AiSettings,
@@ -96,6 +96,7 @@ export async function startSession(args: {
     skill: args.skill,
     provider: args.provider,
     model: args.model,
+    locale: currentLocale(),
   });
   _sessionByTarget[args.targetId] = info;
   _chatBySession[info.session_id] = [];

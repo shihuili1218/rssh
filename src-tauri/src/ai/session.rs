@@ -56,11 +56,12 @@ pub struct SessionConfig {
     pub session_id: String,
     pub target_id: String,
     pub skill: String,
-    /// catalog system prompt（含通用规则 + skill 目录），启动前由 commands 层构造
+    /// system prompt：内置 general 规则集 + user-skill 目录（id + description），
+    /// 启动前由 commands 层构造。user-skill 详细内容走 `load_skill` 工具按需加载。
     pub system_prompt: String,
-    /// 启动时一次性 load 全部 skill（含 content）作为 load_skill 工具的来源；
-    /// 会话期间不重新读 DB，避免用户中途改 skill 影响当前会话
-    pub skills_cache: Vec<SkillRecord>,
+    /// 启动时一次性 snapshot 的 user-skill（仅自定义，不含 builtin general）；
+    /// `load_skill` 工具从这里查内容，会话期间不重读 DB，避免用户中途改 skill 影响当前会话。
+    pub user_skills_cache: Vec<SkillRecord>,
     pub model: String,
     pub client: Box<dyn LlmClient>,
     pub redact_rules: Vec<RedactRule>,
@@ -213,7 +214,7 @@ impl Actor {
             tools::TOOL_DOWNLOAD_FILE => self.handle_download_file(tc).await,
             tools::TOOL_ANALYZE_LOCALLY => self.handle_analyze_locally(tc).await,
             other => {
-                self.push_tool_error(&tc.id, &format!("未知工具: {other}"));
+                self.push_tool_error(&tc.id, &format!("Unknown tool: {other}"));
                 Ok(())
             }
         }
@@ -223,18 +224,31 @@ impl Actor {
         let input: LoadSkillInput = match serde_json::from_value(tc.input.clone()) {
             Ok(i) => i,
             Err(e) => {
-                self.push_tool_error(&tc.id, &format!("input 解析失败: {e}"));
+                self.push_tool_error(&tc.id, &format!("Failed to parse input: {e}"));
                 return Ok(());
             }
         };
-        let skill = match self.cfg.skills_cache.iter().find(|s| s.id == input.id) {
+        // 'general' 是内置 builtin，已经直接在 system prompt 里——不可被 load
+        if input.id == "general" {
+            self.push_tool_error(
+                &tc.id,
+                "'general' is the built-in rule set and is already in the system prompt — no need to load it.",
+            );
+            return Ok(());
+        }
+        let skill = match self.cfg.user_skills_cache.iter().find(|s| s.id == input.id) {
             Some(s) => s.clone(),
             None => {
-                let known: Vec<&str> = self.cfg.skills_cache.iter().map(|s| s.id.as_str()).collect();
+                let known: Vec<&str> = self
+                    .cfg
+                    .user_skills_cache
+                    .iter()
+                    .map(|s| s.id.as_str())
+                    .collect();
                 self.push_tool_error(
                     &tc.id,
                     &format!(
-                        "未知 skill id: {}。可用: {}",
+                        "Unknown user-skill id: {}. Available user skills: [{}]",
                         input.id,
                         known.join(", ")
                     ),
@@ -243,12 +257,12 @@ impl Actor {
             }
         };
         self.audit_push(AuditKind::Note {
-            message: format!("loaded skill: {} ({})", skill.id, skill.name),
+            message: format!("loaded user-skill: {} ({})", skill.id, skill.name),
         });
         self.history.push(ChatMessage::ToolResult {
             tool_call_id: tc.id,
             content: format!(
-                "# {} (id: {})\n\n{}\n\n---\n\n{}",
+                "# {} (id: {})\n\n_{}_\n\n---\n\n{}",
                 skill.name, skill.id, skill.description, skill.content
             ),
             is_error: false,
@@ -260,7 +274,7 @@ impl Actor {
         let input: DownloadFileInput = match serde_json::from_value(tc.input.clone()) {
             Ok(i) => i,
             Err(e) => {
-                self.push_tool_error(&tc.id, &format!("input 解析失败: {e}"));
+                self.push_tool_error(&tc.id, &format!("Failed to parse input: {e}"));
                 return Ok(());
             }
         };
@@ -271,7 +285,7 @@ impl Actor {
             None => {
                 self.push_tool_error(
                     &tc.id,
-                    "当前会话目标是本地 shell，不需要 SFTP。直接把路径告诉用户即可。",
+                    "This session's target is a local shell, so SFTP isn't needed. Just tell the user the path.",
                 );
                 return Ok(());
             }
@@ -308,7 +322,7 @@ impl Actor {
         let result: AppResult<u64> = async {
             tokio::fs::create_dir_all(&local_dir)
                 .await
-                .map_err(|e| AppError::Other(format!("创建本地目录失败: {e}")))?;
+                .map_err(|e| AppError::Other(format!("Failed to create local directory: {e}")))?;
             let sftp = SftpHandle::from_handle(&ssh_handle).await?;
             sftp.download_to_path(&input.remote_path, &local_path, max_bytes)
                 .await
@@ -334,7 +348,7 @@ impl Actor {
                 self.history.push(ChatMessage::ToolResult {
                     tool_call_id: tc.id,
                     content: format!(
-                        "下载完成：{} ({} 字节)。文件已落到用户本机；请告诉用户路径，让他用本地工具自行分析。",
+                        "Download complete: {} ({} bytes). The file is now on the user's machine; tell the user the path and let them analyze it with local tools.",
                         local_str, bytes
                     ),
                     is_error: false,
@@ -342,13 +356,13 @@ impl Actor {
             }
             Err(e) => {
                 self.audit_push(AuditKind::Note {
-                    message: format!("download_file 失败: {e}"),
+                    message: format!("download_file failed: {e}"),
                 });
                 self.push_tool_error(
                     &tc.id,
                     &format!(
-                        "rssh 无法通过 SFTP 直连目标拉文件（{e}）。常见原因：用户是经跳板手动 ssh 进去的，连通路径未直达。\
-                         请告诉用户：用 scp / rsync / sz 等手段把 {} 自行拉到本机，分析完后把关键结果贴回对话。",
+                        "rssh cannot SFTP directly to the target ({e}). Common cause: the user manually ssh'd through a bastion, so the connection path isn't direct. \
+                         Please tell the user to use scp / rsync / sz to pull {} to their local machine themselves, then paste the key analysis output back into the chat.",
                         input.remote_path
                     ),
                 );
@@ -361,7 +375,7 @@ impl Actor {
         let input: AnalyzeLocallyInput = match serde_json::from_value(tc.input.clone()) {
             Ok(i) => i,
             Err(e) => {
-                self.push_tool_error(&tc.id, &format!("input 解析失败: {e}"));
+                self.push_tool_error(&tc.id, &format!("Failed to parse input: {e}"));
                 return Ok(());
             }
         };
@@ -371,7 +385,7 @@ impl Actor {
             self.push_tool_error(
                 &tc.id,
                 &format!(
-                    "本地路径不存在：{}。先用 download_file 把文件拉到本机。",
+                    "Local path does not exist: {}. Use download_file first to pull the file to the local machine.",
                     input.local_path
                 ),
             );
@@ -395,15 +409,15 @@ impl Actor {
 
         use tauri::{WebviewUrl, WebviewWindowBuilder};
         WebviewWindowBuilder::new(&self.app, &label, WebviewUrl::App("index.html".into()))
-            .title("RSSH — 本地分析")
+            .title("RSSH — Local Analysis")
             .inner_size(1200.0, 800.0)
             .initialization_script(&init_script)
             .build()
-            .map_err(|e| AppError::Other(format!("打开新窗口失败: {e}")))?;
+            .map_err(|e| AppError::Other(format!("Failed to open new window: {e}")))?;
 
         self.audit_push(AuditKind::Note {
             message: format!(
-                "analyze_locally: spawn 新窗口分析 {} (task: {})",
+                "analyze_locally: spawned new window for {} (task: {})",
                 input.local_path, input.task
             ),
         });
@@ -411,9 +425,9 @@ impl Actor {
         self.history.push(ChatMessage::ToolResult {
             tool_call_id: tc.id,
             content: format!(
-                "已开新窗口启动独立 AI 会话分析 {}（任务：{}）。\
-                 本会话不会收到分析结果，继续推进当前的远端排障即可；\
-                 用户在新窗口看到结果后会自行决定怎么把结论带回这边。",
+                "Opened a new window with a separate AI session to analyze {} (task: {}). \
+                 This session will NOT receive the analysis result — continue with the current remote diagnosis. \
+                 Once the user has the result in the new window, they'll decide how to bring the conclusion back here.",
                 input.local_path, input.task
             ),
             is_error: false,
@@ -425,7 +439,7 @@ impl Actor {
         let input: RunCommandInput = match serde_json::from_value(tc.input.clone()) {
             Ok(i) => i,
             Err(e) => {
-                self.push_tool_error(&tc.id, &format!("input 解析失败: {e}"));
+                self.push_tool_error(&tc.id, &format!("Failed to parse input: {e}"));
                 return Ok(());
             }
         };
@@ -433,7 +447,7 @@ impl Actor {
         if let Err(e) = sanitize::validate(&input.cmd) {
             self.push_tool_error(
                 &tc.id,
-                &format!("rssh 拒绝该命令：{e}。换一条符合规则的重提。"),
+                &format!("rssh refused the command: {e}. Try a compliant rewrite."),
             );
             return Ok(());
         }
@@ -468,7 +482,7 @@ impl Actor {
         loop {
             let action = match self.action_rx.recv().await {
                 Some(a) => a,
-                None => return Err(AppError::Other("会话 channel 关闭".into())),
+                None => return Err(AppError::Other("Session channel closed".into())),
             };
             match action {
                 UserAction::RejectCommand { tool_call_id, reason } if tool_call_id == tc.id => {
@@ -478,7 +492,7 @@ impl Actor {
                     });
                     self.push_tool_error(
                         &tc.id,
-                        &format!("用户拒绝该命令。理由: {reason}。根据这个理由调整方案。"),
+                        &format!("User rejected the command. Reason: {reason}. Adjust your plan based on this reason."),
                     );
                     return Ok(());
                 }
@@ -523,7 +537,7 @@ impl Actor {
                     });
                     return Ok(());
                 }
-                UserAction::Stop => return Err(AppError::Other("会话已停止".into())),
+                UserAction::Stop => return Err(AppError::Other("Session stopped".into())),
                 _ => continue,
             }
         }

@@ -87,7 +87,7 @@ pub fn truncate(input: &str, max_bytes: usize) -> Truncated {
     let dropped = input.len() - cut;
     let mut text = head.to_string();
     text.push_str(&format!(
-        "\n... [TRUNCATED: 截断了 {dropped} 字节] ..."
+        "\n... [TRUNCATED: dropped {dropped} bytes] ..."
     ));
     Truncated {
         text,
@@ -101,13 +101,13 @@ pub fn truncate(input: &str, max_bytes: usize) -> Truncated {
 #[derive(Debug, thiserror::Error, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ShapeError {
-    #[error("禁止的破坏性命令: {0}")]
+    #[error("Destructive command not allowed: {0}")]
     Destructive(String),
-    #[error("交互式刷屏命令必须用批处理形态: {0}")]
+    #[error("Interactive screen-redrawing command requires batch flags: {0}")]
     Interactive(String),
-    #[error("循环采样必须显式带次数（interval count）: {0}")]
+    #[error("Loop sampling must carry an explicit count (interval count): {0}")]
     UnboundedLoop(String),
-    #[error("空命令")]
+    #[error("Empty command")]
     Empty,
 }
 
@@ -190,7 +190,7 @@ pub fn validate(cmd: &str) -> Result<(), ShapeError> {
             .skip(1)
             .any(|t| t.starts_with("-b") || t.starts_with("-l"));
         if !has_batch {
-            return Err(ShapeError::Interactive("top（缺 -b 或 -l 批处理标志）".into()));
+            return Err(ShapeError::Interactive("top (missing -b or -l batch flag)".into()));
         }
     }
 
@@ -208,7 +208,7 @@ pub fn validate(cmd: &str) -> Result<(), ShapeError> {
         }
         if maxc < 2 {
             return Err(ShapeError::UnboundedLoop(format!(
-                "{first} 需要 'interval count' 两个连续数字"
+                "{first} requires two consecutive numbers 'interval count'"
             )));
         }
     }

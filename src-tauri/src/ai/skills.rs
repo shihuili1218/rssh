@@ -1,5 +1,8 @@
-//! Skill 管理：内置 5 个（include_str! 内嵌）+ 用户自定义（DB ai_skills 表）。
-//! 内置 skill 不可改不可删；用户自定义完全可控。
+//! Skill 管理：1 个内置（`general`，include_str! 内嵌）+ 用户自定义（DB ai_skills 表）。
+//! 内置不可改不可删；用户自定义完全可控。
+//!
+//! 设计哲学：skill 是规则集，不是命令脚本——LLM 自己挑命令。所以一份 general 装下所有场景，
+//! 按场景路由 + lazy-load 已经被砍掉。用户加 user-skill 时直接拼到 system prompt 末尾。
 
 use serde::{Deserialize, Serialize};
 
@@ -15,72 +18,46 @@ pub struct SkillRecord {
     pub builtin: bool,
 }
 
-/// 内置 skill 元数据 + 内容来源。
-const BUILTIN: &[(&str, &str, &str, &str)] = &[
-    (
-        "general",
-        "通用对话",
-        "默认 skill，LLM 自己根据用户问题路由到 CPU/内存场景",
-        super::prompts::GENERAL,
-    ),
-    (
-        "cpu-java",
-        "CPU 高 — Java",
-        "Java 进程 CPU 排障：jstack/jstat/async-profiler",
-        super::prompts::CPU_JAVA,
-    ),
-    (
-        "cpu-go",
-        "CPU 高 — Go",
-        "Go 进程 CPU 排障：pprof endpoint + perf 兜底",
-        super::prompts::CPU_GO,
-    ),
-    (
-        "mem-java",
-        "内存高 — Java",
-        "Java 进程内存排障：jstat/jmap -histo/heap dump",
-        super::prompts::MEM_JAVA,
-    ),
-    (
-        "mem-go",
-        "内存高 — Go",
-        "Go 进程内存排障：pprof heap inuse_space",
-        super::prompts::MEM_GO,
-    ),
-];
+const BUILTIN_ID: &str = "general";
+const BUILTIN_NAME: &str = "General Ops diagnosis";
+const BUILTIN_DESC: &str =
+    "Default rule set + workflow reference for CPU / memory / general triage. The LLM picks commands itself.";
+
+fn builtin_record() -> SkillRecord {
+    SkillRecord {
+        id: BUILTIN_ID.into(),
+        name: BUILTIN_NAME.into(),
+        description: BUILTIN_DESC.into(),
+        content: super::prompts::GENERAL.into(),
+        builtin: true,
+    }
+}
 
 pub fn list_all(db: &Db) -> AppResult<Vec<SkillRecord>> {
-    let mut out: Vec<SkillRecord> = BUILTIN
-        .iter()
-        .map(|(id, name, desc, content)| SkillRecord {
-            id: (*id).to_string(),
-            name: (*name).to_string(),
-            description: (*desc).to_string(),
-            content: (*content).to_string(),
-            builtin: true,
-        })
-        .collect();
-    for u in ai_skill::list(db)? {
-        out.push(SkillRecord {
+    let mut out = vec![builtin_record()];
+    for u in list_user(db)? {
+        out.push(u);
+    }
+    Ok(out)
+}
+
+/// 仅返回用户自定义 skill（不含 builtin general）。给会话启动时 snapshot user-skill cache 用。
+pub fn list_user(db: &Db) -> AppResult<Vec<SkillRecord>> {
+    Ok(ai_skill::list(db)?
+        .into_iter()
+        .map(|u| SkillRecord {
             id: u.id,
             name: u.name,
             description: u.description,
             content: u.content,
             builtin: false,
-        });
-    }
-    Ok(out)
+        })
+        .collect())
 }
 
 pub fn get(db: &Db, id: &str) -> AppResult<Option<SkillRecord>> {
-    if let Some(b) = BUILTIN.iter().find(|t| t.0 == id) {
-        return Ok(Some(SkillRecord {
-            id: b.0.to_string(),
-            name: b.1.to_string(),
-            description: b.2.to_string(),
-            content: b.3.to_string(),
-            builtin: true,
-        }));
+    if id == BUILTIN_ID {
+        return Ok(Some(builtin_record()));
     }
     Ok(ai_skill::get(db, id)?.map(|u| SkillRecord {
         id: u.id,
@@ -92,7 +69,7 @@ pub fn get(db: &Db, id: &str) -> AppResult<Option<SkillRecord>> {
 }
 
 pub fn is_builtin(id: &str) -> bool {
-    BUILTIN.iter().any(|t| t.0 == id)
+    id == BUILTIN_ID
 }
 
 pub fn save_user(db: &Db, rec: &SkillRecord) -> AppResult<()> {
@@ -123,40 +100,38 @@ pub fn delete_user(db: &Db, id: &str) -> AppResult<()> {
     ai_skill::delete(db, id)
 }
 
-/// 构造会话启动用的 catalog prompt：通用规则 + 各 skill 的 description（不含详细 content）。
-/// LLM 看到 skill 目录，按需用 `load_skill` 工具加载具体场景的完整工作流。
-/// 模式参考 Anthropic Skills —— lazy load 节省启动 token。
-pub fn build_catalog_prompt(db: &Db) -> AppResult<String> {
-    let all = list_all(db)?;
+/// 构造会话启动用的 system prompt：
+/// - builtin general 规则集 **直接展开**（永远在 prompt 里）
+/// - user-skill 列表 **只放 id + description**（catalog 形态），LLM 用 `load_skill(<id>)`
+///   工具按需加载详细内容——claude skills 模式，用户写多个 skill 启动 prompt 不爆炸。
+///
+/// `user_locale_label` 是给 LLM 的回复语言提示（如 "English"、"Chinese (Simplified)"），
+/// 由 commands 层根据前端 UI locale 解析后传入。
+pub fn build_catalog_prompt(db: &Db, user_locale_label: &str) -> AppResult<String> {
     let mut s = String::new();
-    s.push_str("你是运维排障助手，跑在 Linux / macOS / *BSD 上都行。具体场景的完整工作流通过 `load_skill` 工具按需加载。\n\n");
+    s.push_str(super::prompts::GENERAL);
 
-    s.push_str("## 通用边界（任何场景都适用）\n\n");
-    s.push_str("- **只诊断不修复**。绝不 propose 破坏性命令（kill / rm / dd / mkfs / iptables / shutdown / reboot / chmod -R 等）；rssh 的 shape validator 也会兜底拦截。\n");
-    s.push_str("- **每条命令都会先经用户点击确认才执行**。`explain`（含义）和 `side_effect`（副作用）必须诚实。\n");
-    s.push_str("- **状态歧义就问用户**：多 PID 让用户选；不确定哪个端口跑了 pprof 让用户协助；不替用户猜。\n");
-    s.push_str("- **第一步永远是探查环境**：`uname -s` / `cat /etc/os-release` / `which <工具>`。\n");
-    s.push_str("- **不用刷屏命令**：不用 `top`（用 `top -bn1` 或 `top -l 1`）、`htop`、`watch`、`tail -f`。\n");
-    s.push_str("- **重复采样必须显式带次数**：`vmstat 1 5` 而非 `vmstat 1`。\n");
-    s.push_str("- **重数据本地预聚合**：火焰图必须用 folded format；jstack 多次采样自己聚合 top-20。\n");
-    s.push_str("- **工具未安装时引导用户安装**，不替用户装。\n\n");
-
-    s.push_str("## 可用工具\n\n");
-    s.push_str("- `run_command(cmd, explain, side_effect, timeout_s)` —— 在用户的终端执行一条命令\n");
-    s.push_str("- `download_file(remote_path, max_mb)` —— SFTP 拉远端文件到用户本机（dump / pprof / perf.data 等）。经跳板手动 ssh 进去时可能失败，会让你引导用户手动 scp。\n");
-    s.push_str("- `analyze_locally(local_path, task)` —— 开新窗口 + 本地 shell + 独立 AI 会话分析下载的文件。本会话拿不到结果，只在远端跑分析会和被诊断进程抢资源时才用。\n");
-    s.push_str("- `load_skill(id)` —— 加载某个 skill 的完整工作流文档；判断场景后**第一时间**调用。\n\n");
-
-    s.push_str("## 可用 skill 目录\n\n");
-    s.push_str("用户描述问题后，你判断场景 → 用 `load_skill(<id>)` 拉取对应详细工作流 → 按工作流执行。\n\n");
-    for r in &all {
-        let tag = if r.builtin { "" } else { " [用户自定义]" };
-        s.push_str(&format!(
-            "- **{}** (id: `{}`){} — {}\n",
-            r.name, r.id, tag,
-            if r.description.is_empty() { "（无描述）" } else { &r.description }
-        ));
+    let user_skills = ai_skill::list(db)?;
+    if !user_skills.is_empty() {
+        s.push_str("\n\n---\n\n# User-defined skills (catalog)\n\n");
+        s.push_str(
+            "The user has defined the following extra skills. \
+             Each entry is just an id + one-line description; \
+             when a user-skill matches the current problem, call `load_skill(<id>)` to pull its full content, then follow it.\n\n",
+        );
+        for u in user_skills {
+            let desc = if u.description.is_empty() {
+                "(no description)"
+            } else {
+                &u.description
+            };
+            s.push_str(&format!("- **{}** (id: `{}`) — {}\n", u.name, u.id, desc));
+        }
     }
-    s.push_str("\n如果场景不明朗（用户问题模糊），先问用户澄清；如果确实只是通用聊天，加载 `general`。\n");
+
+    s.push_str(&format!(
+        "\n---\n\n# Response language\n\nRespond to the user in {user_locale_label}. Keep tool-call arguments (cmd, explain, side_effect, etc.) consistent with the user's language too — those are also user-facing.\n"
+    ));
+
     Ok(s)
 }
