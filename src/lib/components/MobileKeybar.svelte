@@ -55,7 +55,7 @@
     .key:active {
         background: var(--divider);
     }
-    .key.mod.active, .key.active {
+    .key.mod.active {
         background: var(--accent);
         color: #fff;
     }
