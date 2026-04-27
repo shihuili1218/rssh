@@ -407,31 +407,47 @@ impl Actor {
         let init_script = format!("window.__rssh_ai_handoff = {};", json_literal);
         let label = format!("rssh-ai-{}", uuid::Uuid::new_v4().simple());
 
-        use tauri::{WebviewUrl, WebviewWindowBuilder};
-        WebviewWindowBuilder::new(&self.app, &label, WebviewUrl::App("index.html".into()))
-            .title("RSSH — Local Analysis")
-            .inner_size(1200.0, 800.0)
-            .initialization_script(&init_script)
-            .build()
-            .map_err(|e| AppError::Other(format!("Failed to open new window: {e}")))?;
+        // Tauri 2 把 .title()/.inner_size() 等窗口方法限定在 #[cfg(desktop)]，
+        // 移动端不存在。analyze_locally 的本质就是开新窗口，移动端语义上不存在，
+        // 直接告知 LLM 工具不可用。
+        #[cfg(desktop)]
+        {
+            use tauri::{WebviewUrl, WebviewWindowBuilder};
+            WebviewWindowBuilder::new(&self.app, &label, WebviewUrl::App("index.html".into()))
+                .title("RSSH — Local Analysis")
+                .inner_size(1200.0, 800.0)
+                .initialization_script(&init_script)
+                .build()
+                .map_err(|e| AppError::Other(format!("Failed to open new window: {e}")))?;
 
-        self.audit_push(AuditKind::Note {
-            message: format!(
-                "analyze_locally: spawned new window for {} (task: {})",
-                input.local_path, input.task
-            ),
-        });
+            self.audit_push(AuditKind::Note {
+                message: format!(
+                    "analyze_locally: spawned new window for {} (task: {})",
+                    input.local_path, input.task
+                ),
+            });
 
-        self.history.push(ChatMessage::ToolResult {
-            tool_call_id: tc.id,
-            content: format!(
-                "Opened a new window with a separate AI session to analyze {} (task: {}). \
-                 This session will NOT receive the analysis result — continue with the current remote diagnosis. \
-                 Once the user has the result in the new window, they'll decide how to bring the conclusion back here.",
-                input.local_path, input.task
-            ),
-            is_error: false,
-        });
+            self.history.push(ChatMessage::ToolResult {
+                tool_call_id: tc.id,
+                content: format!(
+                    "Opened a new window with a separate AI session to analyze {} (task: {}). \
+                     This session will NOT receive the analysis result — continue with the current remote diagnosis. \
+                     Once the user has the result in the new window, they'll decide how to bring the conclusion back here.",
+                    input.local_path, input.task
+                ),
+                is_error: false,
+            });
+        }
+
+        #[cfg(mobile)]
+        {
+            let _ = (init_script, label);
+            self.push_tool_error(
+                &tc.id,
+                "analyze_locally is desktop-only: this build cannot spawn additional windows. Continue diagnosis in the current session.",
+            );
+        }
+
         Ok(())
     }
 

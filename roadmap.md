@@ -4,4 +4,4 @@
 - 补齐cli功能（group...）cli-first
 - Host key / known_hosts 可视化
 - rssh status CLI 子命令 — 列当前活跃 SSH session / forward / SFTP
-- 增加 ai 对话模块，提供给ai输入命令/输出接口，内置 skill 排查常见问题（类似CPU高就排查现场/进程或者生成火焰图，分析火焰图。内存高就dump，分析。），管理 skill
+- 移动端支持ai dianose
