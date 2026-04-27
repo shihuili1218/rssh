@@ -115,9 +115,8 @@ pub fn build_catalog_prompt(db: &Db, user_locale_label: &str) -> AppResult<Strin
     if !user_skills.is_empty() {
         s.push_str("\n\n---\n\n# User-defined skills (catalog)\n\n");
         s.push_str(
-            "The user has defined the following extra skills. \
-             Each entry is just an id + one-line description; \
-             when a user-skill matches the current problem, call `load_skill(<id>)` to pull its full content, then follow it.\n\n",
+            "The user has authored the following extra skills. \
+             When one matches the current problem, use `load_skill(<id>)` (described in the Tools section) to pull its full content, then follow it.\n\n",
         );
         for u in user_skills {
             let desc = if u.description.is_empty() {
