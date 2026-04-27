@@ -215,25 +215,6 @@ export function terminalPaste(tabId: string, text: string) {
   _terminalControls.get(tabId)?.paste(text);
 }
 
-/* ─── Mobile soft keyboard control ───
- * 移动端 xterm 默认每次交互自动 focus 隐藏 textarea 召出系统键盘，
- * iOS 因此把长按归类为"粘贴菜单"压掉选择手柄。改成显式控制：终端
- * 把 show/hide 句柄注册进来，MobileKeybar 提供按钮让用户主动召唤。 */
-interface KeyboardControl { show(): void; hide(): void; }
-let _keyboardControl: KeyboardControl | null = null;
-let _keyboardVisible = $state(false);
-export function registerKeyboardControl(c: KeyboardControl) { _keyboardControl = c; }
-export function unregisterKeyboardControl() { _keyboardControl = null; _keyboardVisible = false; }
-export function keyboardVisible() { return _keyboardVisible; }
-export function toggleKeyboard() {
-  if (!_keyboardControl) return;
-  if (_keyboardVisible) { _keyboardControl.hide(); _keyboardVisible = false; }
-  else { _keyboardControl.show(); _keyboardVisible = true; }
-}
-/** 由 TerminalPane 在 textarea 实际 blur 时调用，保持状态同步
- *  （iOS 用户点 dismiss 键盘时不走 toggleKeyboard 路径）。 */
-export function notifyKeyboardBlurred() { _keyboardVisible = false; }
-
 /** Read system clipboard. On desktop, goes through Rust to bypass
  *  WebKit's permission prompt for externally-sourced content. */
 export async function readClipboard(): Promise<string> {
