@@ -25,6 +25,16 @@
     let isNew = $state(false);
     let savingSkill = $state(false);
     let skillNote = $state<string | null>(null);
+    let confirmingDelete = $state(false);
+    let confirmDeleteTimer: number | null = null;
+
+    function resetDeleteConfirm() {
+        confirmingDelete = false;
+        if (confirmDeleteTimer !== null) {
+            clearTimeout(confirmDeleteTimer);
+            confirmDeleteTimer = null;
+        }
+    }
 
     onMount(async () => {
         const s = await ai.loadSettings();
@@ -85,18 +95,21 @@
         };
         isNew = true;
         skillNote = null;
+        resetDeleteConfirm();
     }
 
     function viewSkill(s: SkillRecord) {
         editing = { ...s };
         isNew = false;
         skillNote = null;
+        resetDeleteConfirm();
     }
 
     function cancelEdit() {
         editing = null;
         isNew = false;
         skillNote = null;
+        resetDeleteConfirm();
     }
 
     async function saveSkill() {
@@ -130,9 +143,20 @@
 
     async function removeSkill(s: SkillRecord) {
         if (s.builtin) return;
-        if (!confirm(t("ai.settings.skills.confirm_delete", { name: s.name }))) return;
+        // 二次点击确认：第一次切到 "click again to confirm" 状态，3s 内不再点就回退
+        if (!confirmingDelete) {
+            confirmingDelete = true;
+            confirmDeleteTimer = window.setTimeout(() => {
+                confirmingDelete = false;
+                confirmDeleteTimer = null;
+            }, 3000);
+            return;
+        }
+        resetDeleteConfirm();
         try {
             await ai.deleteSkill(s.id);
+            editing = null;
+            isNew = false;
             await refreshSkills();
         } catch (e) {
             skillNote = t("ai.settings.skills.error.delete_failed", { error: errMsg(e) });
@@ -229,7 +253,7 @@
                 <input id="sk-desc" type="text" bind:value={editing.description} disabled={editing.builtin}
                        placeholder={t("ai.settings.skills.placeholder.desc")}/>
             </div>
-            <div class="row vert">
+            <div class="row">
                 <label for="sk-content">SYSTEM PROMPT</label>
                 <textarea id="sk-content" bind:value={editing.content} disabled={editing.builtin}
                           rows="20"
@@ -242,7 +266,10 @@
                     </button>
                 {/if}
                 {#if !editing.builtin && !isNew}
-                    <button class="btn btn-sm btn-danger" onclick={() => editing && removeSkill(editing)}>{t("ai.settings.skills.btn.delete")}</button>
+                    <button class="btn btn-sm btn-danger" class:confirming={confirmingDelete}
+                            onclick={() => editing && removeSkill(editing)}>
+                        {confirmingDelete ? t("ai.settings.skills.btn.delete_confirm") : t("ai.settings.skills.btn.delete")}
+                    </button>
                 {/if}
                 <button class="btn btn-sm" onclick={cancelEdit}>{editing.builtin ? t("ai.settings.skills.btn.back") : t("ai.settings.skills.btn.cancel")}</button>
             </div>
@@ -272,30 +299,23 @@
     .form {
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 10px;
     }
     .row {
         display: flex;
-        align-items: center;
-        gap: 12px;
-    }
-    .row.vert {
         flex-direction: column;
-        align-items: stretch;
+        gap: 4px;
     }
     .row label {
-        min-width: 120px;
-        text-align: right;
-    }
-    .row.vert label {
-        text-align: left;
-        min-width: 0;
+        font-size: 12px;
+        color: var(--text-sub);
     }
     .row input[type="text"],
     .row input[type="password"],
     .row select,
     .row textarea {
-        flex: 1;
+        width: 100%;
+        box-sizing: border-box;
     }
     .row textarea {
         font-family: monospace;
@@ -309,6 +329,13 @@
         gap: 8px;
         align-items: center;
         margin-top: 4px;
+    }
+    .btn-danger.confirming {
+        animation: confirmPulse 1.2s ease-in-out infinite;
+    }
+    @keyframes confirmPulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(192, 57, 43, 0.45); }
+        50%      { box-shadow: 0 0 0 6px rgba(192, 57, 43, 0); }
     }
     .note {
         font-size: 12px;

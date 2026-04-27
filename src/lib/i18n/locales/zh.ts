@@ -217,6 +217,7 @@ const zh: Messages = {
   "ai.settings.skills.placeholder.desc": "一句话说明用途",
   "ai.settings.skills.placeholder.content": "告诉 LLM：场景、可用工具、铁律、工作流……",
   "ai.settings.skills.btn.delete": "删除",
+  "ai.settings.skills.btn.delete_confirm": "再点一次确认删除",
   "ai.settings.skills.btn.cancel": "取消",
   "ai.settings.skills.btn.back": "返回",
   "ai.settings.skills.error.builtin_readonly": "内置 skill 不可保存",

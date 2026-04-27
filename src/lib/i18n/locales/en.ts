@@ -215,6 +215,7 @@ const en = {
   "ai.settings.skills.placeholder.desc": "One line about its purpose",
   "ai.settings.skills.placeholder.content": "Tell the LLM: scenario, available tools, hard rules, workflow…",
   "ai.settings.skills.btn.delete": "Delete",
+  "ai.settings.skills.btn.delete_confirm": "Click again to confirm",
   "ai.settings.skills.btn.cancel": "Cancel",
   "ai.settings.skills.btn.back": "Back",
   "ai.settings.skills.error.builtin_readonly": "Builtin skills are read-only",
