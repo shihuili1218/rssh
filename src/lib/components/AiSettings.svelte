@@ -10,7 +10,6 @@
     let endpoint = $state("");
     let apiKey = $state("");
     let hasKey = $state(false);
-    let position = $state<"left" | "right">(ai.position());
     let savingByok = $state(false);
     let byokNote = $state<string | null>(null);
 
@@ -79,11 +78,6 @@
         const d = DEFAULTS[provider];
         if (!model) model = d.model;
     });
-
-    function setPos(p: "left" | "right") {
-        position = p;
-        ai.setPosition(p);
-    }
 
     function newSkill() {
         editing = {
@@ -199,12 +193,6 @@
             </button>
             {#if byokNote}<span class="note">{byokNote}</span>{/if}
         </div>
-    </div>
-
-    <div class="section-label">{t("ai.settings.section.position")}</div>
-    <div class="segmented">
-        <button class="seg-btn" class:active={position === "left"} onclick={() => setPos("left")}>{t("ai.settings.position.left")}</button>
-        <button class="seg-btn" class:active={position === "right"} onclick={() => setPos("right")}>{t("ai.settings.position.right")}</button>
     </div>
 
     <div class="section-label skill-header">
@@ -340,34 +328,6 @@
     .note {
         font-size: 12px;
         color: var(--accent);
-    }
-
-    .segmented {
-        display: inline-flex;
-        border: 1px solid var(--divider);
-        border-radius: var(--radius-sm);
-        overflow: hidden;
-        width: fit-content;
-    }
-    .seg-btn {
-        padding: 8px 18px;
-        border: none;
-        background: var(--bg);
-        color: var(--text-sub);
-        font-family: inherit;
-        font-size: 13px;
-        cursor: pointer;
-        border-right: 1px solid var(--divider);
-    }
-    .seg-btn:last-child { border-right: none; }
-    .seg-btn:hover:not(.active) {
-        background: var(--surface);
-        color: var(--text);
-    }
-    .seg-btn.active {
-        background: var(--accent);
-        color: #fff;
-        font-weight: 600;
     }
 
     .skill-header {
