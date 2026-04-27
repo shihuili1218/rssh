@@ -21,6 +21,8 @@ rssh 的设计反过来：尽可能融入你已有的 Unix 工具链。
 
 SSH 客户端是天生的运维工具，所有命令输入/输出都就经过它。RSSH GUI 提供了多个工具供 LLM 调用，为 LLM 提供了手和脚。
 
+skills 在 src-tauri/src/ai/prompts ，欢迎审查。
+
 当然安全是无比重要的，LLM 的任何操作都必须通过 RSSH 提供的工具，而所有操作都会在 RSSH 层 shape validator + 你的授权。
 
 ![img_ai.png](img_ai.png)
