@@ -113,12 +113,14 @@
         // from a previous crash or hot-reload.
         //
         // Skip this in cloned windows (window.__rssh_clone is set by
-        // open_tab_in_new_window): passing activeIds=[] would nuke every
+        // open_tab_in_new_window) and AI handoff windows (window.__rssh_ai_handoff
+        // is set by analyze_locally tool): passing activeIds=[] would nuke every
         // session in the shared AppState, including other windows' tabs.
-        if (!window.__rssh_clone) {
+        if (!window.__rssh_clone && !window.__rssh_ai_handoff) {
             invoke("reconcile_sessions", { activeIds: [] }).catch(() => {});
         }
         consumeCloneQuery();
+        consumeAiHandoff();
 
         const detachKeydown = attachShortcuts(shortcutsTable());
         const detachKeyup = attachKeyup((e) => {
@@ -131,6 +133,63 @@
         });
         return () => { detachKeydown(); detachKeyup(); };
     });
+
+    /* Consume window.__rssh_ai_handoff injected by analyze_locally tool.
+       工作流：开本地 shell tab → 等 PTY 就绪 → 启动独立 AI 会话 → 把 task 作为首条消息发过去。
+       PTY spawn 在 TerminalPane onMount 里走，前端轮询 sessionIdForTab 等就绪。 */
+    async function consumeAiHandoff() {
+        const data = window.__rssh_ai_handoff;
+        if (!data) return;
+        delete window.__rssh_ai_handoff;
+        let payload: { local_path: string; task: string };
+        try {
+            payload = JSON.parse(data);
+        } catch (e) {
+            console.error("Failed to parse AI handoff:", e);
+            return;
+        }
+
+        // 1. 开本地 shell tab
+        const tabId = `local:${crypto.randomUUID()}`;
+        app.addTab({type: "local", id: tabId, label: "AI 分析", meta: {}});
+        ai.openPanel();
+
+        // 2. 等本地 PTY 就绪（TerminalPane 异步 spawn + setSession）。300ms × 100 = 30s 上限
+        const sid = await waitFor(() => app.sessionIdForTab(tabId), 300, 100);
+        if (!sid) {
+            console.error("AI handoff: 本地 PTY 30s 内未就绪，放弃");
+            return;
+        }
+
+        // 3. 启动独立 AI 会话 + 发首条消息
+        try {
+            const settings = await ai.loadSettings();
+            if (!settings.has_api_key) {
+                console.error("AI handoff: 缺 API key，无法自动启动会话");
+                return;
+            }
+            const info = await ai.startSession({
+                targetKind: "local",
+                targetId: sid,
+                skill: "general",
+                provider: settings.provider,
+                model: settings.model,
+            });
+            const initialMsg = `请帮我在本机分析 \`${payload.local_path}\`。任务：${payload.task}`;
+            await ai.sendMessage(info.session_id, initialMsg);
+        } catch (e) {
+            console.error("AI handoff failed:", e);
+        }
+    }
+
+    async function waitFor<T>(probe: () => T | undefined, intervalMs: number, maxTries: number): Promise<T | undefined> {
+        for (let i = 0; i < maxTries; i++) {
+            const v = probe();
+            if (v !== undefined) return v;
+            await new Promise(r => setTimeout(r, intervalMs));
+        }
+        return undefined;
+    }
 
     /* Consume window.__rssh_clone injected by open_tab_in_new_window */
     function consumeCloneQuery() {

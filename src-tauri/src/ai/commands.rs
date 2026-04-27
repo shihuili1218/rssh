@@ -116,25 +116,28 @@ pub async fn ai_session_start(
         .ok_or_else(|| AppError::Config(format!("缺少 {provider} API key，请到设置里配置")))?;
     let endpoint = state.secret_store.get(&key_endpoint(&provider))?;
 
-    // 2. 校验 target 存在（命令在前端的 active terminal 里跑，后端只校验 id 合法）
-    match target_kind.as_str() {
+    // 2. 校验 target 存在 + 抓 SSH handle 给 download_file 工具复用
+    let ssh_handle = match target_kind.as_str() {
         "ssh" => {
-            if !locked(&state.sessions)?.contains_key(&target_id) {
-                return Err(AppError::NotFound("SSH session 不存在".into()));
-            }
+            let g = locked(&state.sessions)?;
+            let h = g
+                .get(&target_id)
+                .ok_or_else(|| AppError::NotFound("SSH session 不存在".into()))?;
+            Some(h.ssh_handle().clone())
         }
         #[cfg(not(target_os = "android"))]
         "local" => {
             if !locked(&state.pty_sessions)?.contains_key(&target_id) {
                 return Err(AppError::NotFound("Local PTY 不存在".into()));
             }
+            None
         }
         _ => {
             return Err(AppError::Config(format!(
                 "未知 target_kind: {target_kind}（应为 ssh 或 local）"
             )))
         }
-    }
+    };
 
     let client = llm::build_client(&provider, api_key, endpoint)?;
 
@@ -155,6 +158,8 @@ pub async fn ai_session_start(
         client,
         redact_rules: sanitize::default_rules(),
         max_output_bytes: sanitize::DEFAULT_MAX_OUTPUT_BYTES,
+        ssh_handle,
+        data_dir: state.data_dir.clone(),
     };
 
     let session = session::start(cfg, app)?;

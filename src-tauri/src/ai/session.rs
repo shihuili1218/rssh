@@ -8,6 +8,7 @@
 //!
 //! 这样命令在用户的交互终端里完整可见，没有任何后端注入或 byte 监控。
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -15,12 +16,14 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 
 use crate::error::{AppError, AppResult};
+use crate::ssh::client::SshHandle;
+use crate::ssh::sftp::SftpHandle;
 
 use super::audit::{AuditKind, AuditLog};
 use super::llm::{ChatDelta, ChatMessage, ChatRequest, DeltaSink, LlmClient, ToolCall};
 use super::sanitize::{self, RedactRule};
 use super::skills::SkillRecord;
-use super::tools::{self, LoadSkillInput, RunCommandInput};
+use super::tools::{self, AnalyzeLocallyInput, DownloadFileInput, LoadSkillInput, RunCommandInput};
 
 #[derive(Debug)]
 pub enum UserAction {
@@ -62,6 +65,11 @@ pub struct SessionConfig {
     pub client: Box<dyn LlmClient>,
     pub redact_rules: Vec<RedactRule>,
     pub max_output_bytes: usize,
+    /// SSH target 的连接 handle（本地 PTY target 为 None）。
+    /// download_file 工具复用这个 handle 起 SFTP 子系统。
+    pub ssh_handle: Option<SshHandle>,
+    /// dump 文件落地目录（实际文件写到 <data_dir>/diagnose/<session_id>/）。
+    pub data_dir: PathBuf,
 }
 
 pub fn start(cfg: SessionConfig, app: AppHandle) -> AppResult<DiagnoseSession> {
@@ -202,14 +210,8 @@ impl Actor {
         match tc.name.as_str() {
             tools::TOOL_RUN_COMMAND => self.handle_run_command(tc).await,
             tools::TOOL_LOAD_SKILL => self.handle_load_skill(tc).await,
-            tools::TOOL_DOWNLOAD_FILE => {
-                self.push_tool_error(&tc.id, "download_file MVP 暂未启用");
-                Ok(())
-            }
-            tools::TOOL_ANALYZE_LOCALLY => {
-                self.push_tool_error(&tc.id, "analyze_locally MVP 暂未启用");
-                Ok(())
-            }
+            tools::TOOL_DOWNLOAD_FILE => self.handle_download_file(tc).await,
+            tools::TOOL_ANALYZE_LOCALLY => self.handle_analyze_locally(tc).await,
             other => {
                 self.push_tool_error(&tc.id, &format!("未知工具: {other}"));
                 Ok(())
@@ -248,6 +250,171 @@ impl Actor {
             content: format!(
                 "# {} (id: {})\n\n{}\n\n---\n\n{}",
                 skill.name, skill.id, skill.description, skill.content
+            ),
+            is_error: false,
+        });
+        Ok(())
+    }
+
+    async fn handle_download_file(&mut self, tc: ToolCall) -> AppResult<()> {
+        let input: DownloadFileInput = match serde_json::from_value(tc.input.clone()) {
+            Ok(i) => i,
+            Err(e) => {
+                self.push_tool_error(&tc.id, &format!("input 解析失败: {e}"));
+                return Ok(());
+            }
+        };
+
+        // 本地 shell target 没必要 SFTP——文件已经在用户本机
+        let ssh_handle = match self.cfg.ssh_handle.as_ref() {
+            Some(h) => h.clone(),
+            None => {
+                self.push_tool_error(
+                    &tc.id,
+                    "当前会话目标是本地 shell，不需要 SFTP。直接把路径告诉用户即可。",
+                );
+                return Ok(());
+            }
+        };
+
+        let dl_id = uuid::Uuid::new_v4().to_string();
+        self.audit_push(AuditKind::DownloadProposed {
+            id: dl_id.clone(),
+            remote_path: input.remote_path.clone(),
+            max_mb: input.max_mb,
+        });
+        self.emit(
+            "download_started",
+            json!({
+                "id": dl_id,
+                "remote_path": input.remote_path,
+                "max_mb": input.max_mb,
+            }),
+        );
+
+        let basename = std::path::Path::new(&input.remote_path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| format!("dump-{}", &dl_id[..8]));
+        let local_dir = self
+            .cfg
+            .data_dir
+            .join("diagnose")
+            .join(&self.cfg.session_id);
+        let local_path = local_dir.join(&basename);
+        let max_bytes = (input.max_mb as u64).saturating_mul(1024 * 1024);
+
+        let result: AppResult<u64> = async {
+            tokio::fs::create_dir_all(&local_dir)
+                .await
+                .map_err(|e| AppError::Other(format!("创建本地目录失败: {e}")))?;
+            let sftp = SftpHandle::from_handle(&ssh_handle).await?;
+            sftp.download_to_path(&input.remote_path, &local_path, max_bytes)
+                .await
+        }
+        .await;
+
+        match result {
+            Ok(bytes) => {
+                let local_str = local_path.to_string_lossy().into_owned();
+                self.audit_push(AuditKind::DownloadCompleted {
+                    id: dl_id.clone(),
+                    local_path: local_str.clone(),
+                    bytes,
+                });
+                self.emit(
+                    "download_completed",
+                    json!({
+                        "id": dl_id,
+                        "local_path": local_str,
+                        "bytes": bytes,
+                    }),
+                );
+                self.history.push(ChatMessage::ToolResult {
+                    tool_call_id: tc.id,
+                    content: format!(
+                        "下载完成：{} ({} 字节)。文件已落到用户本机；请告诉用户路径，让他用本地工具自行分析。",
+                        local_str, bytes
+                    ),
+                    is_error: false,
+                });
+            }
+            Err(e) => {
+                self.audit_push(AuditKind::Note {
+                    message: format!("download_file 失败: {e}"),
+                });
+                self.push_tool_error(
+                    &tc.id,
+                    &format!(
+                        "rssh 无法通过 SFTP 直连目标拉文件（{e}）。常见原因：用户是经跳板手动 ssh 进去的，连通路径未直达。\
+                         请告诉用户：用 scp / rsync / sz 等手段把 {} 自行拉到本机，分析完后把关键结果贴回对话。",
+                        input.remote_path
+                    ),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_analyze_locally(&mut self, tc: ToolCall) -> AppResult<()> {
+        let input: AnalyzeLocallyInput = match serde_json::from_value(tc.input.clone()) {
+            Ok(i) => i,
+            Err(e) => {
+                self.push_tool_error(&tc.id, &format!("input 解析失败: {e}"));
+                return Ok(());
+            }
+        };
+
+        // 文件必须真存在——LLM 应该先 download_file
+        if !std::path::Path::new(&input.local_path).exists() {
+            self.push_tool_error(
+                &tc.id,
+                &format!(
+                    "本地路径不存在：{}。先用 download_file 把文件拉到本机。",
+                    input.local_path
+                ),
+            );
+            return Ok(());
+        }
+
+        // 把 handoff 注入到新窗口的 window.__rssh_ai_handoff；
+        // 新窗口的 AppShell 在 onMount 里读它 → 建本地 shell tab → 启动独立 AI 会话 → 发首条消息。
+        let handoff = json!({
+            "local_path": input.local_path,
+            "task": input.task,
+        })
+        .to_string();
+        let json_literal = serde_json::to_string(&handoff)
+            .map_err(|e| AppError::Other(format!("encode handoff: {e}")))?;
+        // 直接把 JSON 字符串赋值为 JS string；前端走 JSON.parse(data) 还原。
+        // 不要在这里 JSON.parse —— 否则 window.__rssh_ai_handoff 已经是 object，
+        // 前端再 JSON.parse 会撞 "[object Object]" 解析失败。
+        let init_script = format!("window.__rssh_ai_handoff = {};", json_literal);
+        let label = format!("rssh-ai-{}", uuid::Uuid::new_v4().simple());
+
+        use tauri::{WebviewUrl, WebviewWindowBuilder};
+        WebviewWindowBuilder::new(&self.app, &label, WebviewUrl::App("index.html".into()))
+            .title("RSSH — 本地分析")
+            .inner_size(1200.0, 800.0)
+            .initialization_script(&init_script)
+            .build()
+            .map_err(|e| AppError::Other(format!("打开新窗口失败: {e}")))?;
+
+        self.audit_push(AuditKind::Note {
+            message: format!(
+                "analyze_locally: spawn 新窗口分析 {} (task: {})",
+                input.local_path, input.task
+            ),
+        });
+
+        self.history.push(ChatMessage::ToolResult {
+            tool_call_id: tc.id,
+            content: format!(
+                "已开新窗口启动独立 AI 会话分析 {}（任务：{}）。\
+                 本会话不会收到分析结果，继续推进当前的远端排障即可；\
+                 用户在新窗口看到结果后会自行决定怎么把结论带回这边。",
+                input.local_path, input.task
             ),
             is_error: false,
         });

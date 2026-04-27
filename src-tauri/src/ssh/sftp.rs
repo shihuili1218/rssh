@@ -124,6 +124,57 @@ impl SftpHandle {
             .map_err(|e| AppError::Sftp(format!("{e}")))
     }
 
+    /// Stream-download a remote file to a local path with a hard size cap.
+    /// 超过 max_bytes 直接 bail（不开始下载）。无前端进度事件——AI 排障流程
+    /// 用，前端不需要进度条。
+    pub async fn download_to_path(
+        &self,
+        remote_path: &str,
+        local_path: &Path,
+        max_bytes: u64,
+    ) -> AppResult<u64> {
+        let meta = self
+            .sftp
+            .metadata(remote_path)
+            .await
+            .map_err(|e| AppError::Sftp(format!("metadata: {e}")))?;
+        let total = meta.size.unwrap_or(0);
+        if total > max_bytes {
+            return Err(AppError::Sftp(format!(
+                "文件 {} 大小 {} 字节超过限制 {} 字节",
+                remote_path, total, max_bytes
+            )));
+        }
+
+        let mut remote_file = self
+            .sftp
+            .open(remote_path)
+            .await
+            .map_err(|e| AppError::Sftp(format!("open: {e}")))?;
+        let mut local_file = tokio::fs::File::create(local_path).await?;
+
+        let mut transferred: u64 = 0;
+        let mut buf = vec![0u8; 32768];
+        loop {
+            let n = remote_file
+                .read(&mut buf)
+                .await
+                .map_err(|e| AppError::Sftp(format!("read: {e}")))?;
+            if n == 0 {
+                break;
+            }
+            local_file.write_all(&buf[..n]).await?;
+            transferred += n as u64;
+        }
+
+        remote_file
+            .shutdown()
+            .await
+            .map_err(|e| AppError::Sftp(format!("close: {e}")))?;
+
+        Ok(transferred)
+    }
+
     /// Stream-download a remote file to a local path, emitting progress events.
     pub async fn download_streaming(
         &self,

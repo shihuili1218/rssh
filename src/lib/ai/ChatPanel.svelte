@@ -239,11 +239,13 @@
         to { visibility: hidden; }
     }
     /* Markdown 内容样式 — 极致紧凑 */
-    .bubble.md { line-height: 1.32; font-size: 12.5px; }
+    /* 关键：覆盖 .bubble 默认的 pre-wrap。marked 输出的 HTML 标签间有 source-only `\n`，
+       pre-wrap 会把那些 `\n` 渲染成可见空行——经典 bug，markdown 气泡必须用 normal。 */
+    .bubble.md { line-height: 1.32; font-size: 12.5px; white-space: normal; }
     .bubble.md :global(> *:first-child) { margin-top: 0; }
     .bubble.md :global(> *:last-child) { margin-bottom: 0; }
-    .bubble.md :global(p) { margin: 0 0 2px; }
-    .bubble.md :global(p + p) { margin-top: 2px; }
+    .bubble.md :global(p) { margin: 0; }
+    .bubble.md :global(p + p) { margin-top: 0; }
     .bubble.md :global(br) { line-height: 1; }
     .bubble.md :global(code) {
         background: color-mix(in srgb, var(--text) 12%, transparent);

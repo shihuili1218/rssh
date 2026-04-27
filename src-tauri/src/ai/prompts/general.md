@@ -12,11 +12,16 @@
 
 ```
 run_command(cmd, explain, side_effect, timeout_s?)
-download_file(remote_path, max_mb)         // MVP 暂未启用
-analyze_locally(local_path, tool_hint)     // MVP 暂未启用
+download_file(remote_path, max_mb)         // SFTP 拉远端文件到用户本机
+analyze_locally(local_path, task)          // 开新窗口 + 本地 shell + 独立 AI 会话分析
 ```
 
-MVP 阶段只用 `run_command`。dump 类分析尽量用远端工具完成（`jmap -histo:live`、`curl + go tool pprof` 等）。
+`download_file`：复用现有 SSH 连接的 SFTP 子系统，文件落到 `<app_data>/rssh/diagnose/<session>/`。\
+**已知失败场景**：用户经跳板机手动 `ssh target` 进去时，rssh 拿到的连接是到跳板机的，SFTP 看不到 target 上的文件——此时下载会失败，工具会让你引导用户用 `scp` / `rsync` / `sz` 自行拉到本机。\
+\
+`analyze_locally`：rssh 会**开新窗口** + 本地 shell + 独立 AI 会话，把你给的 `task` 字符串作为首条消息发过去，由那边的 AI 和用户一起跑分析。**本会话不会收到结果**——这是设计：远端排障 / 本地分析解耦。如需引用结论，让用户从新窗口贴关键输出回来。\
+\
+优先级：能在远端用轻量命令完成的（`jmap -histo:live`、`go tool pprof -top` 远端跑等）优先在远端做。**只在远端跑分析会和被诊断进程抢资源时**（典型场景：4G+ heap dump 在远端跑 jhat / MAT 会再吃 4G+ 内存，几乎压垮已经吃紧的服务器）才走 download_file → analyze_locally。
 
 # 场景路由
 
@@ -47,7 +52,7 @@ MVP 阶段只用 `run_command`。dump 类分析尽量用远端工具完成（`jm
 2. `ps -eo pid,pcpu,rss,user,comm --sort=-rss | head -20` 找 Java 大 RSS 进程
 3. GC 健康：`jstat -gcutil <pid> 1000 10` + `jstat -gccapacity <pid> 1000 10`
 4. **存活直方图（STW 短）**：`jmap -histo:live <pid> | head -30`；副作用必须写明 STW
-5. 完整 heap dump 在 5 不够时才上：`jmap -dump:format=b,live,file=/tmp/rssh-heap-<pid>.hprof <pid>`，副作用写明 STW 较长（堆 4G ~100-300ms+）；下载到本地分析在 MVP 暂未启用，先告诉用户文件位置
+5. 完整 heap dump 在 4 不够时才上：`jmap -dump:format=b,live,file=/tmp/rssh-heap-<pid>.hprof <pid>`，副作用写明 STW 较长（堆 4G ~100-300ms+）；dump 完 → `download_file` 拉到本机 → `analyze_locally` 开新窗口跑分析（在远端跑 jhat / MAT 会再吃几 G 内存，可能压垮服务器）。本会话拿不到分析结果，让用户在新窗口看；他需要时会把关键输出贴回来
 
 ## 场景 D：内存高 — Go 进程
 工作流：

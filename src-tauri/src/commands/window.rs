@@ -13,11 +13,13 @@ use crate::error::{AppError, AppResult};
 /// so spawning a new window is cheap and does not fork the backend.
 #[tauri::command]
 pub fn open_tab_in_new_window(app: AppHandle, clone: String) -> AppResult<()> {
-    // `clone` is a JSON string from the frontend; embed it as a literal
-    // inside the init script by re-serializing to produce a valid JS string.
+    // `clone` is a JSON string from the frontend; embed it as a JS string literal.
+    // Frontend reads window.__rssh_clone as a string and JSON.parses it once.
+    // Do NOT JSON.parse here — that would store an object, and the frontend's
+    // JSON.parse(object) would coerce to "[object Object]" and throw.
     let json_literal = serde_json::to_string(&clone)
         .map_err(|e| AppError::Other(format!("Failed to encode clone payload: {e}")))?;
-    let init_script = format!("window.__rssh_clone = JSON.parse({});", json_literal);
+    let init_script = format!("window.__rssh_clone = {};", json_literal);
 
     let label = format!("rssh-{}", Uuid::new_v4().simple());
     WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))

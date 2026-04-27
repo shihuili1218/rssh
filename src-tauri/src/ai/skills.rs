@@ -142,6 +142,8 @@ pub fn build_catalog_prompt(db: &Db) -> AppResult<String> {
 
     s.push_str("## 可用工具\n\n");
     s.push_str("- `run_command(cmd, explain, side_effect, timeout_s)` —— 在用户的终端执行一条命令\n");
+    s.push_str("- `download_file(remote_path, max_mb)` —— SFTP 拉远端文件到用户本机（dump / pprof / perf.data 等）。经跳板手动 ssh 进去时可能失败，会让你引导用户手动 scp。\n");
+    s.push_str("- `analyze_locally(local_path, task)` —— 开新窗口 + 本地 shell + 独立 AI 会话分析下载的文件。本会话拿不到结果，只在远端跑分析会和被诊断进程抢资源时才用。\n");
     s.push_str("- `load_skill(id)` —— 加载某个 skill 的完整工作流文档；判断场景后**第一时间**调用。\n\n");
 
     s.push_str("## 可用 skill 目录\n\n");

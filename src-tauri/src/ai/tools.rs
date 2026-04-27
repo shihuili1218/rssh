@@ -85,23 +85,23 @@ pub fn all_tools() -> Vec<ToolSchema> {
         },
         ToolSchema {
             name: TOOL_ANALYZE_LOCALLY.into(),
-            description: "在用户本地电脑上跑分析工具（MAT/jhat、go tool pprof、perf script 等），\
-                输出被脱敏后回传。dump 二进制本身不会发给你；只有分析后的文本归因结果。\
-                工具未安装时会引导用户安装并报告失败。".into(),
+            description: "在用户本机分析之前 download_file 拉下来的文件（heap dump / pprof / perf.data 等）。\
+                rssh 会**新开一个窗口**，里面起一个本地 shell + 一个独立 AI 会话，把任务描述自动发给那边的 AI，由它和用户在新窗口里完成分析。\
+                **本会话不会收到分析结果**——这是设计：远端排障和本地分析解耦。新窗口里的分析进展用户可以直接看；如需引用分析结论，让用户把关键输出复制过来。\
+                只在远端工具会和被诊断进程抢资源（4G+ heap dump 上跑 jhat 会再吃 4G、几乎压垮已经内存吃紧的服务器）时才用。".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "local_path": {
                         "type": "string",
-                        "description": "之前 download_file 拉下来的本地路径。",
+                        "description": "之前 download_file 拉下来的本地绝对路径。",
                     },
-                    "tool_hint": {
+                    "task": {
                         "type": "string",
-                        "enum": ["pprof-top", "pprof-top-inuse", "mat-leak", "jhat-histo", "perf-folded"],
-                        "description": "要用哪种本地工具分析。",
+                        "description": "用一两句话告诉新窗口的 AI 要干什么，例如：\"分析 /var/.../heap.hprof，找内存泄漏 top suspects 并报告 retained size 排前 10 的对象\"。",
                     },
                 },
-                "required": ["local_path", "tool_hint"],
+                "required": ["local_path", "task"],
             }),
         },
     ]
@@ -126,7 +126,7 @@ pub struct DownloadFileInput {
 #[derive(Debug, Deserialize)]
 pub struct AnalyzeLocallyInput {
     pub local_path: String,
-    pub tool_hint: String,
+    pub task: String,
 }
 
 #[derive(Debug, Deserialize)]
