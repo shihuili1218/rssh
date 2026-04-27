@@ -1,6 +1,7 @@
 <script lang="ts">
     import { onMount } from "svelte";
     import * as ai from "../ai/store.svelte.ts";
+    import { t, errMsg } from "../i18n/index.svelte.ts";
     import type { LlmProvider, SkillRecord } from "../ai/types.ts";
 
     // ─── BYOK ─────────────────────────────────────────────────
@@ -38,7 +39,7 @@
         try {
             skills = await ai.listSkills();
         } catch (e) {
-            skillNote = `加载失败: ${e}`;
+            skillNote = t("ai.settings.skills.error.load_failed", { error: errMsg(e) });
         }
     }
 
@@ -55,10 +56,10 @@
             const s = await ai.loadSettings();
             hasKey = s.has_api_key;
             apiKey = "";
-            byokNote = "已保存";
+            byokNote = t("ai.settings.note.saved");
             setTimeout(() => (byokNote = null), 2000);
         } catch (e) {
-            byokNote = `保存失败: ${e}`;
+            byokNote = t("ai.settings.note.save_failed", { error: errMsg(e) });
         } finally {
             savingByok = false;
         }
@@ -101,11 +102,11 @@
     async function saveSkill() {
         if (!editing) return;
         if (editing.builtin) {
-            skillNote = "内置 skill 不可保存";
+            skillNote = t("ai.settings.skills.error.builtin_readonly");
             return;
         }
         if (!editing.name.trim() || !editing.content.trim() || !editing.id.trim()) {
-            skillNote = "id / 名称 / 内容不能为空";
+            skillNote = t("ai.settings.skills.error.empty_fields");
             return;
         }
         savingSkill = true;
@@ -121,7 +122,7 @@
             isNew = false;
             await refreshSkills();
         } catch (e) {
-            skillNote = `保存失败: ${e}`;
+            skillNote = t("ai.settings.skills.error.save_failed", { error: errMsg(e) });
         } finally {
             savingSkill = false;
         }
@@ -129,68 +130,68 @@
 
     async function removeSkill(s: SkillRecord) {
         if (s.builtin) return;
-        if (!confirm(`确认删除 skill "${s.name}"？`)) return;
+        if (!confirm(t("ai.settings.skills.confirm_delete", { name: s.name }))) return;
         try {
             await ai.deleteSkill(s.id);
             await refreshSkills();
         } catch (e) {
-            skillNote = `删除失败: ${e}`;
+            skillNote = t("ai.settings.skills.error.delete_failed", { error: errMsg(e) });
         }
     }
 </script>
 
 <div class="page">
     <div class="warn">
-        ⚠️ BYOK：你的命令输出经本地脱敏后会发送到所选 LLM 提供方。提供方可能按其条款使用这些数据
+        {t("ai.settings.warn.byok")}
         （<a href="https://www.anthropic.com/legal/privacy" target="_blank" rel="noopener">Anthropic</a>
          / <a href="https://openai.com/policies/privacy-policy/" target="_blank" rel="noopener">OpenAI</a>）。
     </div>
 
-    <div class="section-label">PROVIDER & MODEL</div>
+    <div class="section-label">{t("ai.settings.section.provider")}</div>
     <div class="form">
         <div class="row">
-            <label for="ai-provider">PROVIDER</label>
+            <label for="ai-provider">{t("ai.settings.label.provider")}</label>
             <select id="ai-provider" bind:value={provider}>
                 <option value="anthropic">Anthropic (Claude)</option>
-                <option value="openai">OpenAI 兼容端点</option>
+                <option value="openai">{t("ai.settings.provider.openai_compat")}</option>
             </select>
         </div>
         <div class="row">
-            <label for="ai-model">MODEL</label>
+            <label for="ai-model">{t("ai.settings.label.model")}</label>
             <input id="ai-model" type="text" bind:value={model} placeholder={DEFAULTS[provider].model}/>
         </div>
         <div class="row">
-            <label for="ai-endpoint">ENDPOINT</label>
-            <input id="ai-endpoint" type="text" bind:value={endpoint} placeholder="留空使用官方默认"/>
+            <label for="ai-endpoint">{t("ai.settings.label.endpoint")}</label>
+            <input id="ai-endpoint" type="text" bind:value={endpoint} placeholder={t("ai.settings.placeholder.endpoint")}/>
         </div>
         <div class="row">
-            <label for="ai-apikey">API KEY</label>
+            <label for="ai-apikey">{t("ai.settings.label.api_key")}</label>
             <input id="ai-apikey" type="password" bind:value={apiKey}
-                   placeholder={hasKey ? "已配置（留空保留）" : "未配置 — 在此粘贴"}/>
+                   placeholder={hasKey ? t("ai.settings.placeholder.api_key_set") : t("ai.settings.placeholder.api_key_unset")}/>
         </div>
         <div class="actions">
             <button class="btn btn-accent btn-sm" onclick={saveByok} disabled={savingByok}>
-                {savingByok ? "保存中…" : "保存"}
+                {savingByok ? t("ai.settings.btn.saving") : t("common.save")}
             </button>
             {#if byokNote}<span class="note">{byokNote}</span>{/if}
         </div>
     </div>
 
-    <div class="section-label">PANEL POSITION</div>
+    <div class="section-label">{t("ai.settings.section.position")}</div>
     <div class="segmented">
-        <button class="seg-btn" class:active={position === "left"} onclick={() => setPos("left")}>左侧</button>
-        <button class="seg-btn" class:active={position === "right"} onclick={() => setPos("right")}>右侧</button>
+        <button class="seg-btn" class:active={position === "left"} onclick={() => setPos("left")}>{t("ai.settings.position.left")}</button>
+        <button class="seg-btn" class:active={position === "right"} onclick={() => setPos("right")}>{t("ai.settings.position.right")}</button>
     </div>
 
     <div class="section-label skill-header">
-        SKILLS
+        {t("ai.settings.section.skills")}
         {#if !editing}
-            <button class="btn btn-sm" onclick={newSkill}>+ 新建</button>
+            <button class="btn btn-sm" onclick={newSkill}>{t("ai.settings.skills.new")}</button>
         {/if}
     </div>
 
     {#if skillNote}
-        <div class="banner">{skillNote} <button class="banner-close" onclick={() => (skillNote = null)} aria-label="关闭">×</button></div>
+        <div class="banner">{skillNote} <button class="banner-close" onclick={() => (skillNote = null)} aria-label={t("common.close")}>×</button></div>
     {/if}
 
     {#if !editing}
@@ -200,7 +201,7 @@
                     <div class="skill-row">
                         <span class="skill-name">{s.name}</span>
                         <span class="skill-tag" class:builtin={s.builtin} class:user={!s.builtin}>
-                            {s.builtin ? "内置" : "自定义"}
+                            {s.builtin ? t("ai.settings.skills.tag.builtin") : t("ai.settings.skills.tag.user")}
                         </span>
                         <span class="skill-id">{s.id}</span>
                     </div>
@@ -208,7 +209,7 @@
                 </button>
             {/each}
             {#if skills.length === 0}
-                <div class="placeholder">还没有 skill — 点上方"+ 新建"创建。</div>
+                <div class="placeholder">{t("ai.settings.skills.empty")}</div>
             {/if}
         </div>
     {:else}
@@ -221,29 +222,29 @@
             <div class="row">
                 <label for="sk-name">NAME</label>
                 <input id="sk-name" type="text" bind:value={editing.name} disabled={editing.builtin}
-                       placeholder="如：CPU 高 — Python"/>
+                       placeholder={t("ai.settings.skills.placeholder.name")}/>
             </div>
             <div class="row">
                 <label for="sk-desc">DESCRIPTION</label>
                 <input id="sk-desc" type="text" bind:value={editing.description} disabled={editing.builtin}
-                       placeholder="一句话说明用途"/>
+                       placeholder={t("ai.settings.skills.placeholder.desc")}/>
             </div>
             <div class="row vert">
                 <label for="sk-content">SYSTEM PROMPT</label>
                 <textarea id="sk-content" bind:value={editing.content} disabled={editing.builtin}
                           rows="20"
-                          placeholder="告诉 LLM：场景、可用工具、铁律、工作流……"></textarea>
+                          placeholder={t("ai.settings.skills.placeholder.content")}></textarea>
             </div>
             <div class="actions">
                 {#if !editing.builtin}
                     <button class="btn btn-accent btn-sm" onclick={saveSkill} disabled={savingSkill}>
-                        {savingSkill ? "保存中…" : "保存"}
+                        {savingSkill ? t("ai.settings.btn.saving") : t("common.save")}
                     </button>
                 {/if}
                 {#if !editing.builtin && !isNew}
-                    <button class="btn btn-sm btn-danger" onclick={() => editing && removeSkill(editing)}>删除</button>
+                    <button class="btn btn-sm btn-danger" onclick={() => editing && removeSkill(editing)}>{t("ai.settings.skills.btn.delete")}</button>
                 {/if}
-                <button class="btn btn-sm" onclick={cancelEdit}>{editing.builtin ? "返回" : "取消"}</button>
+                <button class="btn btn-sm" onclick={cancelEdit}>{editing.builtin ? t("ai.settings.skills.btn.back") : t("ai.settings.skills.btn.cancel")}</button>
             </div>
         </div>
     {/if}

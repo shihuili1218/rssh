@@ -1,6 +1,7 @@
 <script lang="ts">
     import { onMount } from "svelte";
     import * as ai from "./store.svelte.ts";
+    import { t, errMsg } from "../i18n/index.svelte.ts";
     import type { AuditEntry, AuditLog } from "./types.ts";
 
     let { sessionId } = $props<{ sessionId: string }>();
@@ -20,9 +21,9 @@
     async function saveToFile() {
         try {
             const path = await ai.saveAuditWithDialog(sessionId);
-            if (path) alert(`已保存到 ${path}`);
+            if (path) alert(t("ai.audit.alert.saved", { path }));
         } catch (e) {
-            alert(`保存失败: ${e}`);
+            alert(t("ai.audit.alert.save_failed", { error: errMsg(e) }));
         }
     }
 
@@ -35,31 +36,38 @@
     function summary(e: AuditEntry): string {
         const k = e.kind;
         switch (k.type) {
-            case "session_started": return `会话开始 [${k.skill}] target=${k.target}`;
-            case "session_ended": return "会话结束";
-            case "llm_request": return `→ LLM (${k.model})`;
-            case "llm_response": return `← LLM ${k.tokens_in ?? "?"}/${k.tokens_out ?? "?"} tokens`;
-            case "command_proposed": return `提议命令: ${k.cmd}`;
-            case "command_rejected": return `拒绝命令 ${k.id.slice(0, 8)}: ${k.reason}`;
-            case "command_executed": return `执行 ${k.id.slice(0, 8)} exit=${k.exit_code} ${k.duration_ms}ms${k.truncated_bytes > 0 ? ` (截断 ${k.truncated_bytes}B)` : ""}`;
-            case "download_proposed": return `提议下载: ${k.remote_path}`;
-            case "download_completed": return `下载完成: ${k.local_path} (${k.bytes}B)`;
-            case "note": return `备注: ${k.message}`;
-            case "error": return `错误: ${k.message}`;
+            case "session_started": return t("ai.audit.summary.session_started", { skill: k.skill, target: k.target });
+            case "session_ended": return t("ai.audit.summary.session_ended");
+            case "llm_request": return t("ai.audit.summary.llm_request", { model: k.model });
+            case "llm_response": return t("ai.audit.summary.llm_response", { tin: k.tokens_in ?? "?", tout: k.tokens_out ?? "?" });
+            case "command_proposed": return t("ai.audit.summary.command_proposed", { cmd: k.cmd });
+            case "command_rejected": return t("ai.audit.summary.command_rejected", { id: k.id.slice(0, 8), reason: k.reason });
+            case "command_executed": {
+                const trunc = k.truncated_bytes > 0
+                    ? t("ai.audit.summary.command_executed_truncated", { bytes: k.truncated_bytes })
+                    : "";
+                return t("ai.audit.summary.command_executed", {
+                    id: k.id.slice(0, 8), exit: k.exit_code, dur: k.duration_ms, trunc,
+                });
+            }
+            case "download_proposed": return t("ai.audit.summary.download_proposed", { path: k.remote_path });
+            case "download_completed": return t("ai.audit.summary.download_completed", { path: k.local_path, bytes: k.bytes });
+            case "note": return t("ai.audit.summary.note", { message: k.message });
+            case "error": return t("ai.audit.summary.error", { message: k.message });
         }
     }
 </script>
 
 <div class="audit">
     <div class="audit-toolbar">
-        <button onclick={refresh} disabled={loading}>{loading ? "加载…" : "🔄 刷新"}</button>
-        <button onclick={saveToFile} disabled={!log || log.entries.length === 0}>💾 保存到文件</button>
+        <button onclick={refresh} disabled={loading}>{loading ? t("ai.audit.refresh_loading") : t("ai.audit.refresh")}</button>
+        <button onclick={saveToFile} disabled={!log || log.entries.length === 0}>{t("ai.audit.save_to_file")}</button>
     </div>
     <div class="audit-list">
         {#if !log}
-            <div class="placeholder">加载中...</div>
+            <div class="placeholder">{t("ai.audit.placeholder.loading")}</div>
         {:else if log.entries.length === 0}
-            <div class="placeholder">暂无审计记录</div>
+            <div class="placeholder">{t("ai.audit.placeholder.empty")}</div>
         {:else}
             {#each log.entries as entry, i (i)}
                 <div class="audit-entry">
@@ -67,23 +75,23 @@
                     <span class="text">{summary(entry)}</span>
                     {#if entry.kind.type === "llm_request"}
                         <details class="dropdown">
-                            <summary>查看 payload (脱敏后)</summary>
+                            <summary>{t("ai.audit.toggle.payload")}</summary>
                             <pre>{entry.kind.redacted_payload}</pre>
                         </details>
                     {:else if entry.kind.type === "llm_response"}
                         <details class="dropdown">
-                            <summary>查看响应文本</summary>
+                            <summary>{t("ai.audit.toggle.response")}</summary>
                             <pre>{entry.kind.text}</pre>
                         </details>
                     {:else if entry.kind.type === "command_executed"}
                         <details class="dropdown">
-                            <summary>查看输出 (脱敏后, {entry.kind.original_bytes}B)</summary>
+                            <summary>{t("ai.audit.toggle.output", { bytes: entry.kind.original_bytes })}</summary>
                             <pre>{entry.kind.output_redacted}</pre>
                         </details>
                     {:else if entry.kind.type === "command_proposed"}
                         <div class="cmd-detail">
-                            <div>含义: {entry.kind.explain}</div>
-                            <div>副作用: {entry.kind.side_effect}</div>
+                            <div>{t("ai.audit.cmd.explain")}: {entry.kind.explain}</div>
+                            <div>{t("ai.audit.cmd.side_effect")}: {entry.kind.side_effect}</div>
                         </div>
                     {/if}
                 </div>

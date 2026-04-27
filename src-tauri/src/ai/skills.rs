@@ -97,10 +97,10 @@ pub fn is_builtin(id: &str) -> bool {
 
 pub fn save_user(db: &Db, rec: &SkillRecord) -> AppResult<()> {
     if is_builtin(&rec.id) {
-        return Err(crate::error::AppError::Other(format!(
-            "skill id '{}' 是内置，不能修改",
-            rec.id
-        )));
+        return Err(crate::error::AppError::coded(
+            "skill_builtin_readonly",
+            serde_json::json!({ "id": rec.id }),
+        ));
     }
     ai_skill::upsert(
         db,
@@ -115,9 +115,10 @@ pub fn save_user(db: &Db, rec: &SkillRecord) -> AppResult<()> {
 
 pub fn delete_user(db: &Db, id: &str) -> AppResult<()> {
     if is_builtin(id) {
-        return Err(crate::error::AppError::Other(format!(
-            "skill id '{id}' 是内置，不能删除"
-        )));
+        return Err(crate::error::AppError::coded(
+            "skill_builtin_undeletable",
+            serde_json::json!({ "id": id }),
+        ));
     }
     ai_skill::delete(db, id)
 }

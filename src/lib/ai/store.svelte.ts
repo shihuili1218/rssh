@@ -7,6 +7,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { t } from "../i18n/index.svelte.ts";
 import type {
   AiSessionInfo,
   AiSettings,
@@ -300,7 +301,7 @@ async function attachListeners(info: AiSessionInfo) {
   }));
 
   u.push(await listen<{}>(`ai:session_ended:${sid}`, () => {
-    pushChat(sid, { kind: "note", text: "会话已结束", at: Date.now() });
+    pushChat(sid, { kind: "note", text: t("ai.session.ended_note"), at: Date.now() });
   }));
 
   _unlisteners[sid] = u;

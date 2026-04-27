@@ -45,7 +45,7 @@
         return [
             {
                 display: "⌘W / Ctrl+W",
-                description: "关闭当前 Tab",
+                description: t("shortcut.tab.close"),
                 skipInSettings: true,
                 match: e => (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key === "w",
                 handler: () => {
@@ -56,7 +56,7 @@
             },
             {
                 display: "⌘⇧D / Ctrl+Shift+D",
-                description: "克隆当前 Tab",
+                description: t("shortcut.tab.clone"),
                 skipInSettings: true,
                 match: e => (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "d",
                 handler: () => {
@@ -67,7 +67,7 @@
             },
             {
                 display: "⌘⇧N / Ctrl+Shift+N",
-                description: "在新窗口打开当前 Tab",
+                description: t("shortcut.tab.open_new_window"),
                 skipInSettings: true,
                 match: e => (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "n",
                 handler: () => {
@@ -78,7 +78,7 @@
             },
             {
                 display: "Ctrl+Tab / Ctrl+Shift+Tab",
-                description: "在 Tab 之间循环切换",
+                description: t("shortcut.tab.cycle"),
                 match: e => e.ctrlKey && e.key === "Tab",
                 handler: e => {
                     const dir = e.shiftKey ? -1 : 1;
@@ -98,7 +98,7 @@
             },
             {
                 display: "Esc",
-                description: "退出 Tab 切换模式",
+                description: t("shortcut.tab.exit_cycle"),
                 match: e => tabCycling && e.key === "Escape",
                 handler: () => closeDrawer(),
             },
@@ -151,7 +151,7 @@
 
         // 1. 开本地 shell tab
         const tabId = `local:${crypto.randomUUID()}`;
-        app.addTab({type: "local", id: tabId, label: "AI 分析", meta: {}});
+        app.addTab({type: "local", id: tabId, label: t("ai.handoff.tab_label"), meta: {}});
         ai.openPanel();
 
         // 2. 等本地 PTY 就绪（TerminalPane 异步 spawn + setSession）。300ms × 100 = 30s 上限
@@ -175,7 +175,7 @@
                 provider: settings.provider,
                 model: settings.model,
             });
-            const initialMsg = `请帮我在本机分析 \`${payload.local_path}\`。任务：${payload.task}`;
+            const initialMsg = t("ai.handoff.initial_msg", { path: payload.local_path, task: payload.task });
             await ai.sendMessage(info.session_id, initialMsg);
         } catch (e) {
             console.error("AI handoff failed:", e);

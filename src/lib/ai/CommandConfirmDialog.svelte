@@ -1,5 +1,6 @@
 <script lang="ts">
     import * as ai from "./store.svelte.ts";
+    import { t, errMsg } from "../i18n/index.svelte.ts";
     import type { CommandProposed, CommandResult } from "./types.ts";
 
     let { sessionId, targetKind, targetSessionId, cmd, result, rejected } = $props<{
@@ -24,7 +25,7 @@
             await ai.executeCommand(sessionId, cmd, targetKind, targetSessionId);
         } catch (e) {
             console.error("[ai] execute failed:", e);
-            alert(`执行失败: ${e}`);
+            alert(t("ai.cmd.alert.exec_failed", { error: errMsg(e) }));
         } finally {
             executing = false;
         }
@@ -49,44 +50,44 @@
         <code class="cmd">{cmd.cmd}</code>
     </div>
     <div class="meta">
-        <div><span class="label">含义</span><span>{cmd.explain}</span></div>
-        <div><span class="label">副作用</span><span>{cmd.side_effect}</span></div>
-        <div><span class="label">超时</span><span>{cmd.timeout_s}s</span></div>
+        <div><span class="label">{t("ai.cmd.label.explain")}</span><span>{cmd.explain}</span></div>
+        <div><span class="label">{t("ai.cmd.label.side_effect")}</span><span>{cmd.side_effect}</span></div>
+        <div><span class="label">{t("ai.cmd.label.timeout")}</span><span>{cmd.timeout_s}s</span></div>
     </div>
 
     {#if isPending}
         {#if !askingReason}
             <div class="actions">
                 <button class="btn btn-approve" onclick={approve} disabled={executing}>
-                    {executing ? "⋯ 执行中" : "✓ 在终端执行"}
+                    {executing ? t("ai.cmd.btn.executing") : t("ai.cmd.btn.approve")}
                 </button>
-                <button class="btn btn-reject" onclick={reject} disabled={executing}>✗ 拒绝</button>
+                <button class="btn btn-reject" onclick={reject} disabled={executing}>{t("ai.cmd.btn.reject")}</button>
             </div>
             {#if executing}
-                <div class="hint">命令已粘贴并回车，正在等待终端输出 sentinel…</div>
+                <div class="hint">{t("ai.cmd.hint.executing")}</div>
             {/if}
         {:else}
             <div class="reject-form">
                 <input
                     bind:value={rejectReason}
-                    placeholder="拒绝理由（让 AI 调整方案）"
+                    placeholder={t("ai.cmd.reject.placeholder")}
                     onkeydown={(e) => { if (e.key === "Enter") reject(); }}
                 />
-                <button class="btn" onclick={reject} disabled={!rejectReason.trim()}>提交</button>
-                <button class="btn btn-ghost" onclick={() => (askingReason = false)}>取消</button>
+                <button class="btn" onclick={reject} disabled={!rejectReason.trim()}>{t("ai.cmd.reject.submit")}</button>
+                <button class="btn btn-ghost" onclick={() => (askingReason = false)}>{t("ai.cmd.reject.cancel")}</button>
             </div>
         {/if}
     {:else if rejected}
-        <div class="rejected-note">已拒绝。理由: {rejected.reason}</div>
+        <div class="rejected-note">{t("ai.cmd.rejected_note", { reason: rejected.reason })}</div>
     {:else if result}
         <div class="result">
             <div class="result-meta">
                 <span>exit={result.exit_code}</span>
                 <span>{result.duration_ms}ms</span>
-                {#if result.timed_out}<span class="warn">超时</span>{/if}
-                {#if result.truncated_bytes > 0}<span class="warn">截断 {result.truncated_bytes}B</span>{/if}
+                {#if result.timed_out}<span class="warn">{t("ai.cmd.warn.timed_out")}</span>{/if}
+                {#if result.truncated_bytes > 0}<span class="warn">{t("ai.cmd.warn.truncated", { bytes: result.truncated_bytes })}</span>{/if}
             </div>
-            <pre class="output">{result.output || "(空输出)"}</pre>
+            <pre class="output">{result.output || t("ai.cmd.empty_output")}</pre>
         </div>
     {/if}
 </div>

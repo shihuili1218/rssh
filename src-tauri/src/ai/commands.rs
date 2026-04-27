@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
+use serde_json::json;
+
 use crate::error::{locked, AppError, AppResult};
 use crate::secret::setting_key;
 use crate::state::AppState;
@@ -103,9 +105,10 @@ pub async fn ai_session_start(
     {
         let g = locked(&state.ai_sessions)?;
         if g.values().any(|s| s.target_id == target_id) {
-            return Err(AppError::Other(format!(
-                "目标 {target_id} 已有 AI 会话，请先停止"
-            )));
+            return Err(AppError::coded(
+                "session_already_exists",
+                json!({ "target": target_id }),
+            ));
         }
     }
 
@@ -113,7 +116,9 @@ pub async fn ai_session_start(
     let api_key = state
         .secret_store
         .get(&key_api_key(&provider))?
-        .ok_or_else(|| AppError::Config(format!("缺少 {provider} API key，请到设置里配置")))?;
+        .ok_or_else(|| {
+            AppError::coded("api_key_missing", json!({ "provider": provider }))
+        })?;
     let endpoint = state.secret_store.get(&key_endpoint(&provider))?;
 
     // 2. 校验 target 存在 + 抓 SSH handle 给 download_file 工具复用
@@ -122,20 +127,21 @@ pub async fn ai_session_start(
             let g = locked(&state.sessions)?;
             let h = g
                 .get(&target_id)
-                .ok_or_else(|| AppError::NotFound("SSH session 不存在".into()))?;
+                .ok_or_else(|| AppError::coded("ssh_session_not_found", json!({})))?;
             Some(h.ssh_handle().clone())
         }
         #[cfg(not(target_os = "android"))]
         "local" => {
             if !locked(&state.pty_sessions)?.contains_key(&target_id) {
-                return Err(AppError::NotFound("Local PTY 不存在".into()));
+                return Err(AppError::coded("local_pty_not_found", json!({})));
             }
             None
         }
         _ => {
-            return Err(AppError::Config(format!(
-                "未知 target_kind: {target_kind}（应为 ssh 或 local）"
-            )))
+            return Err(AppError::coded(
+                "unknown_target_kind",
+                json!({ "kind": target_kind }),
+            ))
         }
     };
 
@@ -177,9 +183,9 @@ pub async fn ai_user_message(
     let tx = locked(&state.ai_sessions)?
         .get(&session_id)
         .map(|s| s.action_tx.clone())
-        .ok_or_else(|| AppError::NotFound("AI session 不存在".into()))?;
+        .ok_or_else(|| AppError::coded("ai_session_not_found", json!({})))?;
     tx.send(UserAction::Message(text))
-        .map_err(|_| AppError::Other("AI session 已停止".into()))?;
+        .map_err(|_| AppError::coded("ai_session_stopped", json!({})))?;
     Ok(())
 }
 
@@ -195,14 +201,14 @@ pub async fn ai_command_result(
     let tx = locked(&state.ai_sessions)?
         .get(&session_id)
         .map(|s| s.action_tx.clone())
-        .ok_or_else(|| AppError::NotFound("AI session 不存在".into()))?;
+        .ok_or_else(|| AppError::coded("ai_session_not_found", json!({})))?;
     tx.send(UserAction::CommandResult {
         tool_call_id,
         exit_code,
         output,
         timed_out,
     })
-    .map_err(|_| AppError::Other("AI session 已停止".into()))?;
+    .map_err(|_| AppError::coded("ai_session_stopped", json!({})))?;
     Ok(())
 }
 
@@ -216,12 +222,12 @@ pub async fn ai_command_reject(
     let tx = locked(&state.ai_sessions)?
         .get(&session_id)
         .map(|s| s.action_tx.clone())
-        .ok_or_else(|| AppError::NotFound("AI session 不存在".into()))?;
+        .ok_or_else(|| AppError::coded("ai_session_not_found", json!({})))?;
     tx.send(UserAction::RejectCommand {
         tool_call_id,
         reason,
     })
-    .map_err(|_| AppError::Other("AI session 已停止".into()))?;
+    .map_err(|_| AppError::coded("ai_session_stopped", json!({})))?;
     Ok(())
 }
 
@@ -232,7 +238,7 @@ pub async fn ai_session_stop(
 ) -> AppResult<()> {
     let session = locked(&state.ai_sessions)?
         .remove(&session_id)
-        .ok_or_else(|| AppError::NotFound("AI session 不存在".into()))?;
+        .ok_or_else(|| AppError::coded("ai_session_not_found", json!({})))?;
     let _ = session.action_tx.send(UserAction::Stop);
     Ok(())
 }
@@ -246,7 +252,7 @@ pub async fn ai_audit_save(
     let audit = locked(&state.ai_sessions)?
         .get(&session_id)
         .map(|s| s.audit.clone())
-        .ok_or_else(|| AppError::NotFound("AI session 不存在".into()))?;
+        .ok_or_else(|| AppError::coded("ai_session_not_found", json!({})))?;
     let g = audit.lock().map_err(|_| AppError::Lock)?;
     g.save_to_file(&PathBuf::from(file_path))
         .map_err(AppError::Io)?;
@@ -263,14 +269,14 @@ pub async fn ai_audit_save_pick(
     #[cfg(target_os = "android")]
     {
         let _ = (state, session_id);
-        Err(AppError::Other("Android 不支持原生文件对话框".into()))
+        Err(AppError::coded("android_no_dialog", json!({})))
     }
     #[cfg(not(target_os = "android"))]
     {
         let audit = locked(&state.ai_sessions)?
             .get(&session_id)
             .map(|s| s.audit.clone())
-            .ok_or_else(|| AppError::NotFound("AI session 不存在".into()))?;
+            .ok_or_else(|| AppError::coded("ai_session_not_found", json!({})))?;
 
         let default_dir = dirs::document_dir().unwrap_or_else(|| PathBuf::from("."));
         let default_name = format!(
@@ -302,7 +308,7 @@ pub async fn ai_audit_get(
     let audit = locked(&state.ai_sessions)?
         .get(&session_id)
         .map(|s| s.audit.clone())
-        .ok_or_else(|| AppError::NotFound("AI session 不存在".into()))?;
+        .ok_or_else(|| AppError::coded("ai_session_not_found", json!({})))?;
     let g = audit.lock().map_err(|_| AppError::Lock)?;
     Ok(g.clone())
 }

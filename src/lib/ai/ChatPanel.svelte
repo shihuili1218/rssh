@@ -4,6 +4,7 @@
     import CommandConfirmDialog from "./CommandConfirmDialog.svelte";
     import AuditPanel from "./AuditPanel.svelte";
     import { renderMarkdown } from "./markdown.ts";
+    import { t, errMsg } from "../i18n/index.svelte.ts";
     import { onMount } from "svelte";
 
     let { tabId, targetKind, targetId } = $props<{
@@ -39,7 +40,7 @@
         if (session) return session.session_id;
         const settings = ai.settings() ?? await ai.loadSettings();
         if (!settings.has_api_key) {
-            throw new Error("请先到 设置 → AI 排障 配置 API key");
+            throw new Error(t("ai.error.no_api_key"));
         }
         const info = await ai.startSession({
             targetKind, targetId, skill: "general",
@@ -58,9 +59,8 @@
             inputText = "";
             await ai.sendMessage(sid, text);
         } catch (e: any) {
-            const msg = e?.message ?? String(e);
             console.error("[ai] send failed:", e);
-            banner = msg;
+            banner = errMsg(e);
         } finally {
             busy = false;
         }
@@ -88,14 +88,14 @@
 
 <div class="ai-panel">
     <div class="toolbar">
-        <span class="title">AI 排障</span>
+        <span class="title">{t("ai.title")}</span>
         {#if session}
             <button class="btn btn-ghost btn-sm" onclick={() => (auditOpen = !auditOpen)}>
-                {auditOpen ? "← 对话" : "📋 审计"}
+                {auditOpen ? t("ai.toolbar.back_to_chat") : t("ai.toolbar.audit")}
             </button>
         {/if}
         <span class="grow"></span>
-        <button class="btn-icon" onclick={closePanel} title="关闭并结束会话">×</button>
+        <button class="btn-icon" onclick={closePanel} title={t("ai.toolbar.close_session")}>×</button>
     </div>
 
     {#if banner}
@@ -138,9 +138,9 @@
             {/each}
             {#if items.length === 0 && !session}
                 <div class="placeholder dim">
-                    <p>直接说说怎么了，AI 会自己挑路径。</p>
-                    <p class="hint">例如："这台机器 CPU 飙到 100% 了"、"Java 进程内存涨得很猛"。</p>
-                    <p class="hint">所有提议命令都会经你点击确认才执行；命令输出本地脱敏后再发给 LLM。</p>
+                    <p>{t("ai.placeholder.welcome")}</p>
+                    <p class="hint">{t("ai.placeholder.example_hint")}</p>
+                    <p class="hint">{t("ai.placeholder.confirm_hint")}</p>
                 </div>
             {/if}
         </div>
@@ -149,12 +149,12 @@
             <textarea
                 bind:this={inputEl}
                 bind:value={inputText}
-                placeholder={busy ? (session ? "AI 正在回复…" : "启动会话…") : "说说怎么了…  (Enter 发送，Shift+Enter 换行)"}
+                placeholder={busy ? (session ? t("ai.input.replying") : t("ai.input.starting")) : t("ai.input.placeholder")}
                 onkeydown={onKeyDown}
                 disabled={busy}
             ></textarea>
             <button class="btn btn-primary" onclick={send} disabled={!inputText.trim() || busy}>
-                {busy && !session ? "启动中…" : "发送"}
+                {busy && !session ? t("ai.input.starting_short") : t("ai.input.send")}
             </button>
         </div>
     {/if}
