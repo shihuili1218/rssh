@@ -51,6 +51,56 @@ pub fn open_external_url(url: String) -> AppResult<()> {
         .map_err(|e| AppError::Other(format!("Failed to open URL: {e}")))
 }
 
+/// Fetch the latest release tag from a GitHub repo.
+///
+/// Hits the HTML page `https://github.com/{repo}/releases/latest` rather than
+/// the JSON API. GitHub responds with a 302 redirect whose Location is
+/// `/{repo}/releases/tag/<tag>` — we parse the tag from there.
+///
+/// Why not the API: `api.github.com` enforces a 60 req/h per-IP limit for
+/// unauthenticated calls. Behind shared NAT (offices, VPNs) the quota is
+/// burned by other users and we get HTTP 403. The HTML redirect path has no
+/// such limit and no auth requirement.
+///
+/// `repo` must be of the form "owner/name". Returns the raw tag (e.g. "v1.2.3").
+#[tauri::command]
+pub async fn fetch_latest_release_tag(repo: String) -> AppResult<String> {
+    if repo.is_empty() || !repo.contains('/') || repo.contains(char::is_whitespace) {
+        return Err(AppError::Other(format!("Invalid repo: {repo}")));
+    }
+    let url = format!("https://github.com/{repo}/releases/latest");
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("rssh/", env!("CARGO_PKG_VERSION")))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| AppError::Other(format!("HTTP client: {e}")))?;
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| AppError::Other(format!("Request failed: {e}")))?;
+
+    let status = resp.status();
+    if !status.is_redirection() {
+        return Err(AppError::Other(format!(
+            "GitHub releases {status} (expected redirect)"
+        )));
+    }
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| AppError::Other("Redirect without Location".into()))?;
+
+    // Location is like "/owner/repo/releases/tag/v1.2.3" or full URL.
+    location
+        .rsplit_once("/releases/tag/")
+        .map(|(_, tag)| tag.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| AppError::Other(format!("Unexpected redirect target: {location}")))
+}
+
 /// Read the system clipboard as text.
 /// Goes through Rust (arboard) to bypass WebKit's permission prompt on
 /// externally-sourced clipboard content — `navigator.clipboard.readText()`

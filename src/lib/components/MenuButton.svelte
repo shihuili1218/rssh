@@ -7,6 +7,7 @@
         | { kind: "new-edit" }
         | { kind: "pin"; profile: Profile }
         | { kind: "pin-window" }
+        | { kind: "downloads" }
         | { kind: "settings" };
 
     export function navItemKey(item: NavItem): string {
@@ -28,6 +29,7 @@
         groupColor?: string | null;
         showClose?: boolean;
         horizontal?: boolean;
+        badge?: string | null;
         onActivate: () => void;
         onClose?: () => void;
         onDragStart?: (e: DragEvent) => void;
@@ -45,6 +47,7 @@
         groupColor = null,
         showClose = false,
         horizontal = false,
+        badge = null,
         onActivate,
         onClose,
         onDragStart,
@@ -58,6 +61,7 @@
         if (i.kind === "new-edit") return "✎";
         if (i.kind === "pin") return i.profile.name.charAt(0).toUpperCase();
         if (i.kind === "pin-window") return "📌";
+        if (i.kind === "downloads") return "⇅";
         if (i.kind === "settings") return "⚙";
         // tab
         const tab = i.tab;
@@ -74,6 +78,7 @@
         if (i.kind === "new-tab") return t("tab.new_terminal");
         if (i.kind === "new-edit") return t("tab.new_edit");
         if (i.kind === "pin-window") return t("window.pin");
+        if (i.kind === "downloads") return t("tab.downloads");
         return t("tab.settings");
     }
 
@@ -106,7 +111,12 @@
     title={label}
     style={horizontal && showActive && groupColor ? `--accent: ${groupColor}; --accent-soft: color-mix(in srgb, ${groupColor} 15%, transparent)` : null}
 >
-    <span class="sb-icon" style={groupColor ? `background: ${groupColor}; color: white` : ''}>{icon}</span>
+    <span class="sb-icon-wrap">
+        <span class="sb-icon" style={groupColor ? `background: ${groupColor}; color: white` : ''}>{icon}</span>
+        {#if badge}
+            <span class="sb-badge">{badge}</span>
+        {/if}
+    </span>
     <span class="sb-label">{label}</span>
     {#if showClose && onClose}
         <span
@@ -162,6 +172,12 @@
         color: var(--warning);
     }
 
+    .sb-icon-wrap {
+        position: relative;
+        display: flex;
+        flex-shrink: 0;
+    }
+
     .sb-icon {
         width: 22px;
         height: 22px;
@@ -174,6 +190,24 @@
         font-weight: 700;
         border-radius: 4px;
         background: var(--surface);
+    }
+
+    .sb-badge {
+        position: absolute;
+        top: -4px;
+        right: -6px;
+        min-width: 14px;
+        height: 14px;
+        padding: 0 3px;
+        border-radius: 7px;
+        background: var(--error, #d64444);
+        color: white;
+        font-size: 9px;
+        font-weight: 700;
+        line-height: 14px;
+        text-align: center;
+        box-shadow: 0 0 0 2px var(--bg);
+        pointer-events: none;
     }
 
     .sb-item.active .sb-icon {

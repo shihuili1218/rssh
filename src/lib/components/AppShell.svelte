@@ -10,7 +10,9 @@
     import EditPane from "./EditPane.svelte";
     import SettingsLayout from "./SettingsLayout.svelte";
     import SftpBrowser from "./SftpBrowser.svelte";
+    import DownloadsScreen from "./DownloadsScreen.svelte";
     import SnippetPicker from "./SnippetPicker.svelte";
+    import * as transfers from "../stores/transfers.svelte.ts";
     import TabContextMenu, {type CtxMenuItem} from "./TabContextMenu.svelte";
     import MenuButton, {type NavItem, navItemKey} from "./MenuButton.svelte";
     import StripBar from "./StripBar.svelte";
@@ -223,6 +225,8 @@
         const tab = app.activeTab();
         if (app.settingsActive()) {
             getCurrentWindow().setTitle("Settings");
+        } else if (app.downloadsActive()) {
+            getCurrentWindow().setTitle(t("downloads.title"));
         } else if (tab) {
             const termTitle = app.terminalTitle(tab.id);
             const title = termTitle ? `${tab.label} — ${termTitle}` : tab.label;
@@ -247,7 +251,12 @@
         && (aiActiveTab.type === "ssh" || aiActiveTab.type === "local")
         && !!aiSessionId
         && !app.settingsActive()
+        && !app.downloadsActive()
     );
+    let xferBadge = $derived.by(() => {
+        const n = transfers.activeCount();
+        return n > 0 ? String(n) : null;
+    });
     let aiPos = $derived(ai.position());
 
     /* Menu data — sections describe layout (header / scrollable list / footer),
@@ -260,7 +269,7 @@
         ],
         middle: app.tabs().filter(t => t.type !== "home").map(t => ({kind: "tab" as const, tab: t})),
         footer: [
-            ...(app.isMobile ? [] : [{kind: "pin-window" as const}]),
+            ...(app.isMobile ? [] : [{kind: "pin-window" as const}, {kind: "downloads" as const}]),
             {kind: "settings" as const},
         ],
     });
@@ -275,8 +284,9 @@
     }
 
     function isActiveItem(item: NavItem): boolean {
-        if (item.kind === "tab") return !app.settingsActive() && item.tab.id === app.activeTabId();
+        if (item.kind === "tab") return !app.settingsActive() && !app.downloadsActive() && item.tab.id === app.activeTabId();
         if (item.kind === "settings") return app.settingsActive();
+        if (item.kind === "downloads") return app.downloadsActive();
         return false;
     }
 
@@ -286,6 +296,7 @@
         else if (item.kind === "pin") connectPinned(item.profile);
         else if (item.kind === "tab") selectTab(item.tab.id);
         else if (item.kind === "pin-window") { togglePin(); closeDrawer(); }
+        else if (item.kind === "downloads") selectDownloads();
         else selectSettings();
     }
 
@@ -328,6 +339,11 @@
 
     function selectSettings() {
         app.openSettings();
+        closeDrawer();
+    }
+
+    function selectDownloads() {
+        app.openDownloads();
         closeDrawer();
     }
 
@@ -621,6 +637,7 @@
                         active={isActiveItem(item)}
                         focused={isFocusedItem(item)}
                         pinnedState={pinned}
+                        badge={item.kind === "downloads" ? xferBadge : null}
                         onActivate={() => activateNavItem(item)}
                     />
                 {/each}
@@ -634,6 +651,7 @@
             pinned={pinned}
             dragTabId={dragTabId}
             dropTabId={dropTabId}
+            xferBadge={xferBadge}
             isActiveItem={isActiveItem}
             isFocusedItem={isFocusedItem}
             groupColorOf={tabGroupColor}
@@ -656,11 +674,15 @@
                 <div class="pane visible">
                     <SettingsLayout/>
                 </div>
+            {:else if app.downloadsActive()}
+                <div class="pane visible">
+                    <DownloadsScreen/>
+                </div>
             {/if}
 
             {#each app.tabs() as tab (tab.id)}
                 <div class="pane"
-                     class:visible={!app.settingsActive() && tab.id === app.activeTabId()}
+                     class:visible={!app.settingsActive() && !app.downloadsActive() && tab.id === app.activeTabId()}
                      oncontextmenu={app.isMobile ? undefined : (e) => openCtxMenu(e, tab)}>
                     {#if tab.type === "home"}
                         <HomeScreen/>

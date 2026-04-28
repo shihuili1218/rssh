@@ -72,6 +72,8 @@ let _editingId = $state<string | null>(null);
 
 /* SFTP overlay (opened from terminal via ⌘O) */
 let _sftpOpen = $state(false);
+/* Background transfers screen — sibling of settings, mutually exclusive */
+let _downloadsActive = $state(false);
 let _pinnedProfileIds = $state<string[]>(JSON.parse(localStorage.getItem("pinned_profiles") ?? "[]"));
 
 /* Terminal title (from remote shell OSC sequence), separate from tab label */
@@ -85,6 +87,7 @@ export function settingsActive() { return _settingsActive; }
 export function settingsPage() { return _settingsPage; }
 export function editingId() { return _editingId; }
 export function sftpOpen() { return _sftpOpen; }
+export function downloadsActive() { return _downloadsActive; }
 export function pinnedProfileIds() { return _pinnedProfileIds; }
 export function terminalTitle(tabId: string) { return _terminalTitles[tabId]; }
 
@@ -92,6 +95,7 @@ export function terminalTitle(tabId: string) { return _terminalTitles[tabId]; }
 export function setActiveTab(id: string) {
   _activeTabId = id;
   _settingsActive = false;
+  _downloadsActive = false;
   _sftpOpen = false;
 }
 
@@ -99,6 +103,7 @@ export function addTab(tab: Tab) {
   _tabs.push(tab);
   _activeTabId = tab.id;
   _settingsActive = false;
+  _downloadsActive = false;
   _sftpOpen = false;
 }
 
@@ -135,8 +140,17 @@ export function setTerminalTitle(tabId: string, title: string) {
 /* ─── Settings Navigation ─── */
 export function openSettings() {
   _settingsActive = true;
+  _downloadsActive = false;
   _sftpOpen = false;
 }
+
+export function openDownloads() {
+  _downloadsActive = true;
+  _settingsActive = false;
+  _sftpOpen = false;
+}
+
+export function closeDownloads() { _downloadsActive = false; }
 
 export function settingsNavigate(page: SettingsPage, editId?: string) {
   _settingsPage = page;
