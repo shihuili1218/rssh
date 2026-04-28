@@ -28,9 +28,9 @@
     onMount(async () => { commandBlockBar = await app.loadCommandBlockBar(); });
     async function saveCommandBlockBar() { await app.setCommandBlockBar(commandBlockBar); }
 
-    // ─── AI panel position (migrated from AI settings) ────────────────
-    let aiPos = $state<"left" | "right">(ai.position());
-    function pickAiPos(p: "left" | "right") {
+    // ─── AI panel position ────────────────────────────────────────────
+    let aiPos = $state<ai.AiPosition>(ai.position());
+    function pickAiPos(p: ai.AiPosition) {
         aiPos = p;
         ai.setPosition(p);
     }
@@ -98,9 +98,7 @@
                         </div>
                     </div>
                 </div>
-                <div class="layout-label">
-                    {side === "left" ? t("settings.appearance.ai_panel.left") : t("settings.appearance.ai_panel.right")}
-                </div>
+                <div class="layout-label">{t(side === "left" ? "settings.appearance.pos.left" : "settings.appearance.pos.right")}</div>
             </button>
         {/each}
     </div>
@@ -197,7 +195,7 @@
     .mini-body.dir-top    { flex-direction: column;         }
     .mini-body.dir-bottom { flex-direction: column-reverse; }
 
-    /* AI panel (purple) */
+    /* AI panel (purple) — 只支持 left/right */
     .mini-ai {
         width: 38%;
         background: color-mix(in srgb, #a855f7 22%, var(--surface));

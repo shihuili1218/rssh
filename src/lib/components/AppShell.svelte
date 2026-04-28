@@ -562,7 +562,15 @@
 {/if}
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="shell" ontouchstart={handleTouchStart} ontouchend={handleTouchEnd}>
+<div
+    class="shell"
+    class:sb-left={sbPos === "left"}
+    class:sb-right={sbPos === "right"}
+    class:sb-top={sbPos === "top"}
+    class:sb-bottom={sbPos === "bottom"}
+    ontouchstart={handleTouchStart}
+    ontouchend={handleTouchEnd}
+>
 
     {#if drawerOpen}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -638,45 +646,44 @@
         />
     {/if}
 
-    {#if aiVisible && aiActiveTab && aiSessionId}
-        <aside class="ai-side" class:left={aiPos === "left"} class:right={aiPos === "right"}>
-            <ChatPanel
-                tabId={aiActiveTab.id}
-                targetKind={aiActiveTab.type as "ssh" | "local"}
-                targetId={aiSessionId}
-            />
-        </aside>
-    {/if}
-
     <div
         class="content"
-        class:right={sbPos === "right"}
-        class:top={sbPos === "top"}
-        class:bottom={sbPos === "bottom"}
+        class:ai-on={aiVisible}
         class:ai-left={aiVisible && aiPos === "left"}
-        class:ai-right={aiVisible && aiPos === "right"}
     >
-        {#if app.settingsActive()}
-            <div class="pane visible">
-                <SettingsLayout/>
-            </div>
-        {/if}
+        <div class="main-area">
+            {#if app.settingsActive()}
+                <div class="pane visible">
+                    <SettingsLayout/>
+                </div>
+            {/if}
 
-        {#each app.tabs() as tab (tab.id)}
-            <div class="pane"
-                 class:visible={!app.settingsActive() && tab.id === app.activeTabId()}
-                 oncontextmenu={app.isMobile ? undefined : (e) => openCtxMenu(e, tab)}>
-                {#if tab.type === "home"}
-                    <HomeScreen/>
-                {:else if tab.type === "ssh" || tab.type === "local"}
-                    <TerminalPane tabId={tab.id} tabType={tab.type} meta={tab.meta ?? {}}/>
-                {:else if tab.type === "forward"}
-                    <ForwardPane tabId={tab.id} meta={tab.meta ?? {}}/>
-                {:else if tab.type === "edit"}
-                    <EditPane tabId={tab.id} />
-                {/if}
-            </div>
-        {/each}
+            {#each app.tabs() as tab (tab.id)}
+                <div class="pane"
+                     class:visible={!app.settingsActive() && tab.id === app.activeTabId()}
+                     oncontextmenu={app.isMobile ? undefined : (e) => openCtxMenu(e, tab)}>
+                    {#if tab.type === "home"}
+                        <HomeScreen/>
+                    {:else if tab.type === "ssh" || tab.type === "local"}
+                        <TerminalPane tabId={tab.id} tabType={tab.type} meta={tab.meta ?? {}}/>
+                    {:else if tab.type === "forward"}
+                        <ForwardPane tabId={tab.id} meta={tab.meta ?? {}}/>
+                    {:else if tab.type === "edit"}
+                        <EditPane tabId={tab.id} />
+                    {/if}
+                </div>
+            {/each}
+        </div>
+
+        {#if aiVisible && aiActiveTab && aiSessionId}
+            <aside class="ai-side">
+                <ChatPanel
+                    tabId={aiActiveTab.id}
+                    targetKind={aiActiveTab.type as "ssh" | "local"}
+                    targetId={aiSessionId}
+                />
+            </aside>
+        {/if}
     </div>
 </div>
 
@@ -684,7 +691,17 @@
     .shell {
         height: 100%;
         position: relative;
+        /* Sidebar 在四个方向上的占用厚度——AI 面板与 .content 都从这里读，
+           不再写 magic number 也不再为"sb 在右 + ai 在左"这种组合开特例。 */
+        --sb-left: 0px;
+        --sb-right: 0px;
+        --sb-top: 0px;
+        --sb-bottom: 0px;
     }
+    .shell.sb-left   { --sb-left:   40px; }
+    .shell.sb-right  { --sb-right:  40px; }
+    .shell.sb-top    { --sb-top:    44px; }
+    .shell.sb-bottom { --sb-bottom: 44px; }
 
     /* ── Sidebar: one component, two states ── */
     .sidebar {
@@ -751,47 +768,39 @@
         z-index: 100;
     }
 
-    /* ── Content (offset by collapsed sidebar width) ── */
+    /* ── Content = 剩余空间（让位 sidebar 后），内部分成 main-area + ai-side flex 横排 ── */
     .content {
-        height: 100%;
         position: relative;
-        margin-left: 40px;
+        display: flex;
+        flex-direction: row;
+        margin-left: var(--sb-left);
+        margin-right: var(--sb-right);
+        margin-top: var(--sb-top);
+        height: calc(100% - var(--sb-top) - var(--sb-bottom));
+    }
+    /* AI 在左：flex row 翻转，模板顺序不变，无须状态机 */
+    .content.ai-left { flex-direction: row-reverse; }
+
+    /* 终端区——所有 .pane 挂在这里，绝对定位由父级 main-area 提供 position: relative。
+       min-width: 0 让 flex 能把它压到 0（窄屏 AI 接管时） */
+    .main-area {
+        flex: 1;
+        position: relative;
+        min-width: 0;
     }
 
-    .content.right {
-        margin-left: 0;
-        margin-right: 40px;
-    }
-    .content.top {
-        margin-left: 0;
-        margin-top: 44px;
-        height: calc(100% - 44px);
-    }
-    .content.bottom {
-        margin-left: 0;
-        height: calc(100% - 44px);
-    }
-
-    /* AI 侧边面板 */
+    /* 边框在 ChatPanel 自身 CSS 里（左右都有），aside 不重复加 */
     .ai-side {
-        position: fixed;
-        top: env(safe-area-inset-top, 0px);
-        bottom: 0;
-        width: 380px;
-        z-index: 150;
+        flex: 0 0 380px;
         background: var(--bg);
     }
-    .ai-side.left { left: 40px; }
-    .ai-side.right { right: 0; }
 
-    .content.ai-left { margin-left: 420px; }      /* 40 sidebar + 380 ai */
-    .content.ai-right { margin-right: 380px; }
-    .content.ai-left.right { margin-left: 380px; margin-right: 40px; }  /* sidebar 在右、ai 在左：从左推 ai 面板 */
-    .content.ai-right.right { margin-right: 380px; }
-    @media (max-width: 800px) {
-        .ai-side { width: 320px; }
-        .content.ai-left { margin-left: 360px; }
-        .content.ai-right { margin-right: 320px; }
+    @media (max-width: 800px) { .ai-side { flex-basis: 320px; } }
+
+    /* 竖屏手机：AI 接管整块内容区，main-area 挤到 0（终端实例保留，关 AI 后恢复） */
+    @media (max-width: 480px) {
+        .ai-side { flex: 1; }
+        .content.ai-on .main-area { flex: 0; }
     }
 
     .pane {

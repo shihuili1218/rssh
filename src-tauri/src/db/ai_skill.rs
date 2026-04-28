@@ -72,3 +72,11 @@ pub fn delete(db: &Db, id: &str) -> AppResult<()> {
     conn.execute("DELETE FROM ai_skills WHERE id = ?1", [id])?;
     Ok(())
 }
+
+/// 清空所有用户 skill。GitHub sync pull 覆盖语义用——只在 payload 显式带 `skills`
+/// 字段时才调，老 v1 payload（无字段）不会触发，避免清空用户本地数据。
+pub fn clear_all(db: &Db) -> AppResult<()> {
+    let conn = db.lock()?;
+    conn.execute("DELETE FROM ai_skills", [])?;
+    Ok(())
+}

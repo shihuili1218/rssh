@@ -18,10 +18,13 @@ import type {
   SkillRecord,
 } from "./types.ts";
 
-// ─── Position（常量先声明，下方 $state 初始化会调 loadPos） ──────
+// ─── Position ────────────────────────────────────────────────────
+// 只支持 left/right。移动端用户横屏即可用——左右布局就够了，没必要再开上下分支。
+
+export type AiPosition = "left" | "right";
 
 const POS_KEY = "ai_panel_position";
-function loadPos(): "left" | "right" {
+function loadPos(): AiPosition {
   const v = localStorage.getItem(POS_KEY);
   return v === "left" || v === "right" ? v : "right";
 }
@@ -29,7 +32,7 @@ function loadPos(): "left" | "right" {
 // ─── 全局可见状态 ─────────────────────────────────────────────────
 
 let _open = $state(false);
-let _position = $state<"left" | "right">(loadPos());
+let _position = $state<AiPosition>(loadPos());
 let _activeSessionId = $state<string | null>(null);
 let _sessionByTarget = $state<Record<string, AiSessionInfo>>({});
 let _chatBySession = $state<Record<string, ChatItem[]>>({});
@@ -40,7 +43,7 @@ let _settings = $state<AiSettings | null>(null);
 const _unlisteners: Record<string, UnlistenFn[]> = {};
 
 export function position() { return _position; }
-export function setPosition(p: "left" | "right") {
+export function setPosition(p: AiPosition) {
   _position = p;
   localStorage.setItem(POS_KEY, p);
 }
