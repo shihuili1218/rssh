@@ -37,6 +37,7 @@ export type SettingsPage =
   | "cli"
   | "shortcuts"
   | "appearance"
+  | "ai"
   | "about";
 
 export interface Group {

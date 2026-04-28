@@ -52,6 +52,8 @@ html, body {
 }
 /* Terminal 内恢复选择 */
 .xterm { user-select: text; -webkit-user-select: text; }
+/* AI 对话面板内恢复选择（用户要复制 LLM 输出 / 命令文本） */
+.ai-panel, .ai-panel * { user-select: text; -webkit-user-select: text; }
 #app {
   height: 100%;
   padding-top: env(safe-area-inset-top, 0px);

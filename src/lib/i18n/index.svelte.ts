@@ -48,6 +48,28 @@ export function t(key: MessageKey, params?: Record<string, string | number>): st
   });
 }
 
+/**
+ * 把后端抛出的错误（任意值）转成 i18n 字符串。
+ *
+ * 后端 `AppError::coded(code, params)` 序列化成形如
+ * `__rssh_err__|{"code":"foo","params":{...}}` 的字符串；前端识别前缀后查 `error.<code>`。
+ * 老式 String 错误原样返回（向后兼容）。
+ */
+export function errMsg(e: unknown): string {
+  const s = e == null ? "" : (e instanceof Error ? e.message : String(e));
+  const PREFIX = "__rssh_err__|";
+  if (!s.startsWith(PREFIX)) return s;
+  try {
+    const payload = JSON.parse(s.slice(PREFIX.length)) as {
+      code: string;
+      params?: Record<string, string | number>;
+    };
+    return t(`error.${payload.code}` as MessageKey, payload.params);
+  } catch {
+    return s;
+  }
+}
+
 /** 用于 lang picker 的元数据。 */
 export const AVAILABLE_LOCALES: { code: Locale; label: string }[] = [
   { code: "en", label: "English" },

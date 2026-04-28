@@ -140,6 +140,7 @@
     let resizeDisposable: IDisposable | undefined;
     let reconnectDisposable: IDisposable | undefined;
     let resizeObs: ResizeObserver;
+    let mobileKeyboardCleanup: (() => void) | undefined;
 
     const isLocal = $derived(tabType === "local");
     const writeCmd = $derived(isLocal ? "pty_write" : "ssh_write");
@@ -303,6 +304,129 @@
         }
     }
 
+    function setupMobileSoftKeyboard(helper: HTMLTextAreaElement) {
+        const longPressMs = 360;
+        const moveSlopPx = 12;
+        let gesture: {
+            pointerId: number;
+            x: number;
+            y: number;
+            longPress: boolean;
+            moved: boolean;
+            timer: number | undefined;
+        } | null = null;
+
+        function lockKeyboard() {
+            helper.readOnly = true;
+            helper.setAttribute("readonly", "true");
+            helper.setAttribute("inputmode", "none");
+            helper.tabIndex = -1;
+            helper.inert = true;
+        }
+
+        function unlockKeyboard() {
+            helper.inert = false;
+            helper.readOnly = false;
+            helper.removeAttribute("readonly");
+            helper.setAttribute("inputmode", "text");
+            helper.tabIndex = 0;
+        }
+
+        function showKeyboard() {
+            unlockKeyboard();
+            helper.focus({ preventScroll: true });
+        }
+
+        function hideKeyboard() {
+            helper.blur();
+            lockKeyboard();
+        }
+
+        function clearGestureTimer() {
+            if (gesture?.timer) {
+                window.clearTimeout(gesture.timer);
+                gesture.timer = undefined;
+            }
+        }
+
+        function shouldHandleTouch(ev: PointerEvent) {
+            return ev.pointerType === "touch" || ev.pointerType === "pen";
+        }
+
+        function onPointerDown(ev: PointerEvent) {
+            if (!shouldHandleTouch(ev)) return;
+            clearGestureTimer();
+            gesture = {
+                pointerId: ev.pointerId,
+                x: ev.clientX,
+                y: ev.clientY,
+                longPress: false,
+                moved: false,
+                timer: undefined,
+            };
+            gesture.timer = window.setTimeout(() => {
+                if (!gesture || gesture.pointerId !== ev.pointerId) return;
+                gesture.longPress = true;
+                hideKeyboard();
+            }, longPressMs);
+        }
+
+        function onPointerMove(ev: PointerEvent) {
+            if (!gesture || gesture.pointerId !== ev.pointerId) return;
+            const dx = ev.clientX - gesture.x;
+            const dy = ev.clientY - gesture.y;
+            if (Math.hypot(dx, dy) <= moveSlopPx) return;
+            gesture.moved = true;
+            clearGestureTimer();
+            hideKeyboard();
+        }
+
+        function onPointerUp(ev: PointerEvent) {
+            if (!gesture || gesture.pointerId !== ev.pointerId) return;
+            const shouldOpenKeyboard = !gesture.longPress && !gesture.moved;
+            clearGestureTimer();
+            gesture = null;
+            if (shouldOpenKeyboard) showKeyboard();
+            else lockKeyboard();
+        }
+
+        function onPointerCancel(ev: PointerEvent) {
+            if (!gesture || gesture.pointerId !== ev.pointerId) return;
+            clearGestureTimer();
+            gesture = null;
+            lockKeyboard();
+        }
+
+        function onContextMenu(ev: Event) {
+            hideKeyboard();
+            ev.preventDefault();
+            ev.stopImmediatePropagation();
+        }
+
+        function onBlur() {
+            lockKeyboard();
+        }
+
+        lockKeyboard();
+        helper.blur();
+        helper.addEventListener("blur", onBlur);
+        containerEl.addEventListener("pointerdown", onPointerDown, { capture: true, passive: true });
+        containerEl.addEventListener("pointermove", onPointerMove, { capture: true, passive: true });
+        containerEl.addEventListener("pointerup", onPointerUp, { capture: true, passive: true });
+        containerEl.addEventListener("pointercancel", onPointerCancel, { capture: true, passive: true });
+        containerEl.addEventListener("contextmenu", onContextMenu, { capture: true });
+
+        return () => {
+            clearGestureTimer();
+            helper.removeEventListener("blur", onBlur);
+            containerEl.removeEventListener("pointerdown", onPointerDown, { capture: true });
+            containerEl.removeEventListener("pointermove", onPointerMove, { capture: true });
+            containerEl.removeEventListener("pointerup", onPointerUp, { capture: true });
+            containerEl.removeEventListener("pointercancel", onPointerCancel, { capture: true });
+            containerEl.removeEventListener("contextmenu", onContextMenu, { capture: true });
+        };
+    }
+
     onMount(async () => {
         terminal = new Terminal({
             cursorBlink: true,
@@ -328,6 +452,16 @@
         terminal.open(containerEl);
         terminal.unicode.activeVersion = "11";
         fitAddon.fit();
+
+        // 移动端：xterm 的 helper-textarea 一旦 focus 就会召系统键盘，
+        // 而长按选择需要避开这个 focus。短按终端时解锁并 focus；长按、
+        // 拖选或 contextmenu 时立刻锁回去。
+        if (app.isMobile) {
+            const helper = terminal.textarea ?? containerEl.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea");
+            if (helper) {
+                mobileKeyboardCleanup = setupMobileSoftKeyboard(helper);
+            }
+        }
 
         app.registerTerminalControls(tabId, {
             getSelection: () => terminal.getSelection(),
@@ -451,6 +585,7 @@
         resizeDisposable?.dispose();
         reconnectDisposable?.dispose();
         resizeObs?.disconnect();
+        mobileKeyboardCleanup?.();
         blockTracker?.dispose();
         app.unregisterTerminalWriter();
         app.unregisterTerminalArrowSender();

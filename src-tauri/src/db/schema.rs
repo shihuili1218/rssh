@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::error::AppResult;
 
-const SCHEMA_VERSION: u32 = 11;
+const SCHEMA_VERSION: u32 = 12;
 
 pub fn migrate(conn: &Connection) -> AppResult<()> {
     let version: u32 = conn
@@ -102,6 +102,22 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );"
+        )?;
+    }
+
+    if version < 12 {
+        // AI 自定义 skill 表（内置 5 个 skill 不入表，从 prompts.rs 直接读）
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS ai_skills (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                content     TEXT NOT NULL,
+                created_at  INTEGER NOT NULL DEFAULT 0,
+                updated_at  INTEGER NOT NULL DEFAULT 0
+            );
+            ",
         )?;
     }
 

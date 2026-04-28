@@ -45,6 +45,7 @@ pub fn export_config(state: State<'_, AppState>) -> AppResult<String> {
     let credentials = list_credentials_with_secrets(&state)?;
     let forwards = crate::db::forward::list(&state.db)?;
     let groups = crate::db::group::list(&state.db)?;
+    let skills = crate::ai::skills::list_user(&state.db)?;
     serde_json::to_string_pretty(&serde_json::json!({
         "version": 1,
         "exported_at": chrono::Utc::now().to_rfc3339(),
@@ -52,6 +53,7 @@ pub fn export_config(state: State<'_, AppState>) -> AppResult<String> {
         "credentials": credentials,
         "forwards": forwards,
         "groups": groups,
+        "skills": skills,
     }))
     .map_err(|e| AppError::Other(e.to_string()))
 }
@@ -111,6 +113,35 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
         }
     }
 
+    // user skills：仅当 payload **显式带** "skills" 字段时才覆盖。
+    // 老 v1 payload（无字段）→ data.get 返回 None → 跳过，保留本地 user skills。
+    // 新 payload "skills": [] → 显式空覆盖 = 清空本地。
+    // builtin "general" 不入表，clear_all 不会影响它。
+    if let Some(skills_val) = data.get("skills").filter(|v| !v.is_null()) {
+        if let Some(arr) = skills_val.as_array() {
+            crate::db::ai_skill::clear_all(&state.db)?;
+            for item in arr {
+                match serde_json::from_value::<crate::ai::skills::SkillRecord>(item.clone()) {
+                    Ok(s) if !s.builtin => {
+                        let user = crate::db::ai_skill::UserSkill {
+                            id: s.id.clone(),
+                            name: s.name,
+                            description: s.description,
+                            content: s.content,
+                        };
+                        if let Err(e) = crate::db::ai_skill::upsert(&state.db, &user) {
+                            errors.push(format!("skill {}: {e}", user.id));
+                        }
+                    }
+                    Ok(_) => {} // builtin 跳过
+                    Err(e) => errors.push(format!("skill parse: {e}")),
+                }
+            }
+        } else {
+            errors.push("skills 字段必须是数组".into());
+        }
+    }
+
     if errors.is_empty() {
         Ok(())
     } else {
@@ -138,6 +169,7 @@ pub async fn github_push(state: State<'_, AppState>, password: String) -> AppRes
     let mut credentials = list_credentials_with_secrets(&state)?;
     let forwards = crate::db::forward::list(&state.db)?;
     let groups = crate::db::group::list(&state.db)?;
+    let skills = crate::ai::skills::list_user(&state.db)?;
 
     // 尊重 save_to_remote：不同步的凭证清空 secret/passphrase
     for c in credentials.iter_mut() {
@@ -154,6 +186,7 @@ pub async fn github_push(state: State<'_, AppState>, password: String) -> AppRes
         "credentials": credentials,
         "forwards": forwards,
         "groups": groups,
+        "skills": skills,
     }))
     .map_err(|e| AppError::Other(e.to_string()))?;
 

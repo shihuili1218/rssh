@@ -14,6 +14,8 @@
     import TabContextMenu, {type CtxMenuItem} from "./TabContextMenu.svelte";
     import MenuButton, {type NavItem, navItemKey} from "./MenuButton.svelte";
     import StripBar from "./StripBar.svelte";
+    import ChatPanel from "../ai/ChatPanel.svelte";
+    import * as ai from "../ai/store.svelte.ts";
     import {attachShortcuts, attachKeyup, type Shortcut} from "../keyboard/registry.ts";
     import {t} from "../i18n/index.svelte.ts";
 
@@ -43,7 +45,7 @@
         return [
             {
                 display: "⌘W / Ctrl+W",
-                description: "关闭当前 Tab",
+                description: t("shortcut.tab.close"),
                 skipInSettings: true,
                 match: e => (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key === "w",
                 handler: () => {
@@ -54,7 +56,7 @@
             },
             {
                 display: "⌘⇧D / Ctrl+Shift+D",
-                description: "克隆当前 Tab",
+                description: t("shortcut.tab.clone"),
                 skipInSettings: true,
                 match: e => (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "d",
                 handler: () => {
@@ -65,7 +67,7 @@
             },
             {
                 display: "⌘⇧N / Ctrl+Shift+N",
-                description: "在新窗口打开当前 Tab",
+                description: t("shortcut.tab.open_new_window"),
                 skipInSettings: true,
                 match: e => (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "n",
                 handler: () => {
@@ -76,7 +78,7 @@
             },
             {
                 display: "Ctrl+Tab / Ctrl+Shift+Tab",
-                description: "在 Tab 之间循环切换",
+                description: t("shortcut.tab.cycle"),
                 match: e => e.ctrlKey && e.key === "Tab",
                 handler: e => {
                     const dir = e.shiftKey ? -1 : 1;
@@ -96,7 +98,7 @@
             },
             {
                 display: "Esc",
-                description: "退出 Tab 切换模式",
+                description: t("shortcut.tab.exit_cycle"),
                 match: e => tabCycling && e.key === "Escape",
                 handler: () => closeDrawer(),
             },
@@ -111,12 +113,14 @@
         // from a previous crash or hot-reload.
         //
         // Skip this in cloned windows (window.__rssh_clone is set by
-        // open_tab_in_new_window): passing activeIds=[] would nuke every
+        // open_tab_in_new_window) and AI handoff windows (window.__rssh_ai_handoff
+        // is set by analyze_locally tool): passing activeIds=[] would nuke every
         // session in the shared AppState, including other windows' tabs.
-        if (!window.__rssh_clone) {
+        if (!window.__rssh_clone && !window.__rssh_ai_handoff) {
             invoke("reconcile_sessions", { activeIds: [] }).catch(() => {});
         }
         consumeCloneQuery();
+        consumeAiHandoff();
 
         const detachKeydown = attachShortcuts(shortcutsTable());
         const detachKeyup = attachKeyup((e) => {
@@ -129,6 +133,63 @@
         });
         return () => { detachKeydown(); detachKeyup(); };
     });
+
+    /* Consume window.__rssh_ai_handoff injected by analyze_locally tool.
+       工作流：开本地 shell tab → 等 PTY 就绪 → 启动独立 AI 会话 → 把 task 作为首条消息发过去。
+       PTY spawn 在 TerminalPane onMount 里走，前端轮询 sessionIdForTab 等就绪。 */
+    async function consumeAiHandoff() {
+        const data = window.__rssh_ai_handoff;
+        if (!data) return;
+        delete window.__rssh_ai_handoff;
+        let payload: { local_path: string; task: string };
+        try {
+            payload = JSON.parse(data);
+        } catch (e) {
+            console.error("Failed to parse AI handoff:", e);
+            return;
+        }
+
+        // 1. 开本地 shell tab
+        const tabId = `local:${crypto.randomUUID()}`;
+        app.addTab({type: "local", id: tabId, label: t("ai.handoff.tab_label"), meta: {}});
+        ai.openPanel();
+
+        // 2. 等本地 PTY 就绪（TerminalPane 异步 spawn + setSession）。300ms × 100 = 30s 上限
+        const sid = await waitFor(() => app.sessionIdForTab(tabId), 300, 100);
+        if (!sid) {
+            console.error("AI handoff: 本地 PTY 30s 内未就绪，放弃");
+            return;
+        }
+
+        // 3. 启动独立 AI 会话 + 发首条消息
+        try {
+            const settings = await ai.loadSettings();
+            if (!settings.has_api_key) {
+                console.error("AI handoff: 缺 API key，无法自动启动会话");
+                return;
+            }
+            const info = await ai.startSession({
+                targetKind: "local",
+                targetId: sid,
+                skill: "general",
+                provider: settings.provider,
+                model: settings.model,
+            });
+            const initialMsg = t("ai.handoff.initial_msg", { path: payload.local_path, task: payload.task });
+            await ai.sendMessage(info.session_id, initialMsg);
+        } catch (e) {
+            console.error("AI handoff failed:", e);
+        }
+    }
+
+    async function waitFor<T>(probe: () => T | undefined, intervalMs: number, maxTries: number): Promise<T | undefined> {
+        for (let i = 0; i < maxTries; i++) {
+            const v = probe();
+            if (v !== undefined) return v;
+            await new Promise(r => setTimeout(r, intervalMs));
+        }
+        return undefined;
+    }
 
     /* Consume window.__rssh_clone injected by open_tab_in_new_window */
     function consumeCloneQuery() {
@@ -175,6 +236,19 @@
         profiles.filter(p => app.pinnedProfileIds().includes(p.id))
     );
     let sbPos = $derived(app.sidebarPosition());
+
+    // AI 面板：仅在终端 tab 已连接时可见；位置走 ai.position()
+    let aiTabId = $derived(app.activeTabId());
+    let aiActiveTab = $derived(app.activeTab());
+    let aiSessionId = $derived(aiActiveTab ? app.sessionIdForTab(aiActiveTab.id) : undefined);
+    let aiVisible = $derived(
+        ai.isOpen()
+        && !!aiActiveTab
+        && (aiActiveTab.type === "ssh" || aiActiveTab.type === "local")
+        && !!aiSessionId
+        && !app.settingsActive()
+    );
+    let aiPos = $derived(ai.position());
 
     /* Menu data — sections describe layout (header / scrollable list / footer),
        flat navItems is what the keyboard shortcut cycles through. */
@@ -366,6 +440,18 @@
             {label: t("tab.context.close"), shortcut: "⌘W", onClick: () => app.closeTab(tab.id)},
         ]);
 
+        // AI 排障入口（ssh/local tab 才有，且需要已经连上 = 有 sessionId）
+        if (isTerminal) {
+            const sid = app.sessionIdForTab(tab.id);
+            sections.push([
+                {
+                    label: t("tab.context.ai"),
+                    disabled: !sid,
+                    onClick: () => { app.setActiveTab(tab.id); ai.openPanel(); },
+                },
+            ]);
+        }
+
         // Multi-window requires Tauri WebviewWindowBuilder — desktop only.
         if (isTerminal && !app.isMobile) {
             sections.push([
@@ -476,7 +562,15 @@
 {/if}
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="shell" ontouchstart={handleTouchStart} ontouchend={handleTouchEnd}>
+<div
+    class="shell"
+    class:sb-left={sbPos === "left"}
+    class:sb-right={sbPos === "right"}
+    class:sb-top={sbPos === "top"}
+    class:sb-bottom={sbPos === "bottom"}
+    ontouchstart={handleTouchStart}
+    ontouchend={handleTouchEnd}
+>
 
     {#if drawerOpen}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -552,28 +646,44 @@
         />
     {/if}
 
-    <div class="content" class:right={sbPos === "right"} class:top={sbPos === "top"} class:bottom={sbPos === "bottom"}>
-        {#if app.settingsActive()}
-            <div class="pane visible">
-                <SettingsLayout/>
-            </div>
-        {/if}
+    <div
+        class="content"
+        class:ai-on={aiVisible}
+        class:ai-left={aiVisible && aiPos === "left"}
+    >
+        <div class="main-area">
+            {#if app.settingsActive()}
+                <div class="pane visible">
+                    <SettingsLayout/>
+                </div>
+            {/if}
 
-        {#each app.tabs() as tab (tab.id)}
-            <div class="pane"
-                 class:visible={!app.settingsActive() && tab.id === app.activeTabId()}
-                 oncontextmenu={app.isMobile ? undefined : (e) => openCtxMenu(e, tab)}>
-                {#if tab.type === "home"}
-                    <HomeScreen/>
-                {:else if tab.type === "ssh" || tab.type === "local"}
-                    <TerminalPane tabId={tab.id} tabType={tab.type} meta={tab.meta ?? {}}/>
-                {:else if tab.type === "forward"}
-                    <ForwardPane tabId={tab.id} meta={tab.meta ?? {}}/>
-                {:else if tab.type === "edit"}
-                    <EditPane tabId={tab.id} />
-                {/if}
-            </div>
-        {/each}
+            {#each app.tabs() as tab (tab.id)}
+                <div class="pane"
+                     class:visible={!app.settingsActive() && tab.id === app.activeTabId()}
+                     oncontextmenu={app.isMobile ? undefined : (e) => openCtxMenu(e, tab)}>
+                    {#if tab.type === "home"}
+                        <HomeScreen/>
+                    {:else if tab.type === "ssh" || tab.type === "local"}
+                        <TerminalPane tabId={tab.id} tabType={tab.type} meta={tab.meta ?? {}}/>
+                    {:else if tab.type === "forward"}
+                        <ForwardPane tabId={tab.id} meta={tab.meta ?? {}}/>
+                    {:else if tab.type === "edit"}
+                        <EditPane tabId={tab.id} />
+                    {/if}
+                </div>
+            {/each}
+        </div>
+
+        {#if aiVisible && aiActiveTab && aiSessionId}
+            <aside class="ai-side">
+                <ChatPanel
+                    tabId={aiActiveTab.id}
+                    targetKind={aiActiveTab.type as "ssh" | "local"}
+                    targetId={aiSessionId}
+                />
+            </aside>
+        {/if}
     </div>
 </div>
 
@@ -581,7 +691,17 @@
     .shell {
         height: 100%;
         position: relative;
+        /* Sidebar 在四个方向上的占用厚度——AI 面板与 .content 都从这里读，
+           不再写 magic number 也不再为"sb 在右 + ai 在左"这种组合开特例。 */
+        --sb-left: 0px;
+        --sb-right: 0px;
+        --sb-top: 0px;
+        --sb-bottom: 0px;
     }
+    .shell.sb-left   { --sb-left:   40px; }
+    .shell.sb-right  { --sb-right:  40px; }
+    .shell.sb-top    { --sb-top:    44px; }
+    .shell.sb-bottom { --sb-bottom: 44px; }
 
     /* ── Sidebar: one component, two states ── */
     .sidebar {
@@ -648,25 +768,39 @@
         z-index: 100;
     }
 
-    /* ── Content (offset by collapsed sidebar width) ── */
+    /* ── Content = 剩余空间（让位 sidebar 后），内部分成 main-area + ai-side flex 横排 ── */
     .content {
-        height: 100%;
         position: relative;
-        margin-left: 40px;
+        display: flex;
+        flex-direction: row;
+        margin-left: var(--sb-left);
+        margin-right: var(--sb-right);
+        margin-top: var(--sb-top);
+        height: calc(100% - var(--sb-top) - var(--sb-bottom));
+    }
+    /* AI 在左：flex row 翻转，模板顺序不变，无须状态机 */
+    .content.ai-left { flex-direction: row-reverse; }
+
+    /* 终端区——所有 .pane 挂在这里，绝对定位由父级 main-area 提供 position: relative。
+       min-width: 0 让 flex 能把它压到 0（窄屏 AI 接管时） */
+    .main-area {
+        flex: 1;
+        position: relative;
+        min-width: 0;
     }
 
-    .content.right {
-        margin-left: 0;
-        margin-right: 40px;
+    /* 边框在 ChatPanel 自身 CSS 里（左右都有），aside 不重复加 */
+    .ai-side {
+        flex: 0 0 380px;
+        background: var(--bg);
     }
-    .content.top {
-        margin-left: 0;
-        margin-top: 44px;
-        height: calc(100% - 44px);
-    }
-    .content.bottom {
-        margin-left: 0;
-        height: calc(100% - 44px);
+
+    @media (max-width: 800px) { .ai-side { flex-basis: 320px; } }
+
+    /* 竖屏手机：AI 接管整块内容区，main-area 挤到 0（终端实例保留，关 AI 后恢复） */
+    @media (max-width: 480px) {
+        .ai-side { flex: 1; }
+        .content.ai-on .main-area { flex: 0; }
     }
 
     .pane {

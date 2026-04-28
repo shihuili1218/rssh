@@ -1,3 +1,4 @@
+mod ai;
 mod commands;
 pub mod crypto;
 pub mod db;
@@ -50,6 +51,7 @@ pub fn run() {
                 active_forwards: Mutex::new(HashMap::new()),
                 auth_waiters: Mutex::new(HashMap::new()),
                 window_sessions: Mutex::new(HashMap::new()),
+                ai_sessions: Mutex::new(HashMap::new()),
                 data_dir,
             });
             Ok(())
@@ -142,6 +144,22 @@ pub fn run() {
             commands::sync::import_config,
             commands::sync::github_push,
             commands::sync::github_pull,
+            // AI 排障
+            ai::commands::ai_list_skills,
+            ai::commands::ai_get_skill,
+            ai::commands::ai_save_skill,
+            ai::commands::ai_delete_skill,
+            ai::commands::ai_session_start,
+            ai::commands::ai_session_stop,
+            ai::commands::ai_user_message,
+            ai::commands::ai_command_result,
+            ai::commands::ai_command_reject,
+            ai::commands::ai_audit_save,
+            ai::commands::ai_audit_save_pick,
+            ai::commands::ai_audit_get,
+            ai::commands::ai_list_sessions,
+            ai::commands::ai_settings_get,
+            ai::commands::ai_settings_set,
         ])
         .run(tauri::generate_context!())
         .expect("启动 RSSH 失败");

@@ -28,8 +28,22 @@ pub enum AppError {
     #[error("锁已中毒")]
     Lock,
 
+    /// i18n 错误码 + 参数。前端按 `error.<code>` 翻译。
+    /// 序列化形态：`__rssh_err__|{"code":"...","params":{...}}`，前端识别前缀走翻译表，
+    /// 否则原样显示。这样老的 String 错误不破坏。
+    #[error("__rssh_err__|{0}")]
+    Coded(String),
+
     #[error("{0}")]
     Other(String),
+}
+
+impl AppError {
+    /// 构造一个 i18n 错误：`code` 对应前端 `error.<code>` 翻译键，`params` 用于占位符替换。
+    pub fn coded(code: &'static str, params: serde_json::Value) -> Self {
+        let payload = serde_json::json!({ "code": code, "params": params });
+        Self::Coded(payload.to_string())
+    }
 }
 
 /// Acquire a std::sync::Mutex lock, mapping PoisonError to AppError::Lock.
