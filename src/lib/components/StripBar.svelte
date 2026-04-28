@@ -12,7 +12,7 @@
         isActiveItem: (item: NavItem) => boolean;
         isFocusedItem: (item: NavItem) => boolean;
         groupColorOf: (tab: Tab) => string | null;
-        onActivate: (item: NavItem) => void;
+        onActivate: (item: NavItem, e?: MouseEvent) => void;
         onClose: (tabId: string) => void;
         onDragStart: (e: DragEvent, tabId: string) => void;
         onDragOver: (e: DragEvent, tabId: string) => void;
@@ -94,7 +94,7 @@
                 dragOver={t !== null && dropTabId === t.id && dragTabId !== t.id}
                 groupColor={itemTab ? groupColorOf(itemTab) : null}
                 showClose={t !== null}
-                onActivate={() => onActivate(item)}
+                onActivate={(e) => onActivate(item, e)}
                 onClose={t ? () => onClose(t.id) : undefined}
                 onDragStart={t ? (e) => onDragStart(e, t.id) : undefined}
                 onDragOver={t ? (e) => { onDragOver(e, t.id); updateAutoScroll(e.clientX); } : undefined}

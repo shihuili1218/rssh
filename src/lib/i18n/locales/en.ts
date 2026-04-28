@@ -29,6 +29,7 @@ const en = {
   "tab.new_edit": "New Edit",
   "tab.settings": "Settings",
   "tab.downloads": "Transfers",
+  "tab.pinned_menu": "Starred profiles",
   "window.pin": "Pin on Top",
   "downloads.title": "File Transfers",
   "downloads.empty": "No transfers yet — start one from the SFTP browser.",

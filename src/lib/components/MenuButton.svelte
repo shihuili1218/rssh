@@ -6,6 +6,7 @@
         | { kind: "new-tab" }
         | { kind: "new-edit" }
         | { kind: "pin"; profile: Profile }
+        | { kind: "pinned-menu" }
         | { kind: "pin-window" }
         | { kind: "downloads" }
         | { kind: "settings" };
@@ -30,7 +31,7 @@
         showClose?: boolean;
         horizontal?: boolean;
         badge?: string | null;
-        onActivate: () => void;
+        onActivate: (e?: MouseEvent) => void;
         onClose?: () => void;
         onDragStart?: (e: DragEvent) => void;
         onDragOver?: (e: DragEvent) => void;
@@ -60,6 +61,7 @@
         if (i.kind === "new-tab") return "+";
         if (i.kind === "new-edit") return "✎";
         if (i.kind === "pin") return i.profile.name.charAt(0).toUpperCase();
+        if (i.kind === "pinned-menu") return "★";
         if (i.kind === "pin-window") return "📌";
         if (i.kind === "downloads") return "⇅";
         if (i.kind === "settings") return "⚙";
@@ -77,6 +79,7 @@
         if (i.kind === "pin") return i.profile.name;
         if (i.kind === "new-tab") return t("tab.new_terminal");
         if (i.kind === "new-edit") return t("tab.new_edit");
+        if (i.kind === "pinned-menu") return t("tab.pinned_menu");
         if (i.kind === "pin-window") return t("window.pin");
         if (i.kind === "downloads") return t("tab.downloads");
         return t("tab.settings");
@@ -86,7 +89,7 @@
     let label = $derived(labelOf(item));
     // Pin-on-top, when ON, uses the selected/active style (it *is* a toggle);
     // pinned profiles keep the warning tint because they're shortcuts, not state.
-    let tinted = $derived(item.kind === "pin");
+    let tinted = $derived(item.kind === "pin" || item.kind === "pinned-menu");
     let showActive = $derived(active || (item.kind === "pin-window" && pinnedState));
     let draggable = $derived(!!onDragStart);
     // In horizontal mode, static function entries show icon; content items
@@ -103,7 +106,7 @@
     class:horizontal
     class:icon-only={iconOnly}
     draggable={draggable ? "true" : undefined}
-    onclick={onActivate}
+    onclick={(e) => onActivate(e)}
     ondragstart={onDragStart}
     ondragover={onDragOver}
     ondrop={onDrop}

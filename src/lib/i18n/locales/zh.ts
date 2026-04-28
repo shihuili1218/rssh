@@ -31,6 +31,7 @@ const zh: Messages = {
   "tab.new_edit": "新建编辑",
   "tab.settings": "设置",
   "tab.downloads": "传输",
+  "tab.pinned_menu": "收藏 Profile",
   "window.pin": "窗口置顶",
   "downloads.title": "文件传输",
   "downloads.empty": "暂无传输任务——从 SFTP 浏览器发起一个吧。",

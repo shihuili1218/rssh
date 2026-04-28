@@ -28,6 +28,7 @@
     let groups = $state<Group[]>([]);
     let sidebarTimer = 0;
     let menuCtx = $state<{ x: number; y: number; tab: Tab } | null>(null);
+    let pinnedMenu = $state<{ x: number; y: number } | null>(null);
     let pinned = $state(false);
 
     function togglePin() {
@@ -240,6 +241,7 @@
         profiles.filter(p => app.pinnedProfileIds().includes(p.id))
     );
     let sbPos = $derived(app.sidebarPosition());
+    let isHorizontal = $derived(sbPos === "top" || sbPos === "bottom");
 
     // AI 面板：仅在终端 tab 已连接时可见；位置走 ai.position()
     let aiTabId = $derived(app.activeTabId());
@@ -265,7 +267,11 @@
         header: [
             ...app.tabs().filter(t => t.type === "home").map(t => ({kind: "tab" as const, tab: t})),
             ...(app.isMobile ? [] : [{kind: "new-tab" as const}, {kind: "new-edit" as const}]),
-            ...pinnedProfiles.map(p => ({kind: "pin" as const, profile: p})),
+            // Horizontal strip would burst sideways with N pinned profiles — collapse
+            // them into one ★ button that pops a menu. Vertical sidebar keeps the list.
+            ...(isHorizontal
+                ? (pinnedProfiles.length > 0 ? [{kind: "pinned-menu" as const}] : [])
+                : pinnedProfiles.map(p => ({kind: "pin" as const, profile: p}))),
         ],
         middle: app.tabs().filter(t => t.type !== "home").map(t => ({kind: "tab" as const, tab: t})),
         footer: [
@@ -290,14 +296,38 @@
         return false;
     }
 
-    function activateNavItem(item: NavItem) {
+    function activateNavItem(item: NavItem, e?: MouseEvent) {
         if (item.kind === "new-tab") addLocalTab();
         else if (item.kind === "new-edit") addEditTab();
         else if (item.kind === "pin") connectPinned(item.profile);
+        else if (item.kind === "pinned-menu") openPinnedMenu(e);
         else if (item.kind === "tab") selectTab(item.tab.id);
         else if (item.kind === "pin-window") { togglePin(); closeDrawer(); }
         else if (item.kind === "downloads") selectDownloads();
         else selectSettings();
+    }
+
+    function openPinnedMenu(e?: MouseEvent) {
+        const target = e?.currentTarget as HTMLElement | undefined;
+        if (target) {
+            const r = target.getBoundingClientRect();
+            // Anchor to the bottom-left of the button when bar is on top, otherwise above it.
+            const aboveBar = sbPos === "bottom";
+            pinnedMenu = { x: r.left, y: aboveBar ? r.top : r.bottom + 4 };
+        } else {
+            // Keyboard cycle path — no anchor element. Drop near top-left of viewport.
+            pinnedMenu = { x: 16, y: 60 };
+        }
+    }
+
+    function closePinnedMenu() { pinnedMenu = null; }
+
+    function buildPinnedMenu(): CtxMenuItem[][] {
+        if (pinnedProfiles.length === 0) return [[]];
+        return [pinnedProfiles.map(p => ({
+            label: p.name,
+            onClick: () => connectPinned(p),
+        }))];
     }
 
     function connectPinned(p: Profile) {
@@ -565,6 +595,15 @@
     />
 {/if}
 
+{#if pinnedMenu}
+    <TabContextMenu
+        x={pinnedMenu.x}
+        y={pinnedMenu.y}
+        sections={buildPinnedMenu()}
+        onClose={closePinnedMenu}
+    />
+{/if}
+
 {#if app.sftpOpen()}
     <div class="sftp-overlay">
         <div class="sftp-bar">
@@ -606,7 +645,7 @@
                     active={isActiveItem(item)}
                     focused={isFocusedItem(item)}
                     pinnedState={pinned}
-                    onActivate={() => activateNavItem(item)}
+                    onActivate={(e) => activateNavItem(item, e)}
                 />
             {/each}
 
@@ -620,7 +659,7 @@
                         dragOver={tab !== null && dropTabId === tab.id && dragTabId !== tab.id}
                         groupColor={tab ? tabGroupColor(tab) : null}
                         showClose={tab !== null}
-                        onActivate={() => activateNavItem(item)}
+                        onActivate={(e) => activateNavItem(item, e)}
                         onClose={tab ? () => app.closeTab(tab.id) : undefined}
                         onDragStart={tab ? (e) => handleDragStart(e, tab.id) : undefined}
                         onDragOver={tab ? (e) => handleDragOver(e, tab.id) : undefined}
@@ -638,7 +677,7 @@
                         focused={isFocusedItem(item)}
                         pinnedState={pinned}
                         badge={item.kind === "downloads" ? xferBadge : null}
-                        onActivate={() => activateNavItem(item)}
+                        onActivate={(e) => activateNavItem(item, e)}
                     />
                 {/each}
             </div>
