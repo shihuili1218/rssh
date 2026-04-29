@@ -165,10 +165,20 @@ pub async fn ssh_resize(
 #[tauri::command]
 pub async fn ssh_disconnect(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
     crate::commands::lifecycle::unregister_window_session(&state, &session_id);
+
+    // 1) 先把挂在这条 SSH 上的 SFTP children 清掉。Drop Arc 让传输任务下次
+    //    访问 channel 时立刻 IO error 退出 —— 不依赖 frontend 的 finally。
+    {
+        let mut sftp = locked(&state.sftp_sessions)?;
+        sftp.retain(|_, h| h.parent_ssh_id() != Some(&session_id));
+    }
+
+    // 2) 拿走 SessionHandle 并强切 TCP（不只是 shell channel）。
     let session = locked(&state.sessions)?
         .remove(&session_id)
         .ok_or_else(|| AppError::NotFound("会话不存在".into()))?;
-    session.close()
+    session.force_disconnect();
+    Ok(())
 }
 
 #[tauri::command]

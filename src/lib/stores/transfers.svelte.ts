@@ -9,7 +9,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type TransferKind = "download" | "upload";
-export type TransferStatus = "running" | "done" | "failed";
+export type TransferStatus = "running" | "done" | "failed" | "cancelled";
+
+/// 后端用这个文本标记"用户主动取消"和"出错"。看到它前端把状态归为 cancelled。
+const CANCELLED_TAG = "传输已取消";
 
 export interface Transfer {
   id: string;
@@ -90,10 +93,11 @@ async function runTransfer(id: string): Promise<void> {
       cur.finishedAt = Date.now();
     }
   } catch (e) {
+    const errStr = String(e);
     const cur = find(id);
     if (cur) {
-      cur.status = "failed";
-      cur.error = String(e);
+      cur.status = errStr.includes(CANCELLED_TAG) ? "cancelled" : "failed";
+      cur.error = errStr;
       cur.finishedAt = Date.now();
     }
   } finally {
@@ -158,6 +162,18 @@ export async function retry(id: string): Promise<void> {
   t.startedAt = Date.now();
   t.finishedAt = undefined;
   void runTransfer(id);
+}
+
+/** 主动取消进行中的传输：让后端 streaming 循环下一次 chunk 时退出。
+ *  状态翻转由 runTransfer 的 catch 分支处理（看到 CANCELLED_TAG 标记成 cancelled）。 */
+export async function cancel(id: string): Promise<void> {
+  const t = find(id);
+  if (!t || t.status !== "running") return;
+  try {
+    await invoke("sftp_cancel_transfer", { transferId: id });
+  } catch (e) {
+    console.error("[transfers] cancel failed:", e);
+  }
 }
 
 export function remove(id: string): void {

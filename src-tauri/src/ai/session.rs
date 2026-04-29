@@ -327,7 +327,7 @@ impl Actor {
             tokio::fs::create_dir_all(&local_dir)
                 .await
                 .map_err(|e| AppError::Other(format!("Failed to create local directory: {e}")))?;
-            let sftp = SftpHandle::from_handle(&ssh_handle).await?;
+            let sftp = SftpHandle::from_handle(&ssh_handle, self.cfg.target_id.clone()).await?;
             sftp.download_to_path(&input.remote_path, &local_path, max_bytes)
                 .await
         }

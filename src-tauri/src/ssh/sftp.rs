@@ -1,4 +1,6 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -6,6 +8,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::error::{AppError, AppResult};
 use crate::models::Credential;
 use crate::ssh::client;
+
+/// 用户取消时返回这条错误；前端可识别专门提示"已取消"，而非"传输失败"。
+const CANCELLED_MSG: &str = "传输已取消";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteEntry {
@@ -16,11 +21,21 @@ pub struct RemoteEntry {
 
 pub struct SftpHandle {
     sftp: russh_sftp::client::SftpSession,
+    /// 父 SSH 会话 id；None 表示这条 SFTP 走的是独立 TCP（`SftpHandle::connect`）。
+    /// SSH 关闭时会按这个字段反向找到所有 children 并清理。
+    parent_ssh_id: Option<String>,
 }
 
 impl SftpHandle {
+    pub fn parent_ssh_id(&self) -> Option<&str> {
+        self.parent_ssh_id.as_deref()
+    }
+
     /// Open SFTP subsystem on an existing SSH connection.
-    pub async fn from_handle(ssh_handle: &crate::ssh::client::SshHandle) -> AppResult<Self> {
+    pub async fn from_handle(
+        ssh_handle: &crate::ssh::client::SshHandle,
+        parent_ssh_id: String,
+    ) -> AppResult<Self> {
         let channel = {
             let h = ssh_handle.lock().await;
             h.channel_open_session()
@@ -37,7 +52,10 @@ impl SftpHandle {
             .await
             .map_err(|e| AppError::Sftp(format!("SFTP 初始化失败: {e}")))?;
 
-        Ok(Self { sftp })
+        Ok(Self {
+            sftp,
+            parent_ssh_id: Some(parent_ssh_id),
+        })
     }
 
     pub async fn connect(
@@ -72,7 +90,10 @@ impl SftpHandle {
             .await
             .map_err(|e| AppError::Sftp(format!("SFTP 初始化失败: {e}")))?;
 
-        Ok(Self { sftp })
+        Ok(Self {
+            sftp,
+            parent_ssh_id: None,
+        })
     }
 
     pub async fn home_dir(&self) -> AppResult<String> {
@@ -180,12 +201,16 @@ impl SftpHandle {
     }
 
     /// Stream-download a remote file to a local path, emitting progress events.
+    ///
+    /// `cancel` 是用户取消的旗子；streaming 循环每个 chunk 之间查一次。
+    /// 命中即提前返回 `Sftp(CANCELLED_MSG)`，下游靠这条文本识别"取消"和"出错"。
     pub async fn download_streaming(
         &self,
         remote_path: &str,
         local_path: &Path,
         app: &tauri::AppHandle,
         transfer_id: &str,
+        cancel: Arc<AtomicBool>,
     ) -> AppResult<u64> {
         use tauri::Emitter;
 
@@ -209,6 +234,9 @@ impl SftpHandle {
         let mut buf = vec![0u8; 32768];
 
         loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(AppError::Sftp(CANCELLED_MSG.into()));
+            }
             let n = remote_file
                 .read(&mut buf)
                 .await
@@ -241,6 +269,7 @@ impl SftpHandle {
         remote_path: &str,
         app: &tauri::AppHandle,
         transfer_id: &str,
+        cancel: Arc<AtomicBool>,
     ) -> AppResult<u64> {
         use tauri::Emitter;
 
@@ -259,6 +288,9 @@ impl SftpHandle {
         let mut buf = vec![0u8; 32768];
 
         loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(AppError::Sftp(CANCELLED_MSG.into()));
+            }
             let n = local_file.read(&mut buf).await?;
             if n == 0 {
                 break;

@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use crate::ai::session::DiagnoseSession;
@@ -18,6 +19,10 @@ pub struct AppState {
     #[cfg(not(target_os = "android"))]
     pub pty_sessions: Mutex<HashMap<String, PtyHandle>>,
     pub sftp_sessions: Mutex<HashMap<String, Arc<SftpHandle>>>,
+    /// 进行中的 SFTP 传输 cancel flag：transfer_id → AtomicBool。
+    /// 用户在传输页点"取消"会把对应位置 1，streaming 循环每个 chunk 查一次，
+    /// 命中即提前 Err 退出。传输结束（成功 / 失败 / 取消）都从 map 里移除。
+    pub transfer_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub active_forwards: Mutex<HashMap<String, ForwardHandle>>,
     pub auth_waiters: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Vec<String>>>>,
     /// 私钥 passphrase 提示等待中：tab_id → oneshot sender。

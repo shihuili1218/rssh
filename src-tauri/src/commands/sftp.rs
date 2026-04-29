@@ -1,3 +1,4 @@
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use tauri::State;
@@ -6,6 +7,20 @@ use crate::error::{locked, AppError, AppResult};
 use crate::models::{Credential, CredentialType};
 use crate::ssh::sftp::{RemoteEntry, SftpHandle};
 use crate::state::AppState;
+
+/// 注册一个 cancel flag 给 transfer_id；返回需要传给 streaming 函数的 Arc。
+/// 调用方负责在结束（成功 / 失败 / 取消）时 unregister，否则会泄漏到下次重启。
+fn register_cancel_flag(state: &State<'_, AppState>, transfer_id: &str) -> AppResult<Arc<AtomicBool>> {
+    let flag = Arc::new(AtomicBool::new(false));
+    locked(&state.transfer_cancels)?.insert(transfer_id.to_string(), flag.clone());
+    Ok(flag)
+}
+
+fn unregister_cancel_flag(state: &State<'_, AppState>, transfer_id: &str) {
+    if let Ok(mut m) = locked(&state.transfer_cancels) {
+        m.remove(transfer_id);
+    };
+}
 
 #[tauri::command]
 pub async fn sftp_connect(
@@ -56,8 +71,9 @@ pub async fn sftp_connect_session(
             .clone()
     };
 
+    let parent = session_id.clone();
     let handle = crate::ssh::client::run_blocking_ssh(move || async move {
-        SftpHandle::from_handle(&ssh_handle).await
+        SftpHandle::from_handle(&ssh_handle, parent).await
     })
     .await?;
     let id = uuid::Uuid::new_v4().to_string();
@@ -150,8 +166,12 @@ pub async fn sftp_save_file(
 
     let sftp = get_sftp(&state, &sftp_id)?;
     let transfer_id = uuid::Uuid::new_v4().to_string();
-    sftp.download_streaming(&remote_path, &local, &app, &transfer_id)
-        .await?;
+    let cancel = register_cancel_flag(&state, &transfer_id)?;
+    let result = sftp
+        .download_streaming(&remote_path, &local, &app, &transfer_id, cancel)
+        .await;
+    unregister_cancel_flag(&state, &transfer_id);
+    result?;
     Ok(Some(local.display().to_string()))
 }
 
@@ -181,8 +201,12 @@ pub async fn sftp_pick_and_upload(
 
     let sftp = get_sftp(&state, &sftp_id)?;
     let transfer_id = uuid::Uuid::new_v4().to_string();
-    sftp.upload_streaming(&local, &remote_path, &app, &transfer_id)
-        .await?;
+    let cancel = register_cancel_flag(&state, &transfer_id)?;
+    let result = sftp
+        .upload_streaming(&local, &remote_path, &app, &transfer_id, cancel)
+        .await;
+    unregister_cancel_flag(&state, &transfer_id);
+    result?;
     Ok(Some(name))
 }
 
@@ -219,9 +243,12 @@ pub async fn sftp_download_to(
 ) -> AppResult<()> {
     let sftp = get_sftp(&state, &sftp_id)?;
     let local = std::path::PathBuf::from(&local_path);
-    sftp.download_streaming(&remote_path, &local, &app, &transfer_id)
-        .await?;
-    Ok(())
+    let cancel = register_cancel_flag(&state, &transfer_id)?;
+    let result = sftp
+        .download_streaming(&remote_path, &local, &app, &transfer_id, cancel)
+        .await;
+    unregister_cancel_flag(&state, &transfer_id);
+    result.map(|_| ())
 }
 
 /// Stream-upload from a caller-supplied local path. transfer_id mirrors above.
@@ -237,7 +264,21 @@ pub async fn sftp_upload_from(
 ) -> AppResult<()> {
     let sftp = get_sftp(&state, &sftp_id)?;
     let local = std::path::PathBuf::from(&local_path);
-    sftp.upload_streaming(&local, &remote_path, &app, &transfer_id)
-        .await?;
+    let cancel = register_cancel_flag(&state, &transfer_id)?;
+    let result = sftp
+        .upload_streaming(&local, &remote_path, &app, &transfer_id, cancel)
+        .await;
+    unregister_cancel_flag(&state, &transfer_id);
+    result.map(|_| ())
+}
+
+/// 用户在传输页点"取消"调用：把 transfer_id 对应的 cancel flag 置 1，
+/// streaming 循环下一次 chunk 检查时退出。
+#[tauri::command]
+pub fn sftp_cancel_transfer(state: State<'_, AppState>, transfer_id: String) -> AppResult<()> {
+    use std::sync::atomic::Ordering;
+    if let Some(flag) = locked(&state.transfer_cancels)?.get(&transfer_id) {
+        flag.store(true, Ordering::SeqCst);
+    }
     Ok(())
 }

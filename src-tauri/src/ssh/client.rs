@@ -172,7 +172,12 @@ async fn decode_key_with_prompt(
     // 必须有 ctx 才能交互；否则该流程拒绝加密私钥（forward / SFTP 等）
     let ctx = ctx.ok_or_else(|| {
         AppError::Ssh(
-            "私钥已加密，但当前流程不支持密码输入；请先在 SSH 终端建立一次连接以缓存 passphrase。"
+            "私钥已加密。\
+             Forward / SFTP 等后台启动流程无法弹出 passphrase 输入框——\
+             请先用同一个凭证（同一 profile）在 SSH 终端中建立一次连接，\
+             输入 passphrase 成功后会缓存到本进程内存，\
+             之后再启动此项即可命中缓存自动通过。\
+             （进程退出 / rssh 重启 → 缓存清空，需要重新缓存）"
                 .into(),
         )
     })?;
@@ -773,14 +778,17 @@ pub async fn authenticate_with_agent(
     }
     #[cfg(windows)]
     {
+        // 优先 OpenSSH for Windows 命名管道；不通时再退到 Pageant。
+        // 两个 connect 都返回 Result —— 前面少了一次解包，导致 .dynamic() 在
+        // Result 上找不到，windows 这边编译就挂。
         let pipe = r"\\.\pipe\openssh-ssh-agent";
-        match AgentClient::connect_named_pipe(pipe).await {
-            Ok(agent) => try_agent_identities(handle, username, agent.dynamic()).await,
-            Err(_) => {
-                let agent = AgentClient::connect_pageant().await;
-                try_agent_identities(handle, username, agent.dynamic()).await
-            }
+        if let Ok(agent) = AgentClient::connect_named_pipe(pipe).await {
+            return try_agent_identities(handle, username, agent.dynamic()).await;
         }
+        let agent = AgentClient::connect_pageant()
+            .await
+            .map_err(|e| AppError::Ssh(format!("无法连接 SSH agent (Pageant): {e}")))?;
+        try_agent_identities(handle, username, agent.dynamic()).await
     }
 }
 
@@ -1015,13 +1023,31 @@ impl SessionHandle {
             .send(SessionCmd::Resize { cols, rows })
             .map_err(|_| AppError::Ssh("会话已关闭".into()))
     }
-    pub fn close(&self) -> AppResult<()> {
-        self.tx
-            .send(SessionCmd::Close)
-            .map_err(|_| AppError::Ssh("会话已关闭".into()))
-    }
     pub fn ssh_handle(&self) -> &SshHandle {
         &self.ssh_handle
+    }
+
+    /// 强制断开整条 SSH 连接 —— 不只是 shell channel，连 TCP 一起切。
+    ///
+    /// 用途：用户关 tab / 关窗口时调用。所有挂在这条 SSH 上的子资源
+    /// （SFTP transfer、forward listener 等）会因为底层 socket 被切，
+    /// 下一次 read/write 立刻 IO error 退出。
+    ///
+    /// 跑在 SSH worker 线程里 —— `Handle::disconnect` 走 russh，
+    /// 必须在原 runtime 上下文。所以 dispatch 出去。
+    pub fn force_disconnect(&self) {
+        // 先发 Close 让 session_task 优雅退出 shell channel
+        let _ = self.tx.send(SessionCmd::Close);
+
+        let ssh_handle = self.ssh_handle.clone();
+        let _ = spawn_ssh::<_, _, ()>(move || async move {
+            let h = ssh_handle.lock().await;
+            // ByApplication = 用户主动断；空 message + 空 lang 是合规的最小 payload
+            let _ = h
+                .disconnect(russh::Disconnect::ByApplication, "", "")
+                .await;
+            Ok(())
+        });
     }
 }
 

@@ -57,6 +57,7 @@ pub fn run() {
                 #[cfg(not(target_os = "android"))]
                 pty_sessions: Mutex::new(HashMap::new()),
                 sftp_sessions: Mutex::new(HashMap::new()),
+                transfer_cancels: Mutex::new(HashMap::new()),
                 active_forwards: Mutex::new(HashMap::new()),
                 auth_waiters: Mutex::new(HashMap::new()),
                 passphrase_waiters: Mutex::new(HashMap::new()),
@@ -150,6 +151,7 @@ pub fn run() {
             commands::sftp::sftp_download_to,
             #[cfg(not(target_os = "android"))]
             commands::sftp::sftp_upload_from,
+            commands::sftp::sftp_cancel_transfer,
             // CLI install
             commands::cli::cli_status,
             commands::cli::cli_install,
