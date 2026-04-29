@@ -48,7 +48,8 @@ impl SftpHandle {
         timeout_secs: u64,
     ) -> AppResult<Self> {
         let config = crate::ssh::client::default_client_config();
-        let mut handle = client::ssh_connect(config, host, port, known_hosts_path, timeout_secs).await
+        let log = crate::ssh::client::null_logger();
+        let mut handle = client::ssh_connect(config, host, port, known_hosts_path, timeout_secs, log).await
             .map_err(|e| AppError::Sftp(format!("SSH 连接失败: {e}")))?;
 
         client::authenticate(&mut handle, credential).await

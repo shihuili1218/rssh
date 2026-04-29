@@ -1,4 +1,4 @@
-name: SSH Debug
+name: Create pod
 
 # Manually fire from Actions tab — never runs on push.
 on:

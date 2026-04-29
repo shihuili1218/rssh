@@ -103,7 +103,7 @@ where
 /// Cost is one allocation per log line; we log a handful per connection.
 pub type LogFn = Arc<dyn Fn(String) + Send + Sync>;
 
-fn null_logger() -> LogFn {
+pub(crate) fn null_logger() -> LogFn {
     Arc::new(|_: String| ())
 }
 
@@ -129,6 +129,8 @@ pub struct SshHandler {
     key_mismatch: Arc<StdMutex<bool>>,
     /// Sender for forwarded channels from remote port forwarding.
     forwarded_channels: Arc<StdMutex<Option<mpsc::UnboundedSender<russh::Channel<client::Msg>>>>>,
+    /// Surface TOFU fingerprints / known_hosts write errors back to the user.
+    log: LogFn,
 }
 
 impl client::Handler for SshHandler {
@@ -156,6 +158,7 @@ impl client::Handler for SshHandler {
         server_public_key: &russh::keys::ssh_key::PublicKey,
     ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
         use russh::keys::known_hosts;
+        use russh::keys::HashAlg;
 
         // Do all known_hosts work synchronously (it's I/O-light file reads).
         // The async block below captures only the `bool` result, which means
@@ -167,17 +170,30 @@ impl client::Handler for SshHandler {
             &self.known_hosts_path,
         ) {
             Ok(true) => Ok(true),
-            // 完全未知 — TOFU：写入 known_hosts，接受
+            // TOFU: print fingerprint, write to known_hosts, accept.
+            // Fingerprint Display impl already formats as "SHA256:<base64>".
             Ok(false) => {
-                let _ = known_hosts::learn_known_hosts_path(
+                let alg = server_public_key.algorithm().as_str().to_string();
+                let fp = server_public_key.fingerprint(HashAlg::Sha256).to_string();
+                (self.log)(format!(
+                    "Unknown host {}:{} (first connection). {} key fingerprint {}",
+                    self.host, self.port, alg, fp
+                ));
+                match known_hosts::learn_known_hosts_path(
                     &self.host,
                     self.port,
                     server_public_key,
                     &self.known_hosts_path,
-                );
+                ) {
+                    Ok(()) => (self.log)(format!(
+                        "Permanently added {}:{} to known_hosts.",
+                        self.host, self.port
+                    )),
+                    Err(e) => (self.log)(format!("known_hosts write failed: {e}")),
+                }
                 Ok(true)
             }
-            // 已知但密钥变了 — 拒绝
+            // Known host, key changed — reject.
             Err(_) => {
                 if let Ok(mut m) = self.key_mismatch.lock() {
                     *m = true;
@@ -219,6 +235,7 @@ fn new_handler(
     host: &str,
     port: u16,
     known_hosts_path: PathBuf,
+    log: LogFn,
 ) -> (SshHandler, Arc<StdMutex<bool>>, ForwardedChannelSender) {
     let mismatch = Arc::new(StdMutex::new(false));
     let fwd_channels: ForwardedChannelSender = Arc::new(StdMutex::new(None));
@@ -228,6 +245,7 @@ fn new_handler(
         known_hosts_path,
         key_mismatch: mismatch.clone(),
         forwarded_channels: fwd_channels.clone(),
+        log,
     };
     (handler, mismatch, fwd_channels)
 }
@@ -257,9 +275,10 @@ pub async fn ssh_connect(
     port: u16,
     known_hosts_path: PathBuf,
     timeout_secs: u64,
+    log: LogFn,
 ) -> AppResult<client::Handle<SshHandler>> {
     let connect_timeout = Duration::from_secs(timeout_secs);
-    let (handler, mismatch, _fwd) = new_handler(&host, port, known_hosts_path);
+    let (handler, mismatch, _fwd) = new_handler(&host, port, known_hosts_path, log);
     match timeout(
         connect_timeout,
         client::connect(config, (host.as_str(), port), handler),
@@ -281,9 +300,10 @@ pub async fn ssh_connect_with_forward(
     port: u16,
     known_hosts_path: PathBuf,
     timeout_secs: u64,
+    log: LogFn,
 ) -> AppResult<(client::Handle<SshHandler>, ForwardedChannelSender)> {
     let connect_timeout = Duration::from_secs(timeout_secs);
-    let (handler, mismatch, fwd) = new_handler(&host, port, known_hosts_path);
+    let (handler, mismatch, fwd) = new_handler(&host, port, known_hosts_path, log);
     let handle = match timeout(
         connect_timeout,
         client::connect(config, (host.as_str(), port), handler),
@@ -310,12 +330,13 @@ pub async fn ssh_connect_stream<S>(
     port: u16,
     known_hosts_path: PathBuf,
     timeout_secs: u64,
+    log: LogFn,
 ) -> AppResult<(client::Handle<SshHandler>, ForwardedChannelSender)>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     let connect_timeout = Duration::from_secs(timeout_secs);
-    let (handler, mismatch, fwd) = new_handler(&host, port, known_hosts_path);
+    let (handler, mismatch, fwd) = new_handler(&host, port, known_hosts_path, log);
     let handle = match timeout(
         connect_timeout,
         client::connect_stream(config, stream, handler),
@@ -358,6 +379,7 @@ pub async fn establish_via_chain(
             target_port,
             known_hosts_path,
             timeout_secs,
+            log.clone(),
         )
         .await?;
         log(format!("TCP connected. SSH handshake OK."));
@@ -379,6 +401,7 @@ pub async fn establish_via_chain(
         first_port,
         known_hosts_path.clone(),
         timeout_secs,
+        log.clone(),
     )
     .await?;
     log(format!(
@@ -414,6 +437,7 @@ pub async fn establish_via_chain(
             next_port,
             known_hosts_path.clone(),
             timeout_secs,
+            log.clone(),
         )
         .await?;
         hop = new_hop;
@@ -448,6 +472,7 @@ pub async fn establish_via_chain(
         target_port,
         known_hosts_path,
         timeout_secs,
+        log.clone(),
     )
     .await
 }
@@ -480,6 +505,14 @@ async fn open_tunnel_with_timeout(
 // 认证 — 全部 owned Credential / String
 // ---------------------------------------------------------------------------
 
+fn check_auth_result(result: client::AuthResult) -> AppResult<()> {
+    if result.success() {
+        Ok(())
+    } else {
+        Err(AppError::Ssh("认证被拒绝".into()))
+    }
+}
+
 /// Consumes Credential. For RSA keys, mirror OpenSSH's publickey auth path:
 /// read RFC 8308 `server-sig-algs` and use the strongest mutual RSA signature
 /// hash, falling back to the base `ssh-rsa` type only when the extension is
@@ -488,14 +521,14 @@ pub async fn authenticate(
     handle: &mut client::Handle<SshHandler>,
     credential: Credential,
 ) -> AppResult<()> {
-    let result = match credential.credential_type {
+    match credential.credential_type {
         CredentialType::Password => {
-            return authenticate_password_or_default_keys(
-                handle,
-                credential.username,
-                credential.secret,
-            )
-            .await;
+            let pw = credential.secret.unwrap_or_default();
+            let result = handle
+                .authenticate_password(credential.username, pw)
+                .await
+                .map_err(|e| AppError::Ssh(format!("密码认证失败: {e}")))?;
+            check_auth_result(result)
         }
         CredentialType::Key => {
             let pem = credential
@@ -505,24 +538,20 @@ pub async fn authenticate(
             let key: PrivateKey =
                 russh::keys::decode_secret_key(pem, credential.passphrase.as_deref())
                     .map_err(|e| AppError::Ssh(format!("私钥解析失败: {e}")))?;
-            return authenticate_private_key(handle, credential.username, key).await;
+            authenticate_private_key(handle, credential.username, key).await
         }
         CredentialType::Agent => {
-            return authenticate_with_agent_or_default_keys(handle, credential.username).await;
+            authenticate_with_agent_or_default_keys(handle, credential.username).await
         }
-        CredentialType::None => handle
-            .authenticate_none(credential.username)
-            .await
-            .map_err(|e| AppError::Ssh(format!("认证失败: {e}")))?,
-        CredentialType::Interactive => {
-            // Handled separately by authenticate_interactive()
-            return Ok(());
+        CredentialType::None => {
+            let result = handle
+                .authenticate_none(credential.username)
+                .await
+                .map_err(|e| AppError::Ssh(format!("认证失败: {e}")))?;
+            check_auth_result(result)
         }
-    };
-    if !result.success() {
-        return Err(AppError::Ssh("认证被拒绝".into()));
+        CredentialType::Interactive => Ok(()),
     }
-    Ok(())
 }
 
 /// OpenSSH-compatible RSA signature selection.
@@ -545,14 +574,9 @@ async fn pick_rsa_hash(
 }
 
 fn publickey_signature_label(key: &PrivateKey, rsa_hash: Option<HashAlg>) -> String {
-    if matches!(key.algorithm(), Algorithm::Rsa { .. }) {
-        match rsa_hash {
-            Some(HashAlg::Sha256) => "rsa-sha2-256".to_string(),
-            Some(HashAlg::Sha512) => "rsa-sha2-512".to_string(),
-            _ => "ssh-rsa".to_string(),
-        }
-    } else {
-        key.algorithm().as_str().to_string()
+    match key.algorithm() {
+        Algorithm::Rsa { .. } => Algorithm::Rsa { hash: rsa_hash }.as_str().to_string(),
+        a => a.as_str().to_string(),
     }
 }
 
@@ -561,42 +585,14 @@ async fn authenticate_private_key(
     username: String,
     key: PrivateKey,
 ) -> AppResult<()> {
-    let alg = if matches!(key.algorithm(), Algorithm::Rsa { .. }) {
-        pick_rsa_hash(handle, &key).await?
-    } else {
-        None
-    };
+    let alg = pick_rsa_hash(handle, &key).await?;
     let label = publickey_signature_label(&key, alg);
     let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), alg);
     let result = handle
         .authenticate_publickey(username, key_with_alg)
         .await
         .map_err(|e| AppError::Ssh(format!("密钥认证失败 ({label}): {e}")))?;
-    if result.success() {
-        Ok(())
-    } else {
-        Err(AppError::Ssh("认证被拒绝".into()))
-    }
-}
-
-pub async fn authenticate_password_or_default_keys(
-    handle: &mut client::Handle<SshHandler>,
-    username: String,
-    secret: Option<String>,
-) -> AppResult<()> {
-    let pw = secret.unwrap_or_default();
-    if pw.is_empty() {
-        return authenticate_with_default_keys(handle, username).await;
-    }
-
-    match handle
-        .authenticate_password(username.clone(), pw.clone())
-        .await
-    {
-        Ok(result) if result.success() => Ok(()),
-        Ok(_) => Err(AppError::Ssh("认证被拒绝".into())),
-        Err(e) => Err(AppError::Ssh(format!("密码认证失败: {e}"))),
-    }
+    check_auth_result(result)
 }
 
 // ---------------------------------------------------------------------------
