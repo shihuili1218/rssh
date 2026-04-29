@@ -10,7 +10,9 @@
     import EditPane from "./EditPane.svelte";
     import SettingsLayout from "./SettingsLayout.svelte";
     import SftpBrowser from "./SftpBrowser.svelte";
+    import DownloadsScreen from "./DownloadsScreen.svelte";
     import SnippetPicker from "./SnippetPicker.svelte";
+    import * as transfers from "../stores/transfers.svelte.ts";
     import TabContextMenu, {type CtxMenuItem} from "./TabContextMenu.svelte";
     import MenuButton, {type NavItem, navItemKey} from "./MenuButton.svelte";
     import StripBar from "./StripBar.svelte";
@@ -26,6 +28,7 @@
     let groups = $state<Group[]>([]);
     let sidebarTimer = 0;
     let menuCtx = $state<{ x: number; y: number; tab: Tab } | null>(null);
+    let pinnedMenu = $state<{ x: number; y: number } | null>(null);
     let pinned = $state(false);
 
     function togglePin() {
@@ -223,6 +226,8 @@
         const tab = app.activeTab();
         if (app.settingsActive()) {
             getCurrentWindow().setTitle("Settings");
+        } else if (app.downloadsActive()) {
+            getCurrentWindow().setTitle(t("downloads.title"));
         } else if (tab) {
             const termTitle = app.terminalTitle(tab.id);
             const title = termTitle ? `${tab.label} — ${termTitle}` : tab.label;
@@ -236,6 +241,7 @@
         profiles.filter(p => app.pinnedProfileIds().includes(p.id))
     );
     let sbPos = $derived(app.sidebarPosition());
+    let isHorizontal = $derived(sbPos === "top" || sbPos === "bottom");
 
     // AI 面板：仅在终端 tab 已连接时可见；位置走 ai.position()
     let aiTabId = $derived(app.activeTabId());
@@ -247,7 +253,12 @@
         && (aiActiveTab.type === "ssh" || aiActiveTab.type === "local")
         && !!aiSessionId
         && !app.settingsActive()
+        && !app.downloadsActive()
     );
+    let xferBadge = $derived.by(() => {
+        const n = transfers.activeCount();
+        return n > 0 ? String(n) : null;
+    });
     let aiPos = $derived(ai.position());
 
     /* Menu data — sections describe layout (header / scrollable list / footer),
@@ -256,11 +267,15 @@
         header: [
             ...app.tabs().filter(t => t.type === "home").map(t => ({kind: "tab" as const, tab: t})),
             ...(app.isMobile ? [] : [{kind: "new-tab" as const}, {kind: "new-edit" as const}]),
-            ...pinnedProfiles.map(p => ({kind: "pin" as const, profile: p})),
+            // Horizontal strip would burst sideways with N pinned profiles — collapse
+            // them into one ★ button that pops a menu. Vertical sidebar keeps the list.
+            ...(isHorizontal
+                ? (pinnedProfiles.length > 0 ? [{kind: "pinned-menu" as const}] : [])
+                : pinnedProfiles.map(p => ({kind: "pin" as const, profile: p}))),
         ],
         middle: app.tabs().filter(t => t.type !== "home").map(t => ({kind: "tab" as const, tab: t})),
         footer: [
-            ...(app.isMobile ? [] : [{kind: "pin-window" as const}]),
+            ...(app.isMobile ? [] : [{kind: "pin-window" as const}, {kind: "downloads" as const}]),
             {kind: "settings" as const},
         ],
     });
@@ -275,18 +290,44 @@
     }
 
     function isActiveItem(item: NavItem): boolean {
-        if (item.kind === "tab") return !app.settingsActive() && item.tab.id === app.activeTabId();
+        if (item.kind === "tab") return !app.settingsActive() && !app.downloadsActive() && item.tab.id === app.activeTabId();
         if (item.kind === "settings") return app.settingsActive();
+        if (item.kind === "downloads") return app.downloadsActive();
         return false;
     }
 
-    function activateNavItem(item: NavItem) {
+    function activateNavItem(item: NavItem, e?: MouseEvent) {
         if (item.kind === "new-tab") addLocalTab();
         else if (item.kind === "new-edit") addEditTab();
         else if (item.kind === "pin") connectPinned(item.profile);
+        else if (item.kind === "pinned-menu") openPinnedMenu(e);
         else if (item.kind === "tab") selectTab(item.tab.id);
         else if (item.kind === "pin-window") { togglePin(); closeDrawer(); }
+        else if (item.kind === "downloads") selectDownloads();
         else selectSettings();
+    }
+
+    function openPinnedMenu(e?: MouseEvent) {
+        const target = e?.currentTarget as HTMLElement | undefined;
+        if (target) {
+            const r = target.getBoundingClientRect();
+            // Anchor to the bottom-left of the button when bar is on top, otherwise above it.
+            const aboveBar = sbPos === "bottom";
+            pinnedMenu = { x: r.left, y: aboveBar ? r.top : r.bottom + 4 };
+        } else {
+            // Keyboard cycle path — no anchor element. Drop near top-left of viewport.
+            pinnedMenu = { x: 16, y: 60 };
+        }
+    }
+
+    function closePinnedMenu() { pinnedMenu = null; }
+
+    function buildPinnedMenu(): CtxMenuItem[][] {
+        if (pinnedProfiles.length === 0) return [[]];
+        return [pinnedProfiles.map(p => ({
+            label: p.name,
+            onClick: () => connectPinned(p),
+        }))];
     }
 
     function connectPinned(p: Profile) {
@@ -328,6 +369,11 @@
 
     function selectSettings() {
         app.openSettings();
+        closeDrawer();
+    }
+
+    function selectDownloads() {
+        app.openDownloads();
         closeDrawer();
     }
 
@@ -549,6 +595,15 @@
     />
 {/if}
 
+{#if pinnedMenu}
+    <TabContextMenu
+        x={pinnedMenu.x}
+        y={pinnedMenu.y}
+        sections={buildPinnedMenu()}
+        onClose={closePinnedMenu}
+    />
+{/if}
+
 {#if app.sftpOpen()}
     <div class="sftp-overlay">
         <div class="sftp-bar">
@@ -590,7 +645,7 @@
                     active={isActiveItem(item)}
                     focused={isFocusedItem(item)}
                     pinnedState={pinned}
-                    onActivate={() => activateNavItem(item)}
+                    onActivate={(e) => activateNavItem(item, e)}
                 />
             {/each}
 
@@ -604,7 +659,7 @@
                         dragOver={tab !== null && dropTabId === tab.id && dragTabId !== tab.id}
                         groupColor={tab ? tabGroupColor(tab) : null}
                         showClose={tab !== null}
-                        onActivate={() => activateNavItem(item)}
+                        onActivate={(e) => activateNavItem(item, e)}
                         onClose={tab ? () => app.closeTab(tab.id) : undefined}
                         onDragStart={tab ? (e) => handleDragStart(e, tab.id) : undefined}
                         onDragOver={tab ? (e) => handleDragOver(e, tab.id) : undefined}
@@ -621,7 +676,8 @@
                         active={isActiveItem(item)}
                         focused={isFocusedItem(item)}
                         pinnedState={pinned}
-                        onActivate={() => activateNavItem(item)}
+                        badge={item.kind === "downloads" ? xferBadge : null}
+                        onActivate={(e) => activateNavItem(item, e)}
                     />
                 {/each}
             </div>
@@ -634,6 +690,7 @@
             pinned={pinned}
             dragTabId={dragTabId}
             dropTabId={dropTabId}
+            xferBadge={xferBadge}
             isActiveItem={isActiveItem}
             isFocusedItem={isFocusedItem}
             groupColorOf={tabGroupColor}
@@ -656,11 +713,15 @@
                 <div class="pane visible">
                     <SettingsLayout/>
                 </div>
+            {:else if app.downloadsActive()}
+                <div class="pane visible">
+                    <DownloadsScreen/>
+                </div>
             {/if}
 
             {#each app.tabs() as tab (tab.id)}
                 <div class="pane"
-                     class:visible={!app.settingsActive() && tab.id === app.activeTabId()}
+                     class:visible={!app.settingsActive() && !app.downloadsActive() && tab.id === app.activeTabId()}
                      oncontextmenu={app.isMobile ? undefined : (e) => openCtxMenu(e, tab)}>
                     {#if tab.type === "home"}
                         <HomeScreen/>

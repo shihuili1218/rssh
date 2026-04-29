@@ -66,14 +66,17 @@ pub async fn forward_start(
         }
         chain.push((hop, bc));
     }
-    let chain_refs: Vec<(&Profile, &Credential)> = chain.iter().map(|(p, c)| (p, c)).collect();
-
     let known_hosts_path = crate::ssh::known_hosts::path_for(&state.data_dir);
-    let handle = match f.forward_type {
-        ForwardType::Local => fwd::start_local(&f, &p.host, p.port, &c, &chain_refs, known_hosts_path, timeout_secs).await?,
-        ForwardType::Remote => fwd::start_remote(&f, &p.host, p.port, &c, &chain_refs, known_hosts_path, timeout_secs).await?,
-        ForwardType::Dynamic => fwd::start_dynamic(&f, &p.host, p.port, &c, &chain_refs, known_hosts_path, timeout_secs).await?,
-    };
+    let host = p.host.clone();
+    let port = p.port;
+    let kind = f.forward_type;
+    let handle = crate::ssh::client::run_blocking_ssh(move || async move {
+        match kind {
+            ForwardType::Local => fwd::start_local(f, host, port, c, chain, known_hosts_path, timeout_secs).await,
+            ForwardType::Remote => fwd::start_remote(f, host, port, c, chain, known_hosts_path, timeout_secs).await,
+            ForwardType::Dynamic => fwd::start_dynamic(f, host, port, c, chain, known_hosts_path, timeout_secs).await,
+        }
+    }).await?;
     let active_id = uuid::Uuid::new_v4().to_string();
 
     locked(&state.active_forwards)?.insert(active_id.clone(), handle);

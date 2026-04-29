@@ -41,9 +41,9 @@ impl SftpHandle {
     }
 
     pub async fn connect(
-        host: &str,
+        host: String,
         port: u16,
-        credential: &Credential,
+        credential: Credential,
         known_hosts_path: PathBuf,
         timeout_secs: u64,
     ) -> AppResult<Self> {

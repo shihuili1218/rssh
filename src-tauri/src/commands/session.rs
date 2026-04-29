@@ -111,14 +111,19 @@ pub async fn ssh_connect(
     };
 
     // Only pass log_session_id if verbose logging is enabled
-    let effective_log_id = if verbose_log { log_session_id.as_deref() } else { None };
+    let effective_log_id = if verbose_log { log_session_id } else { None };
 
     let known_hosts_path = crate::ssh::known_hosts::path_for(&state.data_dir);
-    let chain_refs: Vec<(&Profile, &Credential)> = chain.iter().map(|(p, c)| (p, c)).collect();
-    let result = client::connect(&profile, &credential, &chain_refs, cols, rows, app, recording_path, effective_log_id, known_hosts_path, timeout_secs).await?;
+    let init_command = profile.init_command.clone();
+    let result = client::run_blocking_ssh(move || async move {
+        client::connect(
+            profile, credential, chain, cols, rows, app, recording_path,
+            effective_log_id, known_hosts_path, timeout_secs,
+        ).await
+    }).await?;
 
     // 执行初始命令（shell 已就绪，直接写入）
-    if let Some(ref cmd) = profile.init_command {
+    if let Some(ref cmd) = init_command {
         if !cmd.is_empty() {
             result.handle.write(format!("{}\n", cmd).as_bytes())?;
         }

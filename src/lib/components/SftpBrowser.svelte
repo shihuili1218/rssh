@@ -1,7 +1,8 @@
 <script lang="ts">
     import {onDestroy, onMount} from "svelte";
     import {invoke} from "@tauri-apps/api/core";
-    import {listen, type UnlistenFn} from "@tauri-apps/api/event";
+    import * as app from "../stores/app.svelte.ts";
+    import * as transfers from "../stores/transfers.svelte.ts";
     import type {RemoteEntry} from "../stores/app.svelte.ts";
 
     let {meta}: { meta: Record<string, string> } = $props();
@@ -11,10 +12,7 @@
     let entries = $state<RemoteEntry[]>([]);
     let loading = $state(true);
     let error = $state("");
-    let uploading = $state(false);
     let notice = $state("");
-    let transferProgress = $state<{ transferred: number; total: number } | null>(null);
-    let progressUnlisten: UnlistenFn | null = null;
 
     onMount(async () => {
         try {
@@ -40,7 +38,6 @@
 
     onDestroy(() => {
         if (sftpId) invoke("sftp_close", {sftpId});
-        progressUnlisten?.();
     });
 
     async function listDir(path: string) {
@@ -64,59 +61,47 @@
         if (e.is_dir) listDir(cwd === "/" ? `/${e.name}` : `${cwd}/${e.name}`);
     }
 
-    async function startProgressListener() {
-        progressUnlisten?.();
-        // Listen for all sftp:progress events (wildcard via prefix matching)
-        progressUnlisten = await listen<{ transferred: number; total: number }>(
-            "sftp:progress",
-            (ev) => { transferProgress = ev.payload; },
-        );
-    }
-
-    function stopProgress() {
-        progressUnlisten?.();
-        progressUnlisten = null;
-        transferProgress = null;
+    function basename(p: string): string {
+        return p.split(/[\\/]/).pop() || p;
     }
 
     async function download(e: RemoteEntry) {
         error = "";
         notice = "";
-        transferProgress = { transferred: 0, total: e.size };
+        if (!meta.sessionId) { error = "Missing SSH session"; return; }
         try {
+            const localPath = await invoke<string | null>("sftp_pick_save_path", { defaultName: e.name });
+            if (!localPath) return;
             const remotePath = cwd === "/" ? `/${e.name}` : `${cwd}/${e.name}`;
-            const saved = await invoke<string | null>("sftp_save_file", {
-                sftpId,
+            await transfers.startDownload({
+                sessionId: meta.sessionId,
                 remotePath,
-                defaultName: e.name,
+                localPath,
+                sizeHint: e.size,
             });
-            if (saved) notice = `Saved to ${saved}`;
+            notice = `Queued: ${e.name}`;
         } catch (err: any) {
             error = String(err);
-        } finally {
-            stopProgress();
         }
     }
 
     async function upload() {
         error = "";
         notice = "";
-        uploading = true;
-        transferProgress = { transferred: 0, total: 0 };
+        if (!meta.sessionId) { error = "Missing SSH session"; return; }
         try {
-            const name = await invoke<string | null>("sftp_pick_and_upload", {
-                sftpId,
-                remoteDir: cwd,
+            const localPath = await invoke<string | null>("sftp_pick_open_path");
+            if (!localPath) return;
+            const name = basename(localPath);
+            const remotePath = cwd === "/" ? `/${name}` : `${cwd}/${name}`;
+            await transfers.startUpload({
+                sessionId: meta.sessionId,
+                localPath,
+                remotePath,
             });
-            if (name) {
-                notice = `Uploaded ${name}`;
-                await listDir(cwd);
-            }
+            notice = `Queued: ${name}`;
         } catch (err: any) {
             error = String(err);
-        } finally {
-            uploading = false;
-            stopProgress();
         }
     }
 
@@ -126,27 +111,20 @@
         if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} M`;
         return `${(bytes / 1073741824).toFixed(1)} G`;
     }
+
+    function gotoDownloads() {
+        app.openDownloads();
+    }
 </script>
 
 <div class="sftp">
     <div class="header">
         <button class="btn btn-sm" onclick={goUp}>← Up</button>
         <button class="btn btn-sm" onclick={() => listDir(cwd)}>Refresh</button>
-        <button class="btn btn-sm" disabled={uploading || !sftpId} onclick={upload}>
-            {uploading ? "Uploading..." : "⬆ Upload"}
-        </button>
+        <button class="btn btn-sm" disabled={!sftpId} onclick={upload}>⬆ Upload</button>
+        <button class="btn btn-sm btn-link" onclick={gotoDownloads}>Transfers →</button>
     </div>
     <div class="breadcrumb">{cwd}</div>
-
-    {#if transferProgress}
-        {@const pct = transferProgress.total > 0 ? Math.min(100, (transferProgress.transferred / transferProgress.total) * 100) : 0}
-        <div class="progress-row">
-            <div class="progress-track">
-                <div class="progress-fill" style="width: {pct.toFixed(1)}%"></div>
-            </div>
-            <span class="progress-text">{pct.toFixed(0)}% — {formatSize(transferProgress.transferred)} / {formatSize(transferProgress.total)}</span>
-        </div>
-    {/if}
 
     {#if error}
         <div class="error-banner">{error}</div>
@@ -283,32 +261,10 @@
         padding: 24px;
     }
 
-    .progress-row {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-bottom: 8px;
-    }
-
-    .progress-track {
-        flex: 1;
-        height: 6px;
-        background: var(--surface);
-        border-radius: 3px;
-        overflow: hidden;
-    }
-
-    .progress-fill {
-        height: 100%;
-        background: var(--accent);
-        border-radius: 3px;
-        transition: width 0.15s linear;
-    }
-
-    .progress-text {
-        font-size: 11px;
-        color: var(--text-sub);
-        white-space: nowrap;
-        min-width: 120px;
+    .btn-link {
+        background: transparent;
+        box-shadow: none;
+        color: var(--accent);
+        margin-left: auto;
     }
 </style>

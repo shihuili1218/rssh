@@ -8,7 +8,9 @@ use tokio::net::{TcpListener, TcpStream};
 
 use crate::error::{AppError, AppResult};
 use crate::models::{Credential, Forward};
-use crate::ssh::client;
+use crate::models::Profile;
+use crate::ssh::client::{self, LogFn};
+use std::sync::Arc as StdArc;
 
 pub struct ForwardHandle {
     abort: tokio::task::AbortHandle,
@@ -58,16 +60,17 @@ async fn counted_copy<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
 }
 
 pub async fn start_local(
-    forward: &Forward,
-    host: &str,
+    forward: Forward,
+    host: String,
     port: u16,
-    credential: &Credential,
-    bastion_chain: &[(&crate::models::Profile, &Credential)],
+    credential: Credential,
+    bastion_chain: Vec<(Profile, Credential)>,
     known_hosts_path: PathBuf,
     timeout_secs: u64,
 ) -> AppResult<ForwardHandle> {
+    let log: LogFn = StdArc::new(|_: String| ());
     let (mut handle, _fwd) = client::establish_via_chain(
-        bastion_chain, host, port, known_hosts_path, timeout_secs, |_| {},
+        bastion_chain, host, port, known_hosts_path, timeout_secs, log,
     ).await?;
     client::authenticate(&mut handle, credential).await?;
 
@@ -134,16 +137,17 @@ pub async fn start_local(
 // ---------------------------------------------------------------------------
 
 pub async fn start_remote(
-    forward: &Forward,
-    host: &str,
+    forward: Forward,
+    host: String,
     port: u16,
-    credential: &Credential,
-    bastion_chain: &[(&crate::models::Profile, &Credential)],
+    credential: Credential,
+    bastion_chain: Vec<(Profile, Credential)>,
     known_hosts_path: PathBuf,
     timeout_secs: u64,
 ) -> AppResult<ForwardHandle> {
+    let log: LogFn = StdArc::new(|_: String| ());
     let (mut handle, fwd_sender) = client::establish_via_chain(
-        bastion_chain, host, port, known_hosts_path, timeout_secs, |_| {},
+        bastion_chain, host, port, known_hosts_path, timeout_secs, log,
     ).await?;
     client::authenticate(&mut handle, credential).await?;
 
@@ -289,16 +293,17 @@ async fn socks5_handshake(stream: &mut TcpStream) -> std::io::Result<(String, u1
 }
 
 pub async fn start_dynamic(
-    forward: &Forward,
-    host: &str,
+    forward: Forward,
+    host: String,
     port: u16,
-    credential: &Credential,
-    bastion_chain: &[(&crate::models::Profile, &Credential)],
+    credential: Credential,
+    bastion_chain: Vec<(Profile, Credential)>,
     known_hosts_path: PathBuf,
     timeout_secs: u64,
 ) -> AppResult<ForwardHandle> {
+    let log: LogFn = StdArc::new(|_: String| ());
     let (mut handle, _fwd) = client::establish_via_chain(
-        bastion_chain, host, port, known_hosts_path, timeout_secs, |_| {},
+        bastion_chain, host, port, known_hosts_path, timeout_secs, log,
     ).await?;
     client::authenticate(&mut handle, credential).await?;
 

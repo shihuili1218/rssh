@@ -31,7 +31,9 @@ pub async fn sftp_connect(
         .unwrap_or(crate::ssh::client::DEFAULT_CONNECT_TIMEOUT);
 
     let known_hosts_path = crate::ssh::known_hosts::path_for(&state.data_dir);
-    let handle = SftpHandle::connect(&host, port, &cred, known_hosts_path, timeout_secs).await?;
+    let handle = crate::ssh::client::run_blocking_ssh(move || async move {
+        SftpHandle::connect(host, port, cred, known_hosts_path, timeout_secs).await
+    }).await?;
     let id = uuid::Uuid::new_v4().to_string();
 
     locked(&state.sftp_sessions)?.insert(id.clone(), Arc::new(handle));
@@ -54,7 +56,9 @@ pub async fn sftp_connect_session(
             .clone()
     };
 
-    let handle = SftpHandle::from_handle(&ssh_handle).await?;
+    let handle = crate::ssh::client::run_blocking_ssh(move || async move {
+        SftpHandle::from_handle(&ssh_handle).await
+    }).await?;
     let id = uuid::Uuid::new_v4().to_string();
 
     locked(&state.sftp_sessions)?.insert(id.clone(), Arc::new(handle));
@@ -175,4 +179,58 @@ pub async fn sftp_pick_and_upload(
     let transfer_id = uuid::Uuid::new_v4().to_string();
     sftp.upload_streaming(&local, &remote_path, &app, &transfer_id).await?;
     Ok(Some(name))
+}
+
+/// Open native Save-As dialog and return the chosen path. No transfer happens here.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn sftp_pick_save_path(default_name: String) -> AppResult<Option<String>> {
+    let handle = rfd::AsyncFileDialog::new()
+        .set_file_name(&default_name)
+        .save_file()
+        .await;
+    Ok(handle.map(|h| h.path().display().to_string()))
+}
+
+/// Open native Open dialog and return the chosen path. No transfer happens here.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn sftp_pick_open_path() -> AppResult<Option<String>> {
+    let handle = rfd::AsyncFileDialog::new().pick_file().await;
+    Ok(handle.map(|h| h.path().display().to_string()))
+}
+
+/// Stream-download to a caller-supplied local path. transfer_id is used as the
+/// `sftp:progress` event id so the frontend can multiplex concurrent transfers.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn sftp_download_to(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    sftp_id: String,
+    remote_path: String,
+    local_path: String,
+    transfer_id: String,
+) -> AppResult<()> {
+    let sftp = get_sftp(&state, &sftp_id)?;
+    let local = std::path::PathBuf::from(&local_path);
+    sftp.download_streaming(&remote_path, &local, &app, &transfer_id).await?;
+    Ok(())
+}
+
+/// Stream-upload from a caller-supplied local path. transfer_id mirrors above.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn sftp_upload_from(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    sftp_id: String,
+    local_path: String,
+    remote_path: String,
+    transfer_id: String,
+) -> AppResult<()> {
+    let sftp = get_sftp(&state, &sftp_id)?;
+    let local = std::path::PathBuf::from(&local_path);
+    sftp.upload_streaming(&local, &remote_path, &app, &transfer_id).await?;
+    Ok(())
 }

@@ -1,0 +1,33 @@
+name: SSH Debug
+
+# Manually fire from Actions tab — never runs on push.
+on:
+  workflow_dispatch:
+    inputs:
+      os:
+        description: Runner OS
+        required: true
+        default: ubuntu-latest
+        type: choice
+        options:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+      timeout-minutes:
+        description: Hard kill after N minutes
+        required: false
+        default: "60"
+
+jobs:
+  ssh:
+    runs-on: ${{ github.event.inputs.os }}
+    timeout-minutes: ${{ fromJSON(github.event.inputs.timeout-minutes) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Open tmate session
+        uses: mxschmitt/action-tmate@v3
+        with:
+          # Only the user who fired this workflow can connect (uses your
+          # GitHub-uploaded SSH public keys for auth).
+          limit-access-to-actor: true

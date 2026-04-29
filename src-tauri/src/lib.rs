@@ -129,6 +129,14 @@ pub fn run() {
             commands::sftp::sftp_save_file,
             #[cfg(not(target_os = "android"))]
             commands::sftp::sftp_pick_and_upload,
+            #[cfg(not(target_os = "android"))]
+            commands::sftp::sftp_pick_save_path,
+            #[cfg(not(target_os = "android"))]
+            commands::sftp::sftp_pick_open_path,
+            #[cfg(not(target_os = "android"))]
+            commands::sftp::sftp_download_to,
+            #[cfg(not(target_os = "android"))]
+            commands::sftp::sftp_upload_from,
             // CLI install
             commands::cli::cli_status,
             commands::cli::cli_install,
@@ -139,6 +147,8 @@ pub fn run() {
             commands::window::open_external_url,
             #[cfg(not(target_os = "android"))]
             commands::window::clipboard_read,
+            #[cfg(not(target_os = "android"))]
+            commands::window::fetch_latest_release_tag,
             // sync
             commands::sync::export_config,
             commands::sync::import_config,
