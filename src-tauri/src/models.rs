@@ -55,8 +55,6 @@ pub struct Credential {
     pub secret: Option<String>,
     #[serde(default)]
     pub save_to_remote: bool,
-    #[serde(default)]
-    pub passphrase: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

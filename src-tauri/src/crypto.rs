@@ -8,9 +8,8 @@ use crate::error::{AppError, AppResult};
 // Auth: HMAC-SHA256(key, ciphertext)
 // ---------------------------------------------------------------------------
 
-
 fn derive_key(password: &str, salt: &[u8]) -> Vec<u8> {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut k = Sha256::digest([password.as_bytes(), salt].concat()).to_vec();
     for _ in 1..1000 {
         k = Sha256::digest([k.as_slice(), salt].concat()).to_vec();
@@ -18,23 +17,18 @@ fn derive_key(password: &str, salt: &[u8]) -> Vec<u8> {
     k
 }
 
-
 fn keystream(key: &[u8], length: usize) -> Vec<u8> {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut out = Vec::with_capacity(length + 32);
     let mut ctr: u32 = 0;
     while out.len() < length {
-        let block = Sha256::digest([
-            key,
-            &ctr.to_le_bytes(),
-        ].concat());
+        let block = Sha256::digest([key, &ctr.to_le_bytes()].concat());
         out.extend_from_slice(&block);
         ctr += 1;
     }
     out.truncate(length);
     out
 }
-
 
 fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
     use hmac::{Hmac, Mac};
@@ -44,14 +38,12 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
     mac.finalize().into_bytes().to_vec()
 }
 
-
 pub fn encrypt(json: &str, password: &str) -> AppResult<String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
 
     let salt = {
         let mut buf = [0u8; 16];
-        getrandom::getrandom(&mut buf)
-            .map_err(|e| AppError::Other(format!("RNG failed: {e}")))?;
+        getrandom::getrandom(&mut buf).map_err(|e| AppError::Other(format!("RNG failed: {e}")))?;
         buf
     };
 
@@ -68,11 +60,11 @@ pub fn encrypt(json: &str, password: &str) -> AppResult<String> {
     Ok(STANDARD.encode(&out))
 }
 
-
 pub fn decrypt(b64: &str, password: &str) -> AppResult<String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
 
-    let data = STANDARD.decode(b64)
+    let data = STANDARD
+        .decode(b64)
         .map_err(|e| AppError::Config(format!("Base64 解码失败: {e}")))?;
     if data.len() < 49 {
         return Err(AppError::Config("Invalid encrypted config".into()));

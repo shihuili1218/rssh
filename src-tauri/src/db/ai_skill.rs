@@ -16,9 +16,8 @@ pub struct UserSkill {
 
 pub fn list(db: &Db) -> AppResult<Vec<UserSkill>> {
     let conn = db.lock()?;
-    let mut stmt = conn.prepare(
-        "SELECT id, name, description, content FROM ai_skills ORDER BY updated_at DESC",
-    )?;
+    let mut stmt = conn
+        .prepare("SELECT id, name, description, content FROM ai_skills ORDER BY updated_at DESC")?;
     let rows = stmt
         .query_map([], |r| {
             Ok(UserSkill {

@@ -23,7 +23,6 @@ pub async fn sftp_connect(
         credential_type: CredentialType::from_str(&auth_type),
         secret,
         save_to_remote: false,
-        passphrase: None,
     };
 
     let timeout_secs: u64 = crate::db::settings::get(&state.db, "connect_timeout")?
@@ -33,7 +32,8 @@ pub async fn sftp_connect(
     let known_hosts_path = crate::ssh::known_hosts::path_for(&state.data_dir);
     let handle = crate::ssh::client::run_blocking_ssh(move || async move {
         SftpHandle::connect(host, port, cred, known_hosts_path, timeout_secs).await
-    }).await?;
+    })
+    .await?;
     let id = uuid::Uuid::new_v4().to_string();
 
     locked(&state.sftp_sessions)?.insert(id.clone(), Arc::new(handle));
@@ -58,7 +58,8 @@ pub async fn sftp_connect_session(
 
     let handle = crate::ssh::client::run_blocking_ssh(move || async move {
         SftpHandle::from_handle(&ssh_handle).await
-    }).await?;
+    })
+    .await?;
     let id = uuid::Uuid::new_v4().to_string();
 
     locked(&state.sftp_sessions)?.insert(id.clone(), Arc::new(handle));
@@ -142,12 +143,15 @@ pub async fn sftp_save_file(
         .save_file()
         .await;
 
-    let Some(handle) = save_path else { return Ok(None) };
+    let Some(handle) = save_path else {
+        return Ok(None);
+    };
     let local = handle.path().to_path_buf();
 
     let sftp = get_sftp(&state, &sftp_id)?;
     let transfer_id = uuid::Uuid::new_v4().to_string();
-    sftp.download_streaming(&remote_path, &local, &app, &transfer_id).await?;
+    sftp.download_streaming(&remote_path, &local, &app, &transfer_id)
+        .await?;
     Ok(Some(local.display().to_string()))
 }
 
@@ -177,7 +181,8 @@ pub async fn sftp_pick_and_upload(
 
     let sftp = get_sftp(&state, &sftp_id)?;
     let transfer_id = uuid::Uuid::new_v4().to_string();
-    sftp.upload_streaming(&local, &remote_path, &app, &transfer_id).await?;
+    sftp.upload_streaming(&local, &remote_path, &app, &transfer_id)
+        .await?;
     Ok(Some(name))
 }
 
@@ -214,7 +219,8 @@ pub async fn sftp_download_to(
 ) -> AppResult<()> {
     let sftp = get_sftp(&state, &sftp_id)?;
     let local = std::path::PathBuf::from(&local_path);
-    sftp.download_streaming(&remote_path, &local, &app, &transfer_id).await?;
+    sftp.download_streaming(&remote_path, &local, &app, &transfer_id)
+        .await?;
     Ok(())
 }
 
@@ -231,6 +237,7 @@ pub async fn sftp_upload_from(
 ) -> AppResult<()> {
     let sftp = get_sftp(&state, &sftp_id)?;
     let local = std::path::PathBuf::from(&local_path);
-    sftp.upload_streaming(&local, &remote_path, &app, &transfer_id).await?;
+    sftp.upload_streaming(&local, &remote_path, &app, &transfer_id)
+        .await?;
     Ok(())
 }

@@ -128,10 +128,14 @@ impl Actor {
             match action {
                 UserAction::Stop => break,
                 UserAction::Message(text) => {
-                    self.history.push(ChatMessage::User { content: text.clone() });
+                    self.history.push(ChatMessage::User {
+                        content: text.clone(),
+                    });
                     self.emit("user_message", json!({ "text": text }));
                     if let Err(e) = self.dialogue_turn().await {
-                        self.audit_push(AuditKind::Error { message: e.to_string() });
+                        self.audit_push(AuditKind::Error {
+                            message: e.to_string(),
+                        });
                         self.emit("error", json!({ "message": e.to_string() }));
                     }
                 }
@@ -501,7 +505,10 @@ impl Actor {
                 None => return Err(AppError::Other("Session channel closed".into())),
             };
             match action {
-                UserAction::RejectCommand { tool_call_id, reason } if tool_call_id == tc.id => {
+                UserAction::RejectCommand {
+                    tool_call_id,
+                    reason,
+                } if tool_call_id == tc.id => {
                     self.audit_push(AuditKind::CommandRejected {
                         id: cmd_id.clone(),
                         reason: reason.clone(),

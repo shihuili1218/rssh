@@ -84,6 +84,50 @@
         authValues = [];
     }
 
+    /** 终端内 passphrase 输入：监听后端 ssh:passphrase_prompt 事件，
+     *  把光标交给一个临时 onData handler，回车提交，Ctrl-C 取消，Backspace 退格。
+     *  passphrase 不回显（sudo 风格），buffer 仅保存在本闭包，不进 Svelte state，
+     *  不进 xterm 的 history。 */
+    let passphraseInputDisposable: IDisposable | undefined;
+    function beginPassphrasePrompt(promptText: string) {
+        // 旧 prompt 还没结束就来新的（理论不会）—— 关掉旧的
+        passphraseInputDisposable?.dispose();
+        passphraseInputDisposable = undefined;
+
+        terminal.write(`\r\n${promptText}`);
+
+        let buffer = "";
+        let done = false;
+        const finish = (action: "submit" | "cancel") => {
+            if (done) return;
+            done = true;
+            passphraseInputDisposable?.dispose();
+            passphraseInputDisposable = undefined;
+            if (action === "submit") {
+                terminal.write("\r\n");
+                invoke("ssh_passphrase_respond", { tabId, passphrase: buffer });
+            } else {
+                terminal.write("^C\r\n");
+                invoke("ssh_passphrase_cancel", { tabId });
+            }
+            buffer = "";
+        };
+
+        passphraseInputDisposable = terminal.onData((data: string) => {
+            for (const ch of data) {
+                const code = ch.charCodeAt(0);
+                if (ch === "\r" || ch === "\n") { finish("submit"); return; }
+                if (ch === "\x03") { finish("cancel"); return; }   // Ctrl-C
+                if (ch === "\x7f" || ch === "\b") {                // Backspace / DEL
+                    if (buffer.length > 0) buffer = buffer.slice(0, -1);
+                    continue;
+                }
+                if (code < 0x20) continue;                          // 其他控制字符忽略
+                buffer += ch;
+            }
+        });
+    }
+
     let terminal: Terminal;
     let fitAddon: FitAddon;
     let searchAddon: SearchAddon;
@@ -228,13 +272,16 @@
             }
             await wireSessionEvents(sessionId);
         } else {
-            // SSH: listen on tabId FIRST for connection logs
+            // SSH: listen on tabId FIRST for connection logs + auth prompts
             const logUn = await listen<number[]>(`ssh:data:${tabId}`, (ev) => {
                 terminal.write(new Uint8Array(ev.payload));
             });
             const authUn = await listen<AuthPromptData>(`ssh:auth_prompt:${tabId}`, (ev) => {
                 authPrompt = ev.payload;
                 authValues = ev.payload.prompts.map(() => "");
+            });
+            const passUn = await listen<{ prompt: string }>(`ssh:passphrase_prompt:${tabId}`, (ev) => {
+                beginPassphrasePrompt(ev.payload.prompt);
             });
 
             try {
@@ -249,13 +296,15 @@
                     cols: terminal.cols, rows: terminal.rows,
                 });
             } catch (e: any) {
-                logUn(); authUn();
+                logUn(); authUn(); passUn();
+                passphraseInputDisposable?.dispose(); passphraseInputDisposable = undefined;
                 terminal.write(`\x1b[31mConnection failed: ${e}\x1b[0m\r\n`);
                 terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
                 disconnected = true;
                 return false;
             }
-            logUn(); authUn();
+            logUn(); authUn(); passUn();
+            passphraseInputDisposable?.dispose(); passphraseInputDisposable = undefined;
             await wireSessionEvents(sessionId);
         }
 
@@ -584,6 +633,12 @@
         dataDisposable?.dispose();
         resizeDisposable?.dispose();
         reconnectDisposable?.dispose();
+        // 关 tab 时若停在 passphrase 提示阶段，主动取消让后端 connect 流程跳出，
+        // 否则 ssh_connect 会在 worker 线程上挂着等用户输入。
+        if (passphraseInputDisposable) {
+            invoke("ssh_passphrase_cancel", { tabId }).catch(() => {});
+        }
+        passphraseInputDisposable?.dispose();
         resizeObs?.disconnect();
         mobileKeyboardCleanup?.();
         blockTracker?.dispose();

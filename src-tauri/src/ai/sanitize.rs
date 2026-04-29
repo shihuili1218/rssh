@@ -52,7 +52,10 @@ pub fn default_rules() -> Vec<RedactRule> {
 pub fn redact(text: &str, rules: &[RedactRule]) -> String {
     let mut out = text.to_string();
     for r in rules {
-        out = r.pattern.replace_all(&out, r.replacement.as_str()).into_owned();
+        out = r
+            .pattern
+            .replace_all(&out, r.replacement.as_str())
+            .into_owned();
     }
     out
 }
@@ -86,9 +89,7 @@ pub fn truncate(input: &str, max_bytes: usize) -> Truncated {
     let head = &input[..cut];
     let dropped = input.len() - cut;
     let mut text = head.to_string();
-    text.push_str(&format!(
-        "\n... [TRUNCATED: dropped {dropped} bytes] ..."
-    ));
+    text.push_str(&format!("\n... [TRUNCATED: dropped {dropped} bytes] ..."));
     Truncated {
         text,
         original_bytes: input.len(),
@@ -112,8 +113,21 @@ pub enum ShapeError {
 }
 
 pub const DESTRUCTIVE: &[&str] = &[
-    "rm", "dd", "mkfs", "iptables", "ip6tables", "shutdown", "reboot", "halt", "poweroff",
-    "kill", "pkill", "killall", "mount", "umount", "exec",
+    "rm",
+    "dd",
+    "mkfs",
+    "iptables",
+    "ip6tables",
+    "shutdown",
+    "reboot",
+    "halt",
+    "poweroff",
+    "kill",
+    "pkill",
+    "killall",
+    "mount",
+    "umount",
+    "exec",
 ];
 
 pub const INTERACTIVE_BARE: &[&str] = &[
@@ -173,9 +187,7 @@ pub fn validate(cmd: &str) -> Result<(), ShapeError> {
     }
 
     // 3. tail -f / -F
-    if first == "tail"
-        && tokens.iter().any(|t| *t == "-f" || *t == "-F")
-    {
+    if first == "tail" && tokens.iter().any(|t| *t == "-f" || *t == "-F") {
         return Err(ShapeError::Interactive("tail -f".into()));
     }
 
@@ -190,7 +202,9 @@ pub fn validate(cmd: &str) -> Result<(), ShapeError> {
             .skip(1)
             .any(|t| t.starts_with("-b") || t.starts_with("-l"));
         if !has_batch {
-            return Err(ShapeError::Interactive("top (missing -b or -l batch flag)".into()));
+            return Err(ShapeError::Interactive(
+                "top (missing -b or -l batch flag)".into(),
+            ));
         }
     }
 
@@ -223,7 +237,10 @@ mod tests {
     #[test]
     fn redact_internal_ips() {
         let rules = default_rules();
-        assert_eq!(redact("connect 10.0.0.1:8080", &rules), "connect <REDACTED:ip-10>:8080");
+        assert_eq!(
+            redact("connect 10.0.0.1:8080", &rules),
+            "connect <REDACTED:ip-10>:8080"
+        );
         assert_eq!(redact("172.16.0.5", &rules), "<REDACTED:ip-172>");
         assert_eq!(redact("172.32.0.5", &rules), "172.32.0.5"); // 不在 16-31 范围
         assert_eq!(redact("192.168.1.1", &rules), "<REDACTED:ip-192>");
@@ -233,14 +250,13 @@ mod tests {
     #[test]
     fn redact_tokens() {
         let rules = default_rules();
-        assert!(redact("Bearer abcdefghijklmnopqrstuvwxyz1234", &rules).contains("<REDACTED:bearer>"));
+        assert!(
+            redact("Bearer abcdefghijklmnopqrstuvwxyz1234", &rules).contains("<REDACTED:bearer>")
+        );
         assert!(redact("key=sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ", &rules).contains("<REDACTED:sk-key>"));
         assert!(
-            redact(
-                "eyJabcdefghijklmnop1234.abcdefghijklmnop1234.abc",
-                &rules
-            )
-            .contains("<REDACTED:jwt>")
+            redact("eyJabcdefghijklmnop1234.abcdefghijklmnop1234.abc", &rules)
+                .contains("<REDACTED:jwt>")
         );
     }
 
@@ -270,29 +286,56 @@ mod tests {
 
     #[test]
     fn shape_destructive() {
-        assert!(matches!(validate("rm -rf /tmp/foo"), Err(ShapeError::Destructive(_))));
-        assert!(matches!(validate("kill -9 1234"), Err(ShapeError::Destructive(_))));
-        assert!(matches!(validate("dd if=/dev/zero of=/tmp/x"), Err(ShapeError::Destructive(_))));
-        assert!(matches!(validate("ps -ef && kill -9 123"), Err(ShapeError::Destructive(_))));
-        assert!(matches!(validate("foo | rm -rf /"), Err(ShapeError::Destructive(_))));
+        assert!(matches!(
+            validate("rm -rf /tmp/foo"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("kill -9 1234"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("dd if=/dev/zero of=/tmp/x"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("ps -ef && kill -9 123"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("foo | rm -rf /"),
+            Err(ShapeError::Destructive(_))
+        ));
     }
 
     #[test]
     fn shape_chmod_recursive_blocked() {
-        assert!(matches!(validate("chmod -R 755 /"), Err(ShapeError::Destructive(_))));
+        assert!(matches!(
+            validate("chmod -R 755 /"),
+            Err(ShapeError::Destructive(_))
+        ));
         assert!(validate("chmod 755 /tmp/foo").is_ok());
     }
 
     #[test]
     fn shape_fork_bomb() {
-        assert!(matches!(validate(":(){:|:&};:"), Err(ShapeError::Destructive(_))));
-        assert!(matches!(validate(":(){ :|:& };:"), Err(ShapeError::Destructive(_))));
+        assert!(matches!(
+            validate(":(){:|:&};:"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate(":(){ :|:& };:"),
+            Err(ShapeError::Destructive(_))
+        ));
     }
 
     #[test]
     fn shape_top() {
         assert!(matches!(validate("top"), Err(ShapeError::Interactive(_))));
-        assert!(matches!(validate("top -d 1"), Err(ShapeError::Interactive(_)))); // -d 不是批处理
+        assert!(matches!(
+            validate("top -d 1"),
+            Err(ShapeError::Interactive(_))
+        )); // -d 不是批处理
         assert!(validate("top -bn1").is_ok());
         assert!(validate("top -b -n 1").is_ok());
         assert!(validate("top -l 1 -n 20").is_ok()); // macOS
@@ -300,8 +343,14 @@ mod tests {
 
     #[test]
     fn shape_unbounded_loop() {
-        assert!(matches!(validate("vmstat 1"), Err(ShapeError::UnboundedLoop(_))));
-        assert!(matches!(validate("vmstat -t 1"), Err(ShapeError::UnboundedLoop(_))));
+        assert!(matches!(
+            validate("vmstat 1"),
+            Err(ShapeError::UnboundedLoop(_))
+        ));
+        assert!(matches!(
+            validate("vmstat -t 1"),
+            Err(ShapeError::UnboundedLoop(_))
+        ));
         assert!(validate("vmstat 1 5").is_ok());
         assert!(validate("vmstat -t 1 5").is_ok());
         assert!(validate("jstat -gcutil 1234 1000 10").is_ok());
@@ -310,14 +359,23 @@ mod tests {
 
     #[test]
     fn shape_tail_follow_blocked() {
-        assert!(matches!(validate("tail -f /var/log/messages"), Err(ShapeError::Interactive(_))));
-        assert!(matches!(validate("tail -F /var/log/messages"), Err(ShapeError::Interactive(_))));
+        assert!(matches!(
+            validate("tail -f /var/log/messages"),
+            Err(ShapeError::Interactive(_))
+        ));
+        assert!(matches!(
+            validate("tail -F /var/log/messages"),
+            Err(ShapeError::Interactive(_))
+        ));
         assert!(validate("tail -n 100 /var/log/messages").is_ok());
     }
 
     #[test]
     fn shape_exec_blocked() {
-        assert!(matches!(validate("exec foo"), Err(ShapeError::Destructive(_))));
+        assert!(matches!(
+            validate("exec foo"),
+            Err(ShapeError::Destructive(_))
+        ));
     }
 
     #[test]
@@ -338,7 +396,13 @@ mod tests {
 
     #[test]
     fn shape_destructive_with_path() {
-        assert!(matches!(validate("/bin/rm /tmp/foo"), Err(ShapeError::Destructive(_))));
-        assert!(matches!(validate("/usr/bin/kill 1"), Err(ShapeError::Destructive(_))));
+        assert!(matches!(
+            validate("/bin/rm /tmp/foo"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("/usr/bin/kill 1"),
+            Err(ShapeError::Destructive(_))
+        ));
     }
 }

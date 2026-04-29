@@ -34,7 +34,11 @@ pub fn parse(content: &str) -> Vec<SshConfigEntry> {
                         entries.push(entry);
                     }
                 }
-                let alias = value.split_whitespace().next().unwrap_or(&value).to_string();
+                let alias = value
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or(&value)
+                    .to_string();
                 current = Some(SshConfigEntry {
                     host_alias: alias,
                     hostname: String::new(),
@@ -91,4 +95,3 @@ fn expand_tilde(path: &str) -> String {
     }
     path.to_string()
 }
-

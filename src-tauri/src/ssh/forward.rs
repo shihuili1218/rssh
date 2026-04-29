@@ -7,8 +7,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::error::{AppError, AppResult};
-use crate::models::{Credential, Forward};
 use crate::models::Profile;
+use crate::models::{Credential, Forward};
 use crate::ssh::client::{self, LogFn};
 use std::sync::Arc as StdArc;
 
@@ -70,9 +70,16 @@ pub async fn start_local(
 ) -> AppResult<ForwardHandle> {
     let log: LogFn = StdArc::new(|_: String| ());
     let (mut handle, _fwd) = client::establish_via_chain(
-        bastion_chain, host, port, known_hosts_path, timeout_secs, log,
-    ).await?;
-    client::authenticate(&mut handle, credential).await?;
+        bastion_chain,
+        host,
+        port,
+        known_hosts_path,
+        timeout_secs,
+        log,
+        None,
+    )
+    .await?;
+    client::authenticate(&mut handle, credential, None).await?;
 
     let remote_host = forward.remote_host.clone();
     let remote_port = forward.remote_port;
@@ -147,9 +154,16 @@ pub async fn start_remote(
 ) -> AppResult<ForwardHandle> {
     let log: LogFn = StdArc::new(|_: String| ());
     let (mut handle, fwd_sender) = client::establish_via_chain(
-        bastion_chain, host, port, known_hosts_path, timeout_secs, log,
-    ).await?;
-    client::authenticate(&mut handle, credential).await?;
+        bastion_chain,
+        host,
+        port,
+        known_hosts_path,
+        timeout_secs,
+        log,
+        None,
+    )
+    .await?;
+    client::authenticate(&mut handle, credential, None).await?;
 
     // Register a channel to receive forwarded connections from the Handler
     let (ch_tx, mut ch_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -188,7 +202,10 @@ pub async fn start_remote(
             tokio::spawn(async move {
                 let local = match TcpStream::connect(format!("{}:{}", lh, local_port)).await {
                     Ok(s) => s,
-                    Err(_) => { c_conns.fetch_sub(1, Ordering::Relaxed); return; }
+                    Err(_) => {
+                        c_conns.fetch_sub(1, Ordering::Relaxed);
+                        return;
+                    }
                 };
                 let ssh_stream = channel.into_stream();
                 let (mut tcp_r, mut tcp_w) = tokio::io::split(local);
@@ -220,7 +237,10 @@ async fn socks5_handshake(stream: &mut TcpStream) -> std::io::Result<(String, u1
     let mut header = [0u8; 2];
     stream.read_exact(&mut header).await?;
     if header[0] != 0x05 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Not SOCKS5"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Not SOCKS5",
+        ));
     }
     let nmethods = header[1] as usize;
     let mut methods = vec![0u8; nmethods];
@@ -234,8 +254,13 @@ async fn socks5_handshake(stream: &mut TcpStream) -> std::io::Result<(String, u1
     stream.read_exact(&mut req).await?;
     if req[0] != 0x05 || req[1] != 0x01 {
         // Only CONNECT (0x01) supported
-        stream.write_all(&[0x05, 0x07, 0x00, 0x01, 0,0,0,0, 0,0]).await?;
-        return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "Only CONNECT supported"));
+        stream
+            .write_all(&[0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+            .await?;
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Only CONNECT supported",
+        ));
     }
 
     let (host, port) = match req[3] {
@@ -282,12 +307,17 @@ async fn socks5_handshake(stream: &mut TcpStream) -> std::io::Result<(String, u1
             (host, port)
         }
         _ => {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Unknown address type"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Unknown address type",
+            ));
         }
     };
 
     // 4. Reply: success
-    stream.write_all(&[0x05, 0x00, 0x00, 0x01, 0,0,0,0, 0,0]).await?;
+    stream
+        .write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+        .await?;
 
     Ok((host, port))
 }
@@ -303,9 +333,16 @@ pub async fn start_dynamic(
 ) -> AppResult<ForwardHandle> {
     let log: LogFn = StdArc::new(|_: String| ());
     let (mut handle, _fwd) = client::establish_via_chain(
-        bastion_chain, host, port, known_hosts_path, timeout_secs, log,
-    ).await?;
-    client::authenticate(&mut handle, credential).await?;
+        bastion_chain,
+        host,
+        port,
+        known_hosts_path,
+        timeout_secs,
+        log,
+        None,
+    )
+    .await?;
+    client::authenticate(&mut handle, credential, None).await?;
 
     let local_port = forward.local_port;
 
@@ -334,7 +371,12 @@ pub async fn start_dynamic(
             };
 
             let channel = match handle
-                .channel_open_direct_tcpip(&target_host, target_port as u32, "127.0.0.1", local_port as u32)
+                .channel_open_direct_tcpip(
+                    &target_host,
+                    target_port as u32,
+                    "127.0.0.1",
+                    local_port as u32,
+                )
                 .await
             {
                 Ok(c) => c,

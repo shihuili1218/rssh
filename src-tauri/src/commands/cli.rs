@@ -15,14 +15,21 @@ pub struct CliStatus {
 
 fn install_dir() -> PathBuf {
     if cfg!(target_os = "windows") {
-        dirs::data_local_dir().unwrap_or_default().join("Programs").join("rssh")
+        dirs::data_local_dir()
+            .unwrap_or_default()
+            .join("Programs")
+            .join("rssh")
     } else {
         PathBuf::from("/usr/local/bin")
     }
 }
 
 fn cli_name() -> &'static str {
-    if cfg!(target_os = "windows") { "rssh.exe" } else { "rssh" }
+    if cfg!(target_os = "windows") {
+        "rssh.exe"
+    } else {
+        "rssh"
+    }
 }
 
 fn find_installed() -> Option<PathBuf> {
@@ -31,31 +38,53 @@ fn find_installed() -> Option<PathBuf> {
     let candidates = if cfg!(target_os = "windows") {
         vec![
             install_dir().join(name),
-            dirs::home_dir().unwrap_or_default().join(".cargo").join("bin").join(name),
+            dirs::home_dir()
+                .unwrap_or_default()
+                .join(".cargo")
+                .join("bin")
+                .join(name),
         ]
     } else {
         vec![
             PathBuf::from("/usr/local/bin").join(name),
-            dirs::home_dir().unwrap_or_default().join(".local").join("bin").join(name),
-            dirs::home_dir().unwrap_or_default().join(".cargo").join("bin").join("rssh-cli"),
+            dirs::home_dir()
+                .unwrap_or_default()
+                .join(".local")
+                .join("bin")
+                .join(name),
+            dirs::home_dir()
+                .unwrap_or_default()
+                .join(".cargo")
+                .join("bin")
+                .join("rssh-cli"),
         ]
     };
     candidates.into_iter().find(|p| p.exists())
 }
 
 fn find_bundled(app: &AppHandle) -> Option<PathBuf> {
-    let name = if cfg!(target_os = "windows") { "rssh-cli.exe" } else { "rssh-cli" };
+    let name = if cfg!(target_os = "windows") {
+        "rssh-cli.exe"
+    } else {
+        "rssh-cli"
+    };
 
     // 1. Production: bundled in app resources
     if let Ok(dir) = app.path().resource_dir() {
         let p = dir.join("bin").join(name);
-        if p.exists() { return Some(p); }
+        if p.exists() {
+            return Some(p);
+        }
     }
 
     // 2. Dev: local cargo build output
     let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("target").join("release").join(name);
-    if dev.exists() { return Some(dev); }
+        .join("target")
+        .join("release")
+        .join(name);
+    if dev.exists() {
+        return Some(dev);
+    }
 
     None
 }
@@ -66,7 +95,9 @@ pub fn cli_status(app: AppHandle) -> CliStatus {
     let bundled = find_bundled(&app).is_some();
     CliStatus {
         installed: installed.is_some(),
-        path: installed.map(|p| p.display().to_string()).unwrap_or_default(),
+        path: installed
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
         bundled,
     }
 }
@@ -83,9 +114,15 @@ pub fn cli_install(app: AppHandle) -> AppResult<String> {
     {
         let script = format!(
             r#"do shell script "mkdir -p '{}' && cp '{}' '{}' && chmod 755 '{}'" with administrator privileges"#,
-            dest_dir.display(), src.display(), dest.display(), dest.display()
+            dest_dir.display(),
+            src.display(),
+            dest.display(),
+            dest.display()
         );
-        let status = Command::new("osascript").arg("-e").arg(&script).status()
+        let status = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .status()
             .map_err(|e| AppError::Other(format!("Failed to run osascript: {e}")))?;
         if !status.success() {
             return Err(AppError::Other("Installation cancelled or failed.".into()));
@@ -95,9 +132,15 @@ pub fn cli_install(app: AppHandle) -> AppResult<String> {
     #[cfg(target_os = "linux")]
     {
         let status = Command::new("pkexec")
-            .arg("sh").arg("-c")
-            .arg(format!("mkdir -p '{}' && cp '{}' '{}' && chmod 755 '{}'",
-                dest_dir.display(), src.display(), dest.display(), dest.display()))
+            .arg("sh")
+            .arg("-c")
+            .arg(format!(
+                "mkdir -p '{}' && cp '{}' '{}' && chmod 755 '{}'",
+                dest_dir.display(),
+                src.display(),
+                dest.display(),
+                dest.display()
+            ))
             .status()
             .map_err(|e| AppError::Other(format!("Failed to request privileges: {e}")))?;
         if !status.success() {
@@ -139,7 +182,11 @@ fn setup_completions(cli: &PathBuf) {
             let _ = std::fs::write(dir.join("_rssh"), &out.stdout);
         }
     } else if shell.contains("bash") {
-        let dir = home.join(".local").join("share").join("bash-completion").join("completions");
+        let dir = home
+            .join(".local")
+            .join("share")
+            .join("bash-completion")
+            .join("completions");
         let _ = std::fs::create_dir_all(&dir);
         if let Ok(out) = Command::new(cli).arg("completions").arg("bash").output() {
             let _ = std::fs::write(dir.join("rssh"), &out.stdout);
@@ -155,8 +202,15 @@ fn setup_completions(cli: &PathBuf) {
     #[cfg(target_os = "windows")]
     {
         // PowerShell completion — append to profile if not already present
-        if let Ok(out) = Command::new(cli).arg("completions").arg("powershell").output() {
-            let profile = home.join("Documents").join("PowerShell").join("Microsoft.PowerShell_profile.ps1");
+        if let Ok(out) = Command::new(cli)
+            .arg("completions")
+            .arg("powershell")
+            .output()
+        {
+            let profile = home
+                .join("Documents")
+                .join("PowerShell")
+                .join("Microsoft.PowerShell_profile.ps1");
             let _ = std::fs::create_dir_all(profile.parent().unwrap());
             let existing = std::fs::read_to_string(&profile).unwrap_or_default();
             if !existing.contains("Register-ArgumentCompleter -Native -CommandName rssh") {

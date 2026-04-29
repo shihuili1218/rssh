@@ -5,8 +5,11 @@
 //!
 //! Service 名固定 `rssh`，account 命名规则全平台、CLI/GUI 共用：
 //! - `cred:<credential_id>:secret`     凭证主 secret（密码或私钥 PEM）
-//! - `cred:<credential_id>:passphrase` 私钥的 passphrase
 //! - `setting:github_token`            GitHub PAT
+//!
+//! 历史遗留：`cred:<credential_id>:passphrase` 曾用于存储私钥 passphrase，
+//! 已废弃 — 启动时统一清空（参见 `lib.rs` 中的迁移），新流程通过终端交互输入
+//! 并仅在进程内缓存。`cred_passphrase_key` 仍保留，仅供该清空逻辑使用。
 
 use std::sync::Arc;
 

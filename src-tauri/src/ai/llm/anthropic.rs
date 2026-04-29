@@ -11,7 +11,9 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::json;
 
-use super::{ChatDelta, ChatMessage, ChatRequest, ChatResponse, DeltaSink, LlmClient, SseParser, ToolCall};
+use super::{
+    ChatDelta, ChatMessage, ChatRequest, ChatResponse, DeltaSink, LlmClient, SseParser, ToolCall,
+};
 use crate::error::{AppError, AppResult};
 
 const DEFAULT_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
@@ -52,9 +54,19 @@ struct AnthropicMsg {
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AnthropicBlock {
-    Text { text: String },
-    ToolUse { id: String, name: String, input: serde_json::Value },
-    ToolResult { tool_use_id: String, content: String, is_error: bool },
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        is_error: bool,
+    },
 }
 
 #[async_trait]
@@ -70,12 +82,19 @@ impl LlmClient for AnthropicClient {
             .map(|m| match m {
                 ChatMessage::User { content } => AnthropicMsg {
                     role: "user",
-                    content: vec![AnthropicBlock::Text { text: content.clone() }],
+                    content: vec![AnthropicBlock::Text {
+                        text: content.clone(),
+                    }],
                 },
-                ChatMessage::Assistant { content, tool_calls } => {
+                ChatMessage::Assistant {
+                    content,
+                    tool_calls,
+                } => {
                     let mut blocks: Vec<AnthropicBlock> = Vec::new();
                     if !content.is_empty() {
-                        blocks.push(AnthropicBlock::Text { text: content.clone() });
+                        blocks.push(AnthropicBlock::Text {
+                            text: content.clone(),
+                        });
                     }
                     for tc in tool_calls {
                         blocks.push(AnthropicBlock::ToolUse {
@@ -84,9 +103,16 @@ impl LlmClient for AnthropicClient {
                             input: tc.input.clone(),
                         });
                     }
-                    AnthropicMsg { role: "assistant", content: blocks }
+                    AnthropicMsg {
+                        role: "assistant",
+                        content: blocks,
+                    }
                 }
-                ChatMessage::ToolResult { tool_call_id, content, is_error } => AnthropicMsg {
+                ChatMessage::ToolResult {
+                    tool_call_id,
+                    content,
+                    is_error,
+                } => AnthropicMsg {
                     role: "user",
                     content: vec![AnthropicBlock::ToolResult {
                         tool_use_id: tool_call_id.clone(),
@@ -147,8 +173,7 @@ impl LlmClient for AnthropicClient {
         let mut parser = SseParser::new();
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
-            let bytes = chunk
-                .map_err(|e| AppError::Other(format!("LLM stream 读失败: {e}")))?;
+            let bytes = chunk.map_err(|e| AppError::Other(format!("LLM stream 读失败: {e}")))?;
             let s = String::from_utf8_lossy(&bytes).into_owned();
             for ev_data in parser.feed(&s) {
                 let v: serde_json::Value = match serde_json::from_str(&ev_data) {
@@ -169,7 +194,10 @@ impl LlmClient for AnthropicClient {
                             let id = cb["id"].as_str().unwrap_or("").to_string();
                             let name = cb["name"].as_str().unwrap_or("").to_string();
                             tool_calls.insert(idx, (id.clone(), name.clone(), String::new()));
-                            sink(ChatDelta::ToolStart { tool_call_id: id, name });
+                            sink(ChatDelta::ToolStart {
+                                tool_call_id: id,
+                                name,
+                            });
                         }
                     }
                     "content_block_delta" => {

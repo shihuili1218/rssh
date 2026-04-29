@@ -12,10 +12,7 @@ use crate::state::AppState;
 /// `active_ids` 是前端当前持有的所有 ID（不区分 ssh / sftp / forward —
 /// UUID 不会撞）。返回被清理的总数。
 #[tauri::command]
-pub fn reconcile_sessions(
-    state: State<'_, AppState>,
-    active_ids: Vec<String>,
-) -> AppResult<usize> {
+pub fn reconcile_sessions(state: State<'_, AppState>, active_ids: Vec<String>) -> AppResult<usize> {
     let alive: HashSet<String> = active_ids.into_iter().collect();
     let mut closed = 0;
 

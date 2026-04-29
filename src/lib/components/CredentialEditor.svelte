@@ -9,7 +9,6 @@
 
   let name = $state(""); let username = $state("");
   let credentialType = $state("password"); let secret = $state("");
-  let passphrase = $state("");
   let saveToRemote = $state(false);
   let saving = $state(false);
 
@@ -18,7 +17,6 @@
       const c = await invoke<any>("get_credential", { id });
       name = c.name; username = c.username;
       credentialType = c.type; secret = c.secret ?? "";
-      passphrase = c.passphrase ?? "";
       saveToRemote = c.save_to_remote;
     }
   });
@@ -32,7 +30,6 @@
         type: credentialType,
         secret: secret || null,
         save_to_remote: saveToRemote,
-        passphrase: passphrase || null,
       };
       if (id) await invoke("update_credential", { credential });
       else await invoke("create_credential", { credential });
@@ -62,10 +59,9 @@
     {:else if credentialType === "key"}
       <label>{t("credential.private_key")}</label>
       <textarea bind:value={secret} rows="6" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
-      <label>{t("credential.passphrase")}</label>
-      <input type="password" bind:value={passphrase} placeholder={t("credential.passphrase_placeholder")} />
+      <p class="hint">{t("credential.encrypted_key_hint")}</p>
     {:else if credentialType === "agent"}
-      <p class="hint">{t("credential.agent_hint")}</p>
+      <p class="hint agent-hint">{t("credential.agent_hint")}</p>
     {/if}
     <div class="switch-card">
       <div class="switch-card-body">
@@ -87,5 +83,6 @@
   .page { padding: 24px; }
   .form { display: flex; flex-direction: column; gap: 10px; }
   textarea { font-family: monospace; font-size: 12px; resize: vertical; }
-  .hint { font-size: 13px; color: var(--text-muted, #888); margin: 4px 0; }
+  .hint { font-size: 13px; color: var(--text-muted, #888); margin: 4px 0; line-height: 1.55; }
+  .agent-hint { white-space: pre-line; }
 </style>

@@ -12,6 +12,7 @@ use tokio::time::{timeout, Duration};
 
 use crate::error::{locked, AppError, AppResult};
 use crate::models::{Credential, CredentialType, Profile};
+use crate::state::AppState;
 use crate::terminal::recorder::Recorder;
 
 pub const DEFAULT_CONNECT_TIMEOUT: u64 = 10;
@@ -105,6 +106,125 @@ pub type LogFn = Arc<dyn Fn(String) + Send + Sync>;
 
 pub(crate) fn null_logger() -> LogFn {
     Arc::new(|_: String| ())
+}
+
+// ---------------------------------------------------------------------------
+// Passphrase 交互上下文
+// ---------------------------------------------------------------------------
+
+/// 终端可达性上下文 — 提供给 `authenticate_*` 系列函数，让它们在遇到加密
+/// 私钥时能向具体的终端 tab 弹"输入 passphrase"提示。
+///
+/// 没有 `AuthCtx` 的场景（forward / SFTP 子模块）会向加密私钥直接报错；
+/// 用户需先通过 SSH 终端连一次以填充进程内 passphrase 缓存，后续 forward/SFTP
+/// 可命中缓存自动通过。
+#[derive(Clone)]
+pub struct AuthCtx {
+    pub app: tauri::AppHandle,
+    pub tab_id: String,
+}
+
+const MAX_PASSPHRASE_RETRIES: usize = 3;
+
+/// 解析私钥，遇加密时按需向终端索取 passphrase。
+///
+/// `cache_key` 唯一标识这把私钥在本次进程内的 passphrase 缓存项：
+/// 存储凭证用 `cred:{credential_id}`，默认密钥文件用绝对路径，临时直连凭证
+/// 没缓存。`prompt_label` 是直接显示给用户的提示行（含末尾冒号空格）。
+async fn decode_key_with_prompt(
+    pem: &str,
+    cache_key: Option<&str>,
+    prompt_label: &str,
+    ctx: Option<&AuthCtx>,
+) -> AppResult<PrivateKey> {
+    use russh::keys::Error::KeyIsEncrypted;
+
+    // 第一次：试无密码（未加密的 key 直接通过；加密的 key 才进入下面流程）
+    match russh::keys::decode_secret_key(pem, None) {
+        Ok(k) => return Ok(k),
+        Err(KeyIsEncrypted) => {}
+        Err(e) => return Err(AppError::Ssh(format!("私钥解析失败: {e}"))),
+    }
+
+    // 命中缓存 → 直接重试；不命中或失败再走交互
+    if let (Some(key), Some(ctx)) = (cache_key, ctx) {
+        let cached = {
+            let state = ctx.app.state::<AppState>();
+            locked(&state.passphrase_cache)
+                .ok()
+                .and_then(|m| m.get(key).cloned())
+        };
+        if let Some(pw) = cached {
+            match russh::keys::decode_secret_key(pem, Some(&pw)) {
+                Ok(k) => return Ok(k),
+                Err(KeyIsEncrypted) => {
+                    // 缓存的 passphrase 不再匹配（用户改了密码）— 清掉再走交互
+                    let state = ctx.app.state::<AppState>();
+                    if let Ok(mut m) = locked(&state.passphrase_cache) {
+                        m.remove(key);
+                    };
+                }
+                Err(e) => return Err(AppError::Ssh(format!("私钥解析失败: {e}"))),
+            }
+        }
+    }
+
+    // 必须有 ctx 才能交互；否则该流程拒绝加密私钥（forward / SFTP 等）
+    let ctx = ctx.ok_or_else(|| {
+        AppError::Ssh(
+            "私钥已加密，但当前流程不支持密码输入；请先在 SSH 终端建立一次连接以缓存 passphrase。"
+                .into(),
+        )
+    })?;
+
+    // 最多 N 次重试
+    for attempt in 0..MAX_PASSPHRASE_RETRIES {
+        let pw = prompt_passphrase(ctx, prompt_label).await?;
+        match russh::keys::decode_secret_key(pem, Some(&pw)) {
+            Ok(k) => {
+                if let Some(key) = cache_key {
+                    let state = ctx.app.state::<AppState>();
+                    if let Ok(mut m) = locked(&state.passphrase_cache) {
+                        m.insert(key.to_string(), pw);
+                    };
+                }
+                return Ok(k);
+            }
+            Err(KeyIsEncrypted) => {
+                let remaining = MAX_PASSPHRASE_RETRIES - attempt - 1;
+                let msg = if remaining > 0 {
+                    format!("\x1b[31mIncorrect passphrase, {remaining} attempt(s) left.\x1b[0m\r\n")
+                } else {
+                    "\x1b[31mIncorrect passphrase.\x1b[0m\r\n".to_string()
+                };
+                let _ = ctx
+                    .app
+                    .emit(&format!("ssh:data:{}", ctx.tab_id), msg.into_bytes());
+            }
+            Err(e) => return Err(AppError::Ssh(format!("私钥解析失败: {e}"))),
+        }
+    }
+
+    Err(AppError::Ssh("Passphrase 输入错误次数过多".into()))
+}
+
+/// 向终端弹一次 passphrase 提示，等用户输完回车。
+async fn prompt_passphrase(ctx: &AuthCtx, prompt: &str) -> AppResult<String> {
+    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+    {
+        let state = ctx.app.state::<AppState>();
+        // 同一 tab_id 上若已有等待中的 prompt（理论不会发生），覆盖旧 sender
+        let mut waiters = locked(&state.passphrase_waiters)?;
+        waiters.insert(ctx.tab_id.clone(), tx);
+    }
+    ctx.app
+        .emit(
+            &format!("ssh:passphrase_prompt:{}", ctx.tab_id),
+            serde_json::json!({ "prompt": prompt }),
+        )
+        .map_err(|e| AppError::Other(format!("emit passphrase prompt: {e}")))?;
+    rx.await
+        .map_err(|_| AppError::Ssh("用户取消了 passphrase 输入".into()))
 }
 
 /// 默认 SSH 客户端配置：开启 keepalive，远端死了 90 秒内能断开。
@@ -365,6 +485,7 @@ pub async fn establish_via_chain(
     known_hosts_path: PathBuf,
     timeout_secs: u64,
     log: LogFn,
+    ctx: Option<&AuthCtx>,
 ) -> AppResult<(client::Handle<SshHandler>, ForwardedChannelSender)> {
     let config = default_client_config();
 
@@ -410,7 +531,7 @@ pub async fn establish_via_chain(
         first_c.username,
         first_c.credential_type.as_str()
     ));
-    authenticate(&mut hop, first_c).await?;
+    authenticate(&mut hop, first_c, ctx).await?;
     log(format!("Bastion {} authenticated.", first_name));
 
     let mut prev_name = first_name;
@@ -447,7 +568,7 @@ pub async fn establish_via_chain(
             next_c.username,
             next_c.credential_type.as_str()
         ));
-        authenticate(&mut hop, next_c).await?;
+        authenticate(&mut hop, next_c, ctx).await?;
         log(format!("Bastion {} authenticated.", next_name));
         prev_name = next_name;
     }
@@ -517,9 +638,13 @@ fn check_auth_result(result: client::AuthResult) -> AppResult<()> {
 /// read RFC 8308 `server-sig-algs` and use the strongest mutual RSA signature
 /// hash, falling back to the base `ssh-rsa` type only when the extension is
 /// absent.
+///
+/// `ctx` 提供终端反馈通道：加密私钥会在终端内提示输入 passphrase；
+/// 为 `None` 时（forward / SFTP 等子模块）加密私钥直接报错。
 pub async fn authenticate(
     handle: &mut client::Handle<SshHandler>,
     credential: Credential,
+    ctx: Option<&AuthCtx>,
 ) -> AppResult<()> {
     match credential.credential_type {
         CredentialType::Password => {
@@ -535,13 +660,24 @@ pub async fn authenticate(
                 .secret
                 .as_deref()
                 .ok_or_else(|| AppError::Ssh("缺少私钥数据".into()))?;
-            let key: PrivateKey =
-                russh::keys::decode_secret_key(pem, credential.passphrase.as_deref())
-                    .map_err(|e| AppError::Ssh(format!("私钥解析失败: {e}")))?;
+            let cache_key = if credential.id.is_empty() {
+                None
+            } else {
+                Some(format!("cred:{}", credential.id))
+            };
+            let prompt_label = format!(
+                "Enter passphrase for key '{}': ",
+                if credential.name.is_empty() {
+                    credential.username.as_str()
+                } else {
+                    credential.name.as_str()
+                }
+            );
+            let key = decode_key_with_prompt(pem, cache_key.as_deref(), &prompt_label, ctx).await?;
             authenticate_private_key(handle, credential.username, key).await
         }
         CredentialType::Agent => {
-            authenticate_with_agent_or_default_keys(handle, credential.username).await
+            authenticate_with_agent_or_default_keys(handle, credential.username, ctx).await
         }
         CredentialType::None => {
             let result = handle
@@ -601,16 +737,20 @@ async fn authenticate_private_key(
 
 /// Match OpenSSH's common `ssh user@host` behavior: try the configured agent
 /// first, then fall back to default private-key files in ~/.ssh.
+///
+/// 默认密钥若加密会通过 `ctx` 在终端内索取 passphrase；ctx 为 None 时
+/// 加密的默认密钥被跳过（保留旧行为，避免 forward 场景死锁）。
 pub async fn authenticate_with_agent_or_default_keys(
     handle: &mut client::Handle<SshHandler>,
     username: String,
+    ctx: Option<&AuthCtx>,
 ) -> AppResult<()> {
     let agent_err = match authenticate_with_agent(handle, username.clone()).await {
         Ok(()) => return Ok(()),
         Err(e) => e,
     };
 
-    match authenticate_with_default_keys(handle, username).await {
+    match authenticate_with_default_keys(handle, username, ctx).await {
         Ok(()) => Ok(()),
         Err(key_err) => Err(AppError::Ssh(format!(
             "SSH agent 认证失败: {agent_err}; 默认私钥认证也失败: {key_err}"
@@ -717,9 +857,14 @@ fn agent_identity_is_rsa(identity: &AgentIdentity) -> bool {
 
 /// Try OpenSSH's default identity files in the order reported by `ssh -G`.
 /// This keeps GUI behavior aligned with `ssh user@host` for hosts such as
+/// tmate that accept only publickey auth.
+///
+/// 加密的默认私钥：有 ctx 则终端内索取 passphrase，无 ctx 则跳过该文件
+/// 并把错误记入 errors（避免 forward 类无界面流程卡住）。
 pub async fn authenticate_with_default_keys(
     handle: &mut client::Handle<SshHandler>,
     username: String,
+    ctx: Option<&AuthCtx>,
 ) -> AppResult<()> {
     let paths = default_identity_paths();
     let mut errors = Vec::new();
@@ -736,10 +881,12 @@ pub async fn authenticate_with_default_keys(
         };
         found += 1;
 
-        let key: PrivateKey = match russh::keys::decode_secret_key(&pem, None) {
-            Ok(key) => key,
+        let cache_key = path.to_string_lossy().into_owned();
+        let prompt_label = format!("Enter passphrase for {}: ", path.display());
+        let key = match decode_key_with_prompt(&pem, Some(&cache_key), &prompt_label, ctx).await {
+            Ok(k) => k,
             Err(e) => {
-                errors.push(format!("{}: 私钥解析失败 ({e})", path.display()));
+                errors.push(format!("{}: {e}", path.display()));
                 continue;
             }
         };
@@ -914,6 +1061,13 @@ pub async fn connect(
         None => null_logger(),
     };
 
+    // 终端可达性上下文：只要有 tab_id 就能给用户弹 passphrase 提示。
+    // 即使 verbose log 关闭、`log` 是 null_logger，passphrase 提示仍然能发。
+    let ctx = log_session_id.clone().map(|tab_id| AuthCtx {
+        app: app.clone(),
+        tab_id,
+    });
+
     let (mut handle, _fwd) = establish_via_chain(
         bastion_chain,
         profile.host.clone(),
@@ -921,6 +1075,7 @@ pub async fn connect(
         known_hosts_path,
         timeout_secs,
         log.clone(),
+        ctx.as_ref(),
     )
     .await?;
 
@@ -936,7 +1091,7 @@ pub async fn connect(
         let username = credential.username.clone();
         authenticate_interactive(&mut handle, username, app.clone(), tab_id).await?;
     } else {
-        authenticate(&mut handle, credential).await?;
+        authenticate(&mut handle, credential, ctx.as_ref()).await?;
     }
     log(format!("Authenticated."));
 

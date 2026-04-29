@@ -49,10 +49,13 @@ impl SftpHandle {
     ) -> AppResult<Self> {
         let config = crate::ssh::client::default_client_config();
         let log = crate::ssh::client::null_logger();
-        let mut handle = client::ssh_connect(config, host, port, known_hosts_path, timeout_secs, log).await
-            .map_err(|e| AppError::Sftp(format!("SSH 连接失败: {e}")))?;
+        let mut handle =
+            client::ssh_connect(config, host, port, known_hosts_path, timeout_secs, log)
+                .await
+                .map_err(|e| AppError::Sftp(format!("SSH 连接失败: {e}")))?;
 
-        client::authenticate(&mut handle, credential).await
+        client::authenticate(&mut handle, credential, None)
+            .await
             .map_err(|e| AppError::Sftp(format!("认证失败: {e}")))?;
 
         let channel = handle
@@ -187,11 +190,17 @@ impl SftpHandle {
         use tauri::Emitter;
 
         // Get file size for progress
-        let meta = self.sftp.metadata(remote_path).await
+        let meta = self
+            .sftp
+            .metadata(remote_path)
+            .await
             .map_err(|e| AppError::Sftp(format!("{e}")))?;
         let total = meta.size.unwrap_or(0);
 
-        let mut remote_file = self.sftp.open(remote_path).await
+        let mut remote_file = self
+            .sftp
+            .open(remote_path)
+            .await
             .map_err(|e| AppError::Sftp(format!("{e}")))?;
 
         let mut local_file = tokio::fs::File::create(local_path).await?;
@@ -200,9 +209,13 @@ impl SftpHandle {
         let mut buf = vec![0u8; 32768];
 
         loop {
-            let n = remote_file.read(&mut buf).await
+            let n = remote_file
+                .read(&mut buf)
+                .await
                 .map_err(|e| AppError::Sftp(format!("read: {e}")))?;
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
 
             local_file.write_all(&buf[..n]).await?;
             transferred += n as u64;
@@ -213,7 +226,9 @@ impl SftpHandle {
             );
         }
 
-        remote_file.shutdown().await
+        remote_file
+            .shutdown()
+            .await
             .map_err(|e| AppError::Sftp(format!("close: {e}")))?;
 
         Ok(transferred)
@@ -234,7 +249,10 @@ impl SftpHandle {
 
         let mut local_file = tokio::fs::File::open(local_path).await?;
 
-        let mut remote_file = self.sftp.create(remote_path).await
+        let mut remote_file = self
+            .sftp
+            .create(remote_path)
+            .await
             .map_err(|e| AppError::Sftp(format!("{e}")))?;
 
         let mut transferred: u64 = 0;
@@ -242,9 +260,13 @@ impl SftpHandle {
 
         loop {
             let n = local_file.read(&mut buf).await?;
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
 
-            remote_file.write_all(&buf[..n]).await
+            remote_file
+                .write_all(&buf[..n])
+                .await
                 .map_err(|e| AppError::Sftp(format!("write: {e}")))?;
             transferred += n as u64;
 
@@ -254,7 +276,9 @@ impl SftpHandle {
             );
         }
 
-        remote_file.shutdown().await
+        remote_file
+            .shutdown()
+            .await
             .map_err(|e| AppError::Sftp(format!("close: {e}")))?;
 
         Ok(transferred)

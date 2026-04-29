@@ -21,9 +21,8 @@ use state::AppState;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 默认 info；用 RUST_LOG=debug 等覆盖
-    let _ = env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info"),
-    ).try_init();
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .try_init();
 
     tauri::Builder::default()
         .on_window_event(|window, event| {
@@ -41,6 +40,16 @@ pub fn run() {
             let data_dir = db::data_dir();
             let db = Arc::new(db::Db::open(&data_dir)?);
             let secret_store = secret::open(db.clone());
+
+            // 一次性清理：旧版曾把私钥 passphrase 落盘到 SecretStore。
+            // 新流程改为终端内交互输入 + 进程内缓存，旧条目永不读，全部删掉。
+            // 失败不致命：删不掉的项最坏情况是占几个字节，不影响功能。
+            if let Ok(creds) = db::credential::list(&db) {
+                for c in creds {
+                    let _ = secret_store.delete(&secret::cred_passphrase_key(&c.id));
+                }
+            }
+
             app.manage(AppState {
                 db,
                 secret_store,
@@ -50,6 +59,8 @@ pub fn run() {
                 sftp_sessions: Mutex::new(HashMap::new()),
                 active_forwards: Mutex::new(HashMap::new()),
                 auth_waiters: Mutex::new(HashMap::new()),
+                passphrase_waiters: Mutex::new(HashMap::new()),
+                passphrase_cache: Mutex::new(HashMap::new()),
                 window_sessions: Mutex::new(HashMap::new()),
                 ai_sessions: Mutex::new(HashMap::new()),
                 data_dir,
@@ -102,6 +113,8 @@ pub fn run() {
             commands::session::ssh_resize,
             commands::session::ssh_disconnect,
             commands::session::ssh_auth_respond,
+            commands::session::ssh_passphrase_respond,
+            commands::session::ssh_passphrase_cancel,
             // session lifecycle
             commands::lifecycle::reconcile_sessions,
             // PTY (desktop only)

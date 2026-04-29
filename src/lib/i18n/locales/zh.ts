@@ -128,9 +128,8 @@ const zh: Messages = {
   "credential.type.interactive": "键盘交互",
   "credential.password": "密码",
   "credential.private_key": "私钥",
-  "credential.passphrase": "Passphrase（可选）",
-  "credential.passphrase_placeholder": "密钥 passphrase",
-  "credential.agent_hint": "认证将使用本地 SSH agent 中已加载的 key，不会保存任何 secret。",
+  "credential.encrypted_key_hint": "若私钥已加密，连接时会在终端内提示输入 passphrase（仅本进程缓存，不落盘）。",
+  "credential.agent_hint": "优先使用本地 SSH agent（$SSH_AUTH_SOCK / Pageant）中已加载的 key。\nAgent 不可达或全部 identity 被拒绝时，将回退尝试 ~/.ssh/id_rsa、id_ecdsa、id_ecdsa_sk、id_ed25519、id_ed25519_sk。\n如默认私钥已加密，会在终端内提示输入 passphrase（仅本进程缓存）。",
   "credential.sync_to_remote": "同步到远端",
   "credential.sync_to_remote_desc": "推送到 GitHub 时，是否一并上传该凭证的 secret。",
 
@@ -151,6 +150,7 @@ const zh: Messages = {
   "forward.active_connections": "活跃连接",
 
   // ── AI 排障：ChatPanel ──
+  "ai.resize_hint": "拖拽改宽 · 双击重置",
   "ai.title": "AI 排障",
   "ai.toolbar.audit": "📋 审计",
   "ai.toolbar.back_to_chat": "← 对话",

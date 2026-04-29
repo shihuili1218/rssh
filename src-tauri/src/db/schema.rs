@@ -56,9 +56,9 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
         )?;
 
         // Seed default highlights if table is empty
-        let count: u32 = conn.query_row(
-            "SELECT COUNT(*) FROM highlights", [], |r| r.get(0),
-        ).unwrap_or(0);
+        let count: u32 = conn
+            .query_row("SELECT COUNT(*) FROM highlights", [], |r| r.get(0))
+            .unwrap_or(0);
         if count == 0 {
             conn.execute_batch(
                 "
@@ -66,7 +66,7 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
                 INSERT INTO highlights (keyword, color, enabled) VALUES ('WARN', '#FFD060', 1);
                 INSERT INTO highlights (keyword, color, enabled) VALUES ('INFO', '#6EDAA0', 1);
                 INSERT INTO highlights (keyword, color, enabled) VALUES ('DEBUG', '#40C8E0', 1);
-                "
+                ",
             )?;
         }
     }
@@ -74,7 +74,7 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
     if version < 10 {
         // Passphrase column for credentials
         let _ = conn.execute_batch(
-            "ALTER TABLE credentials ADD COLUMN passphrase TEXT NOT NULL DEFAULT '';"
+            "ALTER TABLE credentials ADD COLUMN passphrase TEXT NOT NULL DEFAULT '';",
         );
         // Profile groups table
         conn.execute_batch(
@@ -85,12 +85,10 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
                 color      TEXT NOT NULL DEFAULT '#4A6CF7',
                 sort_order INTEGER NOT NULL DEFAULT 0
             );
-            "
+            ",
         )?;
         // group_id column on profiles
-        let _ = conn.execute_batch(
-            "ALTER TABLE profiles ADD COLUMN group_id TEXT DEFAULT NULL;"
-        );
+        let _ = conn.execute_batch("ALTER TABLE profiles ADD COLUMN group_id TEXT DEFAULT NULL;");
     }
 
     if version < 11 {
@@ -101,7 +99,7 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
             "CREATE TABLE IF NOT EXISTS secrets (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
-            );"
+            );",
         )?;
     }
 

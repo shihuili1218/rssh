@@ -15,15 +15,13 @@ fn row_to_credential(row: &rusqlite::Row) -> rusqlite::Result<Credential> {
         credential_type: CredentialType::from_str(&row.get::<_, String>(3)?),
         secret: None,
         save_to_remote: row.get::<_, i32>(4)? != 0,
-        passphrase: None,
     })
 }
 
 pub fn list(db: &Db) -> AppResult<Vec<Credential>> {
     let conn = db.lock()?;
-    let mut stmt = conn.prepare(
-        "SELECT id, name, username, type, save_to_remote FROM credentials",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT id, name, username, type, save_to_remote FROM credentials")?;
     let rows = stmt.query_map([], |row| row_to_credential(row))?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
@@ -55,8 +53,11 @@ pub fn update(db: &Db, cred: &Credential) -> AppResult<()> {
     conn.execute(
         "UPDATE credentials SET name=?1, username=?2, type=?3, save_to_remote=?4 WHERE id=?5",
         params![
-            cred.name, cred.username, cred.credential_type.as_str(),
-            cred.save_to_remote as i32, cred.id,
+            cred.name,
+            cred.username,
+            cred.credential_type.as_str(),
+            cred.save_to_remote as i32,
+            cred.id,
         ],
     )?;
     Ok(())

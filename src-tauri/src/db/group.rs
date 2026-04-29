@@ -60,7 +60,10 @@ pub fn delete(db: &Db, id: &str) -> AppResult<()> {
     let conn = db.lock()?;
     conn.execute("DELETE FROM groups WHERE id = ?1", params![id])?;
     // Clear group_id references in profiles
-    conn.execute("UPDATE profiles SET group_id = NULL WHERE group_id = ?1", params![id])?;
+    conn.execute(
+        "UPDATE profiles SET group_id = NULL WHERE group_id = ?1",
+        params![id],
+    )?;
     Ok(())
 }
 

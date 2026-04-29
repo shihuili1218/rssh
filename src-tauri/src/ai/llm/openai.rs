@@ -10,7 +10,9 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::json;
 
-use super::{ChatDelta, ChatMessage, ChatRequest, ChatResponse, DeltaSink, LlmClient, SseParser, ToolCall};
+use super::{
+    ChatDelta, ChatMessage, ChatRequest, ChatResponse, DeltaSink, LlmClient, SseParser, ToolCall,
+};
 use crate::error::{AppError, AppResult};
 
 const DEFAULT_ENDPOINT: &str = "https://api.openai.com/v1/chat/completions";
@@ -88,7 +90,10 @@ impl LlmClient for OpenAiClient {
                     tool_calls: None,
                     tool_call_id: None,
                 }),
-                ChatMessage::Assistant { content, tool_calls } => {
+                ChatMessage::Assistant {
+                    content,
+                    tool_calls,
+                } => {
                     let oai_calls: Vec<OaiToolCall> = tool_calls
                         .iter()
                         .map(|tc| OaiToolCall {
@@ -102,13 +107,29 @@ impl LlmClient for OpenAiClient {
                         .collect();
                     messages.push(OaiMsg {
                         role: "assistant",
-                        content: if content.is_empty() { None } else { Some(content.clone()) },
-                        tool_calls: if oai_calls.is_empty() { None } else { Some(oai_calls) },
+                        content: if content.is_empty() {
+                            None
+                        } else {
+                            Some(content.clone())
+                        },
+                        tool_calls: if oai_calls.is_empty() {
+                            None
+                        } else {
+                            Some(oai_calls)
+                        },
                         tool_call_id: None,
                     });
                 }
-                ChatMessage::ToolResult { tool_call_id, content, is_error } => {
-                    let body = if *is_error { format!("[ERROR] {content}") } else { content.clone() };
+                ChatMessage::ToolResult {
+                    tool_call_id,
+                    content,
+                    is_error,
+                } => {
+                    let body = if *is_error {
+                        format!("[ERROR] {content}")
+                    } else {
+                        content.clone()
+                    };
                     messages.push(OaiMsg {
                         role: "tool",
                         content: Some(body),
@@ -170,8 +191,7 @@ impl LlmClient for OpenAiClient {
         let mut parser = SseParser::new();
         let mut stream = resp.bytes_stream();
         'stream: while let Some(chunk) = stream.next().await {
-            let bytes = chunk
-                .map_err(|e| AppError::Other(format!("LLM stream 读失败: {e}")))?;
+            let bytes = chunk.map_err(|e| AppError::Other(format!("LLM stream 读失败: {e}")))?;
             let s = String::from_utf8_lossy(&bytes).into_owned();
             for ev_data in parser.feed(&s) {
                 if ev_data.trim() == "[DONE]" {
@@ -198,7 +218,8 @@ impl LlmClient for OpenAiClient {
                     }
                     if let Some(tcs_arr) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                         for tc in tcs_arr {
-                            let idx = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                            let idx =
+                                tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
                             let entry = tool_calls
                                 .entry(idx)
                                 .or_insert_with(|| (String::new(), String::new(), String::new()));
@@ -207,8 +228,7 @@ impl LlmClient for OpenAiClient {
                                     entry.0 = id.to_string();
                                 }
                             }
-                            if let Some(name) =
-                                tc["function"].get("name").and_then(|s| s.as_str())
+                            if let Some(name) = tc["function"].get("name").and_then(|s| s.as_str())
                             {
                                 if entry.1.is_empty() && !name.is_empty() {
                                     entry.1 = name.to_string();

@@ -41,12 +41,17 @@ pub fn list(db: &Db) -> AppResult<Vec<Forward>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, profile_id, type, local_port, remote_host, remote_port FROM forwards ORDER BY name ASC",
     )?;
-    let rows = stmt.query_map([], |row| Ok(Forward {
-        id: row.get(0)?, name: row.get(1)?, profile_id: row.get(2)?,
-        forward_type: parse_type(&row.get::<_, String>(3)?),
-        local_port: row.get::<_, u32>(4)? as u16,
-        remote_host: row.get(5)?, remote_port: row.get::<_, u32>(6)? as u16,
-    }))?;
+    let rows = stmt.query_map([], |row| {
+        Ok(Forward {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            profile_id: row.get(2)?,
+            forward_type: parse_type(&row.get::<_, String>(3)?),
+            local_port: row.get::<_, u32>(4)? as u16,
+            remote_host: row.get(5)?,
+            remote_port: row.get::<_, u32>(6)? as u16,
+        })
+    })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 

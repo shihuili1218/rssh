@@ -261,6 +261,58 @@
     });
     let aiPos = $derived(ai.position());
 
+    /* ── AI 面板宽度：用户拖拽 → localStorage，覆盖响应式默认值。
+       未设置时回落到 CSS 中的 380px / 320px / mobile-takeover 媒体查询。 */
+    const AI_PANEL_WIDTH_KEY = "ai-panel-width";
+    const AI_PANEL_MIN_WIDTH = 280;
+    const AI_PANEL_MIN_MAIN = 320; // 终端区至少留这么宽
+    let aiPanelWidth = $state<number | null>(null);
+
+    onMount(() => {
+        const saved = localStorage.getItem(AI_PANEL_WIDTH_KEY);
+        if (saved) {
+            const n = parseInt(saved, 10);
+            if (Number.isFinite(n) && n >= AI_PANEL_MIN_WIDTH) aiPanelWidth = n;
+        }
+    });
+
+    let aiSideStyle = $derived(
+        aiPanelWidth != null
+            ? `flex: 0 0 ${aiPanelWidth}px; max-width: ${aiPanelWidth}px;`
+            : ""
+    );
+
+    function startAiResize(e: MouseEvent) {
+        e.preventDefault();
+        const startX = e.clientX;
+        // 取实际渲染宽度作为起点，避免首次拖拽时的"跳变"
+        const sideEl = (e.currentTarget as HTMLElement).parentElement as HTMLElement | null;
+        const startWidth = aiPanelWidth ?? (sideEl?.getBoundingClientRect().width ?? 380);
+        // AI 在右：handle 在左边缘，光标左移 → AI 变宽（dx 取反）
+        // AI 在左：handle 在右边缘，光标右移 → AI 变宽（dx 直接用）
+        const sign = aiPos === "left" ? 1 : -1;
+
+        const onMove = (ev: MouseEvent) => {
+            const dx = ev.clientX - startX;
+            const maxWidth = window.innerWidth - AI_PANEL_MIN_MAIN;
+            const next = Math.max(AI_PANEL_MIN_WIDTH, Math.min(maxWidth, startWidth + sign * dx));
+            aiPanelWidth = next;
+        };
+        const onUp = () => {
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+            if (aiPanelWidth != null) localStorage.setItem(AI_PANEL_WIDTH_KEY, String(aiPanelWidth));
+        };
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+    }
+
+    /** 双击 handle：清除手动宽度，回到响应式默认（媒体查询 + 380px）。 */
+    function resetAiWidth() {
+        aiPanelWidth = null;
+        localStorage.removeItem(AI_PANEL_WIDTH_KEY);
+    }
+
     /* Menu data — sections describe layout (header / scrollable list / footer),
        flat navItems is what the keyboard shortcut cycles through. */
     let navSections = $derived<{ header: NavItem[]; middle: NavItem[]; footer: NavItem[] }>({
@@ -737,7 +789,14 @@
         </div>
 
         {#if aiVisible && aiActiveTab && aiSessionId}
-            <aside class="ai-side">
+            <aside class="ai-side" style={aiSideStyle}>
+                <div class="ai-resize-handle"
+                     class:on-right={aiPos === "left"}
+                     onmousedown={startAiResize}
+                     ondblclick={resetAiWidth}
+                     role="separator"
+                     aria-orientation="vertical"
+                     title={t("ai.resize_hint")}></div>
                 <ChatPanel
                     tabId={aiActiveTab.id}
                     targetKind={aiActiveTab.type as "ssh" | "local"}
@@ -854,9 +913,33 @@
     .ai-side {
         flex: 0 0 380px;
         background: var(--bg);
+        position: relative;
     }
 
     @media (max-width: 800px) { .ai-side { flex-basis: 320px; } }
+
+    /* 拖拽宽度的把手：贴在 ai-side 的内边缘（默认右布局 → 左边；左布局 → 右边）。
+       6px 命中区域，悬停/拖拽时露一根细线。 */
+    .ai-resize-handle {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: -3px;
+        width: 6px;
+        cursor: col-resize;
+        z-index: 10;
+        background: transparent;
+        transition: background 0.12s ease;
+    }
+    .ai-resize-handle.on-right {
+        left: auto;
+        right: -3px;
+    }
+    .ai-resize-handle:hover,
+    .ai-resize-handle:active {
+        background: var(--accent, #4A6CF7);
+        opacity: 0.45;
+    }
 
     /* 竖屏手机：AI 接管整块内容区，main-area 挤到 0（终端实例保留，关 AI 后恢复） */
     @media (max-width: 480px) {

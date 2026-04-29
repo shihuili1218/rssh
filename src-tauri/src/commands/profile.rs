@@ -2,7 +2,7 @@ use tauri::State;
 
 use crate::error::AppError;
 use crate::models::{Credential, Profile};
-use crate::secret::{cred_passphrase_key, cred_secret_key};
+use crate::secret::cred_secret_key;
 use crate::state::AppState;
 
 #[tauri::command]
@@ -31,7 +31,8 @@ pub fn delete_profile(state: State<AppState>, id: String) -> Result<(), AppError
 }
 
 // ---------------------------------------------------------------------------
-// Credentials — secret/passphrase 走 SecretStore，metadata 走 DB
+// Credentials — secret 走 SecretStore，metadata 走 DB
+// 私钥 passphrase 不再持久化：连接时终端内交互输入，仅进程内缓存。
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
@@ -44,7 +45,6 @@ pub fn list_credentials(state: State<AppState>) -> Result<Vec<Credential>, AppEr
 pub fn get_credential(state: State<AppState>, id: String) -> Result<Credential, AppError> {
     let mut cred = crate::db::credential::get(&state.db, &id)?;
     cred.secret = state.secret_store.get(&cred_secret_key(&id))?;
-    cred.passphrase = state.secret_store.get(&cred_passphrase_key(&id))?;
     Ok(cred)
 }
 
@@ -64,20 +64,14 @@ pub fn update_credential(state: State<AppState>, credential: Credential) -> Resu
 pub fn delete_credential(state: State<AppState>, id: String) -> Result<(), AppError> {
     crate::db::credential::delete(&state.db, &id)?;
     state.secret_store.delete(&cred_secret_key(&id))?;
-    state.secret_store.delete(&cred_passphrase_key(&id))?;
     Ok(())
 }
 
 fn save_credential_secrets(state: &State<AppState>, c: &Credential) -> Result<(), AppError> {
     let secret_key = cred_secret_key(&c.id);
-    let passphrase_key = cred_passphrase_key(&c.id);
     match c.secret.as_deref() {
         Some(s) if !s.is_empty() => state.secret_store.set(&secret_key, s)?,
         _ => state.secret_store.delete(&secret_key)?,
-    }
-    match c.passphrase.as_deref() {
-        Some(s) if !s.is_empty() => state.secret_store.set(&passphrase_key, s)?,
-        _ => state.secret_store.delete(&passphrase_key)?,
     }
     Ok(())
 }
