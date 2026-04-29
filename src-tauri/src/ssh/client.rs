@@ -717,7 +717,6 @@ fn agent_identity_is_rsa(identity: &AgentIdentity) -> bool {
 
 /// Try OpenSSH's default identity files in the order reported by `ssh -G`.
 /// This keeps GUI behavior aligned with `ssh user@host` for hosts such as
-/// tmate that accept only publickey auth.
 pub async fn authenticate_with_default_keys(
     handle: &mut client::Handle<SshHandler>,
     username: String,
