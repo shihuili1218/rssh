@@ -9,7 +9,7 @@ use rssh_lib::bastion;
 use rssh_lib::db::{self, Db};
 use rssh_lib::error::AppResult;
 use rssh_lib::models::*;
-use rssh_lib::secret::{self, cred_passphrase_key, cred_secret_key, setting_key, SecretStore};
+use rssh_lib::secret::{self, cred_secret_key, setting_key, SecretStore};
 
 /// CLI 上下文：组合 DB + SecretStore（懒加载）。
 /// Deref<Target=Db> 让所有 `db::xxx::yyy(ctx, ...)` 调用零改动透传。
@@ -22,7 +22,8 @@ struct CliCtx {
 
 impl CliCtx {
     fn secret_store(&self) -> &Arc<dyn SecretStore> {
-        self.secret_store.get_or_init(|| secret::open(self.db.clone()))
+        self.secret_store
+            .get_or_init(|| secret::open(self.db.clone()))
     }
 }
 
@@ -64,15 +65,9 @@ enum Cmd {
         kind: String,
     },
     /// Edit a profile, credential, or forward
-    Edit {
-        kind: String,
-        name: String,
-    },
+    Edit { kind: String, name: String },
     /// Remove a profile, credential, or forward
-    Rm {
-        kind: String,
-        name: String,
-    },
+    Rm { kind: String, name: String },
     /// Configuration: export, import, GitHub sync
     Config {
         #[command(subcommand)]
@@ -85,9 +80,7 @@ enum Cmd {
     },
     /// (hidden) Output entity names for tab completion
     #[command(hide = true, name = "_names")]
-    Names {
-        kind: String,
-    },
+    Names { kind: String },
 }
 
 #[derive(Subcommand)]
@@ -114,16 +107,22 @@ enum ConfigCmd {
 /// `rssh ls`, `rssh open …` etc. still go through the CLI path.
 #[cfg(target_os = "linux")]
 fn try_launch_gui() -> bool {
-    if in_rssh_app() { return false; }
+    if in_rssh_app() {
+        return false;
+    }
     // No display server → headless / SSH session, stay in CLI.
     if std::env::var("DISPLAY").is_err() && std::env::var("WAYLAND_DISPLAY").is_err() {
         return false;
     }
     let gui = std::path::PathBuf::from("/usr/bin/rssh");
-    if !gui.exists() { return false; }
+    if !gui.exists() {
+        return false;
+    }
     // Don't loop when the user runs the GUI binary directly.
     if let Ok(me) = std::env::current_exe() {
-        if me.canonicalize().ok() == gui.canonicalize().ok() { return false; }
+        if me.canonicalize().ok() == gui.canonicalize().ok() {
+            return false;
+        }
     }
     use std::os::unix::process::CommandExt;
     Command::new(&gui)
@@ -149,7 +148,10 @@ fn main() {
         eprintln!("Failed to open database: {e}");
         std::process::exit(1);
     }));
-    let conn = CliCtx { db, secret_store: OnceLock::new() };
+    let conn = CliCtx {
+        db,
+        secret_store: OnceLock::new(),
+    };
 
     let result = match cli.command {
         None => cmd_ls(&conn, None),
@@ -187,7 +189,12 @@ fn cmd_ls(conn: &CliCtx, query: Option<&str>) -> AppResult<()> {
             println!("{:<20} {:<15} {:<10}", "NAME", "USER", "TYPE");
             println!("{}", "-".repeat(48));
             for c in &list {
-                println!("{:<20} {:<15} {:<10}", c.name, c.username, c.credential_type.as_str());
+                println!(
+                    "{:<20} {:<15} {:<10}",
+                    c.name,
+                    c.username,
+                    c.credential_type.as_str()
+                );
             }
         }
         Some("fwd") => {
@@ -198,10 +205,18 @@ fn cmd_ls(conn: &CliCtx, query: Option<&str>) -> AppResult<()> {
             }
             let profiles = db::profile::list(conn)?;
             for f in &list {
-                let pname = profiles.iter().find(|p| p.id == f.profile_id).map(|p| p.name.as_str()).unwrap_or("?");
+                let pname = profiles
+                    .iter()
+                    .find(|p| p.id == f.profile_id)
+                    .map(|p| p.name.as_str())
+                    .unwrap_or("?");
                 let arrow = match f.forward_type {
-                    ForwardType::Local   => format!("-L {} → {}:{}", f.local_port, f.remote_host, f.remote_port),
-                    ForwardType::Remote  => format!("-R {} → {}:{}", f.remote_port, f.remote_host, f.local_port),
+                    ForwardType::Local => {
+                        format!("-L {} → {}:{}", f.local_port, f.remote_host, f.remote_port)
+                    }
+                    ForwardType::Remote => {
+                        format!("-R {} → {}:{}", f.remote_port, f.remote_host, f.local_port)
+                    }
                     ForwardType::Dynamic => format!("-D {}", f.local_port),
                 };
                 println!("{} ({}) via {}", f.name, arrow, pname);
@@ -212,7 +227,11 @@ fn cmd_ls(conn: &CliCtx, query: Option<&str>) -> AppResult<()> {
             let filtered: Vec<&Profile> = match query {
                 Some(q) => {
                     let q = q.to_lowercase();
-                    list.iter().filter(|p| p.name.to_lowercase().contains(&q) || p.host.to_lowercase().contains(&q)).collect()
+                    list.iter()
+                        .filter(|p| {
+                            p.name.to_lowercase().contains(&q) || p.host.to_lowercase().contains(&q)
+                        })
+                        .collect()
                 }
                 None => list.iter().collect(),
             };
@@ -223,12 +242,18 @@ fn cmd_ls(conn: &CliCtx, query: Option<&str>) -> AppResult<()> {
             let creds = db::credential::list(conn)?;
             let groups = db::group::list(conn)?;
             for p in &filtered {
-                let user = p.credential_id.as_deref()
+                let user = p
+                    .credential_id
+                    .as_deref()
                     .and_then(|id| creds.iter().find(|c| c.id == id))
                     .map(|c| c.username.as_str())
                     .unwrap_or("?");
                 let label = format!("{} ({}@{}:{})", p.name, user, p.host, p.port);
-                if let Some(g) = p.group_id.as_deref().and_then(|gid| groups.iter().find(|g| g.id == gid)) {
+                if let Some(g) = p
+                    .group_id
+                    .as_deref()
+                    .and_then(|gid| groups.iter().find(|g| g.id == gid))
+                {
                     let (r, gv, b) = hex_to_rgb(&g.color);
                     println!("\x1b[38;2;{};{};{}m{}\x1b[0m", r, gv, b, label);
                 } else {
@@ -255,7 +280,9 @@ fn osc_open(kind: &str, name: &str) {
 
 fn cmd_open(conn: &CliCtx, target: &str, name: Option<&str>) -> AppResult<()> {
     if target == "fwd" {
-        let fname = name.ok_or_else(|| rssh_lib::error::AppError::Config("Usage: rssh open fwd <name>".into()))?;
+        let fname = name.ok_or_else(|| {
+            rssh_lib::error::AppError::Config("Usage: rssh open fwd <name>".into())
+        })?;
         if in_rssh_app() {
             osc_open("fwd", fname);
             return Ok(());
@@ -271,11 +298,16 @@ fn cmd_open(conn: &CliCtx, target: &str, name: Option<&str>) -> AppResult<()> {
 
 fn cmd_open_ssh(conn: &CliCtx, name: &str) -> AppResult<()> {
     let profiles = db::profile::list(conn)?;
-    let profile = profiles.iter()
+    let profile = profiles
+        .iter()
         .find(|p| p.name.eq_ignore_ascii_case(name))
-        .ok_or_else(|| rssh_lib::error::AppError::NotFound(format!("Profile '{}' not found", name)))?;
+        .ok_or_else(|| {
+            rssh_lib::error::AppError::NotFound(format!("Profile '{}' not found", name))
+        })?;
 
-    let cred = profile.credential_id.as_deref()
+    let cred = profile
+        .credential_id
+        .as_deref()
         .filter(|id| !id.is_empty())
         .and_then(|id| db::credential::get(conn, id).ok())
         .map(|c| load_cred_secrets(conn, c));
@@ -291,7 +323,9 @@ fn cmd_open_ssh(conn: &CliCtx, name: &str) -> AppResult<()> {
     if !chain.is_empty() {
         let mut hops: Vec<String> = Vec::with_capacity(chain.len());
         for hop in &chain {
-            let bc = hop.credential_id.as_deref()
+            let bc = hop
+                .credential_id
+                .as_deref()
                 .filter(|id| !id.is_empty())
                 .and_then(|id| db::credential::get(conn, id).ok())
                 .map(|c| load_cred_secrets(conn, c));
@@ -303,7 +337,8 @@ fn cmd_open_ssh(conn: &CliCtx, name: &str) -> AppResult<()> {
                 if c.credential_type == CredentialType::Key {
                     if let Some(ref secret) = c.secret {
                         let f = write_temp_key(secret)?;
-                        cmd.arg("-o").arg(format!("IdentityFile={}", f.path().display()));
+                        cmd.arg("-o")
+                            .arg(format!("IdentityFile={}", f.path().display()));
                         _key_files.push(f);
                     }
                 }
@@ -337,7 +372,9 @@ fn cmd_open_ssh(conn: &CliCtx, name: &str) -> AppResult<()> {
     // init_command: run it then hand off to shell
     if let Some(ref init) = profile.init_command {
         if !init.is_empty() {
-            cmd.arg("-t").arg(&profile.host).arg(format!("{}; exec $SHELL -l", init));
+            cmd.arg("-t")
+                .arg(&profile.host)
+                .arg(format!("{}; exec $SHELL -l", init));
         } else {
             cmd.arg(&profile.host);
         }
@@ -345,18 +382,25 @@ fn cmd_open_ssh(conn: &CliCtx, name: &str) -> AppResult<()> {
         cmd.arg(&profile.host);
     }
 
-    let status = cmd.status().map_err(|e| rssh_lib::error::AppError::Ssh(format!("Failed to run ssh: {e}")))?;
+    let status = cmd
+        .status()
+        .map_err(|e| rssh_lib::error::AppError::Ssh(format!("Failed to run ssh: {e}")))?;
     std::process::exit(status.code().unwrap_or(1));
 }
 
 fn cmd_open_fwd(conn: &CliCtx, name: &str) -> AppResult<()> {
     let forwards = db::forward::list(conn)?;
-    let fwd = forwards.iter()
+    let fwd = forwards
+        .iter()
         .find(|f| f.name.eq_ignore_ascii_case(name))
-        .ok_or_else(|| rssh_lib::error::AppError::NotFound(format!("Forward '{}' not found", name)))?;
+        .ok_or_else(|| {
+            rssh_lib::error::AppError::NotFound(format!("Forward '{}' not found", name))
+        })?;
 
     let profile = db::profile::get(conn, &fwd.profile_id)?;
-    let cred = profile.credential_id.as_deref()
+    let cred = profile
+        .credential_id
+        .as_deref()
         .filter(|id| !id.is_empty())
         .and_then(|id| db::credential::get(conn, id).ok())
         .map(|c| load_cred_secrets(conn, c));
@@ -368,8 +412,14 @@ fn cmd_open_fwd(conn: &CliCtx, name: &str) -> AppResult<()> {
     cmd.arg("-N");
 
     let (flag, fwd_arg) = match fwd.forward_type {
-        ForwardType::Local => ("-L", format!("{}:{}:{}", fwd.local_port, fwd.remote_host, fwd.remote_port)),
-        ForwardType::Remote => ("-R", format!("{}:{}:{}", fwd.remote_port, fwd.remote_host, fwd.local_port)),
+        ForwardType::Local => (
+            "-L",
+            format!("{}:{}:{}", fwd.local_port, fwd.remote_host, fwd.remote_port),
+        ),
+        ForwardType::Remote => (
+            "-R",
+            format!("{}:{}:{}", fwd.remote_port, fwd.remote_host, fwd.local_port),
+        ),
         ForwardType::Dynamic => ("-D", format!("{}", fwd.local_port)),
     };
     cmd.arg(flag).arg(&fwd_arg);
@@ -379,7 +429,9 @@ fn cmd_open_fwd(conn: &CliCtx, name: &str) -> AppResult<()> {
     if !chain.is_empty() {
         let mut hops: Vec<String> = Vec::with_capacity(chain.len());
         for hop in &chain {
-            let bc = hop.credential_id.as_deref()
+            let bc = hop
+                .credential_id
+                .as_deref()
                 .filter(|id| !id.is_empty())
                 .and_then(|id| db::credential::get(conn, id).ok())
                 .map(|c| load_cred_secrets(conn, c));
@@ -390,7 +442,8 @@ fn cmd_open_fwd(conn: &CliCtx, name: &str) -> AppResult<()> {
                 if c.credential_type == CredentialType::Key {
                     if let Some(ref secret) = c.secret {
                         let f = write_temp_key(secret)?;
-                        cmd.arg("-o").arg(format!("IdentityFile={}", f.path().display()));
+                        cmd.arg("-o")
+                            .arg(format!("IdentityFile={}", f.path().display()));
                         _key_files.push(f);
                     }
                 }
@@ -422,31 +475,32 @@ fn cmd_open_fwd(conn: &CliCtx, name: &str) -> AppResult<()> {
     cmd.arg(&profile.host);
 
     println!("Forwarding {} {} ...", flag, fwd_arg);
-    let status = cmd.status().map_err(|e| rssh_lib::error::AppError::Ssh(format!("{e}")))?;
+    let status = cmd
+        .status()
+        .map_err(|e| rssh_lib::error::AppError::Ssh(format!("{e}")))?;
     std::process::exit(status.code().unwrap_or(1));
 }
 
-/// 从 SecretStore 把 secret/passphrase 灌到 Credential 上。
+/// 从 SecretStore 把 secret 灌到 Credential 上。
 fn load_cred_secrets(conn: &CliCtx, mut c: Credential) -> Credential {
     if !c.id.is_empty() {
-        c.secret = conn.secret_store().get(&cred_secret_key(&c.id)).ok().flatten();
-        c.passphrase = conn.secret_store().get(&cred_passphrase_key(&c.id)).ok().flatten();
+        c.secret = conn
+            .secret_store()
+            .get(&cred_secret_key(&c.id))
+            .ok()
+            .flatten();
     }
     c
 }
 
-/// 把 Credential 完整写入（DB metadata + SecretStore secret/passphrase）。
+/// 把 Credential 完整写入（DB metadata + SecretStore secret）。
+/// 私钥 passphrase 不再持久化 — OpenSSH 会在使用 -i 时自行交互索取。
 fn upsert_cred_with_secrets(conn: &CliCtx, c: &Credential) -> AppResult<()> {
     db::credential::insert(conn, c)?;
     let sk = cred_secret_key(&c.id);
-    let pk = cred_passphrase_key(&c.id);
     match c.secret.as_deref() {
         Some(s) if !s.is_empty() => conn.secret_store().set(&sk, s)?,
         _ => conn.secret_store().delete(&sk)?,
-    }
-    match c.passphrase.as_deref() {
-        Some(s) if !s.is_empty() => conn.secret_store().set(&pk, s)?,
-        _ => conn.secret_store().delete(&pk)?,
     }
     Ok(())
 }
@@ -455,33 +509,27 @@ fn upsert_cred_with_secrets(conn: &CliCtx, c: &Credential) -> AppResult<()> {
 fn update_cred_with_secrets(conn: &CliCtx, c: &Credential) -> AppResult<()> {
     db::credential::update(conn, c)?;
     let sk = cred_secret_key(&c.id);
-    let pk = cred_passphrase_key(&c.id);
     match c.secret.as_deref() {
         Some(s) if !s.is_empty() => conn.secret_store().set(&sk, s)?,
         _ => conn.secret_store().delete(&sk)?,
-    }
-    match c.passphrase.as_deref() {
-        Some(s) if !s.is_empty() => conn.secret_store().set(&pk, s)?,
-        _ => conn.secret_store().delete(&pk)?,
     }
     Ok(())
 }
 
 fn write_temp_key(pem: &str) -> AppResult<tempfile::NamedTempFile> {
-    let mut f = tempfile::NamedTempFile::new()
-        .map_err(|e| rssh_lib::error::AppError::Io(e))?;
+    let mut f = tempfile::NamedTempFile::new().map_err(|e| rssh_lib::error::AppError::Io(e))?;
     f.write_all(pem.as_bytes())
         .map_err(|e| rssh_lib::error::AppError::Io(e))?;
     if !pem.ends_with('\n') {
         f.write_all(b"\n")
             .map_err(|e| rssh_lib::error::AppError::Io(e))?;
     }
-    f.flush()
-        .map_err(|e| rssh_lib::error::AppError::Io(e))?;
+    f.flush().map_err(|e| rssh_lib::error::AppError::Io(e))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        f.as_file().set_permissions(std::fs::Permissions::from_mode(0o600))
+        f.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))
             .map_err(|e| rssh_lib::error::AppError::Io(e))?;
     }
     Ok(f)
@@ -510,28 +558,33 @@ fn add_profile(conn: &CliCtx) -> AppResult<()> {
 
     let creds = db::credential::list(conn)?;
     let credential_id = menu_select(
-        "Credentials:", "Credential", &creds,
+        "Credentials:",
+        "Credential",
+        &creds,
         "(no credentials, use 'rssh add cred' first)",
         |c| format!("{} ({})", c.name, c.username),
-    ).map(|c| c.id.clone());
+    )
+    .map(|c| c.id.clone());
 
     let profiles = db::profile::list(conn)?;
-    let bastion_profile_id = menu_select(
-        "Bastion (optional):", "Bastion", &profiles, "",
-        |p| format!("{} ({})", p.name, p.host),
-    ).map(|p| p.id.clone());
+    let bastion_profile_id = menu_select("Bastion (optional):", "Bastion", &profiles, "", |p| {
+        format!("{} ({})", p.name, p.host)
+    })
+    .map(|p| p.id.clone());
 
     let init_command = prompt_optional("Init command (optional): ");
 
     let groups = db::group::list(conn)?;
-    let group_id = menu_select(
-        "Group (optional):", "Group", &groups, "",
-        |g| g.name.clone(),
-    ).map(|g| g.id.clone());
+    let group_id = menu_select("Group (optional):", "Group", &groups, "", |g| {
+        g.name.clone()
+    })
+    .map(|g| g.id.clone());
 
     let p = Profile {
         id: uuid::Uuid::new_v4().to_string(),
-        name, host, port,
+        name,
+        host,
+        port,
         credential_id,
         bastion_profile_id,
         init_command,
@@ -552,18 +605,17 @@ fn add_credential(conn: &CliCtx) -> AppResult<()> {
     println!("  3 - SSH agent (use $SSH_AUTH_SOCK / Pageant)");
     println!("  4 - none");
     let choice = prompt_default("Type #", "1");
-    let (credential_type, secret, passphrase) = match choice.as_str() {
+    let (credential_type, secret) = match choice.as_str() {
         "2" => {
             println!("Paste private key (end with empty line):");
             let key = read_multiline();
-            let pp = prompt_optional("Key passphrase (optional): ");
-            (CredentialType::Key, Some(key), pp)
+            (CredentialType::Key, Some(key))
         }
-        "3" => (CredentialType::Agent, None, None),
-        "4" => (CredentialType::None, None, None),
+        "3" => (CredentialType::Agent, None),
+        "4" => (CredentialType::None, None),
         _ => {
             let pw = read_password("Password: ");
-            (CredentialType::Password, Some(pw), None)
+            (CredentialType::Password, Some(pw))
         }
     };
 
@@ -571,8 +623,11 @@ fn add_credential(conn: &CliCtx) -> AppResult<()> {
 
     let c = Credential {
         id: uuid::Uuid::new_v4().to_string(),
-        name, username, credential_type, secret, save_to_remote,
-        passphrase,
+        name,
+        username,
+        credential_type,
+        secret,
+        save_to_remote,
     };
     upsert_cred_with_secrets(conn, &c)?;
     println!("Credential '{}' created.", c.name);
@@ -596,7 +651,10 @@ fn add_forward(conn: &CliCtx) -> AppResult<()> {
     let (remote_host, remote_port) = if ft == ForwardType::Dynamic {
         ("127.0.0.1".to_string(), 0u16)
     } else {
-        (prompt_default("Remote host", "127.0.0.1"), prompt("Remote port: ").parse().unwrap_or(0))
+        (
+            prompt_default("Remote host", "127.0.0.1"),
+            prompt("Remote port: ").parse().unwrap_or(0),
+        )
     };
 
     let profiles = db::profile::list(conn)?;
@@ -609,13 +667,19 @@ fn add_forward(conn: &CliCtx) -> AppResult<()> {
         println!("  {} - {} ({})", i + 1, p.name, p.host);
     }
     let pidx = prompt("Profile #: ").parse::<usize>().unwrap_or(0);
-    let profile_id = profiles.get(pidx.wrapping_sub(1))
+    let profile_id = profiles
+        .get(pidx.wrapping_sub(1))
         .map(|p| p.id.clone())
         .unwrap_or_default();
 
     let f = Forward {
         id: uuid::Uuid::new_v4().to_string(),
-        name, forward_type: ft, local_port, remote_host, remote_port, profile_id,
+        name,
+        forward_type: ft,
+        local_port,
+        remote_host,
+        remote_port,
+        profile_id,
     };
     db::forward::insert(conn, &f)?;
     println!("Forward '{}' created.", f.name);
@@ -631,24 +695,34 @@ fn cmd_edit(conn: &CliCtx, kind: &str, name: &str) -> AppResult<()> {
         "profile" => edit_profile(conn, name),
         "cred" | "creds" => edit_credential(conn, name),
         "fwd" => edit_forward(conn, name),
-        _ => { eprintln!("Unknown kind: {kind}"); Ok(()) }
+        _ => {
+            eprintln!("Unknown kind: {kind}");
+            Ok(())
+        }
     }
 }
 
 fn edit_profile(conn: &CliCtx, name: &str) -> AppResult<()> {
     let profiles = db::profile::list(conn)?;
-    let p = profiles.iter()
+    let p = profiles
+        .iter()
         .find(|p| p.name.eq_ignore_ascii_case(name))
-        .ok_or_else(|| rssh_lib::error::AppError::NotFound(format!("Profile '{name}' not found")))?;
+        .ok_or_else(|| {
+            rssh_lib::error::AppError::NotFound(format!("Profile '{name}' not found"))
+        })?;
 
     let mut updated = p.clone();
     updated.name = prompt_default("Name", &p.name);
     updated.host = prompt_default("Host", &p.host);
-    updated.port = prompt_default("Port", &p.port.to_string()).parse().unwrap_or(p.port);
+    updated.port = prompt_default("Port", &p.port.to_string())
+        .parse()
+        .unwrap_or(p.port);
 
     let creds = db::credential::list(conn)?;
     if !creds.is_empty() {
-        let cur = p.credential_id.as_deref()
+        let cur = p
+            .credential_id
+            .as_deref()
             .and_then(|id| creds.iter().position(|c| c.id == id))
             .map(|i| (i + 1).to_string())
             .unwrap_or("0".into());
@@ -658,7 +732,9 @@ fn edit_profile(conn: &CliCtx, name: &str) -> AppResult<()> {
             println!("  {} - {} ({})", i + 1, c.name, c.username);
         }
         let choice = prompt_default("Credential #", &cur);
-        updated.credential_id = choice.parse::<usize>().ok()
+        updated.credential_id = choice
+            .parse::<usize>()
+            .ok()
             .and_then(|n| creds.get(n.wrapping_sub(1)))
             .map(|c| c.id.clone());
     }
@@ -666,12 +742,18 @@ fn edit_profile(conn: &CliCtx, name: &str) -> AppResult<()> {
     updated.init_command = {
         let cur = p.init_command.as_deref().unwrap_or("");
         let v = prompt_default("Init command", cur);
-        if v.is_empty() { None } else { Some(v) }
+        if v.is_empty() {
+            None
+        } else {
+            Some(v)
+        }
     };
 
     let groups = db::group::list(conn)?;
     if !groups.is_empty() {
-        let cur = p.group_id.as_deref()
+        let cur = p
+            .group_id
+            .as_deref()
             .and_then(|id| groups.iter().position(|g| g.id == id))
             .map(|i| (i + 1).to_string())
             .unwrap_or("0".into());
@@ -681,7 +763,9 @@ fn edit_profile(conn: &CliCtx, name: &str) -> AppResult<()> {
             println!("  {} - {}", i + 1, g.name);
         }
         let choice = prompt_default("Group #", &cur);
-        updated.group_id = choice.parse::<usize>().ok()
+        updated.group_id = choice
+            .parse::<usize>()
+            .ok()
             .and_then(|n| groups.get(n.wrapping_sub(1)))
             .map(|g| g.id.clone());
     }
@@ -693,11 +777,14 @@ fn edit_profile(conn: &CliCtx, name: &str) -> AppResult<()> {
 
 fn edit_credential(conn: &CliCtx, name: &str) -> AppResult<()> {
     let creds = db::credential::list(conn)?;
-    let c = creds.iter()
+    let c = creds
+        .iter()
         .find(|c| c.name.eq_ignore_ascii_case(name))
-        .ok_or_else(|| rssh_lib::error::AppError::NotFound(format!("Credential '{name}' not found")))?;
+        .ok_or_else(|| {
+            rssh_lib::error::AppError::NotFound(format!("Credential '{name}' not found"))
+        })?;
 
-    // 把 SecretStore 里的 secret/passphrase 灌进当前值，便于后面"保留"判定
+    // 把 SecretStore 里的 secret 灌进当前值，便于后面"保留"判定
     let mut updated = load_cred_secrets(conn, c.clone());
     updated.name = prompt_default("Name", &c.name);
     updated.username = prompt_default("Username", &c.username);
@@ -709,31 +796,22 @@ fn edit_credential(conn: &CliCtx, name: &str) -> AppResult<()> {
         "1" => {
             updated.credential_type = CredentialType::Password;
             updated.secret = Some(read_password("Password: "));
-            updated.passphrase = None;
         }
         "2" => {
             updated.credential_type = CredentialType::Key;
             println!("Paste private key (end with empty line):");
             updated.secret = Some(read_multiline());
-            updated.passphrase = prompt_optional("Key passphrase (optional): ");
         }
         "3" => {
             updated.credential_type = CredentialType::Agent;
             updated.secret = None;
-            updated.passphrase = None;
         }
         "4" => {
             updated.credential_type = CredentialType::None;
             updated.secret = None;
-            updated.passphrase = None;
         }
         _ => {
-            // Keep current type; still allow editing passphrase if key type
-            if updated.credential_type == CredentialType::Key {
-                let cur = updated.passphrase.as_deref().unwrap_or("");
-                let v = prompt_default("Key passphrase", cur);
-                updated.passphrase = if v.is_empty() { None } else { Some(v) };
-            }
+            // Keep current type/secret; passphrase 已由 OpenSSH 在使用时索取
         }
     }
 
@@ -746,15 +824,22 @@ fn edit_credential(conn: &CliCtx, name: &str) -> AppResult<()> {
 
 fn edit_forward(conn: &CliCtx, name: &str) -> AppResult<()> {
     let forwards = db::forward::list(conn)?;
-    let f = forwards.iter()
+    let f = forwards
+        .iter()
         .find(|f| f.name.eq_ignore_ascii_case(name))
-        .ok_or_else(|| rssh_lib::error::AppError::NotFound(format!("Forward '{name}' not found")))?;
+        .ok_or_else(|| {
+            rssh_lib::error::AppError::NotFound(format!("Forward '{name}' not found"))
+        })?;
 
     let mut updated = f.clone();
     updated.name = prompt_default("Name", &f.name);
-    updated.local_port = prompt_default("Local port", &f.local_port.to_string()).parse().unwrap_or(f.local_port);
+    updated.local_port = prompt_default("Local port", &f.local_port.to_string())
+        .parse()
+        .unwrap_or(f.local_port);
     updated.remote_host = prompt_default("Remote host", &f.remote_host);
-    updated.remote_port = prompt_default("Remote port", &f.remote_port.to_string()).parse().unwrap_or(f.remote_port);
+    updated.remote_port = prompt_default("Remote port", &f.remote_port.to_string())
+        .parse()
+        .unwrap_or(f.remote_port);
 
     db::forward::update(conn, &updated)?;
     println!("Forward '{}' updated.", updated.name);
@@ -769,21 +854,26 @@ fn cmd_rm(conn: &CliCtx, kind: &str, name: &str) -> AppResult<()> {
     match kind {
         "profile" => {
             let id = find_profile_id(conn, name)?;
-            if !confirm(&format!("Delete profile '{name}'?"), false) { return Ok(()); }
+            if !confirm(&format!("Delete profile '{name}'?"), false) {
+                return Ok(());
+            }
             db::profile::delete(conn, &id)?;
             println!("Deleted.");
         }
         "cred" | "creds" => {
             let id = find_credential_id(conn, name)?;
-            if !confirm(&format!("Delete credential '{name}'?"), false) { return Ok(()); }
+            if !confirm(&format!("Delete credential '{name}'?"), false) {
+                return Ok(());
+            }
             db::credential::delete(conn, &id)?;
             let _ = conn.secret_store().delete(&cred_secret_key(&id));
-            let _ = conn.secret_store().delete(&cred_passphrase_key(&id));
             println!("Deleted.");
         }
         "fwd" => {
             let id = find_forward_id(conn, name)?;
-            if !confirm(&format!("Delete forward '{name}'?"), false) { return Ok(()); }
+            if !confirm(&format!("Delete forward '{name}'?"), false) {
+                return Ok(());
+            }
             db::forward::delete(conn, &id)?;
             println!("Deleted.");
         }
@@ -794,21 +884,26 @@ fn cmd_rm(conn: &CliCtx, kind: &str, name: &str) -> AppResult<()> {
 
 fn find_profile_id(conn: &CliCtx, name: &str) -> AppResult<String> {
     db::profile::list(conn)?
-        .iter().find(|p| p.name.eq_ignore_ascii_case(name))
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case(name))
         .map(|p| p.id.clone())
         .ok_or_else(|| rssh_lib::error::AppError::NotFound(format!("Profile '{name}' not found")))
 }
 
 fn find_credential_id(conn: &CliCtx, name: &str) -> AppResult<String> {
     db::credential::list(conn)?
-        .iter().find(|c| c.name.eq_ignore_ascii_case(name))
+        .iter()
+        .find(|c| c.name.eq_ignore_ascii_case(name))
         .map(|c| c.id.clone())
-        .ok_or_else(|| rssh_lib::error::AppError::NotFound(format!("Credential '{name}' not found")))
+        .ok_or_else(|| {
+            rssh_lib::error::AppError::NotFound(format!("Credential '{name}' not found"))
+        })
 }
 
 fn find_forward_id(conn: &CliCtx, name: &str) -> AppResult<String> {
     db::forward::list(conn)?
-        .iter().find(|f| f.name.eq_ignore_ascii_case(name))
+        .iter()
+        .find(|f| f.name.eq_ignore_ascii_case(name))
         .map(|f| f.id.clone())
         .ok_or_else(|| rssh_lib::error::AppError::NotFound(format!("Forward '{name}' not found")))
 }
@@ -832,7 +927,6 @@ fn build_config_json(conn: &CliCtx) -> AppResult<String> {
     let mut credentials = db::credential::list(conn)?;
     for c in credentials.iter_mut() {
         c.secret = conn.secret_store().get(&cred_secret_key(&c.id))?;
-        c.passphrase = conn.secret_store().get(&cred_passphrase_key(&c.id))?;
     }
     let forwards = db::forward::list(conn)?;
     serde_json::to_string_pretty(&serde_json::json!({
@@ -841,7 +935,8 @@ fn build_config_json(conn: &CliCtx) -> AppResult<String> {
         "profiles": profiles,
         "credentials": credentials,
         "forwards": forwards,
-    })).map_err(|e| rssh_lib::error::AppError::Other(e.to_string()))
+    }))
+    .map_err(|e| rssh_lib::error::AppError::Other(e.to_string()))
 }
 
 fn import_config_json(conn: &CliCtx, json: &str) -> AppResult<()> {
@@ -852,7 +947,6 @@ fn import_config_json(conn: &CliCtx, json: &str) -> AppResult<()> {
     if let Ok(old) = db::credential::list(conn) {
         for c in old {
             let _ = conn.secret_store().delete(&cred_secret_key(&c.id));
-            let _ = conn.secret_store().delete(&cred_passphrase_key(&c.id));
         }
     }
     db::credential::clear_all(conn)?;
@@ -907,28 +1001,48 @@ fn config_import(conn: &CliCtx, file: &str) -> AppResult<()> {
 }
 
 fn config_set(conn: &CliCtx) -> AppResult<()> {
-    let cur_token = conn.secret_store().get(&setting_key("github_token"))?.unwrap_or_default();
+    let cur_token = conn
+        .secret_store()
+        .get(&setting_key("github_token"))?
+        .unwrap_or_default();
     let cur_repo = db::settings::get(conn, "github_repo")?.unwrap_or_default();
     let cur_branch = db::settings::get(conn, "github_branch")?.unwrap_or("main".into());
 
-    let token = prompt_default("GitHub PAT", if cur_token.is_empty() { "ghp_..." } else { &cur_token });
+    let token = prompt_default(
+        "GitHub PAT",
+        if cur_token.is_empty() {
+            "ghp_..."
+        } else {
+            &cur_token
+        },
+    );
     let repo = prompt_default("Repo (owner/repo)", &cur_repo);
     let branch = prompt_default("Branch", &cur_branch);
 
     if token.is_empty() {
         conn.secret_store().delete(&setting_key("github_token"))?;
     } else {
-        conn.secret_store().set(&setting_key("github_token"), &token)?;
+        conn.secret_store()
+            .set(&setting_key("github_token"), &token)?;
     }
     db::settings::set(conn, "github_repo", &repo)?;
     db::settings::set(conn, "github_branch", &branch)?;
-    println!("GitHub settings saved (token in {}).", conn.secret_store().backend_name());
+    println!(
+        "GitHub settings saved (token in {}).",
+        conn.secret_store().backend_name()
+    );
     Ok(())
 }
 
 fn config_push(conn: &CliCtx) -> AppResult<()> {
-    let token = conn.secret_store().get(&setting_key("github_token"))?.ok_or_else(|| rssh_lib::error::AppError::Config("GitHub token not set. Run: rssh config set".into()))?;
-    let repo = db::settings::get(conn, "github_repo")?.ok_or_else(|| rssh_lib::error::AppError::Config("GitHub repo not set".into()))?;
+    let token = conn
+        .secret_store()
+        .get(&setting_key("github_token"))?
+        .ok_or_else(|| {
+            rssh_lib::error::AppError::Config("GitHub token not set. Run: rssh config set".into())
+        })?;
+    let repo = db::settings::get(conn, "github_repo")?
+        .ok_or_else(|| rssh_lib::error::AppError::Config("GitHub repo not set".into()))?;
     let branch = db::settings::get(conn, "github_branch")?.unwrap_or("main".into());
 
     let mut json_data = {
@@ -936,17 +1050,16 @@ fn config_push(conn: &CliCtx) -> AppResult<()> {
         let mut credentials = db::credential::list(conn)?;
         for c in credentials.iter_mut() {
             c.secret = conn.secret_store().get(&cred_secret_key(&c.id))?;
-            c.passphrase = conn.secret_store().get(&cred_passphrase_key(&c.id))?;
             if !c.save_to_remote {
                 c.secret = None;
-                c.passphrase = None;
             }
         }
         let forwards = db::forward::list(conn)?;
         serde_json::to_string_pretty(&serde_json::json!({
             "version": 1, "exported_at": chrono::Utc::now().to_rfc3339(),
             "profiles": profiles, "credentials": credentials, "forwards": forwards,
-        })).map_err(|e| rssh_lib::error::AppError::Other(e.to_string()))?
+        }))
+        .map_err(|e| rssh_lib::error::AppError::Other(e.to_string()))?
     };
 
     let pw = read_password("Encryption password: ");
@@ -954,7 +1067,9 @@ fn config_push(conn: &CliCtx) -> AppResult<()> {
     json_data.clear();
 
     let sync = rssh_lib::sync::github::GitHubSync::from_settings(&token, &repo, &branch)?;
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
         .map_err(|e| rssh_lib::error::AppError::Other(e.to_string()))?;
     rt.block_on(sync.push(&encrypted))?;
     println!("Pushed to GitHub.");
@@ -962,12 +1077,20 @@ fn config_push(conn: &CliCtx) -> AppResult<()> {
 }
 
 fn config_pull(conn: &CliCtx) -> AppResult<()> {
-    let token = conn.secret_store().get(&setting_key("github_token"))?.ok_or_else(|| rssh_lib::error::AppError::Config("GitHub token not set. Run: rssh config set".into()))?;
-    let repo = db::settings::get(conn, "github_repo")?.ok_or_else(|| rssh_lib::error::AppError::Config("GitHub repo not set".into()))?;
+    let token = conn
+        .secret_store()
+        .get(&setting_key("github_token"))?
+        .ok_or_else(|| {
+            rssh_lib::error::AppError::Config("GitHub token not set. Run: rssh config set".into())
+        })?;
+    let repo = db::settings::get(conn, "github_repo")?
+        .ok_or_else(|| rssh_lib::error::AppError::Config("GitHub repo not set".into()))?;
     let branch = db::settings::get(conn, "github_branch")?.unwrap_or("main".into());
 
     let sync = rssh_lib::sync::github::GitHubSync::from_settings(&token, &repo, &branch)?;
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
         .map_err(|e| rssh_lib::error::AppError::Other(e.to_string()))?;
     let encrypted = rt.block_on(sync.pull())?;
 
@@ -985,13 +1108,19 @@ fn config_pull(conn: &CliCtx) -> AppResult<()> {
 fn cmd_names(conn: &CliCtx, kind: &str) -> AppResult<()> {
     match kind {
         "profiles" | "profile" => {
-            for p in db::profile::list(conn)? { println!("{}", p.name); }
+            for p in db::profile::list(conn)? {
+                println!("{}", p.name);
+            }
         }
         "cred" | "creds" => {
-            for c in db::credential::list(conn)? { println!("{}", c.name); }
+            for c in db::credential::list(conn)? {
+                println!("{}", c.name);
+            }
         }
         "fwd" => {
-            for f in db::forward::list(conn)? { println!("{}", f.name); }
+            for f in db::forward::list(conn)? {
+                println!("{}", f.name);
+            }
         }
         _ => {}
     }
@@ -1225,12 +1354,20 @@ fn prompt_default(label: &str, default: &str) -> String {
     let mut buf = String::new();
     io::stdin().read_line(&mut buf).unwrap();
     let val = buf.trim();
-    if val.is_empty() { default.to_string() } else { val.to_string() }
+    if val.is_empty() {
+        default.to_string()
+    } else {
+        val.to_string()
+    }
 }
 
 fn prompt_optional(label: &str) -> Option<String> {
     let val = prompt(label);
-    if val.is_empty() { None } else { Some(val) }
+    if val.is_empty() {
+        None
+    } else {
+        Some(val)
+    }
 }
 
 /// 打印编号列表让用户选一项。`0` 或无效输入返回 `None`（跳过）。
@@ -1245,7 +1382,9 @@ where
     F: Fn(&T) -> String,
 {
     if items.is_empty() {
-        if !empty_hint.is_empty() { println!("{}", empty_hint); }
+        if !empty_hint.is_empty() {
+            println!("{}", empty_hint);
+        }
         return None;
     }
     println!("{}", header);
@@ -1254,7 +1393,9 @@ where
         println!("  {} - {}", i + 1, fmt(item));
     }
     let choice = prompt_default(&format!("{} #", label), "0");
-    choice.parse::<usize>().ok()
+    choice
+        .parse::<usize>()
+        .ok()
         .and_then(|n| if n == 0 { None } else { items.get(n - 1) })
 }
 
@@ -1269,7 +1410,9 @@ fn read_multiline() -> String {
     loop {
         let mut buf = String::new();
         io::stdin().read_line(&mut buf).unwrap();
-        if buf.trim().is_empty() { break; }
+        if buf.trim().is_empty() {
+            break;
+        }
         lines.push(buf);
     }
     lines.concat().trim_end().to_string()
@@ -1282,5 +1425,9 @@ fn confirm(label: &str, default: bool) -> bool {
     let mut buf = String::new();
     io::stdin().read_line(&mut buf).unwrap();
     let val = buf.trim().to_lowercase();
-    if val.is_empty() { default } else { val == "y" || val == "yes" }
+    if val.is_empty() {
+        default
+    } else {
+        val == "y" || val == "yes"
+    }
 }

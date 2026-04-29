@@ -21,15 +21,14 @@ pub fn pty_spawn(
 
 #[tauri::command]
 pub fn list_shells() -> Vec<String> {
-    pty::available_shells().iter().map(|s| s.to_string()).collect()
+    pty::available_shells()
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 #[tauri::command]
-pub fn pty_write(
-    state: State<'_, AppState>,
-    session_id: String,
-    data: Vec<u8>,
-) -> AppResult<()> {
+pub fn pty_write(state: State<'_, AppState>, session_id: String, data: Vec<u8>) -> AppResult<()> {
     let handle = locked(&state.pty_sessions)?
         .get(&session_id)
         .cloned()

@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
-use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use tauri::Emitter;
 
 use crate::error::{locked, AppError, AppResult};
@@ -49,7 +49,12 @@ fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| available_shells()[0].to_string())
 }
 
-pub fn spawn(cols: u16, rows: u16, app: tauri::AppHandle, shell_override: Option<String>) -> AppResult<(String, PtyHandle)> {
+pub fn spawn(
+    cols: u16,
+    rows: u16,
+    app: tauri::AppHandle,
+    shell_override: Option<String>,
+) -> AppResult<(String, PtyHandle)> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {

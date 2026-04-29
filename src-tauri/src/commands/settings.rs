@@ -13,16 +13,14 @@ pub fn get_setting(state: State<AppState>, key: String) -> Result<Option<String>
 }
 
 #[tauri::command]
-pub fn set_setting(
-    state: State<AppState>,
-    key: String,
-    value: String,
-) -> Result<(), AppError> {
+pub fn set_setting(state: State<AppState>, key: String, value: String) -> Result<(), AppError> {
     if crate::secret::is_secret_setting(&key) {
         return if value.is_empty() {
             state.secret_store.delete(&crate::secret::setting_key(&key))
         } else {
-            state.secret_store.set(&crate::secret::setting_key(&key), &value)
+            state
+                .secret_store
+                .set(&crate::secret::setting_key(&key), &value)
         };
     }
     crate::db::settings::set(&state.db, &key, &value)
@@ -68,7 +66,9 @@ pub fn secret_backend(state: State<AppState>) -> String {
 #[tauri::command]
 pub fn list_recordings(state: State<AppState>) -> AppResult<Vec<String>> {
     let dir = recording_dir(&state)?;
-    if !dir.exists() { return Ok(vec![]); }
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
     let mut files: Vec<String> = std::fs::read_dir(&dir)?
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().map(|x| x == "cast").unwrap_or(false))

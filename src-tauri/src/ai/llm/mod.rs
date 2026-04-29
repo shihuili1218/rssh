@@ -16,9 +16,18 @@ use crate::error::AppResult;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum ChatMessage {
-    User { content: String },
-    Assistant { content: String, tool_calls: Vec<ToolCall> },
-    ToolResult { tool_call_id: String, content: String, is_error: bool },
+    User {
+        content: String,
+    },
+    Assistant {
+        content: String,
+        tool_calls: Vec<ToolCall>,
+    },
+    ToolResult {
+        tool_call_id: String,
+        content: String,
+        is_error: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,8 +66,14 @@ pub struct ChatResponse {
 #[derive(Debug, Clone)]
 pub enum ChatDelta {
     Text(String),
-    ToolStart { tool_call_id: String, name: String },
-    ToolArgs { tool_call_id: String, partial: String },
+    ToolStart {
+        tool_call_id: String,
+        name: String,
+    },
+    ToolArgs {
+        tool_call_id: String,
+        partial: String,
+    },
 }
 
 pub type DeltaSink = Arc<dyn Fn(ChatDelta) + Send + Sync>;
@@ -104,7 +119,11 @@ impl SseParser {
         loop {
             let sep_idx = self.buf.find("\n\n").or_else(|| self.buf.find("\r\n\r\n"));
             let Some(idx) = sep_idx else { break };
-            let sep_len = if self.buf[idx..].starts_with("\r\n\r\n") { 4 } else { 2 };
+            let sep_len = if self.buf[idx..].starts_with("\r\n\r\n") {
+                4
+            } else {
+                2
+            };
             let event_text = self.buf[..idx].to_string();
             self.buf = self.buf[idx + sep_len..].to_string();
 

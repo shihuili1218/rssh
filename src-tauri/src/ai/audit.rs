@@ -95,13 +95,20 @@ impl AuditLog {
                     s.push_str(&format!("SESSION_STARTED  skill={skill} target={target}\n"));
                 }
                 AuditKind::SessionEnded => s.push_str("SESSION_ENDED\n"),
-                AuditKind::LlmRequest { model, redacted_payload } => {
+                AuditKind::LlmRequest {
+                    model,
+                    redacted_payload,
+                } => {
                     s.push_str(&format!("LLM_REQUEST      model={model}\n"));
                     s.push_str("---PAYLOAD (脱敏后)---\n");
                     s.push_str(redacted_payload);
                     s.push_str("\n---END---\n");
                 }
-                AuditKind::LlmResponse { text, tokens_in, tokens_out } => {
+                AuditKind::LlmResponse {
+                    text,
+                    tokens_in,
+                    tokens_out,
+                } => {
                     s.push_str(&format!(
                         "LLM_RESPONSE     in={} out={}\n",
                         fmt_opt(tokens_in),
@@ -111,7 +118,12 @@ impl AuditLog {
                     s.push_str(text);
                     s.push_str("\n---END---\n");
                 }
-                AuditKind::CommandProposed { id, cmd, explain, side_effect } => {
+                AuditKind::CommandProposed {
+                    id,
+                    cmd,
+                    explain,
+                    side_effect,
+                } => {
                     s.push_str(&format!("CMD_PROPOSED     id={id}\n"));
                     s.push_str(&format!("  cmd:        {cmd}\n"));
                     s.push_str(&format!("  含义:       {explain}\n"));
@@ -121,7 +133,12 @@ impl AuditLog {
                     s.push_str(&format!("CMD_REJECTED     id={id} reason={reason}\n"));
                 }
                 AuditKind::CommandExecuted {
-                    id, exit_code, output_redacted, original_bytes, truncated_bytes, duration_ms,
+                    id,
+                    exit_code,
+                    output_redacted,
+                    original_bytes,
+                    truncated_bytes,
+                    duration_ms,
                 } => {
                     s.push_str(&format!(
                         "CMD_EXECUTED     id={id} exit={exit_code} bytes={original_bytes} truncated={truncated_bytes} dur={duration_ms}ms\n"
@@ -130,12 +147,20 @@ impl AuditLog {
                     s.push_str(output_redacted);
                     s.push_str("\n---END---\n");
                 }
-                AuditKind::DownloadProposed { id, remote_path, max_mb } => {
+                AuditKind::DownloadProposed {
+                    id,
+                    remote_path,
+                    max_mb,
+                } => {
                     s.push_str(&format!(
                         "DOWNLOAD_PROPOSED id={id} remote={remote_path} max_mb={max_mb}\n"
                     ));
                 }
-                AuditKind::DownloadCompleted { id, local_path, bytes } => {
+                AuditKind::DownloadCompleted {
+                    id,
+                    local_path,
+                    bytes,
+                } => {
                     s.push_str(&format!(
                         "DOWNLOAD_DONE    id={id} local={local_path} bytes={bytes}\n"
                     ));
@@ -154,7 +179,9 @@ impl AuditLog {
 }
 
 fn fmt_opt<T: std::fmt::Display>(v: &Option<T>) -> String {
-    v.as_ref().map(|x| x.to_string()).unwrap_or_else(|| "?".into())
+    v.as_ref()
+        .map(|x| x.to_string())
+        .unwrap_or_else(|| "?".into())
 }
 
 #[cfg(test)]

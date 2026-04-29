@@ -2,19 +2,18 @@ use tauri::State;
 
 use crate::error::{AppError, AppResult};
 use crate::models::Credential;
-use crate::secret::{cred_passphrase_key, cred_secret_key, setting_key};
+use crate::secret::{cred_secret_key, setting_key};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
 // 取/写凭证 secret —— DB 不存 secret，统一走 SecretStore
 // ---------------------------------------------------------------------------
 
-/// 列出所有 credentials 并把 SecretStore 中的 secret/passphrase 灌进去。
+/// 列出所有 credentials 并把 SecretStore 中的 secret 灌进去。
 fn list_credentials_with_secrets(state: &State<'_, AppState>) -> AppResult<Vec<Credential>> {
     let mut creds = crate::db::credential::list(&state.db)?;
     for c in creds.iter_mut() {
         c.secret = state.secret_store.get(&cred_secret_key(&c.id))?;
-        c.passphrase = state.secret_store.get(&cred_passphrase_key(&c.id))?;
     }
     Ok(creds)
 }
@@ -23,14 +22,9 @@ fn list_credentials_with_secrets(state: &State<'_, AppState>) -> AppResult<Vec<C
 fn upsert_credential(state: &State<'_, AppState>, c: &Credential) -> AppResult<()> {
     crate::db::credential::insert(&state.db, c)?;
     let sk = cred_secret_key(&c.id);
-    let pk = cred_passphrase_key(&c.id);
     match c.secret.as_deref() {
         Some(s) if !s.is_empty() => state.secret_store.set(&sk, s)?,
         _ => state.secret_store.delete(&sk)?,
-    }
-    match c.passphrase.as_deref() {
-        Some(s) if !s.is_empty() => state.secret_store.set(&pk, s)?,
-        _ => state.secret_store.delete(&pk)?,
     }
     Ok(())
 }
@@ -70,7 +64,6 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
     if let Ok(old) = crate::db::credential::list(&state.db) {
         for c in old {
             let _ = state.secret_store.delete(&cred_secret_key(&c.id));
-            let _ = state.secret_store.delete(&cred_passphrase_key(&c.id));
         }
     }
     crate::db::credential::clear_all(&state.db)?;
@@ -83,7 +76,11 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
     if let Some(arr) = data["credentials"].as_array() {
         for item in arr {
             match serde_json::from_value::<crate::models::Credential>(item.clone()) {
-                Ok(c) => { if let Err(e) = upsert_credential(state, &c) { errors.push(format!("credential {}: {e}", c.name)); } }
+                Ok(c) => {
+                    if let Err(e) = upsert_credential(state, &c) {
+                        errors.push(format!("credential {}: {e}", c.name));
+                    }
+                }
                 Err(e) => errors.push(format!("credential parse: {e}")),
             }
         }
@@ -91,7 +88,11 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
     if let Some(arr) = data["profiles"].as_array() {
         for item in arr {
             match serde_json::from_value::<crate::models::Profile>(item.clone()) {
-                Ok(p) => { if let Err(e) = crate::db::profile::insert(&state.db, &p) { errors.push(format!("profile {}: {e}", p.name)); } }
+                Ok(p) => {
+                    if let Err(e) = crate::db::profile::insert(&state.db, &p) {
+                        errors.push(format!("profile {}: {e}", p.name));
+                    }
+                }
                 Err(e) => errors.push(format!("profile parse: {e}")),
             }
         }
@@ -99,7 +100,11 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
     if let Some(arr) = data["forwards"].as_array() {
         for item in arr {
             match serde_json::from_value::<crate::models::Forward>(item.clone()) {
-                Ok(f) => { if let Err(e) = crate::db::forward::insert(&state.db, &f) { errors.push(format!("forward {}: {e}", f.name)); } }
+                Ok(f) => {
+                    if let Err(e) = crate::db::forward::insert(&state.db, &f) {
+                        errors.push(format!("forward {}: {e}", f.name));
+                    }
+                }
                 Err(e) => errors.push(format!("forward parse: {e}")),
             }
         }
@@ -107,7 +112,11 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
     if let Some(arr) = data["groups"].as_array() {
         for item in arr {
             match serde_json::from_value::<crate::models::Group>(item.clone()) {
-                Ok(g) => { if let Err(e) = crate::db::group::insert(&state.db, &g) { errors.push(format!("group {}: {e}", g.name)); } }
+                Ok(g) => {
+                    if let Err(e) = crate::db::group::insert(&state.db, &g) {
+                        errors.push(format!("group {}: {e}", g.name));
+                    }
+                }
                 Err(e) => errors.push(format!("group parse: {e}")),
             }
         }
@@ -145,7 +154,10 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(AppError::Other(format!("部分导入失败: {}", errors.join("; "))))
+        Err(AppError::Other(format!(
+            "部分导入失败: {}",
+            errors.join("; ")
+        )))
     }
 }
 
@@ -171,11 +183,10 @@ pub async fn github_push(state: State<'_, AppState>, password: String) -> AppRes
     let groups = crate::db::group::list(&state.db)?;
     let skills = crate::ai::skills::list_user(&state.db)?;
 
-    // 尊重 save_to_remote：不同步的凭证清空 secret/passphrase
+    // 尊重 save_to_remote：不同步的凭证清空 secret
     for c in credentials.iter_mut() {
         if !c.save_to_remote {
             c.secret = None;
-            c.passphrase = None;
         }
     }
 

@@ -35,10 +35,7 @@ pub fn delete_forward(state: State<AppState>, id: String) -> Result<(), AppError
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn forward_start(
-    state: State<'_, AppState>,
-    forward_id: String,
-) -> AppResult<String> {
+pub async fn forward_start(state: State<'_, AppState>, forward_id: String) -> AppResult<String> {
     let f = crate::db::forward::get(&state.db, &forward_id)?;
     let p = crate::db::profile::get(&state.db, &f.profile_id)
         .map_err(|_| AppError::NotFound("转发关联的 Profile 不存在".into()))?;
@@ -46,8 +43,9 @@ pub async fn forward_start(
     let mut c = crate::db::credential::get(&state.db, cred_id)
         .map_err(|_| AppError::NotFound("转发关联的凭证不存在".into()))?;
     if !c.id.is_empty() {
-        c.secret = state.secret_store.get(&crate::secret::cred_secret_key(&c.id))?;
-        c.passphrase = state.secret_store.get(&crate::secret::cred_passphrase_key(&c.id))?;
+        c.secret = state
+            .secret_store
+            .get(&crate::secret::cred_secret_key(&c.id))?;
     }
     let timeout_secs: u64 = crate::db::settings::get(&state.db, "connect_timeout")?
         .and_then(|v| v.parse().ok())
@@ -61,19 +59,30 @@ pub async fn forward_start(
         let mut bc = crate::db::credential::get(&state.db, bcid)
             .map_err(|_| AppError::NotFound(format!("堡垒机 '{}' 凭证不存在", hop.name)))?;
         if !bc.id.is_empty() {
-            bc.secret = state.secret_store.get(&crate::secret::cred_secret_key(&bc.id))?;
-            bc.passphrase = state.secret_store.get(&crate::secret::cred_passphrase_key(&bc.id))?;
+            bc.secret = state
+                .secret_store
+                .get(&crate::secret::cred_secret_key(&bc.id))?;
         }
         chain.push((hop, bc));
     }
-    let chain_refs: Vec<(&Profile, &Credential)> = chain.iter().map(|(p, c)| (p, c)).collect();
-
     let known_hosts_path = crate::ssh::known_hosts::path_for(&state.data_dir);
-    let handle = match f.forward_type {
-        ForwardType::Local => fwd::start_local(&f, &p.host, p.port, &c, &chain_refs, known_hosts_path, timeout_secs).await?,
-        ForwardType::Remote => fwd::start_remote(&f, &p.host, p.port, &c, &chain_refs, known_hosts_path, timeout_secs).await?,
-        ForwardType::Dynamic => fwd::start_dynamic(&f, &p.host, p.port, &c, &chain_refs, known_hosts_path, timeout_secs).await?,
-    };
+    let host = p.host.clone();
+    let port = p.port;
+    let kind = f.forward_type;
+    let handle = crate::ssh::client::run_blocking_ssh(move || async move {
+        match kind {
+            ForwardType::Local => {
+                fwd::start_local(f, host, port, c, chain, known_hosts_path, timeout_secs).await
+            }
+            ForwardType::Remote => {
+                fwd::start_remote(f, host, port, c, chain, known_hosts_path, timeout_secs).await
+            }
+            ForwardType::Dynamic => {
+                fwd::start_dynamic(f, host, port, c, chain, known_hosts_path, timeout_secs).await
+            }
+        }
+    })
+    .await?;
     let active_id = uuid::Uuid::new_v4().to_string();
 
     locked(&state.active_forwards)?.insert(active_id.clone(), handle);

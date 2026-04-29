@@ -119,7 +119,10 @@ impl GitHubSync {
 
     fn headers(&self) -> reqwest::header::HeaderMap {
         let mut h = reqwest::header::HeaderMap::new();
-        h.insert("Authorization", format!("Bearer {}", self.token).parse().unwrap());
+        h.insert(
+            "Authorization",
+            format!("Bearer {}", self.token).parse().unwrap(),
+        );
         h.insert("Accept", "application/vnd.github+json".parse().unwrap());
         h.insert("X-GitHub-Api-Version", "2022-11-28".parse().unwrap());
         h.insert("User-Agent", "RSSH".parse().unwrap());

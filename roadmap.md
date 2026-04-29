@@ -3,3 +3,4 @@
 - 补齐cli功能（group...）cli-first
 - Host key / known_hosts 可视化
 - rssh status CLI 子命令 — 列当前活跃 SSH session / forward / SFTP
+- 拆分线程，现在所有会话的所有操作都在一个线程上执行。改成线程池（注意： SFTP 重连场景、后续 Handle 操作），暂时没有瓶颈

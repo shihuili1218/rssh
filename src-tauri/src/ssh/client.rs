@@ -1,8 +1,10 @@
+use std::future::Future;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
-use async_trait::async_trait;
 use russh::client;
+use russh::keys::agent::AgentIdentity;
+use russh::keys::{Algorithm, HashAlg, PrivateKey, PrivateKeyWithHashAlg};
 use russh::ChannelMsg;
 use tauri::{Emitter, Manager};
 use tokio::sync::mpsc;
@@ -10,9 +12,220 @@ use tokio::time::{timeout, Duration};
 
 use crate::error::{locked, AppError, AppResult};
 use crate::models::{Credential, CredentialType, Profile};
+use crate::state::AppState;
 use crate::terminal::recorder::Recorder;
 
 pub const DEFAULT_CONNECT_TIMEOUT: u64 = 10;
+
+/// Job sent to the dedicated SSH worker thread. The closure runs on the
+/// worker thread inside the LocalSet — it is responsible for spawning its
+/// own local future. The closure itself is `Send` (we ship it across the
+/// mpsc channel), but the future it produces does NOT need to be `Send`,
+/// which is the whole point.
+type SshJob = Box<dyn FnOnce() + Send + 'static>;
+
+/// Submit a job to the SSH worker thread. Lazy-spawns the worker on first
+/// use: a single OS thread driving a `current_thread` tokio runtime + a
+/// `LocalSet`. The worker thread (and runtime) lives for the process
+/// lifetime — no drop-the-runtime-and-kill-everything regression.
+///
+/// **Why this layout**: the only way to dodge the HRTB-Send elaboration
+/// failure on russh's internal `&Sender<Msg>` borrows (rust-lang#96865) is
+/// to spawn russh futures on a runtime that doesn't require `Send` on its
+/// tasks. `LocalSet::spawn_local` is exactly that. But LocalSet pins to one
+/// thread — so we dedicate one. `#[tauri::command]` futures only ever
+/// await `oneshot::Receiver`, which carries no russh-derived types, so the
+/// HRTB-Send check on the command never sees the russh internals.
+fn ssh_dispatcher() -> &'static tokio::sync::mpsc::UnboundedSender<SshJob> {
+    static TX: OnceLock<tokio::sync::mpsc::UnboundedSender<SshJob>> = OnceLock::new();
+    TX.get_or_init(|| {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<SshJob>();
+        std::thread::Builder::new()
+            .name("rssh-ssh".into())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("ssh worker runtime");
+                let local = tokio::task::LocalSet::new();
+                rt.block_on(local.run_until(async move {
+                    while let Some(job) = rx.recv().await {
+                        job();
+                    }
+                }));
+            })
+            .expect("spawn ssh worker thread");
+        tx
+    })
+}
+
+/// Spawn an SSH-touching future on the dedicated SSH worker. Returns a
+/// `oneshot::Receiver` for the result.
+///
+/// `work` must be `Send + 'static` (it crosses thread boundaries via mpsc),
+/// but the future it returns does NOT need to be `Send` — it runs on the
+/// LocalSet, single-threaded.
+pub fn spawn_ssh<F, Fut, T>(work: F) -> tokio::sync::oneshot::Receiver<AppResult<T>>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = AppResult<T>> + 'static,
+    T: Send + 'static,
+{
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let job: SshJob = Box::new(move || {
+        let fut = work();
+        tokio::task::spawn_local(async move {
+            let _ = tx.send(fut.await);
+        });
+    });
+    let _ = ssh_dispatcher().send(job);
+    rx
+}
+
+/// Convenience: spawn + await + flatten. Call from async ctx.
+pub async fn run_blocking_ssh<F, Fut, T>(work: F) -> AppResult<T>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = AppResult<T>> + 'static,
+    T: Send + 'static,
+{
+    spawn_ssh(work)
+        .await
+        .map_err(|_| AppError::Ssh("SSH 任务取消".into()))?
+}
+
+/// Owned, type-erased progress logger that consumes `String`.
+///
+/// Why `String` and not `&str`: a `Fn(&str)` trait object is `for<'a> Fn(&'a str)`,
+/// a higher-ranked bound. When that trait object is captured in a future and
+/// awaited under `#[tauri::command]`, the compiler can't elaborate
+/// `for<'a>` Send through the russh internal state (rust-lang#96865 cluster).
+/// `Fn(String)` carries no HRTB — caller hands over an owned String per call.
+/// Cost is one allocation per log line; we log a handful per connection.
+pub type LogFn = Arc<dyn Fn(String) + Send + Sync>;
+
+pub(crate) fn null_logger() -> LogFn {
+    Arc::new(|_: String| ())
+}
+
+// ---------------------------------------------------------------------------
+// Passphrase 交互上下文
+// ---------------------------------------------------------------------------
+
+/// 终端可达性上下文 — 提供给 `authenticate_*` 系列函数，让它们在遇到加密
+/// 私钥时能向具体的终端 tab 弹"输入 passphrase"提示。
+///
+/// 没有 `AuthCtx` 的场景（forward / SFTP 子模块）会向加密私钥直接报错；
+/// 用户需先通过 SSH 终端连一次以填充进程内 passphrase 缓存，后续 forward/SFTP
+/// 可命中缓存自动通过。
+#[derive(Clone)]
+pub struct AuthCtx {
+    pub app: tauri::AppHandle,
+    pub tab_id: String,
+}
+
+const MAX_PASSPHRASE_RETRIES: usize = 3;
+
+/// 解析私钥，遇加密时按需向终端索取 passphrase。
+///
+/// `cache_key` 唯一标识这把私钥在本次进程内的 passphrase 缓存项：
+/// 存储凭证用 `cred:{credential_id}`，默认密钥文件用绝对路径，临时直连凭证
+/// 没缓存。`prompt_label` 是直接显示给用户的提示行（含末尾冒号空格）。
+async fn decode_key_with_prompt(
+    pem: &str,
+    cache_key: Option<&str>,
+    prompt_label: &str,
+    ctx: Option<&AuthCtx>,
+) -> AppResult<PrivateKey> {
+    use russh::keys::Error::KeyIsEncrypted;
+
+    // 第一次：试无密码（未加密的 key 直接通过；加密的 key 才进入下面流程）
+    match russh::keys::decode_secret_key(pem, None) {
+        Ok(k) => return Ok(k),
+        Err(KeyIsEncrypted) => {}
+        Err(e) => return Err(AppError::Ssh(format!("私钥解析失败: {e}"))),
+    }
+
+    // 命中缓存 → 直接重试；不命中或失败再走交互
+    if let (Some(key), Some(ctx)) = (cache_key, ctx) {
+        let cached = {
+            let state = ctx.app.state::<AppState>();
+            locked(&state.passphrase_cache)
+                .ok()
+                .and_then(|m| m.get(key).cloned())
+        };
+        if let Some(pw) = cached {
+            match russh::keys::decode_secret_key(pem, Some(&pw)) {
+                Ok(k) => return Ok(k),
+                Err(KeyIsEncrypted) => {
+                    // 缓存的 passphrase 不再匹配（用户改了密码）— 清掉再走交互
+                    let state = ctx.app.state::<AppState>();
+                    if let Ok(mut m) = locked(&state.passphrase_cache) {
+                        m.remove(key);
+                    };
+                }
+                Err(e) => return Err(AppError::Ssh(format!("私钥解析失败: {e}"))),
+            }
+        }
+    }
+
+    // 必须有 ctx 才能交互；否则该流程拒绝加密私钥（forward / SFTP 等）
+    let ctx = ctx.ok_or_else(|| {
+        AppError::Ssh(
+            "私钥已加密，但当前流程不支持密码输入；请先在 SSH 终端建立一次连接以缓存 passphrase。"
+                .into(),
+        )
+    })?;
+
+    // 最多 N 次重试
+    for attempt in 0..MAX_PASSPHRASE_RETRIES {
+        let pw = prompt_passphrase(ctx, prompt_label).await?;
+        match russh::keys::decode_secret_key(pem, Some(&pw)) {
+            Ok(k) => {
+                if let Some(key) = cache_key {
+                    let state = ctx.app.state::<AppState>();
+                    if let Ok(mut m) = locked(&state.passphrase_cache) {
+                        m.insert(key.to_string(), pw);
+                    };
+                }
+                return Ok(k);
+            }
+            Err(KeyIsEncrypted) => {
+                let remaining = MAX_PASSPHRASE_RETRIES - attempt - 1;
+                let msg = if remaining > 0 {
+                    format!("\x1b[31mIncorrect passphrase, {remaining} attempt(s) left.\x1b[0m\r\n")
+                } else {
+                    "\x1b[31mIncorrect passphrase.\x1b[0m\r\n".to_string()
+                };
+                let _ = ctx
+                    .app
+                    .emit(&format!("ssh:data:{}", ctx.tab_id), msg.into_bytes());
+            }
+            Err(e) => return Err(AppError::Ssh(format!("私钥解析失败: {e}"))),
+        }
+    }
+
+    Err(AppError::Ssh("Passphrase 输入错误次数过多".into()))
+}
+
+/// 向终端弹一次 passphrase 提示，等用户输完回车。
+async fn prompt_passphrase(ctx: &AuthCtx, prompt: &str) -> AppResult<String> {
+    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+    {
+        let state = ctx.app.state::<AppState>();
+        // 同一 tab_id 上若已有等待中的 prompt（理论不会发生），覆盖旧 sender
+        let mut waiters = locked(&state.passphrase_waiters)?;
+        waiters.insert(ctx.tab_id.clone(), tx);
+    }
+    ctx.app
+        .emit(
+            &format!("ssh:passphrase_prompt:{}", ctx.tab_id),
+            serde_json::json!({ "prompt": prompt }),
+        )
+        .map_err(|e| AppError::Other(format!("emit passphrase prompt: {e}")))?;
+    rx.await
+        .map_err(|_| AppError::Ssh("用户取消了 passphrase 输入".into()))
+}
 
 /// 默认 SSH 客户端配置：开启 keepalive，远端死了 90 秒内能断开。
 pub fn default_client_config() -> Arc<client::Config> {
@@ -36,13 +249,14 @@ pub struct SshHandler {
     key_mismatch: Arc<StdMutex<bool>>,
     /// Sender for forwarded channels from remote port forwarding.
     forwarded_channels: Arc<StdMutex<Option<mpsc::UnboundedSender<russh::Channel<client::Msg>>>>>,
+    /// Surface TOFU fingerprints / known_hosts write errors back to the user.
+    log: LogFn,
 }
 
-#[async_trait]
 impl client::Handler for SshHandler {
     type Error = russh::Error;
 
-    async fn server_channel_open_forwarded_tcpip(
+    fn server_channel_open_forwarded_tcpip(
         &mut self,
         channel: russh::Channel<client::Msg>,
         _connected_address: &str,
@@ -50,54 +264,99 @@ impl client::Handler for SshHandler {
         _originator_address: &str,
         _originator_port: u32,
         _session: &mut client::Session,
-    ) -> Result<(), Self::Error> {
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
         if let Ok(guard) = self.forwarded_channels.lock() {
             if let Some(tx) = guard.as_ref() {
                 let _ = tx.send(channel);
             }
         }
-        Ok(())
+        async { Ok(()) }
     }
 
-    async fn check_server_key(
+    fn check_server_key(
         &mut self,
-        server_public_key: &russh_keys::key::PublicKey,
-    ) -> Result<bool, Self::Error> {
-        use russh_keys::known_hosts;
+        server_public_key: &russh::keys::ssh_key::PublicKey,
+    ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
+        use russh::keys::known_hosts;
+        use russh::keys::HashAlg;
 
-        match known_hosts::check_known_hosts_path(
+        // Do all known_hosts work synchronously (it's I/O-light file reads).
+        // The async block below captures only the `bool` result, which means
+        // the returned future doesn't borrow `self` past the function body.
+        let result = match known_hosts::check_known_hosts_path(
             &self.host,
             self.port,
             server_public_key,
             &self.known_hosts_path,
         ) {
-            // 已知且匹配
             Ok(true) => Ok(true),
-            // 完全未知 — TOFU：写入 known_hosts，接受
+            // TOFU: print fingerprint, write to known_hosts, accept.
+            // Fingerprint Display impl already formats as "SHA256:<base64>".
             Ok(false) => {
-                let _ = known_hosts::learn_known_hosts_path(
+                let alg = server_public_key.algorithm().as_str().to_string();
+                let fp = server_public_key.fingerprint(HashAlg::Sha256).to_string();
+                (self.log)(format!(
+                    "Unknown host {}:{} (first connection). {} key fingerprint {}",
+                    self.host, self.port, alg, fp
+                ));
+                match known_hosts::learn_known_hosts_path(
                     &self.host,
                     self.port,
                     server_public_key,
                     &self.known_hosts_path,
-                );
+                ) {
+                    Ok(()) => (self.log)(format!(
+                        "Permanently added {}:{} to known_hosts.",
+                        self.host, self.port
+                    )),
+                    Err(e) => (self.log)(format!("known_hosts write failed: {e}")),
+                }
                 Ok(true)
             }
-            // 已知但密钥变了 — 拒绝
+            // Known host, key changed — reject.
             Err(_) => {
                 if let Ok(mut m) = self.key_mismatch.lock() {
                     *m = true;
                 }
                 Ok(false)
             }
+        };
+        async move { result }
+    }
+
+    fn disconnected(
+        &mut self,
+        reason: client::DisconnectReason<Self::Error>,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        async move {
+            match reason {
+                client::DisconnectReason::ReceivedDisconnect(info) => {
+                    log::warn!(
+                        "SSH server disconnected: {:?}: {}",
+                        info.reason_code,
+                        info.message
+                    );
+                    Ok(())
+                }
+                client::DisconnectReason::Error(e) => {
+                    log::warn!("SSH session error: {e:?}");
+                    Err(e)
+                }
+            }
         }
     }
 }
 
 /// Shared forwarded-channel sender, settable from outside.
-pub type ForwardedChannelSender = Arc<StdMutex<Option<mpsc::UnboundedSender<russh::Channel<client::Msg>>>>>;
+pub type ForwardedChannelSender =
+    Arc<StdMutex<Option<mpsc::UnboundedSender<russh::Channel<client::Msg>>>>>;
 
-fn new_handler(host: &str, port: u16, known_hosts_path: PathBuf) -> (SshHandler, Arc<StdMutex<bool>>, ForwardedChannelSender) {
+fn new_handler(
+    host: &str,
+    port: u16,
+    known_hosts_path: PathBuf,
+    log: LogFn,
+) -> (SshHandler, Arc<StdMutex<bool>>, ForwardedChannelSender) {
     let mismatch = Arc::new(StdMutex::new(false));
     let fwd_channels: ForwardedChannelSender = Arc::new(StdMutex::new(None));
     let handler = SshHandler {
@@ -106,11 +365,17 @@ fn new_handler(host: &str, port: u16, known_hosts_path: PathBuf) -> (SshHandler,
         known_hosts_path,
         key_mismatch: mismatch.clone(),
         forwarded_channels: fwd_channels.clone(),
+        log,
     };
     (handler, mismatch, fwd_channels)
 }
 
-fn map_connect_error(e: russh::Error, host: &str, port: u16, mismatch: &StdMutex<bool>) -> AppError {
+fn map_connect_error(
+    e: russh::Error,
+    host: &str,
+    port: u16,
+    mismatch: &StdMutex<bool>,
+) -> AppError {
     if *mismatch.lock().unwrap() {
         AppError::Ssh(format!(
             "{}:{} 的主机密钥已变更，连接已拒绝。如确认安全，请删除 ~/.ssh/known_hosts 中对应记录后重试（可用 ssh-keygen -R {} 删除）。",
@@ -122,34 +387,56 @@ fn map_connect_error(e: russh::Error, host: &str, port: u16, mismatch: &StdMutex
 }
 
 /// 建立 SSH 连接并验证主机密钥（带超时）。
+/// host: String (owned) — every `&str` parameter that survives an await
+/// risks tripping the HRTB-Send elaboration bug downstream.
 pub async fn ssh_connect(
     config: Arc<client::Config>,
-    host: &str,
+    host: String,
     port: u16,
     known_hosts_path: PathBuf,
     timeout_secs: u64,
+    log: LogFn,
 ) -> AppResult<client::Handle<SshHandler>> {
     let connect_timeout = Duration::from_secs(timeout_secs);
-    let (handler, mismatch, _fwd) = new_handler(host, port, known_hosts_path);
-    match timeout(connect_timeout, client::connect(config, (host, port), handler)).await {
-        Ok(result) => result.map_err(|e| map_connect_error(e, host, port, &mismatch)),
-        Err(_) => Err(AppError::Ssh(format!("{}:{} 连接超时 ({}s)", host, port, timeout_secs))),
+    let (handler, mismatch, _fwd) = new_handler(&host, port, known_hosts_path, log);
+    match timeout(
+        connect_timeout,
+        client::connect(config, (host.as_str(), port), handler),
+    )
+    .await
+    {
+        Ok(result) => result.map_err(|e| map_connect_error(e, &host, port, &mismatch)),
+        Err(_) => Err(AppError::Ssh(format!(
+            "{}:{} 连接超时 ({}s)",
+            host, port, timeout_secs
+        ))),
     }
 }
 
 /// SSH connect that also returns the forwarded channel sender (for remote forwarding).
 pub async fn ssh_connect_with_forward(
     config: Arc<client::Config>,
-    host: &str,
+    host: String,
     port: u16,
     known_hosts_path: PathBuf,
     timeout_secs: u64,
+    log: LogFn,
 ) -> AppResult<(client::Handle<SshHandler>, ForwardedChannelSender)> {
     let connect_timeout = Duration::from_secs(timeout_secs);
-    let (handler, mismatch, fwd) = new_handler(host, port, known_hosts_path);
-    let handle = match timeout(connect_timeout, client::connect(config, (host, port), handler)).await {
-        Ok(result) => result.map_err(|e| map_connect_error(e, host, port, &mismatch))?,
-        Err(_) => return Err(AppError::Ssh(format!("{}:{} 连接超时 ({}s)", host, port, timeout_secs))),
+    let (handler, mismatch, fwd) = new_handler(&host, port, known_hosts_path, log);
+    let handle = match timeout(
+        connect_timeout,
+        client::connect(config, (host.as_str(), port), handler),
+    )
+    .await
+    {
+        Ok(result) => result.map_err(|e| map_connect_error(e, &host, port, &mismatch))?,
+        Err(_) => {
+            return Err(AppError::Ssh(format!(
+                "{}:{} 连接超时 ({}s)",
+                host, port, timeout_secs
+            )))
+        }
     };
     Ok((handle, fwd))
 }
@@ -159,18 +446,24 @@ pub async fn ssh_connect_with_forward(
 pub async fn ssh_connect_stream<S>(
     config: Arc<client::Config>,
     stream: S,
-    host: &str,
+    host: String,
     port: u16,
     known_hosts_path: PathBuf,
     timeout_secs: u64,
+    log: LogFn,
 ) -> AppResult<(client::Handle<SshHandler>, ForwardedChannelSender)>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     let connect_timeout = Duration::from_secs(timeout_secs);
-    let (handler, mismatch, fwd) = new_handler(host, port, known_hosts_path);
-    let handle = match timeout(connect_timeout, client::connect_stream(config, stream, handler)).await {
-        Ok(result) => result.map_err(|e| map_connect_error(e, host, port, &mismatch))?,
+    let (handler, mismatch, fwd) = new_handler(&host, port, known_hosts_path, log);
+    let handle = match timeout(
+        connect_timeout,
+        client::connect_stream(config, stream, handler),
+    )
+    .await
+    {
+        Ok(result) => result.map_err(|e| map_connect_error(e, &host, port, &mismatch))?,
         Err(_) => return Err(AppError::Ssh(format!("{}:{} SSH 握手超时", host, port))),
     };
     Ok((handle, fwd))
@@ -179,78 +472,148 @@ where
 /// 通过堡垒机链建立到 target 的 SSH 连接。链空则直连 target。
 /// 链中每一跳直接 authenticate；target 的 authenticate 由调用方负责。
 /// 返回 `(target_handle, target_fwd_sender)` —— remote 转发用 fwd_sender，其余可丢弃。
-pub async fn establish_via_chain<L: Fn(&str)>(
-    bastion_chain: &[(&Profile, &Credential)],
-    target_host: &str,
+///
+/// All inputs are owned: chain by value, target_host as String, log as Arc<dyn>.
+/// Owned-everywhere is correct here, not just convenient — these data flow
+/// in one direction (DB → connect → live session), there's no other party
+/// holding references. Borrowed parameters in async fns hand-cuff us with
+/// HRTB-Send headaches when awaited under #[tauri::command].
+pub async fn establish_via_chain(
+    bastion_chain: Vec<(Profile, Credential)>,
+    target_host: String,
     target_port: u16,
     known_hosts_path: PathBuf,
     timeout_secs: u64,
-    log: L,
+    log: LogFn,
+    ctx: Option<&AuthCtx>,
 ) -> AppResult<(client::Handle<SshHandler>, ForwardedChannelSender)> {
     let config = default_client_config();
 
     if bastion_chain.is_empty() {
-        log(&format!("TCP connecting to {}:{} ...", target_host, target_port));
-        let (h, fwd) = ssh_connect_with_forward(config, target_host, target_port, known_hosts_path, timeout_secs).await?;
-        log("TCP connected. SSH handshake OK.");
+        log(format!(
+            "TCP connecting to {}:{} ...",
+            target_host, target_port
+        ));
+        let (h, fwd) = ssh_connect_with_forward(
+            config,
+            target_host,
+            target_port,
+            known_hosts_path,
+            timeout_secs,
+            log.clone(),
+        )
+        .await?;
+        log(format!("TCP connected. SSH handshake OK."));
         return Ok((h, fwd));
     }
 
-    // 第一跳：直连
-    let (first_p, first_c) = bastion_chain[0];
-    log(&format!("Connecting to bastion {} ({}:{}) ...", first_p.name, first_p.host, first_p.port));
+    let mut hops = bastion_chain.into_iter();
+    let (first_p, first_c) = hops.next().unwrap();
+    let first_name = first_p.name;
+    let first_host = first_p.host;
+    let first_port = first_p.port;
+    log(format!(
+        "Connecting to bastion {} ({}:{}) ...",
+        first_name, first_host, first_port
+    ));
     let mut hop = ssh_connect(
-        config.clone(), &first_p.host, first_p.port,
-        known_hosts_path.clone(), timeout_secs,
-    ).await?;
-    log(&format!("Bastion {} connected. Authenticating as {} ({}) ...", first_p.name, first_c.username, first_c.credential_type.as_str()));
-    authenticate(&mut hop, first_c).await?;
-    log(&format!("Bastion {} authenticated.", first_p.name));
+        config.clone(),
+        first_host,
+        first_port,
+        known_hosts_path.clone(),
+        timeout_secs,
+        log.clone(),
+    )
+    .await?;
+    log(format!(
+        "Bastion {} connected. Authenticating as {} ({}) ...",
+        first_name,
+        first_c.username,
+        first_c.credential_type.as_str()
+    ));
+    authenticate(&mut hop, first_c, ctx).await?;
+    log(format!("Bastion {} authenticated.", first_name));
 
-    // 中间跳：穿上一跳到下一跳
-    for pair in bastion_chain.windows(2) {
-        let prev_p = pair[0].0;
-        let (next_p, next_c) = pair[1];
-        log(&format!("Opening tunnel through {} to bastion {} ({}:{}) ...", prev_p.name, next_p.name, next_p.host, next_p.port));
+    let mut prev_name = first_name;
+    for (next_p, next_c) in hops {
+        let next_name = next_p.name;
+        let next_host = next_p.host;
+        let next_port = next_p.port;
+        log(format!(
+            "Opening tunnel through {} to bastion {} ({}:{}) ...",
+            prev_name, next_name, next_host, next_port
+        ));
         let tunnel = open_tunnel_with_timeout(
-            &hop, &next_p.host, next_p.port,
+            &hop,
+            next_host.clone(),
+            next_port,
             timeout_secs,
-            &format!("{} → {}", prev_p.name, next_p.name),
-        ).await?;
+            format!("{} → {}", prev_name, next_name),
+        )
+        .await?;
         let (new_hop, _) = ssh_connect_stream(
-            config.clone(), tunnel.into_stream(),
-            &next_p.host, next_p.port,
-            known_hosts_path.clone(), timeout_secs,
-        ).await?;
+            config.clone(),
+            tunnel.into_stream(),
+            next_host,
+            next_port,
+            known_hosts_path.clone(),
+            timeout_secs,
+            log.clone(),
+        )
+        .await?;
         hop = new_hop;
-        log(&format!("Bastion {} connected. Authenticating as {} ({}) ...", next_p.name, next_c.username, next_c.credential_type.as_str()));
-        authenticate(&mut hop, next_c).await?;
-        log(&format!("Bastion {} authenticated.", next_p.name));
+        log(format!(
+            "Bastion {} connected. Authenticating as {} ({}) ...",
+            next_name,
+            next_c.username,
+            next_c.credential_type.as_str()
+        ));
+        authenticate(&mut hop, next_c, ctx).await?;
+        log(format!("Bastion {} authenticated.", next_name));
+        prev_name = next_name;
     }
 
-    // 末跳：穿最后一个 bastion 到 target
-    let last_p = bastion_chain.last().unwrap().0;
-    log(&format!("Opening tunnel through {} to target {}:{} ...", last_p.name, target_host, target_port));
+    log(format!(
+        "Opening tunnel through {} to target {}:{} ...",
+        prev_name, target_host, target_port
+    ));
     let tunnel = open_tunnel_with_timeout(
-        &hop, target_host, target_port,
+        &hop,
+        target_host.clone(),
+        target_port,
         timeout_secs,
-        &format!("{} → target", last_p.name),
-    ).await?;
-    log("Tunnel established. SSH handshake with target ...");
-    ssh_connect_stream(config, tunnel.into_stream(), target_host, target_port, known_hosts_path, timeout_secs).await
+        format!("{} → target", prev_name),
+    )
+    .await?;
+    log(format!("Tunnel established. SSH handshake with target ..."));
+    ssh_connect_stream(
+        config,
+        tunnel.into_stream(),
+        target_host,
+        target_port,
+        known_hosts_path,
+        timeout_secs,
+        log.clone(),
+    )
+    .await
 }
 
 /// 在已建好的 SSH 连接上开 direct-tcpip 隧道，带超时。
 /// 没有这个超时，bastion 拨号 target 失败时（VPC 不通 / target 防火墙拒绝 / target 离线）
 /// 客户端会一直等 server 返回 `CHANNEL_OPEN_FAILURE`，挂数十秒甚至更久。
+///
+/// `host` / `label` 都按值传，避免 `&str` 在 await 期间停留；`hop` 必须借用
+/// 因为 channel_open_direct_tcpip 是 `&self` 方法。Handle 的内部
+/// `Sender<Msg>` 借用是 russh API 决定，无可避免。
 async fn open_tunnel_with_timeout(
     hop: &client::Handle<SshHandler>,
-    target_host: &str,
+    target_host: String,
     target_port: u16,
     timeout_secs: u64,
-    label: &str,
+    label: String,
 ) -> AppResult<russh::Channel<client::Msg>> {
-    let fut = hop.channel_open_direct_tcpip(target_host, target_port as u32, "127.0.0.1", 0);
+    let fut =
+        hop.channel_open_direct_tcpip(target_host.as_str(), target_port as u32, "127.0.0.1", 0);
     match timeout(Duration::from_secs(timeout_secs), fut).await {
         Ok(r) => r.map_err(|e| AppError::Ssh(format!("堡垒机隧道建立失败 ({label}): {e}"))),
         Err(_) => Err(AppError::Ssh(format!(
@@ -260,76 +623,162 @@ async fn open_tunnel_with_timeout(
 }
 
 // ---------------------------------------------------------------------------
-// 认证
+// 认证 — 全部 owned Credential / String
 // ---------------------------------------------------------------------------
 
+fn check_auth_result(result: client::AuthResult) -> AppResult<()> {
+    if result.success() {
+        Ok(())
+    } else {
+        Err(AppError::Ssh("认证被拒绝".into()))
+    }
+}
+
+/// Consumes Credential. For RSA keys, mirror OpenSSH's publickey auth path:
+/// read RFC 8308 `server-sig-algs` and use the strongest mutual RSA signature
+/// hash, falling back to the base `ssh-rsa` type only when the extension is
+/// absent.
+///
+/// `ctx` 提供终端反馈通道：加密私钥会在终端内提示输入 passphrase；
+/// 为 `None` 时（forward / SFTP 等子模块）加密私钥直接报错。
 pub async fn authenticate(
     handle: &mut client::Handle<SshHandler>,
-    credential: &Credential,
+    credential: Credential,
+    ctx: Option<&AuthCtx>,
 ) -> AppResult<()> {
-    let ok = match credential.credential_type {
+    match credential.credential_type {
         CredentialType::Password => {
-            let pw = credential.secret.as_deref().unwrap_or("");
-            handle
-                .authenticate_password(&credential.username, pw)
+            let pw = credential.secret.unwrap_or_default();
+            let result = handle
+                .authenticate_password(credential.username, pw)
                 .await
-                .map_err(|e| AppError::Ssh(format!("密码认证失败: {e}")))?
+                .map_err(|e| AppError::Ssh(format!("密码认证失败: {e}")))?;
+            check_auth_result(result)
         }
         CredentialType::Key => {
             let pem = credential
                 .secret
                 .as_deref()
                 .ok_or_else(|| AppError::Ssh("缺少私钥数据".into()))?;
-            let kp = russh_keys::decode_secret_key(pem, credential.passphrase.as_deref())
-                .map_err(|e| AppError::Ssh(format!("私钥解析失败: {e}")))?;
-            handle
-                .authenticate_publickey(&credential.username, Arc::new(kp))
-                .await
-                .map_err(|e| AppError::Ssh(format!("密钥认证失败: {e}")))?
+            let cache_key = if credential.id.is_empty() {
+                None
+            } else {
+                Some(format!("cred:{}", credential.id))
+            };
+            let prompt_label = format!(
+                "Enter passphrase for key '{}': ",
+                if credential.name.is_empty() {
+                    credential.username.as_str()
+                } else {
+                    credential.name.as_str()
+                }
+            );
+            let key = decode_key_with_prompt(pem, cache_key.as_deref(), &prompt_label, ctx).await?;
+            authenticate_private_key(handle, credential.username, key).await
         }
         CredentialType::Agent => {
-            return authenticate_with_agent(handle, &credential.username).await;
+            authenticate_with_agent_or_default_keys(handle, credential.username, ctx).await
         }
-        CredentialType::None => handle
-            .authenticate_none(&credential.username)
-            .await
-            .map_err(|e| AppError::Ssh(format!("认证失败: {e}")))?,
-        CredentialType::Interactive => {
-            // Handled separately by authenticate_interactive()
-            return Ok(());
+        CredentialType::None => {
+            let result = handle
+                .authenticate_none(credential.username)
+                .await
+                .map_err(|e| AppError::Ssh(format!("认证失败: {e}")))?;
+            check_auth_result(result)
         }
-    };
-    if !ok {
-        return Err(AppError::Ssh("认证被拒绝".into()));
+        CredentialType::Interactive => Ok(()),
     }
-    Ok(())
+}
+
+/// OpenSSH-compatible RSA signature selection.
+///
+/// For RSA keys, OpenSSH's `key_sig_algorithm()` uses `server-sig-algs`
+/// when present; if the extension is absent it falls back to the key's base
+/// signature type (`ssh-rsa`). `russh` represents that base type as `None`.
+async fn pick_rsa_hash(
+    handle: &client::Handle<SshHandler>,
+    key: &PrivateKey,
+) -> AppResult<Option<HashAlg>> {
+    if !matches!(key.algorithm(), Algorithm::Rsa { .. }) {
+        return Ok(None);
+    }
+    let supported = handle
+        .best_supported_rsa_hash()
+        .await
+        .map_err(|e| AppError::Ssh(format!("RSA 签名算法协商失败: {e}")))?;
+    Ok(supported.flatten())
+}
+
+fn publickey_signature_label(key: &PrivateKey, rsa_hash: Option<HashAlg>) -> String {
+    match key.algorithm() {
+        Algorithm::Rsa { .. } => Algorithm::Rsa { hash: rsa_hash }.as_str().to_string(),
+        a => a.as_str().to_string(),
+    }
+}
+
+async fn authenticate_private_key(
+    handle: &mut client::Handle<SshHandler>,
+    username: String,
+    key: PrivateKey,
+) -> AppResult<()> {
+    let alg = pick_rsa_hash(handle, &key).await?;
+    let label = publickey_signature_label(&key, alg);
+    let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), alg);
+    let result = handle
+        .authenticate_publickey(username, key_with_alg)
+        .await
+        .map_err(|e| AppError::Ssh(format!("密钥认证失败 ({label}): {e}")))?;
+    check_auth_result(result)
 }
 
 // ---------------------------------------------------------------------------
 // SSH Agent 认证
 // ---------------------------------------------------------------------------
 
+/// Match OpenSSH's common `ssh user@host` behavior: try the configured agent
+/// first, then fall back to default private-key files in ~/.ssh.
+///
+/// 默认密钥若加密会通过 `ctx` 在终端内索取 passphrase；ctx 为 None 时
+/// 加密的默认密钥被跳过（保留旧行为，避免 forward 场景死锁）。
+pub async fn authenticate_with_agent_or_default_keys(
+    handle: &mut client::Handle<SshHandler>,
+    username: String,
+    ctx: Option<&AuthCtx>,
+) -> AppResult<()> {
+    let agent_err = match authenticate_with_agent(handle, username.clone()).await {
+        Ok(()) => return Ok(()),
+        Err(e) => e,
+    };
+
+    match authenticate_with_default_keys(handle, username, ctx).await {
+        Ok(()) => Ok(()),
+        Err(key_err) => Err(AppError::Ssh(format!(
+            "SSH agent 认证失败: {agent_err}; 默认私钥认证也失败: {key_err}"
+        ))),
+    }
+}
+
 /// 用系统 SSH agent（$SSH_AUTH_SOCK / Pageant）尝试逐个 identity 认证。
 pub async fn authenticate_with_agent(
     handle: &mut client::Handle<SshHandler>,
-    username: &str,
+    username: String,
 ) -> AppResult<()> {
-    // 把内部具体到 platform 的逻辑放在独立 fn 里，外层走 Send 友好的具体 stream 类型
+    use russh::keys::agent::client::AgentClient;
     #[cfg(unix)]
     {
-        let agent = russh_keys::agent::client::AgentClient::connect_env()
+        let agent = AgentClient::connect_env()
             .await
             .map_err(|e| AppError::Ssh(format!("无法连接 SSH agent (检查 $SSH_AUTH_SOCK): {e}")))?;
-        try_agent_identities(handle, username, agent).await
+        try_agent_identities(handle, username, agent.dynamic()).await
     }
     #[cfg(windows)]
     {
         let pipe = r"\\.\pipe\openssh-ssh-agent";
-        match russh_keys::agent::client::AgentClient::connect_named_pipe(pipe).await {
-            Ok(agent) => try_agent_identities(handle, username, agent).await,
+        match AgentClient::connect_named_pipe(pipe).await {
+            Ok(agent) => try_agent_identities(handle, username, agent.dynamic()).await,
             Err(_) => {
-                let agent = russh_keys::agent::client::AgentClient::connect_pageant().await;
-                try_agent_identities(handle, username, agent).await
+                let agent = AgentClient::connect_pageant().await;
+                try_agent_identities(handle, username, agent.dynamic()).await
             }
         }
     }
@@ -337,11 +786,11 @@ pub async fn authenticate_with_agent(
 
 async fn try_agent_identities<S>(
     handle: &mut client::Handle<SshHandler>,
-    username: &str,
-    mut agent: russh_keys::agent::client::AgentClient<S>,
+    username: String,
+    mut agent: russh::keys::agent::client::AgentClient<S>,
 ) -> AppResult<()>
 where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin + 'static,
+    S: russh::keys::agent::client::AgentStream + Send + Unpin + 'static,
 {
     let identities = agent
         .request_identities()
@@ -354,18 +803,128 @@ where
         ));
     }
 
-    for pk in identities {
-        let (returned, result) = handle
-            .authenticate_future(username.to_string(), pk, agent)
-            .await;
-        agent = returned;
+    let rsa_hash = if identities.iter().any(agent_identity_is_rsa) {
+        handle
+            .best_supported_rsa_hash()
+            .await
+            .map_err(|e| AppError::Ssh(format!("RSA 签名算法协商失败: {e}")))?
+            .flatten()
+    } else {
+        None
+    };
+
+    for identity in identities {
+        let hash_alg = if agent_identity_is_rsa(&identity) {
+            rsa_hash
+        } else {
+            None
+        };
+        let result = match identity {
+            AgentIdentity::PublicKey { key, .. } => {
+                handle
+                    .authenticate_publickey_with(username.clone(), key, hash_alg, &mut agent)
+                    .await
+            }
+            AgentIdentity::Certificate { certificate, .. } => {
+                handle
+                    .authenticate_certificate_with(
+                        username.clone(),
+                        certificate,
+                        hash_alg,
+                        &mut agent,
+                    )
+                    .await
+            }
+        };
         match result {
-            Ok(true) => return Ok(()),
-            Ok(false) => continue,
+            Ok(r) if r.success() => return Ok(()),
+            Ok(_) => continue,
             Err(e) => log::warn!("agent identity 签名失败: {e}"),
         }
     }
-    Err(AppError::Ssh("SSH agent 中所有 identity 都被服务器拒绝".into()))
+    Err(AppError::Ssh(
+        "SSH agent 中所有 identity 都被服务器拒绝".into(),
+    ))
+}
+
+fn agent_identity_is_rsa(identity: &AgentIdentity) -> bool {
+    let algorithm = match identity {
+        AgentIdentity::PublicKey { key, .. } => key.algorithm(),
+        AgentIdentity::Certificate { certificate, .. } => certificate.algorithm(),
+    };
+    matches!(algorithm, Algorithm::Rsa { .. })
+}
+
+/// Try OpenSSH's default identity files in the order reported by `ssh -G`.
+/// This keeps GUI behavior aligned with `ssh user@host` for hosts such as
+/// tmate that accept only publickey auth.
+///
+/// 加密的默认私钥：有 ctx 则终端内索取 passphrase，无 ctx 则跳过该文件
+/// 并把错误记入 errors（避免 forward 类无界面流程卡住）。
+pub async fn authenticate_with_default_keys(
+    handle: &mut client::Handle<SshHandler>,
+    username: String,
+    ctx: Option<&AuthCtx>,
+) -> AppResult<()> {
+    let paths = default_identity_paths();
+    let mut errors = Vec::new();
+    let mut found = 0usize;
+
+    for path in paths {
+        let pem = match std::fs::read_to_string(&path) {
+            Ok(pem) => pem,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                errors.push(format!("{}: 读取失败 ({e})", path.display()));
+                continue;
+            }
+        };
+        found += 1;
+
+        let cache_key = path.to_string_lossy().into_owned();
+        let prompt_label = format!("Enter passphrase for {}: ", path.display());
+        let key = match decode_key_with_prompt(&pem, Some(&cache_key), &prompt_label, ctx).await {
+            Ok(k) => k,
+            Err(e) => {
+                errors.push(format!("{}: {e}", path.display()));
+                continue;
+            }
+        };
+
+        match authenticate_private_key(handle, username.clone(), key).await {
+            Ok(()) => return Ok(()),
+            Err(e) => errors.push(format!("{}: {e}", path.display())),
+        }
+    }
+
+    if found == 0 {
+        return Err(AppError::Ssh(
+            "未找到默认私钥（~/.ssh/id_rsa、id_ecdsa、id_ecdsa_sk、id_ed25519、id_ed25519_sk）"
+                .into(),
+        ));
+    }
+
+    Err(AppError::Ssh(format!(
+        "所有默认私钥都不可用: {}",
+        errors.join("; ")
+    )))
+}
+
+fn default_identity_paths() -> Vec<PathBuf> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    let ssh_dir = home.join(".ssh");
+    [
+        "id_rsa",
+        "id_ecdsa",
+        "id_ecdsa_sk",
+        "id_ed25519",
+        "id_ed25519_sk",
+    ]
+    .into_iter()
+    .map(|name| ssh_dir.join(name))
+    .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -374,9 +933,9 @@ where
 
 pub async fn authenticate_interactive(
     handle: &mut client::Handle<SshHandler>,
-    username: &str,
-    app: &tauri::AppHandle,
-    tab_id: &str,
+    username: String,
+    app: tauri::AppHandle,
+    tab_id: String,
 ) -> AppResult<()> {
     use russh::client::KeyboardInteractiveAuthResponse;
 
@@ -388,7 +947,7 @@ pub async fn authenticate_interactive(
     loop {
         match reply {
             KeyboardInteractiveAuthResponse::Success => return Ok(()),
-            KeyboardInteractiveAuthResponse::Failure => {
+            KeyboardInteractiveAuthResponse::Failure { .. } => {
                 return Err(AppError::Ssh("认证被拒绝".into()));
             }
             KeyboardInteractiveAuthResponse::InfoRequest {
@@ -413,7 +972,7 @@ pub async fn authenticate_interactive(
 
                 {
                     let state = app.state::<crate::state::AppState>();
-                    locked(&state.auth_waiters)?.insert(tab_id.to_string(), tx);
+                    locked(&state.auth_waiters)?.insert(tab_id.clone(), tx);
                 }
 
                 let responses = rx
@@ -475,49 +1034,77 @@ pub struct ConnectResult {
     pub handle: SessionHandle,
 }
 
+/// All inputs by value: profile / credential / chain / log_session_id all
+/// owned. The future returned by this fn carries no external borrows, so
+/// `#[tauri::command]` can prove it Send for any caller-supplied state
+/// lifetime without HRTB elaboration.
 pub async fn connect(
-    profile: &Profile,
-    credential: &Credential,
-    bastion_chain: &[(&Profile, &Credential)],
+    profile: Profile,
+    credential: Credential,
+    bastion_chain: Vec<(Profile, Credential)>,
     cols: u32,
     rows: u32,
     app: tauri::AppHandle,
     recording_path: Option<std::path::PathBuf>,
-    log_session_id: Option<&str>,
+    log_session_id: Option<String>,
     known_hosts_path: PathBuf,
     timeout_secs: u64,
 ) -> AppResult<ConnectResult> {
-    let log = |msg: &str| {
-        if let Some(sid) = log_session_id {
-            let line = format!("\x1b[90m[ssh] {msg}\x1b[0m\r\n");
-            let _ = app.emit(&format!("ssh:data:{sid}"), line.into_bytes());
+    let log: LogFn = match log_session_id.clone() {
+        Some(sid) => {
+            let app2 = app.clone();
+            Arc::new(move |msg: String| {
+                let line = format!("\x1b[90m[ssh] {msg}\x1b[0m\r\n");
+                let _ = app2.emit(&format!("ssh:data:{sid}"), line.into_bytes());
+            })
         }
+        None => null_logger(),
     };
+
+    // 终端可达性上下文：只要有 tab_id 就能给用户弹 passphrase 提示。
+    // 即使 verbose log 关闭、`log` 是 null_logger，passphrase 提示仍然能发。
+    let ctx = log_session_id.clone().map(|tab_id| AuthCtx {
+        app: app.clone(),
+        tab_id,
+    });
 
     let (mut handle, _fwd) = establish_via_chain(
-        bastion_chain, &profile.host, profile.port,
-        known_hosts_path, timeout_secs, &log,
-    ).await?;
+        bastion_chain,
+        profile.host.clone(),
+        profile.port,
+        known_hosts_path,
+        timeout_secs,
+        log.clone(),
+        ctx.as_ref(),
+    )
+    .await?;
 
-    log(&format!("Authenticating as {} ({}) ...", credential.username, credential.credential_type.as_str()));
-    if credential.credential_type == crate::models::CredentialType::Interactive {
-        let tab_id = log_session_id.unwrap_or("unknown");
-        authenticate_interactive(&mut handle, &credential.username, &app, tab_id).await?;
+    log(format!(
+        "Authenticating as {} ({}) ...",
+        credential.username,
+        credential.credential_type.as_str()
+    ));
+    if credential.credential_type == CredentialType::Interactive {
+        let tab_id = log_session_id
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        let username = credential.username.clone();
+        authenticate_interactive(&mut handle, username, app.clone(), tab_id).await?;
     } else {
-        authenticate(&mut handle, credential).await?;
+        authenticate(&mut handle, credential, ctx.as_ref()).await?;
     }
-    log("Authenticated.");
+    log(format!("Authenticated."));
 
-    // Wrap handle for channel multiplexing (SFTP, forwarding on same connection)
-    let ssh_handle: SshHandle = Arc::new(tokio::sync::Mutex::new(handle));
-
-    log("Requesting PTY + shell ...");
-    let channel = {
-        let h = ssh_handle.lock().await;
-        h.channel_open_session()
-            .await
-            .map_err(|e| AppError::Ssh(format!("打开 channel 失败: {e}")))?
-    };
+    // Open the shell channel BEFORE wrapping the handle in Arc<Mutex>.
+    // Holding a MutexGuard across `.await` would force the resulting future
+    // to hold `&Mutex<Handle>` for the inner await — fine for runtime, but
+    // the compiler can't always prove that's `for<'a> Send`. Doing the
+    // shell setup directly on the owned handle sidesteps the whole issue.
+    log(format!("Requesting PTY + shell ..."));
+    let channel = handle
+        .channel_open_session()
+        .await
+        .map_err(|e| AppError::Ssh(format!("打开 channel 失败: {e}")))?;
 
     channel
         .request_pty(false, "xterm-256color", cols, rows, 0, 0, &[])
@@ -529,7 +1116,10 @@ pub async fn connect(
         .await
         .map_err(|e| AppError::Ssh(format!("Shell 请求失败: {e}")))?;
 
-    log("Shell ready.\r\n");
+    log(format!("Shell ready.\r\n"));
+
+    // Now wrap for downstream multiplexing (SFTP / forwarding share the conn).
+    let ssh_handle: SshHandle = Arc::new(tokio::sync::Mutex::new(handle));
 
     let session_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = mpsc::unbounded_channel();

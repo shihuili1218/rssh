@@ -126,9 +126,7 @@ pub async fn ai_session_start(
     let api_key = state
         .secret_store
         .get(&key_api_key(&provider))?
-        .ok_or_else(|| {
-            AppError::coded("api_key_missing", json!({ "provider": provider }))
-        })?;
+        .ok_or_else(|| AppError::coded("api_key_missing", json!({ "provider": provider })))?;
     let endpoint = state.secret_store.get(&key_endpoint(&provider))?;
 
     // 2. 校验 target 存在 + 抓 SSH handle 给 download_file 工具复用
@@ -248,10 +246,7 @@ pub async fn ai_command_reject(
 }
 
 #[tauri::command]
-pub async fn ai_session_stop(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> AppResult<()> {
+pub async fn ai_session_stop(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
     let session = locked(&state.ai_sessions)?
         .remove(&session_id)
         .ok_or_else(|| AppError::coded("ai_session_not_found", json!({})))?;
@@ -395,7 +390,9 @@ pub async fn ai_settings_set(
         .or_else(|| state.secret_store.get(&key_provider()).ok().flatten())
         .unwrap_or_else(|| "anthropic".into());
     if let Some(e) = endpoint {
-        state.secret_store.set(&key_endpoint(&active_provider), &e)?;
+        state
+            .secret_store
+            .set(&key_endpoint(&active_provider), &e)?;
     }
     if let Some(k) = api_key {
         if k.is_empty() {

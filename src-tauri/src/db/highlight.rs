@@ -44,7 +44,7 @@ pub fn reset_defaults(db: &Db) -> AppResult<()> {
         INSERT INTO highlights (keyword, color, enabled) VALUES ('WARN', '#FFD060', 1);
         INSERT INTO highlights (keyword, color, enabled) VALUES ('INFO', '#6EDAA0', 1);
         INSERT INTO highlights (keyword, color, enabled) VALUES ('DEBUG', '#40C8E0', 1);
-        "
+        ",
     )?;
     Ok(())
 }

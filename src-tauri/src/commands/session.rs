@@ -2,17 +2,16 @@ use tauri::{AppHandle, State};
 
 use crate::error::{locked, AppError, AppResult};
 use crate::models::{Credential, CredentialType, Profile};
-use crate::secret::{cred_passphrase_key, cred_secret_key};
+use crate::secret::cred_secret_key;
 use crate::ssh::client;
 use crate::state::AppState;
 
-/// 把 SecretStore 里的 secret/passphrase 灌到 Credential 上。
+/// 把 SecretStore 里的 secret 灌到 Credential 上。
 fn load_secrets(state: &State<'_, AppState>, c: &mut Credential) -> AppResult<()> {
     if c.id.is_empty() {
         return Ok(()); // 临时直连凭证，secret 已由前端传入
     }
     c.secret = state.secret_store.get(&cred_secret_key(&c.id))?;
-    c.passphrase = state.secret_store.get(&cred_passphrase_key(&c.id))?;
     Ok(())
 }
 
@@ -73,7 +72,6 @@ pub async fn ssh_connect(
             credential_type: CredentialType::from_str(&auth_type.unwrap_or("password".into())),
             secret,
             save_to_remote: false,
-            passphrase: None,
         };
         (p, c, Vec::new())
     };
@@ -111,14 +109,29 @@ pub async fn ssh_connect(
     };
 
     // Only pass log_session_id if verbose logging is enabled
-    let effective_log_id = if verbose_log { log_session_id.as_deref() } else { None };
+    let effective_log_id = if verbose_log { log_session_id } else { None };
 
     let known_hosts_path = crate::ssh::known_hosts::path_for(&state.data_dir);
-    let chain_refs: Vec<(&Profile, &Credential)> = chain.iter().map(|(p, c)| (p, c)).collect();
-    let result = client::connect(&profile, &credential, &chain_refs, cols, rows, app, recording_path, effective_log_id, known_hosts_path, timeout_secs).await?;
+    let init_command = profile.init_command.clone();
+    let result = client::run_blocking_ssh(move || async move {
+        client::connect(
+            profile,
+            credential,
+            chain,
+            cols,
+            rows,
+            app,
+            recording_path,
+            effective_log_id,
+            known_hosts_path,
+            timeout_secs,
+        )
+        .await
+    })
+    .await?;
 
     // 执行初始命令（shell 已就绪，直接写入）
-    if let Some(ref cmd) = profile.init_command {
+    if let Some(ref cmd) = init_command {
         if !cmd.is_empty() {
             result.handle.write(format!("{}\n", cmd).as_bytes())?;
         }
@@ -150,10 +163,7 @@ pub async fn ssh_resize(
 }
 
 #[tauri::command]
-pub async fn ssh_disconnect(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> AppResult<()> {
+pub async fn ssh_disconnect(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
     crate::commands::lifecycle::unregister_window_session(&state, &session_id);
     let session = locked(&state.sessions)?
         .remove(&session_id)
@@ -175,10 +185,30 @@ pub async fn ssh_auth_respond(
     Ok(())
 }
 
-fn get_session(
-    state: &State<'_, AppState>,
-    session_id: &str,
-) -> AppResult<client::SessionHandle> {
+/// 终端内输完私钥 passphrase 后调用，把结果回传给等待中的 decode_key_with_prompt。
+#[tauri::command]
+pub async fn ssh_passphrase_respond(
+    state: State<'_, AppState>,
+    tab_id: String,
+    passphrase: String,
+) -> AppResult<()> {
+    let tx = locked(&state.passphrase_waiters)?
+        .remove(&tab_id)
+        .ok_or_else(|| AppError::NotFound("无等待中的 passphrase 请求".into()))?;
+    tx.send(passphrase)
+        .map_err(|_| AppError::Other("passphrase 通道已关闭".into()))?;
+    Ok(())
+}
+
+/// 用户在终端弹窗里点取消时调用，让 decode_key_with_prompt 立即报错退出。
+#[tauri::command]
+pub async fn ssh_passphrase_cancel(state: State<'_, AppState>, tab_id: String) -> AppResult<()> {
+    // 直接 drop sender 即可触发等待端的 RecvError
+    locked(&state.passphrase_waiters)?.remove(&tab_id);
+    Ok(())
+}
+
+fn get_session(state: &State<'_, AppState>, session_id: &str) -> AppResult<client::SessionHandle> {
     locked(&state.sessions)?
         .get(session_id)
         .cloned()

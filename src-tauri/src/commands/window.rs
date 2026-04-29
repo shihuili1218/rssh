@@ -108,8 +108,8 @@ pub async fn fetch_latest_release_tag(repo: String) -> AppResult<String> {
 /// same page in this session.
 #[tauri::command]
 pub fn clipboard_read() -> AppResult<String> {
-    let mut cb = arboard::Clipboard::new()
-        .map_err(|e| AppError::Other(format!("Clipboard init: {e}")))?;
+    let mut cb =
+        arboard::Clipboard::new().map_err(|e| AppError::Other(format!("Clipboard init: {e}")))?;
     cb.get_text()
         .map_err(|e| AppError::Other(format!("Clipboard read: {e}")))
 }
