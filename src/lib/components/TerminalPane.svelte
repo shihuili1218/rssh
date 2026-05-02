@@ -84,47 +84,74 @@
         authValues = [];
     }
 
-    /** 终端内 passphrase 输入：监听后端 ssh:passphrase_prompt 事件，
-     *  把光标交给一个临时 onData handler，回车提交，Ctrl-C 取消，Backspace 退格。
-     *  passphrase 不回显（sudo 风格），buffer 仅保存在本闭包，不进 Svelte state，
-     *  不进 xterm 的 history。 */
-    let passphraseInputDisposable: IDisposable | undefined;
-    function beginPassphrasePrompt(promptText: string) {
-        // 旧 prompt 还没结束就来新的（理论不会）—— 关掉旧的
-        passphraseInputDisposable?.dispose();
-        passphraseInputDisposable = undefined;
-
+    /** 通用终端 prompt：临时接管 xterm onData，回车提交、Ctrl-C 取消、退格删字。
+     *  - echo=false：输入不回显（passphrase 等敏感字段，sudo 风格）
+     *  - echo=true：输入回显并支持 backspace 视觉退格（host key yes/no 等）
+     *  调用方负责自己的 disposable 槽位（避免并发 prompt 互相覆盖）。 */
+    function beginTerminalPrompt(
+        promptText: string,
+        opts: { echo: boolean; onSubmit: (value: string) => void; onCancel: () => void },
+    ): IDisposable {
         terminal.write(`\r\n${promptText}`);
 
         let buffer = "";
         let done = false;
+        let disposable: IDisposable | undefined;
         const finish = (action: "submit" | "cancel") => {
             if (done) return;
             done = true;
-            passphraseInputDisposable?.dispose();
-            passphraseInputDisposable = undefined;
+            disposable?.dispose();
+            disposable = undefined;
             if (action === "submit") {
                 terminal.write("\r\n");
-                invoke("ssh_passphrase_respond", { tabId, passphrase: buffer });
+                opts.onSubmit(buffer);
             } else {
                 terminal.write("^C\r\n");
-                invoke("ssh_passphrase_cancel", { tabId });
+                opts.onCancel();
             }
             buffer = "";
         };
 
-        passphraseInputDisposable = terminal.onData((data: string) => {
+        disposable = terminal.onData((data: string) => {
             for (const ch of data) {
                 const code = ch.charCodeAt(0);
                 if (ch === "\r" || ch === "\n") { finish("submit"); return; }
                 if (ch === "\x03") { finish("cancel"); return; }   // Ctrl-C
                 if (ch === "\x7f" || ch === "\b") {                // Backspace / DEL
-                    if (buffer.length > 0) buffer = buffer.slice(0, -1);
+                    if (buffer.length > 0) {
+                        buffer = buffer.slice(0, -1);
+                        if (opts.echo) terminal.write("\b \b");
+                    }
                     continue;
                 }
                 if (code < 0x20) continue;                          // 其他控制字符忽略
                 buffer += ch;
+                if (opts.echo) terminal.write(ch);
             }
+        });
+        return disposable!;
+    }
+
+    /** 终端内 passphrase 输入。监听后端 ssh:passphrase_prompt 事件触发。 */
+    let passphraseInputDisposable: IDisposable | undefined;
+    function beginPassphrasePrompt(promptText: string) {
+        passphraseInputDisposable?.dispose();
+        passphraseInputDisposable = beginTerminalPrompt(promptText, {
+            echo: false,
+            onSubmit: (v) => { invoke("ssh_passphrase_respond", { tabId, passphrase: v }); },
+            onCancel: () => { invoke("ssh_passphrase_cancel", { tabId }); },
+        });
+    }
+
+    /** 终端内 host key TOFU 确认（OpenSSH 风格）。监听 ssh:host_key_prompt 触发。
+     *  yes/no/指纹 均不是秘密，需要回显让用户确认自己的输入。 */
+    let hostKeyInputDisposable: IDisposable | undefined;
+    function beginHostKeyPrompt(banner: string) {
+        hostKeyInputDisposable?.dispose();
+        hostKeyInputDisposable = beginTerminalPrompt(banner, {
+            echo: true,
+            onSubmit: (v) => { invoke("ssh_host_key_respond", { tabId, answer: v }); },
+            onCancel: () => { invoke("ssh_host_key_cancel", { tabId }); },
         });
     }
 
@@ -283,6 +310,9 @@
             const passUn = await listen<{ prompt: string }>(`ssh:passphrase_prompt:${tabId}`, (ev) => {
                 beginPassphrasePrompt(ev.payload.prompt);
             });
+            const hkUn = await listen<{ banner: string }>(`ssh:host_key_prompt:${tabId}`, (ev) => {
+                beginHostKeyPrompt(ev.payload.banner);
+            });
 
             try {
                 sessionId = await invoke<string>("ssh_connect", {
@@ -296,15 +326,17 @@
                     cols: terminal.cols, rows: terminal.rows,
                 });
             } catch (e: any) {
-                logUn(); authUn(); passUn();
+                logUn(); authUn(); passUn(); hkUn();
                 passphraseInputDisposable?.dispose(); passphraseInputDisposable = undefined;
+                hostKeyInputDisposable?.dispose(); hostKeyInputDisposable = undefined;
                 terminal.write(`\x1b[31mConnection failed: ${e}\x1b[0m\r\n`);
                 terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
                 disconnected = true;
                 return false;
             }
-            logUn(); authUn(); passUn();
+            logUn(); authUn(); passUn(); hkUn();
             passphraseInputDisposable?.dispose(); passphraseInputDisposable = undefined;
+            hostKeyInputDisposable?.dispose(); hostKeyInputDisposable = undefined;
             await wireSessionEvents(sessionId);
         }
 
@@ -633,12 +665,16 @@
         dataDisposable?.dispose();
         resizeDisposable?.dispose();
         reconnectDisposable?.dispose();
-        // 关 tab 时若停在 passphrase 提示阶段，主动取消让后端 connect 流程跳出，
+        // 关 tab 时若停在 prompt 阶段，主动取消让后端 connect 流程跳出，
         // 否则 ssh_connect 会在 worker 线程上挂着等用户输入。
         if (passphraseInputDisposable) {
             invoke("ssh_passphrase_cancel", { tabId }).catch(() => {});
         }
+        if (hostKeyInputDisposable) {
+            invoke("ssh_host_key_cancel", { tabId }).catch(() => {});
+        }
         passphraseInputDisposable?.dispose();
+        hostKeyInputDisposable?.dispose();
         resizeObs?.disconnect();
         mobileKeyboardCleanup?.();
         blockTracker?.dispose();

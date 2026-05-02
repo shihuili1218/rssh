@@ -61,6 +61,7 @@ pub fn run() {
                 active_forwards: Mutex::new(HashMap::new()),
                 auth_waiters: Mutex::new(HashMap::new()),
                 passphrase_waiters: Mutex::new(HashMap::new()),
+                host_key_waiters: Mutex::new(HashMap::new()),
                 passphrase_cache: Mutex::new(HashMap::new()),
                 window_sessions: Mutex::new(HashMap::new()),
                 ai_sessions: Mutex::new(HashMap::new()),
@@ -116,6 +117,8 @@ pub fn run() {
             commands::session::ssh_auth_respond,
             commands::session::ssh_passphrase_respond,
             commands::session::ssh_passphrase_cancel,
+            commands::session::ssh_host_key_respond,
+            commands::session::ssh_host_key_cancel,
             // session lifecycle
             commands::lifecycle::reconcile_sessions,
             // PTY (desktop only)

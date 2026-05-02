@@ -68,7 +68,7 @@ impl SftpHandle {
         let config = crate::ssh::client::default_client_config();
         let log = crate::ssh::client::null_logger();
         let mut handle =
-            client::ssh_connect(config, host, port, known_hosts_path, timeout_secs, log)
+            client::ssh_connect(config, host, port, known_hosts_path, timeout_secs, log, None)
                 .await
                 .map_err(|e| AppError::Sftp(format!("SSH 连接失败: {e}")))?;
 

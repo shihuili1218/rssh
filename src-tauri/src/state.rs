@@ -28,6 +28,9 @@ pub struct AppState {
     /// 私钥 passphrase 提示等待中：tab_id → oneshot sender。
     /// 与 auth_waiters 分离，因为提示来源（本地 decode）和回应负载（单条字符串）都不同。
     pub passphrase_waiters: Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>,
+    /// 主机密钥 TOFU 终端确认等待中：tab_id → oneshot sender。
+    /// 用户在 xterm 中输入 yes / no / 指纹，由 ssh_host_key_respond 把字符串送回 check_server_key。
+    pub host_key_waiters: Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>,
     /// 进程内 passphrase 缓存：cache_key（credential_id 或文件路径）→ passphrase。
     /// 进程退出即丢，绝不落盘。
     pub passphrase_cache: Mutex<HashMap<String, String>>,

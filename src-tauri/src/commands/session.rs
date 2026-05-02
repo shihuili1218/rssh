@@ -218,6 +218,28 @@ pub async fn ssh_passphrase_cancel(state: State<'_, AppState>, tab_id: String) -
     Ok(())
 }
 
+/// 终端中输完 host key 确认（yes / no / 指纹）后调用，把字符串送回 check_server_key。
+#[tauri::command]
+pub async fn ssh_host_key_respond(
+    state: State<'_, AppState>,
+    tab_id: String,
+    answer: String,
+) -> AppResult<()> {
+    let tx = locked(&state.host_key_waiters)?
+        .remove(&tab_id)
+        .ok_or_else(|| AppError::NotFound("无等待中的 host key 确认请求".into()))?;
+    tx.send(answer)
+        .map_err(|_| AppError::Other("host key 通道已关闭".into()))?;
+    Ok(())
+}
+
+/// 用户在终端取消（Ctrl-C / 关 tab）host key 确认时调用，让 check_server_key 立即拒绝。
+#[tauri::command]
+pub async fn ssh_host_key_cancel(state: State<'_, AppState>, tab_id: String) -> AppResult<()> {
+    locked(&state.host_key_waiters)?.remove(&tab_id);
+    Ok(())
+}
+
 fn get_session(state: &State<'_, AppState>, session_id: &str) -> AppResult<client::SessionHandle> {
     locked(&state.sessions)?
         .get(session_id)

@@ -213,23 +213,56 @@ async fn decode_key_with_prompt(
     Err(AppError::Ssh("Passphrase 输入错误次数过多".into()))
 }
 
-/// 向终端弹一次 passphrase 提示，等用户输完回车。
-async fn prompt_passphrase(ctx: &AuthCtx, prompt: &str) -> AppResult<String> {
+/// 通用终端 prompt：注册 oneshot sender 到指定 waiters map，emit 事件，等用户回应。
+/// passphrase / host_key 等 xterm 内交互都走这条路；差异只在 waiters / 事件名 / payload。
+async fn prompt_oneshot(
+    waiters: &std::sync::Mutex<
+        std::collections::HashMap<String, tokio::sync::oneshot::Sender<String>>,
+    >,
+    app: &tauri::AppHandle,
+    tab_id: &str,
+    event_prefix: &str,
+    payload: serde_json::Value,
+    cancel_msg: &'static str,
+) -> AppResult<String> {
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
     {
-        let state = ctx.app.state::<AppState>();
+        let mut w = locked(waiters)?;
         // 同一 tab_id 上若已有等待中的 prompt（理论不会发生），覆盖旧 sender
-        let mut waiters = locked(&state.passphrase_waiters)?;
-        waiters.insert(ctx.tab_id.clone(), tx);
+        w.insert(tab_id.to_string(), tx);
     }
-    ctx.app
-        .emit(
-            &format!("ssh:passphrase_prompt:{}", ctx.tab_id),
-            serde_json::json!({ "prompt": prompt }),
-        )
-        .map_err(|e| AppError::Other(format!("emit passphrase prompt: {e}")))?;
-    rx.await
-        .map_err(|_| AppError::Ssh("用户取消了 passphrase 输入".into()))
+    app.emit(&format!("{event_prefix}:{tab_id}"), payload)
+        .map_err(|e| AppError::Other(format!("emit {event_prefix}: {e}")))?;
+    rx.await.map_err(|_| AppError::Ssh(cancel_msg.into()))
+}
+
+/// 向终端弹一次 passphrase 提示，等用户输完回车。
+async fn prompt_passphrase(ctx: &AuthCtx, prompt: &str) -> AppResult<String> {
+    let state = ctx.app.state::<AppState>();
+    prompt_oneshot(
+        &state.passphrase_waiters,
+        &ctx.app,
+        &ctx.tab_id,
+        "ssh:passphrase_prompt",
+        serde_json::json!({ "prompt": prompt }),
+        "用户取消了 passphrase 输入",
+    )
+    .await
+}
+
+/// 向终端弹一次主机密钥 TOFU 确认，等用户输入 yes / no / 指纹。
+/// 调用方负责按返回字符串决定是否信任。
+async fn prompt_host_key(ctx: &AuthCtx, banner: &str) -> AppResult<String> {
+    let state = ctx.app.state::<AppState>();
+    prompt_oneshot(
+        &state.host_key_waiters,
+        &ctx.app,
+        &ctx.tab_id,
+        "ssh:host_key_prompt",
+        serde_json::json!({ "banner": banner }),
+        "用户取消了主机密钥确认",
+    )
+    .await
 }
 
 /// 默认 SSH 客户端配置：开启 keepalive，远端死了 90 秒内能断开。
@@ -256,6 +289,9 @@ pub struct SshHandler {
     forwarded_channels: Arc<StdMutex<Option<mpsc::UnboundedSender<russh::Channel<client::Msg>>>>>,
     /// Surface TOFU fingerprints / known_hosts write errors back to the user.
     log: LogFn,
+    /// 终端可达性上下文：有则未知主机走 xterm 内 yes/no/指纹确认；
+    /// 无（SFTP / Forward 后台连接）则未知主机直接拒绝。
+    prompt_ctx: Option<AuthCtx>,
 }
 
 impl client::Handler for SshHandler {
@@ -285,48 +321,149 @@ impl client::Handler for SshHandler {
         use russh::keys::known_hosts;
         use russh::keys::HashAlg;
 
-        // Do all known_hosts work synchronously (it's I/O-light file reads).
-        // The async block below captures only the `bool` result, which means
-        // the returned future doesn't borrow `self` past the function body.
-        let result = match known_hosts::check_known_hosts_path(
+        // 同步部分先做完：known_hosts 查询 + 指纹计算。
+        // pubkey 跨 await 边界要 Clone（learn 需要它）。
+        let check = known_hosts::check_known_hosts_path(
             &self.host,
             self.port,
             server_public_key,
             &self.known_hosts_path,
-        ) {
-            Ok(true) => Ok(true),
-            // TOFU: print fingerprint, write to known_hosts, accept.
-            // Fingerprint Display impl already formats as "SHA256:<base64>".
-            Ok(false) => {
-                let alg = server_public_key.algorithm().as_str().to_string();
-                let fp = server_public_key.fingerprint(HashAlg::Sha256).to_string();
-                (self.log)(format!(
-                    "Unknown host {}:{} (first connection). {} key fingerprint {}",
-                    self.host, self.port, alg, fp
-                ));
-                match known_hosts::learn_known_hosts_path(
-                    &self.host,
-                    self.port,
-                    server_public_key,
-                    &self.known_hosts_path,
-                ) {
-                    Ok(()) => (self.log)(format!(
-                        "Permanently added {}:{} to known_hosts.",
-                        self.host, self.port
-                    )),
-                    Err(e) => (self.log)(format!("known_hosts write failed: {e}")),
-                }
-                Ok(true)
+        );
+        let host = self.host.clone();
+        let port = self.port;
+        let path = self.known_hosts_path.clone();
+        let alg = server_public_key.algorithm().as_str().to_string();
+        let fp = server_public_key.fingerprint(HashAlg::Sha256).to_string();
+        let pubkey = server_public_key.clone();
+        let log = self.log.clone();
+        let ctx = self.prompt_ctx.clone();
+        let mismatch = self.key_mismatch.clone();
+
+        async move {
+            match check {
+                Ok(true) => Ok(true),
+                // 未知主机：有 ctx 走 xterm 确认，无 ctx 直接拒绝。
+                Ok(false) => match ctx {
+                    Some(ctx) => {
+                        let banner = format!(
+                            "\r\nThe authenticity of host '{host}' can't be established.\r\n\
+                             {alg} key fingerprint is {fp}.\r\n\
+                             This key is not known by any other names.\r\n\
+                             Are you sure you want to continue connecting (yes/no/[fingerprint])? "
+                        );
+                        let answer = match prompt_host_key(&ctx, &banner).await {
+                            Ok(a) => a,
+                            Err(_) => {
+                                log(format!(
+                                    "Host key confirmation cancelled for {host}:{port}."
+                                ));
+                                return Ok(false);
+                            }
+                        };
+                        let trimmed = answer.trim();
+                        if trimmed.eq_ignore_ascii_case("yes") || trimmed == fp {
+                            match known_hosts::learn_known_hosts_path(&host, port, &pubkey, &path)
+                            {
+                                Ok(()) => log(format!(
+                                    "Permanently added {host}:{port} to known_hosts."
+                                )),
+                                Err(e) => log(format!("known_hosts write failed: {e}")),
+                            }
+                            Ok(true)
+                        } else {
+                            log(format!("Host key rejected by user for {host}:{port}."));
+                            Ok(false)
+                        }
+                    }
+                    None => {
+                        log(format!(
+                            "Unknown host {host}:{port} ({alg} fingerprint {fp}). \
+                             No terminal context for confirmation; \
+                             connect via SSH terminal first to establish trust."
+                        ));
+                        Ok(false)
+                    }
+                },
+                // 已知主机但密钥变更：有 ctx 给一次"replace"机会（移动端没法跑 ssh-keygen -R）；
+                // 无 ctx 直接拒绝。要求字面输入 'replace' 而非 'yes'，加大手滑成本。
+                Err(_) => match ctx {
+                    Some(ctx) => {
+                        let old_fps: Vec<String> =
+                            russh::keys::known_hosts::known_host_keys_path(&host, port, &path)
+                                .ok()
+                                .unwrap_or_default()
+                                .into_iter()
+                                .map(|(_, k)| k.fingerprint(HashAlg::Sha256).to_string())
+                                .collect();
+                        let old_fps_str = if old_fps.is_empty() {
+                            "(unknown)".to_string()
+                        } else {
+                            old_fps.join("\r\n  ")
+                        };
+                        let banner = format!(
+                            "\r\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n\
+                             @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\r\n\
+                             @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n\
+                             IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!\r\n\
+                             Someone could be eavesdropping on you right now (man-in-the-middle attack)!\r\n\
+                             \r\n\
+                             Host: {host}:{port}\r\n\
+                             Old key fingerprint:\r\n  {old_fps_str}\r\n\
+                             New key fingerprint:\r\n  {fp} ({alg})\r\n\
+                             \r\n\
+                             If the server was legitimately reinstalled, type 'replace' to remove\r\n\
+                             the old key and trust the new one. Anything else aborts.\r\n\
+                             > "
+                        );
+                        let answer = match prompt_host_key(&ctx, &banner).await {
+                            Ok(a) => a,
+                            Err(_) => {
+                                if let Ok(mut m) = mismatch.lock() {
+                                    *m = true;
+                                }
+                                log(format!(
+                                    "Host key change confirmation cancelled for {host}:{port}."
+                                ));
+                                return Ok(false);
+                            }
+                        };
+                        if answer.trim() == "replace" {
+                            match crate::ssh::known_hosts::remove_host(&host, port, &path) {
+                                Ok(n) => log(format!(
+                                    "Removed {n} stale entry/entries for {host}:{port}."
+                                )),
+                                Err(e) => {
+                                    log(format!("Failed to remove old known_hosts entry: {e}"));
+                                    if let Ok(mut m) = mismatch.lock() {
+                                        *m = true;
+                                    }
+                                    return Ok(false);
+                                }
+                            }
+                            match known_hosts::learn_known_hosts_path(&host, port, &pubkey, &path) {
+                                Ok(()) => log(format!(
+                                    "New host key for {host}:{port} added to known_hosts."
+                                )),
+                                Err(e) => log(format!("known_hosts write failed: {e}")),
+                            }
+                            Ok(true)
+                        } else {
+                            if let Ok(mut m) = mismatch.lock() {
+                                *m = true;
+                            }
+                            log(format!("Host key change rejected by user for {host}:{port}."));
+                            Ok(false)
+                        }
+                    }
+                    None => {
+                        if let Ok(mut m) = mismatch.lock() {
+                            *m = true;
+                        }
+                        Ok(false)
+                    }
+                },
             }
-            // Known host, key changed — reject.
-            Err(_) => {
-                if let Ok(mut m) = self.key_mismatch.lock() {
-                    *m = true;
-                }
-                Ok(false)
-            }
-        };
-        async move { result }
+        }
     }
 
     fn disconnected(
@@ -361,6 +498,7 @@ fn new_handler(
     port: u16,
     known_hosts_path: PathBuf,
     log: LogFn,
+    prompt_ctx: Option<AuthCtx>,
 ) -> (SshHandler, Arc<StdMutex<bool>>, ForwardedChannelSender) {
     let mismatch = Arc::new(StdMutex::new(false));
     let fwd_channels: ForwardedChannelSender = Arc::new(StdMutex::new(None));
@@ -371,6 +509,7 @@ fn new_handler(
         key_mismatch: mismatch.clone(),
         forwarded_channels: fwd_channels.clone(),
         log,
+        prompt_ctx,
     };
     (handler, mismatch, fwd_channels)
 }
@@ -383,8 +522,10 @@ fn map_connect_error(
 ) -> AppError {
     if *mismatch.lock().unwrap() {
         AppError::Ssh(format!(
-            "{}:{} 的主机密钥已变更，连接已拒绝。如确认安全，请删除 ~/.ssh/known_hosts 中对应记录后重试（可用 ssh-keygen -R {} 删除）。",
-            host, port, host
+            "{}:{} 的主机密钥已变更，连接已拒绝。如确认安全（如服务器重装），\
+             请在终端中重连，按提示输入 'replace' 信任新密钥；\
+             SFTP / 端口转发等后台连接需先在终端走完此流程。",
+            host, port
         ))
     } else {
         AppError::Ssh(format!("连接失败: {e}"))
@@ -401,9 +542,10 @@ pub async fn ssh_connect(
     known_hosts_path: PathBuf,
     timeout_secs: u64,
     log: LogFn,
+    prompt_ctx: Option<AuthCtx>,
 ) -> AppResult<client::Handle<SshHandler>> {
     let connect_timeout = Duration::from_secs(timeout_secs);
-    let (handler, mismatch, _fwd) = new_handler(&host, port, known_hosts_path, log);
+    let (handler, mismatch, _fwd) = new_handler(&host, port, known_hosts_path, log, prompt_ctx);
     match timeout(
         connect_timeout,
         client::connect(config, (host.as_str(), port), handler),
@@ -426,9 +568,10 @@ pub async fn ssh_connect_with_forward(
     known_hosts_path: PathBuf,
     timeout_secs: u64,
     log: LogFn,
+    prompt_ctx: Option<AuthCtx>,
 ) -> AppResult<(client::Handle<SshHandler>, ForwardedChannelSender)> {
     let connect_timeout = Duration::from_secs(timeout_secs);
-    let (handler, mismatch, fwd) = new_handler(&host, port, known_hosts_path, log);
+    let (handler, mismatch, fwd) = new_handler(&host, port, known_hosts_path, log, prompt_ctx);
     let handle = match timeout(
         connect_timeout,
         client::connect(config, (host.as_str(), port), handler),
@@ -456,12 +599,13 @@ pub async fn ssh_connect_stream<S>(
     known_hosts_path: PathBuf,
     timeout_secs: u64,
     log: LogFn,
+    prompt_ctx: Option<AuthCtx>,
 ) -> AppResult<(client::Handle<SshHandler>, ForwardedChannelSender)>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     let connect_timeout = Duration::from_secs(timeout_secs);
-    let (handler, mismatch, fwd) = new_handler(&host, port, known_hosts_path, log);
+    let (handler, mismatch, fwd) = new_handler(&host, port, known_hosts_path, log, prompt_ctx);
     let handle = match timeout(
         connect_timeout,
         client::connect_stream(config, stream, handler),
@@ -506,6 +650,7 @@ pub async fn establish_via_chain(
             known_hosts_path,
             timeout_secs,
             log.clone(),
+            ctx.cloned(),
         )
         .await?;
         log(format!("TCP connected. SSH handshake OK."));
@@ -528,6 +673,7 @@ pub async fn establish_via_chain(
         known_hosts_path.clone(),
         timeout_secs,
         log.clone(),
+        ctx.cloned(),
     )
     .await?;
     log(format!(
@@ -564,6 +710,7 @@ pub async fn establish_via_chain(
             known_hosts_path.clone(),
             timeout_secs,
             log.clone(),
+            ctx.cloned(),
         )
         .await?;
         hop = new_hop;
@@ -599,6 +746,7 @@ pub async fn establish_via_chain(
         known_hosts_path,
         timeout_secs,
         log.clone(),
+        ctx.cloned(),
     )
     .await
 }
