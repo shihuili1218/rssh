@@ -478,10 +478,12 @@
             lockKeyboard();
         }
 
-        function onContextMenu(ev: Event) {
+        function onContextMenu(_ev: Event) {
+            // 长按定时器 (360ms) 通常已经先锁过键盘了，这里只是兜底。
+            // 不要 preventDefault：那会连带掐掉系统的复制/粘贴菜单。
             hideKeyboard();
-            ev.preventDefault();
-            ev.stopImmediatePropagation();
+            // ev.preventDefault();
+            // ev.stopImmediatePropagation();
         }
 
         function onBlur() {
