@@ -377,19 +377,12 @@ const zh: Messages = {
   "error.window_redirect_no_location": "重定向缺少 Location header",
   "error.window_redirect_status": "异常响应状态：{status} {body}",
   "error.window_clipboard_failed": "剪贴板 {op} 失败：{err}",
+
+  // ── CLI 安装（GUI 触发的 Tauri command） ──
   "error.cli_not_bundled": "CLI 二进制未打包到此版本。构建：cargo build --release --features cli --bin rssh-cli",
   "error.cli_osascript_failed": "运行 osascript 失败：{err}",
   "error.cli_install_cancelled": "安装被取消或失败",
   "error.cli_priv_request_failed": "申请权限失败：{err}",
-  "error.cli_usage_open_fwd": "用法：rssh open fwd <name>",
-  "error.cli_profile_not_found": "Profile '{name}' 不存在",
-  "error.cli_credential_not_found": "Credential '{name}' 不存在",
-  "error.cli_forward_not_found": "Forward '{name}' 不存在",
-  "error.cli_run_ssh_failed": "运行 ssh 失败：{err}",
-  "error.cli_run_failed": "运行失败：{err}",
-  "error.cli_json_parse_failed": "JSON 解析错误：{err}",
-  "error.cli_github_token_not_set": "未设置 GitHub Token。请运行：rssh config set",
-  "error.cli_github_repo_not_set": "未设置 GitHub 仓库",
 };
 
 export default zh;

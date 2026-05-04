@@ -375,19 +375,12 @@ const en = {
   "error.window_redirect_no_location": "Redirect without Location header",
   "error.window_redirect_status": "Unexpected response status: {status} {body}",
   "error.window_clipboard_failed": "Clipboard {op} failed: {err}",
+
+  // ── CLI install (GUI-triggered Tauri commands) ──
   "error.cli_not_bundled": "CLI binary not bundled in this build. Build with: cargo build --release --features cli --bin rssh-cli",
   "error.cli_osascript_failed": "Run osascript failed: {err}",
   "error.cli_install_cancelled": "Installation cancelled or failed",
   "error.cli_priv_request_failed": "Request privileges failed: {err}",
-  "error.cli_usage_open_fwd": "Usage: rssh open fwd <name>",
-  "error.cli_profile_not_found": "Profile '{name}' not found",
-  "error.cli_credential_not_found": "Credential '{name}' not found",
-  "error.cli_forward_not_found": "Forward '{name}' not found",
-  "error.cli_run_ssh_failed": "Run ssh failed: {err}",
-  "error.cli_run_failed": "Run failed: {err}",
-  "error.cli_json_parse_failed": "JSON parse error: {err}",
-  "error.cli_github_token_not_set": "GitHub token not set. Run: rssh config set",
-  "error.cli_github_repo_not_set": "GitHub repo not set",
 };
 
 export default en;
