@@ -50,8 +50,12 @@ pub fn resolve_chain(db: &Db, target: &Profile) -> AppResult<Vec<Profile>> {
                 json!({ "max": MAX_HOPS }),
             ));
         }
-        let bp = db::profile::get(db, &bid)
-            .map_err(|_| AppError::not_found("bastion_profile_not_found", json!({ "id": &bid })))?;
+        let bp = db::profile::get(db, &bid).map_err(|e| match e {
+            AppError::NotFound(_) => {
+                AppError::not_found("bastion_profile_not_found", json!({ "id": &bid }))
+            }
+            other => other,
+        })?;
         visited.insert(bid);
         next_id = bp.bastion_profile_id.clone();
         chain.push(bp);

@@ -39,8 +39,10 @@ pub async fn ssh_connect(
     let (profile, credential, chain) = if let Some(pid) = profile_id {
         let p = crate::db::profile::get(&state.db, &pid)?;
         let cred_id = p.credential_id.as_deref().unwrap_or("");
-        let mut c = crate::db::credential::get(&state.db, cred_id)
-            .map_err(|_| AppError::not_found("profile_cred_not_found", json!({})))?;
+        let mut c = crate::db::credential::get(&state.db, cred_id).map_err(|e| match e {
+            AppError::NotFound(_) => AppError::not_found("profile_cred_not_found", json!({})),
+            other => other,
+        })?;
         load_secrets(&state, &mut c)?;
 
         // 解析整条堡垒机链 + 给每一跳加载凭证（含 secret）
@@ -48,8 +50,12 @@ pub async fn ssh_connect(
         let mut chain: Vec<(Profile, Credential)> = Vec::with_capacity(chain_profiles.len());
         for hop in chain_profiles {
             let bcid = hop.credential_id.as_deref().unwrap_or("");
-            let mut bc = crate::db::credential::get(&state.db, bcid)
-                .map_err(|_| AppError::not_found("bastion_cred_not_found", json!({ "name": hop.name })))?;
+            let mut bc = crate::db::credential::get(&state.db, bcid).map_err(|e| match e {
+                AppError::NotFound(_) => {
+                    AppError::not_found("bastion_cred_not_found", json!({ "name": hop.name.clone() }))
+                }
+                other => other,
+            })?;
             load_secrets(&state, &mut bc)?;
             chain.push((hop, bc));
         }

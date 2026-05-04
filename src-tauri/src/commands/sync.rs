@@ -72,17 +72,18 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
     crate::db::forward::clear_all(&state.db)?;
     crate::db::group::clear_all(&state.db)?;
 
-    let mut errors = Vec::new();
+    // 收集每条失败的结构化记录，避免把内层 AppError.to_string() 协议串塞进外层 params。
+    let mut errors: Vec<serde_json::Value> = Vec::new();
 
     if let Some(arr) = data["credentials"].as_array() {
         for item in arr {
             match serde_json::from_value::<crate::models::Credential>(item.clone()) {
                 Ok(c) => {
                     if let Err(e) = upsert_credential(state, &c) {
-                        errors.push(format!("credential {}: {e}", c.name));
+                        errors.push(json!({ "kind": "credential", "name": c.name, "code": e.code() }));
                     }
                 }
-                Err(e) => errors.push(format!("credential parse: {e}")),
+                Err(_) => errors.push(json!({ "kind": "credential", "code": "parse_failed" })),
             }
         }
     }
@@ -91,10 +92,10 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
             match serde_json::from_value::<crate::models::Profile>(item.clone()) {
                 Ok(p) => {
                     if let Err(e) = crate::db::profile::insert(&state.db, &p) {
-                        errors.push(format!("profile {}: {e}", p.name));
+                        errors.push(json!({ "kind": "profile", "name": p.name, "code": e.code() }));
                     }
                 }
-                Err(e) => errors.push(format!("profile parse: {e}")),
+                Err(_) => errors.push(json!({ "kind": "profile", "code": "parse_failed" })),
             }
         }
     }
@@ -103,10 +104,10 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
             match serde_json::from_value::<crate::models::Forward>(item.clone()) {
                 Ok(f) => {
                     if let Err(e) = crate::db::forward::insert(&state.db, &f) {
-                        errors.push(format!("forward {}: {e}", f.name));
+                        errors.push(json!({ "kind": "forward", "name": f.name, "code": e.code() }));
                     }
                 }
-                Err(e) => errors.push(format!("forward parse: {e}")),
+                Err(_) => errors.push(json!({ "kind": "forward", "code": "parse_failed" })),
             }
         }
     }
@@ -115,10 +116,10 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
             match serde_json::from_value::<crate::models::Group>(item.clone()) {
                 Ok(g) => {
                     if let Err(e) = crate::db::group::insert(&state.db, &g) {
-                        errors.push(format!("group {}: {e}", g.name));
+                        errors.push(json!({ "kind": "group", "name": g.name, "code": e.code() }));
                     }
                 }
-                Err(e) => errors.push(format!("group parse: {e}")),
+                Err(_) => errors.push(json!({ "kind": "group", "code": "parse_failed" })),
             }
         }
     }
@@ -140,15 +141,15 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
                             content: s.content,
                         };
                         if let Err(e) = crate::db::ai_skill::upsert(&state.db, &user) {
-                            errors.push(format!("skill {}: {e}", user.id));
+                            errors.push(json!({ "kind": "skill", "name": user.id, "code": e.code() }));
                         }
                     }
                     Ok(_) => {} // builtin 跳过
-                    Err(e) => errors.push(format!("skill parse: {e}")),
+                    Err(_) => errors.push(json!({ "kind": "skill", "code": "parse_failed" })),
                 }
             }
         } else {
-            errors.push("skills field must be an array".into());
+            errors.push(json!({ "kind": "skills", "code": "field_not_array" }));
         }
     }
 
@@ -157,7 +158,7 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
     } else {
         Err(AppError::other(
             "import_partial_failed",
-            json!({ "errors": errors.join("; ") }),
+            json!({ "count": errors.len(), "errors": errors }),
         ))
     }
 }

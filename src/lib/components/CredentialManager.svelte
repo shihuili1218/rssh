@@ -4,7 +4,7 @@
   import * as app from "../stores/app.svelte.ts";
   import type { Credential } from "../stores/app.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
-  import { t } from "../i18n/index.svelte.ts";
+  import { t, errMsg } from "../i18n/index.svelte.ts";
 
   let items = $state<Credential[]>([]);
   onMount(async () => { items = await app.loadCredentials(); });
@@ -14,7 +14,7 @@
     try {
       await invoke("delete_credential", { id });
       items = await app.loadCredentials();
-    } catch (e: any) { toast.error(`${t("toast.error.delete")}: ${String(e)}`); }
+    } catch (e: any) { toast.error(`${t("toast.error.delete")}: ${errMsg(e)}`); }
     finally { deleting = null; }
   }
 </script>

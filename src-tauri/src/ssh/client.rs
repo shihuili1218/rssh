@@ -905,7 +905,7 @@ pub async fn authenticate_with_agent_or_default_keys(
         Ok(()) => Ok(()),
         Err(key_err) => Err(AppError::ssh(
             "ssh_agent_and_default_failed",
-            json!({ "agent_err": agent_err.to_string(), "key_err": key_err.to_string() }),
+            json!({ "agent_code": agent_err.code(), "key_code": key_err.code() }),
         )),
     }
 }
@@ -1025,8 +1025,8 @@ pub async fn authenticate_with_default_keys(
         let pem = match std::fs::read_to_string(&path) {
             Ok(pem) => pem,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => {
-                errors.push(format!("{}: read failed ({e})", path.display()));
+            Err(_) => {
+                errors.push(json!({ "path": path.display().to_string(), "code": "io_error" }));
                 continue;
             }
         };
@@ -1037,14 +1037,14 @@ pub async fn authenticate_with_default_keys(
         let key = match decode_key_with_prompt(&pem, Some(&cache_key), &prompt_label, ctx).await {
             Ok(k) => k,
             Err(e) => {
-                errors.push(format!("{}: {e}", path.display()));
+                errors.push(json!({ "path": path.display().to_string(), "code": e.code() }));
                 continue;
             }
         };
 
         match authenticate_private_key(handle, username.clone(), key).await {
             Ok(()) => return Ok(()),
-            Err(e) => errors.push(format!("{}: {e}", path.display())),
+            Err(e) => errors.push(json!({ "path": path.display().to_string(), "code": e.code() })),
         }
     }
 
@@ -1054,7 +1054,7 @@ pub async fn authenticate_with_default_keys(
 
     Err(AppError::ssh(
         "ssh_default_keys_unavailable",
-        json!({ "errors": errors.join("; ") }),
+        json!({ "errors": errors }),
     ))
 }
 

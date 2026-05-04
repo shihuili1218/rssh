@@ -16,7 +16,7 @@ pub fn load(data_dir: &Path) -> AppResult<Vec<Snippet>> {
 pub fn save(data_dir: &Path, snippets: &[Snippet]) -> AppResult<()> {
     let path = data_dir.join("snippets.json");
     let data = serde_json::to_string_pretty(snippets)
-        .map_err(|e| crate::error::AppError::other("db_op_failed", serde_json::json!({ "err": e.to_string() })))?;
+        .map_err(|e| crate::error::AppError::other("serde_failed", serde_json::json!({ "err": e.to_string() })))?;
     std::fs::write(path, data)?;
     Ok(())
 }

@@ -38,11 +38,15 @@ pub fn delete_forward(state: State<AppState>, id: String) -> Result<(), AppError
 #[tauri::command]
 pub async fn forward_start(state: State<'_, AppState>, forward_id: String) -> AppResult<String> {
     let f = crate::db::forward::get(&state.db, &forward_id)?;
-    let p = crate::db::profile::get(&state.db, &f.profile_id)
-        .map_err(|_| AppError::not_found("fwd_profile_not_found", json!({})))?;
+    let p = crate::db::profile::get(&state.db, &f.profile_id).map_err(|e| match e {
+        AppError::NotFound(_) => AppError::not_found("fwd_profile_not_found", json!({})),
+        other => other,
+    })?;
     let cred_id = p.credential_id.as_deref().unwrap_or("");
-    let mut c = crate::db::credential::get(&state.db, cred_id)
-        .map_err(|_| AppError::not_found("fwd_cred_not_found", json!({})))?;
+    let mut c = crate::db::credential::get(&state.db, cred_id).map_err(|e| match e {
+        AppError::NotFound(_) => AppError::not_found("fwd_cred_not_found", json!({})),
+        other => other,
+    })?;
     if !c.id.is_empty() {
         c.secret = state
             .secret_store
@@ -57,8 +61,12 @@ pub async fn forward_start(state: State<'_, AppState>, forward_id: String) -> Ap
     let mut chain: Vec<(Profile, Credential)> = Vec::with_capacity(chain_profiles.len());
     for hop in chain_profiles {
         let bcid = hop.credential_id.as_deref().unwrap_or("");
-        let mut bc = crate::db::credential::get(&state.db, bcid)
-            .map_err(|_| AppError::not_found("bastion_cred_not_found", json!({ "name": hop.name })))?;
+        let mut bc = crate::db::credential::get(&state.db, bcid).map_err(|e| match e {
+            AppError::NotFound(_) => {
+                AppError::not_found("bastion_cred_not_found", json!({ "name": hop.name.clone() }))
+            }
+            other => other,
+        })?;
         if !bc.id.is_empty() {
             bc.secret = state
                 .secret_store

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
+  import { errMsg } from "../i18n/index.svelte.ts";
 
   let importJson = $state("");
   let exportJson = $state("");
@@ -12,7 +13,7 @@
     try {
       exportJson = await invoke<string>("export_config");
       msg = "Exported. Copy and save.";
-    } catch (e: any) { msg = "Export failed: " + String(e); }
+    } catch (e: any) { msg = "Export failed: " + errMsg(e); }
     setTimeout(() => msg = "", 3000);
   }
 
@@ -24,7 +25,7 @@
       await invoke("import_config", { json: importJson });
       importJson = "";
       msg = "Import successful";
-    } catch (e: any) { msg = "Import failed: " + String(e); }
+    } catch (e: any) { msg = "Import failed: " + errMsg(e); }
     finally { importing = false; }
     setTimeout(() => msg = "", 3000);
   }
@@ -35,7 +36,7 @@
       const entries = await invoke<any[]>("import_ssh_config", { content: sshConfig });
       msg = `Parsed ${entries.length} Host entries`;
       sshConfig = "";
-    } catch (e: any) { msg = "Parse failed: " + String(e); }
+    } catch (e: any) { msg = "Parse failed: " + errMsg(e); }
     setTimeout(() => msg = "", 3000);
   }
 </script>

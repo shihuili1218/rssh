@@ -1,6 +1,7 @@
 <script lang="ts">
     import {onMount} from "svelte";
     import {invoke} from "@tauri-apps/api/core";
+    import { errMsg } from "../i18n/index.svelte.ts";
 
     let githubToken = $state("");
     let githubRepo = $state("");
@@ -59,7 +60,7 @@
                 msg = "Pull successful";
             }
         } catch (e: any) {
-            msg = "Failed: " + String(e);
+            msg = "Failed: " + errMsg(e);
         } finally {
             syncing = false;
         }

@@ -1,6 +1,7 @@
 <script lang="ts">
     import {onMount} from "svelte";
     import {invoke} from "@tauri-apps/api/core";
+    import { errMsg } from "../i18n/index.svelte.ts";
 
     let status = $state<{ installed: boolean; path: string; bundled: boolean } | null>(null);
     let installing = $state(false);
@@ -20,7 +21,7 @@
             msg = `Installed to ${path}`;
             await refresh();
         } catch (e: any) {
-            msg = String(e);
+            msg = errMsg(e);
         } finally {
             installing = false;
         }

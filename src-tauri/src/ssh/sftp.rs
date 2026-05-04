@@ -71,12 +71,9 @@ impl SftpHandle {
         let log = crate::ssh::client::null_logger();
         let mut handle =
             client::ssh_connect(config, host, port, known_hosts_path, timeout_secs, log, None)
-                .await
-                .map_err(|e| AppError::sftp("sftp_connect_ssh_failed", json!({ "err": e.to_string() })))?;
+                .await?;
 
-        client::authenticate(&mut handle, credential, None)
-            .await
-            .map_err(|e| AppError::sftp("sftp_auth_failed", json!({ "err": e.to_string() })))?;
+        client::authenticate(&mut handle, credential, None).await?;
 
         let channel = handle
             .channel_open_session()

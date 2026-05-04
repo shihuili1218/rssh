@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
-  import { t } from "../i18n/index.svelte.ts";
+  import { t, errMsg } from "../i18n/index.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
 
   let { id = null }: { id: string | null } = $props();
@@ -34,7 +34,7 @@
       if (id) await invoke("update_credential", { credential });
       else await invoke("create_credential", { credential });
       app.navigate("credentials");
-    } catch (e: any) { toast.error(`${t("toast.error.save")}: ${String(e)}`); }
+    } catch (e: any) { toast.error(`${t("toast.error.save")}: ${errMsg(e)}`); }
     finally { saving = false; }
   }
 </script>

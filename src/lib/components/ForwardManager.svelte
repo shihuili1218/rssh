@@ -4,7 +4,7 @@
   import * as app from "../stores/app.svelte.ts";
   import type { Forward, Profile } from "../stores/app.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
-  import { t } from "../i18n/index.svelte.ts";
+  import { t, errMsg } from "../i18n/index.svelte.ts";
 
   let items = $state<Forward[]>([]);
   let profiles = $state<Profile[]>([]);
@@ -23,7 +23,7 @@
     try {
       await invoke("delete_forward", { id });
       items = await app.loadForwards();
-    } catch (e: any) { toast.error(`${t("toast.error.delete")}: ${String(e)}`); }
+    } catch (e: any) { toast.error(`${t("toast.error.delete")}: ${errMsg(e)}`); }
     finally { deleting = null; }
   }
 </script>

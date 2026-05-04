@@ -4,7 +4,7 @@
   import * as app from "../stores/app.svelte.ts";
   import type { Profile } from "../stores/app.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
-  import { t } from "../i18n/index.svelte.ts";
+  import { t, errMsg } from "../i18n/index.svelte.ts";
 
   let profiles = $state<Profile[]>([]);
   onMount(async () => { profiles = await app.loadProfiles(); });
@@ -15,7 +15,7 @@
     try {
       await invoke("delete_profile", { id });
       profiles = await app.loadProfiles();
-    } catch (e: any) { toast.error(`${t("toast.error.delete")}: ${String(e)}`); }
+    } catch (e: any) { toast.error(`${t("toast.error.delete")}: ${errMsg(e)}`); }
     finally { deleting = null; }
   }
 </script>

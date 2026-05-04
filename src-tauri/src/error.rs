@@ -26,44 +26,64 @@ impl std::fmt::Display for CodedMsg {
     }
 }
 
+impl std::error::Error for CodedMsg {}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
-    /// SQLite 错误 — `?` 自动转换。inner 是 rusqlite 自身英文消息（开发者面对）。
-    #[error("Database error: {0}")]
-    Database(#[from] rusqlite::Error),
+    /// SQLite 错误 — `From<rusqlite::Error>` 自动包装为 CodedMsg。
+    #[error(transparent)]
+    Database(CodedMsg),
 
-    /// 标准 IO 错误 — `?` 自动转换。inner 是 std::io 英文消息（开发者面对）。
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
+    /// 标准 IO 错误 — `From<std::io::Error>` 自动包装为 CodedMsg。
+    #[error(transparent)]
+    Io(CodedMsg),
 
-    /// 锁中毒——编程 bug，固定文案，不需要参数。
-    #[error("Lock poisoned")]
+    /// 锁中毒——编程 bug，固定 i18n code，无参数。
+    #[error("__rssh_err__|{{\"code\":\"lock_poisoned\",\"params\":{{}}}}")]
     Lock,
 
     /// SSH 协议 / 连接 / 认证错误。
-    #[error("{0}")]
+    #[error(transparent)]
     Ssh(CodedMsg),
 
     /// SFTP 操作错误。
-    #[error("{0}")]
+    #[error(transparent)]
     Sftp(CodedMsg),
 
     /// 本地 PTY 错误。
-    #[error("{0}")]
+    #[error(transparent)]
     Pty(CodedMsg),
 
     /// 资源未找到（profile / credential / session …）。
-    #[error("{0}")]
+    #[error(transparent)]
     NotFound(CodedMsg),
 
     /// 配置 / 用户输入校验错误。
-    #[error("{0}")]
+    #[error(transparent)]
     Config(CodedMsg),
 
     /// 不好归到上述具体分类的业务错误：外部 API 错误、内部 channel 状态、
     /// 批处理错误聚合、平台限制等。
-    #[error("{0}")]
+    #[error(transparent)]
     Other(CodedMsg),
+}
+
+impl From<rusqlite::Error> for AppError {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Database(CodedMsg::new(
+            "db_error",
+            serde_json::json!({ "err": e.to_string() }),
+        ))
+    }
+}
+
+impl From<std::io::Error> for AppError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(CodedMsg::new(
+            "io_error",
+            serde_json::json!({ "err": e.to_string() }),
+        ))
+    }
 }
 
 impl AppError {
@@ -84,6 +104,22 @@ impl AppError {
     }
     pub fn other(code: &'static str, params: serde_json::Value) -> Self {
         Self::Other(CodedMsg::new(code, params))
+    }
+
+    /// 仅取出 i18n code，不带 params——用于嵌套错误聚合，避免把整个协议串塞进
+    /// 外层 params。
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Database(c)
+            | Self::Io(c)
+            | Self::Ssh(c)
+            | Self::Sftp(c)
+            | Self::Pty(c)
+            | Self::NotFound(c)
+            | Self::Config(c)
+            | Self::Other(c) => c.code,
+            Self::Lock => "lock_poisoned",
+        }
     }
 }
 

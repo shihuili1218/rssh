@@ -4,6 +4,7 @@
     import * as app from "../stores/app.svelte.ts";
     import * as transfers from "../stores/transfers.svelte.ts";
     import type {RemoteEntry} from "../stores/app.svelte.ts";
+    import { errMsg } from "../i18n/index.svelte.ts";
 
     let {meta}: { meta: Record<string, string> } = $props();
 
@@ -31,7 +32,7 @@
             cwd = home;
             await listDir(home);
         } catch (e: any) {
-            error = String(e);
+            error = errMsg(e);
             loading = false;
         }
     });
@@ -47,7 +48,7 @@
             entries = await invoke<RemoteEntry[]>("sftp_list", {sftpId, path});
             cwd = path;
         } catch (e: any) {
-            error = String(e);
+            error = errMsg(e);
         }
         loading = false;
     }

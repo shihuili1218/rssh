@@ -1,7 +1,7 @@
 use rusqlite::params;
 
 use super::Db;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::models::Profile;
 
 fn row_to_profile(row: &rusqlite::Row) -> rusqlite::Result<Profile> {
@@ -32,7 +32,12 @@ pub fn get(db: &Db, id: &str) -> AppResult<Profile> {
         "SELECT id, name, host, port, credential_id, bastion_profile_id, init_command, group_id FROM profiles WHERE id = ?1",
         params![id],
         |row| row_to_profile(row),
-    ).map_err(Into::into)
+    ).map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::not_found("profile_not_found", serde_json::json!({ "id": id }))
+        }
+        other => other.into(),
+    })
 }
 
 pub fn insert(db: &Db, p: &Profile) -> AppResult<()> {

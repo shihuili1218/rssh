@@ -548,20 +548,17 @@ fn update_cred_with_secrets(conn: &CliCtx, c: &Credential) -> AppResult<()> {
 }
 
 fn write_temp_key(pem: &str) -> AppResult<tempfile::NamedTempFile> {
-    let mut f = tempfile::NamedTempFile::new().map_err(|e| rssh_lib::error::AppError::Io(e))?;
-    f.write_all(pem.as_bytes())
-        .map_err(|e| rssh_lib::error::AppError::Io(e))?;
+    let mut f = tempfile::NamedTempFile::new()?;
+    f.write_all(pem.as_bytes())?;
     if !pem.ends_with('\n') {
-        f.write_all(b"\n")
-            .map_err(|e| rssh_lib::error::AppError::Io(e))?;
+        f.write_all(b"\n")?;
     }
-    f.flush().map_err(|e| rssh_lib::error::AppError::Io(e))?;
+    f.flush()?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         f.as_file()
-            .set_permissions(std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| rssh_lib::error::AppError::Io(e))?;
+            .set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
     Ok(f)
 }

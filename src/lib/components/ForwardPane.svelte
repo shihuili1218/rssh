@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { errMsg } from "../i18n/index.svelte.ts";
 
   let { tabId, meta = {} }: {
     tabId: string;
@@ -55,7 +56,7 @@
       startPolling();
     } catch (e: any) {
       status = "error";
-      errorMsg = String(e);
+      errorMsg = errMsg(e);
     }
   }
 
@@ -66,7 +67,7 @@
       await invoke("forward_stop", { activeId });
       status = "stopped";
       activeId = null;
-    } catch (e: any) { errorMsg = String(e); }
+    } catch (e: any) { errorMsg = errMsg(e); }
   }
 
   function handleKeydown(e: KeyboardEvent) {

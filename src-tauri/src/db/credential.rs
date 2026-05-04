@@ -4,7 +4,7 @@
 use rusqlite::params;
 
 use super::Db;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::models::{Credential, CredentialType};
 
 fn row_to_credential(row: &rusqlite::Row) -> rusqlite::Result<Credential> {
@@ -33,7 +33,12 @@ pub fn get(db: &Db, id: &str) -> AppResult<Credential> {
         params![id],
         |row| row_to_credential(row),
     )
-    .map_err(Into::into)
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::not_found("credential_not_found", serde_json::json!({ "id": id }))
+        }
+        other => other.into(),
+    })
 }
 
 pub fn insert(db: &Db, cred: &Credential) -> AppResult<()> {

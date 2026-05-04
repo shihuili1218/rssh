@@ -4,7 +4,7 @@
   import type { Group } from "../stores/app.svelte.ts";
   import * as app from "../stores/app.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
-  import { t } from "../i18n/index.svelte.ts";
+  import { t, errMsg } from "../i18n/index.svelte.ts";
 
   let groups = $state<Group[]>([]);
   let adding = $state(false);
@@ -56,7 +56,7 @@
       await invoke("create_group", { group });
       adding = false;
       await refresh();
-    } catch (e: any) { toast.error(`${t("toast.error.add")}: ${String(e)}`); }
+    } catch (e: any) { toast.error(`${t("toast.error.add")}: ${errMsg(e)}`); }
   }
 
   async function saveEdit() {
@@ -71,7 +71,7 @@
       await invoke("update_group", { group });
       editId = null;
       await refresh();
-    } catch (e: any) { toast.error(`${t("toast.error.save")}: ${String(e)}`); }
+    } catch (e: any) { toast.error(`${t("toast.error.save")}: ${errMsg(e)}`); }
   }
 
   async function remove(id: string) {
@@ -80,7 +80,7 @@
       await invoke("delete_group", { id });
       if (editId === id) editId = null;
       await refresh();
-    } catch (e: any) { toast.error(`${t("toast.error.delete")}: ${String(e)}`); }
+    } catch (e: any) { toast.error(`${t("toast.error.delete")}: ${errMsg(e)}`); }
     finally { deleting = null; }
   }
 </script>

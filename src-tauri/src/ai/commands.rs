@@ -265,8 +265,7 @@ pub async fn ai_audit_save(
         .map(|s| s.audit.clone())
         .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
     let g = audit.lock().map_err(|_| AppError::Lock)?;
-    g.save_to_file(&PathBuf::from(file_path))
-        .map_err(AppError::Io)?;
+    g.save_to_file(&PathBuf::from(file_path))?;
     Ok(())
 }
 
@@ -306,7 +305,7 @@ pub async fn ai_audit_save_pick(
         let Some(handle) = pick else { return Ok(None) };
         let path = handle.path().to_path_buf();
         let g = audit.lock().map_err(|_| AppError::Lock)?;
-        g.save_to_file(&path).map_err(AppError::Io)?;
+        g.save_to_file(&path)?;
         Ok(Some(path.to_string_lossy().into_owned()))
     }
 }
