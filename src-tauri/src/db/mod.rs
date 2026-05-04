@@ -42,7 +42,7 @@ impl Db {
 
 /// 数据目录：桌面用 ~/.rssh，Android 用 app_data_dir
 pub fn data_dir() -> PathBuf {
-    let mut p = dirs::home_dir().expect("无法获取 home 目录");
+    let mut p = dirs::home_dir().expect("home directory unavailable");
     p.push(".rssh");
     p
 }

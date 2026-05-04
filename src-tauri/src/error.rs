@@ -2,47 +2,88 @@ use std::sync::{Mutex, MutexGuard};
 
 use serde::Serialize;
 
+/// i18n 错误消息：`code` 对应前端 `error.<code>` 翻译键，`params` 用于占位符替换。
+///
+/// `Display` 输出形如 `__rssh_err__|{"code":"...","params":{...}}`，前端 `errMsg()`
+/// 识别此前缀走翻译表。每个 `AppError` 业务变体都装一个 `CodedMsg`——所有错误
+/// 必须 i18n，没有"裸字符串报错信息"的逃生通道。
+#[derive(Debug, Clone)]
+pub struct CodedMsg {
+    pub code: &'static str,
+    pub params: serde_json::Value,
+}
+
+impl CodedMsg {
+    pub fn new(code: &'static str, params: serde_json::Value) -> Self {
+        Self { code, params }
+    }
+}
+
+impl std::fmt::Display for CodedMsg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let payload = serde_json::json!({ "code": self.code, "params": &self.params });
+        write!(f, "__rssh_err__|{payload}")
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
-    #[error("数据库错误: {0}")]
+    /// SQLite 错误 — `?` 自动转换。inner 是 rusqlite 自身英文消息（开发者面对）。
+    #[error("Database error: {0}")]
     Database(#[from] rusqlite::Error),
 
-    #[error("SSH 连接失败: {0}")]
-    Ssh(String),
-
-    #[error("SFTP 操作失败: {0}")]
-    Sftp(String),
-
-    #[error("PTY 错误: {0}")]
-    Pty(String),
-
-    #[error("IO 错误: {0}")]
+    /// 标准 IO 错误 — `?` 自动转换。inner 是 std::io 英文消息（开发者面对）。
+    #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("未找到: {0}")]
-    NotFound(String),
-
-    #[error("配置错误: {0}")]
-    Config(String),
-
-    #[error("锁已中毒")]
+    /// 锁中毒——编程 bug，固定文案，不需要参数。
+    #[error("Lock poisoned")]
     Lock,
 
-    /// i18n 错误码 + 参数。前端按 `error.<code>` 翻译。
-    /// 序列化形态：`__rssh_err__|{"code":"...","params":{...}}`，前端识别前缀走翻译表，
-    /// 否则原样显示。这样老的 String 错误不破坏。
-    #[error("__rssh_err__|{0}")]
-    Coded(String),
-
+    /// SSH 协议 / 连接 / 认证错误。
     #[error("{0}")]
-    Other(String),
+    Ssh(CodedMsg),
+
+    /// SFTP 操作错误。
+    #[error("{0}")]
+    Sftp(CodedMsg),
+
+    /// 本地 PTY 错误。
+    #[error("{0}")]
+    Pty(CodedMsg),
+
+    /// 资源未找到（profile / credential / session …）。
+    #[error("{0}")]
+    NotFound(CodedMsg),
+
+    /// 配置 / 用户输入校验错误。
+    #[error("{0}")]
+    Config(CodedMsg),
+
+    /// 不好归到上述具体分类的业务错误：外部 API 错误、内部 channel 状态、
+    /// 批处理错误聚合、平台限制等。
+    #[error("{0}")]
+    Other(CodedMsg),
 }
 
 impl AppError {
-    /// 构造一个 i18n 错误：`code` 对应前端 `error.<code>` 翻译键，`params` 用于占位符替换。
-    pub fn coded(code: &'static str, params: serde_json::Value) -> Self {
-        let payload = serde_json::json!({ "code": code, "params": params });
-        Self::Coded(payload.to_string())
+    pub fn ssh(code: &'static str, params: serde_json::Value) -> Self {
+        Self::Ssh(CodedMsg::new(code, params))
+    }
+    pub fn sftp(code: &'static str, params: serde_json::Value) -> Self {
+        Self::Sftp(CodedMsg::new(code, params))
+    }
+    pub fn pty(code: &'static str, params: serde_json::Value) -> Self {
+        Self::Pty(CodedMsg::new(code, params))
+    }
+    pub fn not_found(code: &'static str, params: serde_json::Value) -> Self {
+        Self::NotFound(CodedMsg::new(code, params))
+    }
+    pub fn config(code: &'static str, params: serde_json::Value) -> Self {
+        Self::Config(CodedMsg::new(code, params))
+    }
+    pub fn other(code: &'static str, params: serde_json::Value) -> Self {
+        Self::Other(CodedMsg::new(code, params))
     }
 }
 

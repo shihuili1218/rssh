@@ -281,7 +281,7 @@ fn osc_open(kind: &str, name: &str) {
 fn cmd_open(conn: &CliCtx, target: &str, name: Option<&str>) -> AppResult<()> {
     if target == "fwd" {
         let fname = name.ok_or_else(|| {
-            rssh_lib::error::AppError::Config("Usage: rssh open fwd <name>".into())
+            rssh_lib::error::AppError::config("cli_usage_open_fwd", serde_json::json!({}))
         })?;
         if in_rssh_app() {
             osc_open("fwd", fname);
@@ -302,7 +302,7 @@ fn cmd_open_ssh(conn: &CliCtx, name: &str) -> AppResult<()> {
         .iter()
         .find(|p| p.name.eq_ignore_ascii_case(name))
         .ok_or_else(|| {
-            rssh_lib::error::AppError::NotFound(format!("Profile '{}' not found", name))
+            rssh_lib::error::AppError::not_found("cli_profile_not_found", serde_json::json!({ "name": name }))
         })?;
 
     let cred = profile
@@ -384,7 +384,7 @@ fn cmd_open_ssh(conn: &CliCtx, name: &str) -> AppResult<()> {
 
     let status = cmd
         .status()
-        .map_err(|e| rssh_lib::error::AppError::Ssh(format!("Failed to run ssh: {e}")))?;
+        .map_err(|e| rssh_lib::error::AppError::ssh("cli_run_ssh_failed", serde_json::json!({ "err": e.to_string() })))?;
     std::process::exit(status.code().unwrap_or(1));
 }
 
@@ -394,7 +394,7 @@ fn cmd_open_fwd(conn: &CliCtx, name: &str) -> AppResult<()> {
         .iter()
         .find(|f| f.name.eq_ignore_ascii_case(name))
         .ok_or_else(|| {
-            rssh_lib::error::AppError::NotFound(format!("Forward '{}' not found", name))
+            rssh_lib::error::AppError::not_found("cli_forward_not_found", serde_json::json!({ "name": name }))
         })?;
 
     let profile = db::profile::get(conn, &fwd.profile_id)?;
@@ -477,7 +477,7 @@ fn cmd_open_fwd(conn: &CliCtx, name: &str) -> AppResult<()> {
     println!("Forwarding {} {} ...", flag, fwd_arg);
     let status = cmd
         .status()
-        .map_err(|e| rssh_lib::error::AppError::Ssh(format!("{e}")))?;
+        .map_err(|e| rssh_lib::error::AppError::ssh("cli_run_ssh_failed", serde_json::json!({ "err": e.to_string() })))?;
     std::process::exit(status.code().unwrap_or(1));
 }
 
@@ -708,7 +708,7 @@ fn edit_profile(conn: &CliCtx, name: &str) -> AppResult<()> {
         .iter()
         .find(|p| p.name.eq_ignore_ascii_case(name))
         .ok_or_else(|| {
-            rssh_lib::error::AppError::NotFound(format!("Profile '{name}' not found"))
+            rssh_lib::error::AppError::not_found("cli_profile_not_found", serde_json::json!({ "name": name }))
         })?;
 
     let mut updated = p.clone();
@@ -781,7 +781,7 @@ fn edit_credential(conn: &CliCtx, name: &str) -> AppResult<()> {
         .iter()
         .find(|c| c.name.eq_ignore_ascii_case(name))
         .ok_or_else(|| {
-            rssh_lib::error::AppError::NotFound(format!("Credential '{name}' not found"))
+            rssh_lib::error::AppError::not_found("cli_credential_not_found", serde_json::json!({ "name": name }))
         })?;
 
     // 把 SecretStore 里的 secret 灌进当前值，便于后面"保留"判定
@@ -828,7 +828,7 @@ fn edit_forward(conn: &CliCtx, name: &str) -> AppResult<()> {
         .iter()
         .find(|f| f.name.eq_ignore_ascii_case(name))
         .ok_or_else(|| {
-            rssh_lib::error::AppError::NotFound(format!("Forward '{name}' not found"))
+            rssh_lib::error::AppError::not_found("cli_forward_not_found", serde_json::json!({ "name": name }))
         })?;
 
     let mut updated = f.clone();
@@ -887,7 +887,7 @@ fn find_profile_id(conn: &CliCtx, name: &str) -> AppResult<String> {
         .iter()
         .find(|p| p.name.eq_ignore_ascii_case(name))
         .map(|p| p.id.clone())
-        .ok_or_else(|| rssh_lib::error::AppError::NotFound(format!("Profile '{name}' not found")))
+        .ok_or_else(|| rssh_lib::error::AppError::not_found("cli_profile_not_found", serde_json::json!({ "name": name })))
 }
 
 fn find_credential_id(conn: &CliCtx, name: &str) -> AppResult<String> {
@@ -896,7 +896,7 @@ fn find_credential_id(conn: &CliCtx, name: &str) -> AppResult<String> {
         .find(|c| c.name.eq_ignore_ascii_case(name))
         .map(|c| c.id.clone())
         .ok_or_else(|| {
-            rssh_lib::error::AppError::NotFound(format!("Credential '{name}' not found"))
+            rssh_lib::error::AppError::not_found("cli_credential_not_found", serde_json::json!({ "name": name }))
         })
 }
 
@@ -905,7 +905,7 @@ fn find_forward_id(conn: &CliCtx, name: &str) -> AppResult<String> {
         .iter()
         .find(|f| f.name.eq_ignore_ascii_case(name))
         .map(|f| f.id.clone())
-        .ok_or_else(|| rssh_lib::error::AppError::NotFound(format!("Forward '{name}' not found")))
+        .ok_or_else(|| rssh_lib::error::AppError::not_found("cli_forward_not_found", serde_json::json!({ "name": name })))
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -936,12 +936,12 @@ fn build_config_json(conn: &CliCtx) -> AppResult<String> {
         "credentials": credentials,
         "forwards": forwards,
     }))
-    .map_err(|e| rssh_lib::error::AppError::Other(e.to_string()))
+    .map_err(|e| rssh_lib::error::AppError::other("serde_failed", serde_json::json!({ "err": e.to_string() })))
 }
 
 fn import_config_json(conn: &CliCtx, json: &str) -> AppResult<()> {
     let data: serde_json::Value = serde_json::from_str(json)
-        .map_err(|e| rssh_lib::error::AppError::Config(format!("JSON parse error: {e}")))?;
+        .map_err(|e| rssh_lib::error::AppError::config("cli_json_parse_failed", serde_json::json!({ "err": e.to_string() })))?;
 
     // 清空旧 secrets
     if let Ok(old) = db::credential::list(conn) {
@@ -1039,10 +1039,10 @@ fn config_push(conn: &CliCtx) -> AppResult<()> {
         .secret_store()
         .get(&setting_key("github_token"))?
         .ok_or_else(|| {
-            rssh_lib::error::AppError::Config("GitHub token not set. Run: rssh config set".into())
+            rssh_lib::error::AppError::config("cli_github_token_not_set", serde_json::json!({}))
         })?;
     let repo = db::settings::get(conn, "github_repo")?
-        .ok_or_else(|| rssh_lib::error::AppError::Config("GitHub repo not set".into()))?;
+        .ok_or_else(|| rssh_lib::error::AppError::config("cli_github_repo_not_set", serde_json::json!({})))?;
     let branch = db::settings::get(conn, "github_branch")?.unwrap_or("main".into());
 
     let mut json_data = {
@@ -1059,7 +1059,7 @@ fn config_push(conn: &CliCtx) -> AppResult<()> {
             "version": 1, "exported_at": chrono::Utc::now().to_rfc3339(),
             "profiles": profiles, "credentials": credentials, "forwards": forwards,
         }))
-        .map_err(|e| rssh_lib::error::AppError::Other(e.to_string()))?
+        .map_err(|e| rssh_lib::error::AppError::other("serde_failed", serde_json::json!({ "err": e.to_string() })))?
     };
 
     let pw = read_password("Encryption password: ");
@@ -1070,7 +1070,7 @@ fn config_push(conn: &CliCtx) -> AppResult<()> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|e| rssh_lib::error::AppError::Other(e.to_string()))?;
+        .map_err(|e| rssh_lib::error::AppError::other("serde_failed", serde_json::json!({ "err": e.to_string() })))?;
     rt.block_on(sync.push(&encrypted))?;
     println!("Pushed to GitHub.");
     Ok(())
@@ -1081,17 +1081,17 @@ fn config_pull(conn: &CliCtx) -> AppResult<()> {
         .secret_store()
         .get(&setting_key("github_token"))?
         .ok_or_else(|| {
-            rssh_lib::error::AppError::Config("GitHub token not set. Run: rssh config set".into())
+            rssh_lib::error::AppError::config("cli_github_token_not_set", serde_json::json!({}))
         })?;
     let repo = db::settings::get(conn, "github_repo")?
-        .ok_or_else(|| rssh_lib::error::AppError::Config("GitHub repo not set".into()))?;
+        .ok_or_else(|| rssh_lib::error::AppError::config("cli_github_repo_not_set", serde_json::json!({})))?;
     let branch = db::settings::get(conn, "github_branch")?.unwrap_or("main".into());
 
     let sync = rssh_lib::sync::github::GitHubSync::from_settings(&token, &repo, &branch)?;
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|e| rssh_lib::error::AppError::Other(e.to_string()))?;
+        .map_err(|e| rssh_lib::error::AppError::other("serde_failed", serde_json::json!({ "err": e.to_string() })))?;
     let encrypted = rt.block_on(sync.pull())?;
 
     let pw = read_password("Decryption password: ");

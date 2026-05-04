@@ -17,7 +17,7 @@ impl PtyHandle {
     pub fn write(&self, data: &[u8]) -> AppResult<()> {
         locked(&self.writer)?
             .write_all(data)
-            .map_err(|e| AppError::Pty(e.to_string()))
+            .map_err(|e| AppError::pty("pty_op_failed", serde_json::json!({ "err": e.to_string() })))
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> AppResult<()> {
@@ -28,7 +28,7 @@ impl PtyHandle {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| AppError::Pty(e.to_string()))
+            .map_err(|e| AppError::pty("pty_op_failed", serde_json::json!({ "err": e.to_string() })))
     }
 }
 
@@ -63,7 +63,7 @@ pub fn spawn(
             pixel_width: 0,
             pixel_height: 0,
         })
-        .map_err(|e| AppError::Pty(e.to_string()))?;
+        .map_err(|e| AppError::pty("pty_op_failed", serde_json::json!({ "err": e.to_string() })))?;
 
     let shell = shell_override
         .filter(|s| !s.is_empty())
@@ -79,17 +79,17 @@ pub fn spawn(
     let _child = pair
         .slave
         .spawn_command(cmd)
-        .map_err(|e| AppError::Pty(e.to_string()))?;
+        .map_err(|e| AppError::pty("pty_op_failed", serde_json::json!({ "err": e.to_string() })))?;
     drop(pair.slave);
 
     let reader = pair
         .master
         .try_clone_reader()
-        .map_err(|e| AppError::Pty(e.to_string()))?;
+        .map_err(|e| AppError::pty("pty_op_failed", serde_json::json!({ "err": e.to_string() })))?;
     let writer = pair
         .master
         .take_writer()
-        .map_err(|e| AppError::Pty(e.to_string()))?;
+        .map_err(|e| AppError::pty("pty_op_failed", serde_json::json!({ "err": e.to_string() })))?;
 
     let id = uuid::Uuid::new_v4().to_string();
     let handle = PtyHandle {

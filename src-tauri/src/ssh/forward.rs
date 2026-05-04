@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use serde::Serialize;
+use serde_json::json;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -87,7 +88,7 @@ pub async fn start_local(
 
     let listener = TcpListener::bind(format!("127.0.0.1:{local_port}"))
         .await
-        .map_err(|e| AppError::Ssh(format!("端口 {local_port} 绑定失败: {e}")))?;
+        .map_err(|e| AppError::ssh("ssh_port_bind_failed", json!({ "port": local_port, "err": e.to_string() })))?;
 
     let bytes_tx = Arc::new(AtomicU64::new(0));
     let bytes_rx = Arc::new(AtomicU64::new(0));
@@ -176,7 +177,7 @@ pub async fn start_remote(
     let _bound_port = handle
         .tcpip_forward("0.0.0.0", forward.remote_port as u32)
         .await
-        .map_err(|e| AppError::Ssh(format!("tcpip_forward 失败: {e}")))?;
+        .map_err(|e| AppError::ssh("ssh_tcpip_forward_failed", json!({ "err": e.to_string() })))?;
 
     let local_host = forward.remote_host.clone();
     let local_port = forward.local_port;
@@ -348,7 +349,7 @@ pub async fn start_dynamic(
 
     let listener = TcpListener::bind(format!("127.0.0.1:{local_port}"))
         .await
-        .map_err(|e| AppError::Ssh(format!("端口 {local_port} 绑定失败: {e}")))?;
+        .map_err(|e| AppError::ssh("ssh_port_bind_failed", json!({ "port": local_port, "err": e.to_string() })))?;
 
     let bytes_tx = Arc::new(AtomicU64::new(0));
     let bytes_rx = Arc::new(AtomicU64::new(0));

@@ -105,7 +105,7 @@ pub fn cli_status(app: AppHandle) -> CliStatus {
 #[tauri::command]
 pub fn cli_install(app: AppHandle) -> AppResult<String> {
     let src = find_bundled(&app)
-        .ok_or_else(|| AppError::Other("CLI binary not bundled in this build. Build with: cargo build --release --features cli --bin rssh-cli".into()))?;
+        .ok_or_else(|| AppError::other("cli_not_bundled", serde_json::json!({})))?;
 
     let dest_dir = install_dir();
     let dest = dest_dir.join(cli_name());
@@ -123,9 +123,9 @@ pub fn cli_install(app: AppHandle) -> AppResult<String> {
             .arg("-e")
             .arg(&script)
             .status()
-            .map_err(|e| AppError::Other(format!("Failed to run osascript: {e}")))?;
+            .map_err(|e| AppError::other("cli_osascript_failed", serde_json::json!({ "err": e.to_string() })))?;
         if !status.success() {
-            return Err(AppError::Other("Installation cancelled or failed.".into()));
+            return Err(AppError::other("cli_install_cancelled", serde_json::json!({})));
         }
     }
 
@@ -142,9 +142,9 @@ pub fn cli_install(app: AppHandle) -> AppResult<String> {
                 dest.display()
             ))
             .status()
-            .map_err(|e| AppError::Other(format!("Failed to request privileges: {e}")))?;
+            .map_err(|e| AppError::other("cli_priv_request_failed", serde_json::json!({ "err": e.to_string() })))?;
         if !status.success() {
-            return Err(AppError::Other("Installation cancelled or failed.".into()));
+            return Err(AppError::other("cli_install_cancelled", serde_json::json!({})));
         }
     }
 

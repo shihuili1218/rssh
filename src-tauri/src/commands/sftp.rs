@@ -1,6 +1,7 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use serde_json::json;
 use tauri::State;
 
 use crate::error::{locked, AppError, AppResult};
@@ -66,7 +67,7 @@ pub async fn sftp_connect_session(
         let sessions = locked(&state.sessions)?;
         sessions
             .get(&session_id)
-            .ok_or_else(|| AppError::NotFound("SSH 会话不存在".into()))?
+            .ok_or_else(|| AppError::not_found("ssh_session_not_found_msg", json!({})))?
             .ssh_handle()
             .clone()
     };
@@ -88,7 +89,7 @@ fn get_sftp(state: &State<'_, AppState>, sftp_id: &str) -> AppResult<Arc<SftpHan
     locked(&state.sftp_sessions)?
         .get(sftp_id)
         .cloned()
-        .ok_or(AppError::NotFound("SFTP 会话不存在".into()))
+        .ok_or_else(|| AppError::not_found("sftp_session_not_found", json!({})))
 }
 
 #[tauri::command]
@@ -190,7 +191,7 @@ pub async fn sftp_pick_and_upload(
 
     let name = local
         .file_name()
-        .ok_or_else(|| AppError::Other("Invalid filename".into()))?
+        .ok_or_else(|| AppError::other("sftp_invalid_filename", json!({})))?
         .to_string_lossy()
         .into_owned();
     let remote_path = if remote_dir == "/" {

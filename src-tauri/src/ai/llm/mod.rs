@@ -94,9 +94,10 @@ pub fn build_client(
         "openai" | "openai-compatible" => {
             Ok(Box::new(openai::OpenAiClient::new(api_key, endpoint)))
         }
-        other => Err(crate::error::AppError::Config(format!(
-            "未知 LLM provider: {other}"
-        ))),
+        other => Err(crate::error::AppError::config(
+            "llm_unknown_provider",
+            serde_json::json!({ "provider": other }),
+        )),
     }
 }
 

@@ -1,3 +1,5 @@
+use serde_json::json;
+
 use crate::error::{AppError, AppResult};
 
 // ---------------------------------------------------------------------------
@@ -43,7 +45,7 @@ pub fn encrypt(json: &str, password: &str) -> AppResult<String> {
 
     let salt = {
         let mut buf = [0u8; 16];
-        getrandom::getrandom(&mut buf).map_err(|e| AppError::Other(format!("RNG failed: {e}")))?;
+        getrandom::getrandom(&mut buf).map_err(|e| AppError::other("crypto_rng_failed", json!({ "err": e.to_string() })))?;
         buf
     };
 
@@ -65,9 +67,9 @@ pub fn decrypt(b64: &str, password: &str) -> AppResult<String> {
 
     let data = STANDARD
         .decode(b64)
-        .map_err(|e| AppError::Config(format!("Base64 解码失败: {e}")))?;
+        .map_err(|e| AppError::config("crypto_base64_decode_failed", json!({ "err": e.to_string() })))?;
     if data.len() < 49 {
-        return Err(AppError::Config("Invalid encrypted config".into()));
+        return Err(AppError::config("crypto_invalid_payload", json!({})));
     }
 
     let salt = &data[0..16];
@@ -81,10 +83,10 @@ pub fn decrypt(b64: &str, password: &str) -> AppResult<String> {
         diff |= a ^ b;
     }
     if diff != 0 {
-        return Err(AppError::Config("密码错误或数据损坏".into()));
+        return Err(AppError::config("crypto_password_or_corrupted", json!({})));
     }
 
     let ks = keystream(&key, cipher.len());
     let plain: Vec<u8> = cipher.iter().zip(ks.iter()).map(|(c, k)| c ^ k).collect();
-    String::from_utf8(plain).map_err(|_| AppError::Config("解密数据非 UTF-8".into()))
+    String::from_utf8(plain).map_err(|_| AppError::config("crypto_decrypt_not_utf8", json!({})))
 }

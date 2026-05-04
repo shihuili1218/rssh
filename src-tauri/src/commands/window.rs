@@ -18,7 +18,7 @@ pub fn open_tab_in_new_window(app: AppHandle, clone: String) -> AppResult<()> {
     // Do NOT JSON.parse here — that would store an object, and the frontend's
     // JSON.parse(object) would coerce to "[object Object]" and throw.
     let json_literal = serde_json::to_string(&clone)
-        .map_err(|e| AppError::Other(format!("Failed to encode clone payload: {e}")))?;
+        .map_err(|e| AppError::other("window_clone_encode_failed", serde_json::json!({ "err": e.to_string() })))?;
     let init_script = format!("window.__rssh_clone = {};", json_literal);
 
     let label = format!("rssh-{}", Uuid::new_v4().simple());
@@ -27,7 +27,7 @@ pub fn open_tab_in_new_window(app: AppHandle, clone: String) -> AppResult<()> {
         .inner_size(1200.0, 800.0)
         .initialization_script(&init_script)
         .build()
-        .map_err(|e| AppError::Other(format!("Failed to open window: {e}")))?;
+        .map_err(|e| AppError::other("window_open_failed", serde_json::json!({ "err": e.to_string() })))?;
     Ok(())
 }
 
@@ -36,7 +36,7 @@ pub fn open_tab_in_new_window(app: AppHandle, clone: String) -> AppResult<()> {
 #[tauri::command]
 pub fn open_external_url(url: String) -> AppResult<()> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err(AppError::Other(format!("Refusing non-http(s) URL: {url}")));
+        return Err(AppError::config("window_non_https_url", serde_json::json!({ "url": url })));
     }
 
     #[cfg(target_os = "macos")]
@@ -48,7 +48,7 @@ pub fn open_external_url(url: String) -> AppResult<()> {
 
     result
         .map(|_| ())
-        .map_err(|e| AppError::Other(format!("Failed to open URL: {e}")))
+        .map_err(|e| AppError::other("window_open_url_failed", serde_json::json!({ "err": e.to_string() })))
 }
 
 /// Fetch the latest release tag from a GitHub repo.
@@ -66,39 +66,40 @@ pub fn open_external_url(url: String) -> AppResult<()> {
 #[tauri::command]
 pub async fn fetch_latest_release_tag(repo: String) -> AppResult<String> {
     if repo.is_empty() || !repo.contains('/') || repo.contains(char::is_whitespace) {
-        return Err(AppError::Other(format!("Invalid repo: {repo}")));
+        return Err(AppError::config("window_invalid_repo", serde_json::json!({ "repo": repo })));
     }
     let url = format!("https://github.com/{repo}/releases/latest");
     let client = reqwest::Client::builder()
         .user_agent(concat!("rssh/", env!("CARGO_PKG_VERSION")))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|e| AppError::Other(format!("HTTP client: {e}")))?;
+        .map_err(|e| AppError::other("window_http_failed", serde_json::json!({ "op": "client", "err": e.to_string() })))?;
 
     let resp = client
         .get(&url)
         .send()
         .await
-        .map_err(|e| AppError::Other(format!("Request failed: {e}")))?;
+        .map_err(|e| AppError::other("window_http_failed", serde_json::json!({ "op": "request", "err": e.to_string() })))?;
 
     let status = resp.status();
     if !status.is_redirection() {
-        return Err(AppError::Other(format!(
-            "GitHub releases {status} (expected redirect)"
-        )));
+        return Err(AppError::other(
+            "window_redirect_status",
+            serde_json::json!({ "status": status.to_string(), "body": "expected redirect" }),
+        ));
     }
     let location = resp
         .headers()
         .get(reqwest::header::LOCATION)
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| AppError::Other("Redirect without Location".into()))?;
+        .ok_or_else(|| AppError::other("window_redirect_no_location", serde_json::json!({})))?;
 
     // Location is like "/owner/repo/releases/tag/v1.2.3" or full URL.
     location
         .rsplit_once("/releases/tag/")
         .map(|(_, tag)| tag.trim().to_string())
         .filter(|t| !t.is_empty())
-        .ok_or_else(|| AppError::Other(format!("Unexpected redirect target: {location}")))
+        .ok_or_else(|| AppError::other("window_unexpected_redirect", serde_json::json!({ "location": location })))
 }
 
 /// Read the system clipboard as text.
@@ -109,7 +110,7 @@ pub async fn fetch_latest_release_tag(repo: String) -> AppResult<String> {
 #[tauri::command]
 pub fn clipboard_read() -> AppResult<String> {
     let mut cb =
-        arboard::Clipboard::new().map_err(|e| AppError::Other(format!("Clipboard init: {e}")))?;
+        arboard::Clipboard::new().map_err(|e| AppError::other("window_clipboard_failed", serde_json::json!({ "op": "init", "err": e.to_string() })))?;
     cb.get_text()
-        .map_err(|e| AppError::Other(format!("Clipboard read: {e}")))
+        .map_err(|e| AppError::other("window_clipboard_failed", serde_json::json!({ "op": "read", "err": e.to_string() })))
 }

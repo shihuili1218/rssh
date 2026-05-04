@@ -1,5 +1,6 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
+use serde_json::json;
 
 use crate::error::{AppError, AppResult};
 
@@ -24,7 +25,7 @@ impl GitHubSync {
     pub fn from_settings(token: &str, repo_slug: &str, branch: &str) -> AppResult<Self> {
         let parts: Vec<&str> = repo_slug.split('/').collect();
         if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
-            return Err(AppError::Config("Repo 格式应为 owner/repo".into()));
+            return Err(AppError::config("github_repo_format", json!({})));
         }
         Ok(Self {
             token: token.to_string(),
@@ -71,11 +72,11 @@ impl GitHubSync {
             .json(&body)
             .send()
             .await
-            .map_err(|e| AppError::Other(format!("GitHub push 失败: {e}")))?;
+            .map_err(|e| AppError::other("github_push_failed", json!({ "err": e.to_string() })))?;
 
         if !resp.status().is_success() {
             let msg = resp.text().await.unwrap_or_default();
-            return Err(AppError::Other(format!("GitHub {msg}")));
+            return Err(AppError::other("github_api_error", json!({ "msg": msg })));
         }
         Ok(())
     }
@@ -93,28 +94,28 @@ impl GitHubSync {
             .headers(self.headers())
             .send()
             .await
-            .map_err(|e| AppError::Other(format!("GitHub pull 失败: {e}")))?;
+            .map_err(|e| AppError::other("github_pull_failed", json!({ "err": e.to_string() })))?;
 
         if !resp.status().is_success() {
             let msg = resp.text().await.unwrap_or_default();
-            return Err(AppError::Other(format!("GitHub {msg}")));
+            return Err(AppError::other("github_api_error", json!({ "msg": msg })));
         }
 
         let file: FileResponse = resp
             .json()
             .await
-            .map_err(|e| AppError::Other(format!("解析失败: {e}")))?;
+            .map_err(|e| AppError::other("github_parse_failed", json!({ "err": e.to_string() })))?;
 
         let raw = file
             .content
-            .ok_or_else(|| AppError::Other("GitHub 返回无内容".into()))?
+            .ok_or_else(|| AppError::other("github_empty_content", json!({})))?
             .replace('\n', "");
 
         let bytes = STANDARD
             .decode(&raw)
-            .map_err(|e| AppError::Other(format!("Base64 解码失败: {e}")))?;
+            .map_err(|e| AppError::config("crypto_base64_decode_failed", json!({ "err": e.to_string() })))?;
 
-        String::from_utf8(bytes).map_err(|e| AppError::Other(format!("UTF-8 错误: {e}")))
+        String::from_utf8(bytes).map_err(|e| AppError::other("github_utf8_failed", json!({ "err": e.to_string() })))
     }
 
     fn headers(&self) -> reqwest::header::HeaderMap {

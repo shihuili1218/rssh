@@ -154,12 +154,12 @@ impl LlmClient for AnthropicClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| AppError::Other(format!("LLM 请求失败: {e}")))?;
+            .map_err(|e| AppError::other("llm_request_failed", serde_json::json!({ "err": e.to_string() })))?;
 
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(AppError::Other(format!("LLM 错误 {status}: {text}")));
+            return Err(AppError::other("llm_error_status", serde_json::json!({ "status": status.to_string(), "text": text })));
         }
 
         // 流式解析
@@ -173,7 +173,7 @@ impl LlmClient for AnthropicClient {
         let mut parser = SseParser::new();
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
-            let bytes = chunk.map_err(|e| AppError::Other(format!("LLM stream 读失败: {e}")))?;
+            let bytes = chunk.map_err(|e| AppError::other("llm_stream_read_failed", serde_json::json!({ "err": e.to_string() })))?;
             let s = String::from_utf8_lossy(&bytes).into_owned();
             for ev_data in parser.feed(&s) {
                 let v: serde_json::Value = match serde_json::from_str(&ev_data) {

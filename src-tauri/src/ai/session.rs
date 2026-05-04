@@ -326,7 +326,7 @@ impl Actor {
         let result: AppResult<u64> = async {
             tokio::fs::create_dir_all(&local_dir)
                 .await
-                .map_err(|e| AppError::Other(format!("Failed to create local directory: {e}")))?;
+                .map_err(|e| AppError::other("ai_local_dir_create_failed", json!({ "err": e.to_string() })))?;
             let sftp = SftpHandle::from_handle(&ssh_handle, self.cfg.target_id.clone()).await?;
             sftp.download_to_path(&input.remote_path, &local_path, max_bytes)
                 .await
@@ -404,7 +404,7 @@ impl Actor {
         })
         .to_string();
         let json_literal = serde_json::to_string(&handoff)
-            .map_err(|e| AppError::Other(format!("encode handoff: {e}")))?;
+            .map_err(|e| AppError::other("ai_handoff_encode_failed", json!({ "err": e.to_string() })))?;
         // 直接把 JSON 字符串赋值为 JS string；前端走 JSON.parse(data) 还原。
         // 不要在这里 JSON.parse —— 否则 window.__rssh_ai_handoff 已经是 object，
         // 前端再 JSON.parse 会撞 "[object Object]" 解析失败。
@@ -422,7 +422,7 @@ impl Actor {
                 .inner_size(1200.0, 800.0)
                 .initialization_script(&init_script)
                 .build()
-                .map_err(|e| AppError::Other(format!("Failed to open new window: {e}")))?;
+                .map_err(|e| AppError::other("ai_window_open_failed", json!({ "err": e.to_string() })))?;
 
             self.audit_push(AuditKind::Note {
                 message: format!(
@@ -502,7 +502,7 @@ impl Actor {
         loop {
             let action = match self.action_rx.recv().await {
                 Some(a) => a,
-                None => return Err(AppError::Other("Session channel closed".into())),
+                None => return Err(AppError::other("session_channel_closed", json!({}))),
             };
             match action {
                 UserAction::RejectCommand {
@@ -560,7 +560,7 @@ impl Actor {
                     });
                     return Ok(());
                 }
-                UserAction::Stop => return Err(AppError::Other("Session stopped".into())),
+                UserAction::Stop => return Err(AppError::other("session_stopped_user", json!({}))),
                 _ => continue,
             }
         }

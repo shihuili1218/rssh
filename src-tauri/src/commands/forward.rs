@@ -1,3 +1,4 @@
+use serde_json::json;
 use tauri::State;
 
 use crate::error::{locked, AppError, AppResult};
@@ -38,10 +39,10 @@ pub fn delete_forward(state: State<AppState>, id: String) -> Result<(), AppError
 pub async fn forward_start(state: State<'_, AppState>, forward_id: String) -> AppResult<String> {
     let f = crate::db::forward::get(&state.db, &forward_id)?;
     let p = crate::db::profile::get(&state.db, &f.profile_id)
-        .map_err(|_| AppError::NotFound("转发关联的 Profile 不存在".into()))?;
+        .map_err(|_| AppError::not_found("fwd_profile_not_found", json!({})))?;
     let cred_id = p.credential_id.as_deref().unwrap_or("");
     let mut c = crate::db::credential::get(&state.db, cred_id)
-        .map_err(|_| AppError::NotFound("转发关联的凭证不存在".into()))?;
+        .map_err(|_| AppError::not_found("fwd_cred_not_found", json!({})))?;
     if !c.id.is_empty() {
         c.secret = state
             .secret_store
@@ -57,7 +58,7 @@ pub async fn forward_start(state: State<'_, AppState>, forward_id: String) -> Ap
     for hop in chain_profiles {
         let bcid = hop.credential_id.as_deref().unwrap_or("");
         let mut bc = crate::db::credential::get(&state.db, bcid)
-            .map_err(|_| AppError::NotFound(format!("堡垒机 '{}' 凭证不存在", hop.name)))?;
+            .map_err(|_| AppError::not_found("bastion_cred_not_found", json!({ "name": hop.name })))?;
         if !bc.id.is_empty() {
             bc.secret = state
                 .secret_store
@@ -98,7 +99,7 @@ pub fn forward_stats(
     let forwards = locked(&state.active_forwards)?;
     let handle = forwards
         .get(&active_id)
-        .ok_or(AppError::NotFound("转发不存在".into()))?;
+        .ok_or_else(|| AppError::not_found("fwd_not_found", json!({})))?;
     Ok(handle.stats())
 }
 
@@ -106,7 +107,7 @@ pub fn forward_stats(
 pub fn forward_stop(state: State<'_, AppState>, active_id: String) -> AppResult<()> {
     let handle = locked(&state.active_forwards)?
         .remove(&active_id)
-        .ok_or(AppError::NotFound("转发不存在".into()))?;
+        .ok_or_else(|| AppError::not_found("fwd_not_found", json!({})))?;
     handle.stop();
     Ok(())
 }

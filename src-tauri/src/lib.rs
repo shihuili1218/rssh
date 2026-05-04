@@ -190,5 +190,5 @@ pub fn run() {
             ai::commands::ai_settings_set,
         ])
         .run(tauri::generate_context!())
-        .expect("启动 RSSH 失败");
+        .expect("RSSH startup failed");
 }

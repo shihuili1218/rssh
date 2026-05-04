@@ -1,3 +1,4 @@
+use serde_json::json;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
@@ -49,13 +50,13 @@ pub fn export_config(state: State<'_, AppState>) -> AppResult<String> {
         "groups": groups,
         "skills": skills,
     }))
-    .map_err(|e| AppError::Other(e.to_string()))
+    .map_err(|e| AppError::other("serde_failed", json!({ "err": e.to_string() })))
 }
 
 #[tauri::command]
 pub fn import_config(state: State<'_, AppState>, json: String) -> AppResult<()> {
     let data: serde_json::Value =
-        serde_json::from_str(&json).map_err(|e| AppError::Config(format!("JSON 解析失败: {e}")))?;
+        serde_json::from_str(&json).map_err(|e| AppError::config("json_parse_failed", json!({ "err": e.to_string() })))?;
     apply_import(&state, &data)
 }
 
@@ -147,17 +148,17 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
                 }
             }
         } else {
-            errors.push("skills 字段必须是数组".into());
+            errors.push("skills field must be an array".into());
         }
     }
 
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(AppError::Other(format!(
-            "部分导入失败: {}",
-            errors.join("; ")
-        )))
+        Err(AppError::other(
+            "import_partial_failed",
+            json!({ "errors": errors.join("; ") }),
+        ))
     }
 }
 
@@ -172,9 +173,9 @@ pub async fn github_push(state: State<'_, AppState>, password: String) -> AppRes
     let token = state
         .secret_store
         .get(&setting_key("github_token"))?
-        .ok_or_else(|| AppError::Config("未配置 GitHub Token".into()))?;
+        .ok_or_else(|| AppError::config("github_token_missing", json!({})))?;
     let repo = crate::db::settings::get(&state.db, "github_repo")?
-        .ok_or_else(|| AppError::Config("未配置 GitHub Repo".into()))?;
+        .ok_or_else(|| AppError::config("github_repo_missing", json!({})))?;
     let branch = crate::db::settings::get(&state.db, "github_branch")?.unwrap_or("main".into());
 
     let profiles = crate::db::profile::list(&state.db)?;
@@ -199,7 +200,7 @@ pub async fn github_push(state: State<'_, AppState>, password: String) -> AppRes
         "groups": groups,
         "skills": skills,
     }))
-    .map_err(|e| AppError::Other(e.to_string()))?;
+    .map_err(|e| AppError::other("serde_failed", json!({ "err": e.to_string() })))?;
 
     let encrypted = crate::crypto::encrypt(&json, &password)?;
     let sync = GitHubSync::from_settings(&token, &repo, &branch)?;
@@ -213,9 +214,9 @@ pub async fn github_pull(state: State<'_, AppState>, password: String) -> AppRes
     let token = state
         .secret_store
         .get(&setting_key("github_token"))?
-        .ok_or_else(|| AppError::Config("未配置 GitHub Token".into()))?;
+        .ok_or_else(|| AppError::config("github_token_missing", json!({})))?;
     let repo = crate::db::settings::get(&state.db, "github_repo")?
-        .ok_or_else(|| AppError::Config("未配置 GitHub Repo".into()))?;
+        .ok_or_else(|| AppError::config("github_repo_missing", json!({})))?;
     let branch = crate::db::settings::get(&state.db, "github_branch")?.unwrap_or("main".into());
 
     let sync = GitHubSync::from_settings(&token, &repo, &branch)?;
@@ -223,6 +224,6 @@ pub async fn github_pull(state: State<'_, AppState>, password: String) -> AppRes
     let json = crate::crypto::decrypt(&encrypted, &password)?;
 
     let data: serde_json::Value =
-        serde_json::from_str(&json).map_err(|e| AppError::Config(format!("JSON 解析失败: {e}")))?;
+        serde_json::from_str(&json).map_err(|e| AppError::config("json_parse_failed", json!({ "err": e.to_string() })))?;
     apply_import(&state, &data)
 }

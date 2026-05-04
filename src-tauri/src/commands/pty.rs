@@ -32,7 +32,7 @@ pub fn pty_write(state: State<'_, AppState>, session_id: String, data: Vec<u8>) 
     let handle = locked(&state.pty_sessions)?
         .get(&session_id)
         .cloned()
-        .ok_or(AppError::NotFound("PTY 不存在".into()))?;
+        .ok_or_else(|| AppError::not_found("pty_not_found", serde_json::json!({})))?;
     handle.write(&data)
 }
 
@@ -46,7 +46,7 @@ pub fn pty_resize(
     let handle = locked(&state.pty_sessions)?
         .get(&session_id)
         .cloned()
-        .ok_or(AppError::NotFound("PTY 不存在".into()))?;
+        .ok_or_else(|| AppError::not_found("pty_not_found", serde_json::json!({})))?;
     handle.resize(cols, rows)
 }
 

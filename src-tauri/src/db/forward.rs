@@ -31,7 +31,7 @@ pub fn get(db: &Db, id: &str) -> AppResult<Forward> {
             remote_host: row.get(5)?, remote_port: row.get::<_, u32>(6)? as u16,
         }),
     ).map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => crate::error::AppError::NotFound("转发规则不存在".into()),
+        rusqlite::Error::QueryReturnedNoRows => crate::error::AppError::not_found("fwd_rule_not_found", serde_json::json!({})),
         other => other.into(),
     })
 }

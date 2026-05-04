@@ -1,3 +1,4 @@
+use serde_json::json;
 use tauri::{AppHandle, State};
 
 use crate::error::{locked, AppError, AppResult};
@@ -39,7 +40,7 @@ pub async fn ssh_connect(
         let p = crate::db::profile::get(&state.db, &pid)?;
         let cred_id = p.credential_id.as_deref().unwrap_or("");
         let mut c = crate::db::credential::get(&state.db, cred_id)
-            .map_err(|_| AppError::NotFound("Profile 关联的凭证不存在".into()))?;
+            .map_err(|_| AppError::not_found("profile_cred_not_found", json!({})))?;
         load_secrets(&state, &mut c)?;
 
         // 解析整条堡垒机链 + 给每一跳加载凭证（含 secret）
@@ -48,7 +49,7 @@ pub async fn ssh_connect(
         for hop in chain_profiles {
             let bcid = hop.credential_id.as_deref().unwrap_or("");
             let mut bc = crate::db::credential::get(&state.db, bcid)
-                .map_err(|_| AppError::NotFound(format!("堡垒机 '{}' 凭证不存在", hop.name)))?;
+                .map_err(|_| AppError::not_found("bastion_cred_not_found", json!({ "name": hop.name })))?;
             load_secrets(&state, &mut bc)?;
             chain.push((hop, bc));
         }
@@ -58,7 +59,7 @@ pub async fn ssh_connect(
         let p = Profile {
             id: String::new(),
             name: String::new(),
-            host: host.ok_or_else(|| AppError::Config("缺少 host".into()))?,
+            host: host.ok_or_else(|| AppError::config("host_missing", json!({})))?,
             port: port.unwrap_or(22),
             credential_id: None,
             bastion_profile_id: None,
@@ -68,7 +69,7 @@ pub async fn ssh_connect(
         let c = Credential {
             id: String::new(),
             name: String::new(),
-            username: username.ok_or_else(|| AppError::Config("缺少 username".into()))?,
+            username: username.ok_or_else(|| AppError::config("username_missing", json!({})))?,
             credential_type: CredentialType::from_str(&auth_type.unwrap_or("password".into())),
             secret,
             save_to_remote: false,
@@ -176,7 +177,7 @@ pub async fn ssh_disconnect(state: State<'_, AppState>, session_id: String) -> A
     // 2) 拿走 SessionHandle 并强切 TCP（不只是 shell channel）。
     let session = locked(&state.sessions)?
         .remove(&session_id)
-        .ok_or_else(|| AppError::NotFound("会话不存在".into()))?;
+        .ok_or_else(|| AppError::not_found("session_not_found", json!({})))?;
     session.force_disconnect();
     Ok(())
 }
@@ -189,9 +190,9 @@ pub async fn ssh_auth_respond(
 ) -> AppResult<()> {
     let tx = locked(&state.auth_waiters)?
         .remove(&tab_id)
-        .ok_or_else(|| AppError::NotFound("无等待中的认证请求".into()))?;
+        .ok_or_else(|| AppError::other("no_pending_auth", json!({})))?;
     tx.send(responses)
-        .map_err(|_| AppError::Other("认证通道已关闭".into()))?;
+        .map_err(|_| AppError::other("auth_channel_closed", json!({})))?;
     Ok(())
 }
 
@@ -204,9 +205,9 @@ pub async fn ssh_passphrase_respond(
 ) -> AppResult<()> {
     let tx = locked(&state.passphrase_waiters)?
         .remove(&tab_id)
-        .ok_or_else(|| AppError::NotFound("无等待中的 passphrase 请求".into()))?;
+        .ok_or_else(|| AppError::other("no_pending_passphrase", json!({})))?;
     tx.send(passphrase)
-        .map_err(|_| AppError::Other("passphrase 通道已关闭".into()))?;
+        .map_err(|_| AppError::other("passphrase_channel_closed", json!({})))?;
     Ok(())
 }
 
@@ -227,9 +228,9 @@ pub async fn ssh_host_key_respond(
 ) -> AppResult<()> {
     let tx = locked(&state.host_key_waiters)?
         .remove(&tab_id)
-        .ok_or_else(|| AppError::NotFound("无等待中的 host key 确认请求".into()))?;
+        .ok_or_else(|| AppError::other("no_pending_hostkey", json!({})))?;
     tx.send(answer)
-        .map_err(|_| AppError::Other("host key 通道已关闭".into()))?;
+        .map_err(|_| AppError::other("hostkey_channel_closed", json!({})))?;
     Ok(())
 }
 
@@ -244,5 +245,5 @@ fn get_session(state: &State<'_, AppState>, session_id: &str) -> AppResult<clien
     locked(&state.sessions)?
         .get(session_id)
         .cloned()
-        .ok_or_else(|| AppError::NotFound("会话不存在".into()))
+        .ok_or_else(|| AppError::not_found("session_not_found", json!({})))
 }

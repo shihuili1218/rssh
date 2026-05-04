@@ -10,6 +10,8 @@
 
 use std::collections::HashSet;
 
+use serde_json::json;
+
 use crate::db::{self, Db};
 use crate::error::{AppError, AppResult};
 use crate::models::Profile;
@@ -37,19 +39,19 @@ pub fn resolve_chain(db: &Db, target: &Profile) -> AppResult<Vec<Profile>> {
             if let Some(loop_name) = chain.iter().find(|p| p.id == bid).map(|p| p.name.as_str()) {
                 path.push(loop_name);
             }
-            return Err(AppError::Config(format!(
-                "堡垒机链存在环: {}",
-                path.join(" → ")
-            )));
+            return Err(AppError::config(
+                "bastion_cycle",
+                json!({ "path": path.join(" → ") }),
+            ));
         }
         if chain.len() >= MAX_HOPS {
-            return Err(AppError::Config(format!(
-                "堡垒机链超过 {} 跳，疑似配置异常",
-                MAX_HOPS
-            )));
+            return Err(AppError::config(
+                "bastion_too_many_hops",
+                json!({ "max": MAX_HOPS }),
+            ));
         }
         let bp = db::profile::get(db, &bid)
-            .map_err(|_| AppError::NotFound(format!("堡垒机 Profile '{}' 不存在", bid)))?;
+            .map_err(|_| AppError::not_found("bastion_profile_not_found", json!({ "id": &bid })))?;
         visited.insert(bid);
         next_id = bp.bastion_profile_id.clone();
         chain.push(bp);

@@ -74,7 +74,7 @@ pub fn is_builtin(id: &str) -> bool {
 
 pub fn save_user(db: &Db, rec: &SkillRecord) -> AppResult<()> {
     if is_builtin(&rec.id) {
-        return Err(crate::error::AppError::coded(
+        return Err(crate::error::AppError::config(
             "skill_builtin_readonly",
             serde_json::json!({ "id": rec.id }),
         ));
@@ -92,7 +92,7 @@ pub fn save_user(db: &Db, rec: &SkillRecord) -> AppResult<()> {
 
 pub fn delete_user(db: &Db, id: &str) -> AppResult<()> {
     if is_builtin(id) {
-        return Err(crate::error::AppError::coded(
+        return Err(crate::error::AppError::config(
             "skill_builtin_undeletable",
             serde_json::json!({ "id": id }),
         ));
