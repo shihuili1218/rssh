@@ -896,12 +896,17 @@ pub async fn authenticate_with_agent_or_default_keys(
     username: String,
     ctx: Option<&AuthCtx>,
 ) -> AppResult<()> {
-    // agent 失败是常态（多数用户没起 agent），真正阻塞用户的是 default keys 那条；
-    // 直接 propagate key_err，避免给前端塞嵌套结构化数据。
-    if authenticate_with_agent(handle, username.clone()).await.is_ok() {
-        return Ok(());
+    let agent_err = match authenticate_with_agent(handle, username.clone()).await {
+        Ok(()) => return Ok(()),
+        Err(e) => e,
+    };
+    match authenticate_with_default_keys(handle, username, ctx).await {
+        Ok(()) => Ok(()),
+        // default keys 完全没文件可试 → fallback 没条件走，agent_err 才是真正失败原因
+        // （Agent 凭证类型用户明确依赖 agent，丢掉 agent_err 会得到误导性的"默认密钥不存在"）。
+        Err(key_err) if key_err.code() == "ssh_default_keys_not_found" => Err(agent_err),
+        Err(key_err) => Err(key_err),
     }
-    authenticate_with_default_keys(handle, username, ctx).await
 }
 
 /// 用系统 SSH agent（$SSH_AUTH_SOCK / Pageant）尝试逐个 identity 认证。
