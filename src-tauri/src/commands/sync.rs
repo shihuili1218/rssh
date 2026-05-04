@@ -156,9 +156,17 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
     if errors.is_empty() {
         Ok(())
     } else {
+        // 把第一条失败的标量字段提到顶层，前端 i18n 模板能直接渲染；
+        // 全量数组在结构上保留但不进文案（前端不渲染嵌套结构）。
+        let first = errors.first().cloned().unwrap_or(json!({}));
         Err(AppError::other(
             "import_partial_failed",
-            json!({ "count": errors.len(), "errors": errors }),
+            json!({
+                "count": errors.len(),
+                "first_kind": first.get("kind").cloned().unwrap_or(json!("?")),
+                "first_name": first.get("name").cloned().unwrap_or(json!("?")),
+                "first_code": first.get("code").cloned().unwrap_or(json!("?")),
+            }),
         ))
     }
 }

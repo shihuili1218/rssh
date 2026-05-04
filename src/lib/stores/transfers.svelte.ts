@@ -7,6 +7,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { errMsg } from "../i18n/index.svelte.ts";
 
 export type TransferKind = "download" | "upload";
 export type TransferStatus = "running" | "done" | "failed" | "cancelled";
@@ -94,11 +95,12 @@ async function runTransfer(id: string): Promise<void> {
       cur.finishedAt = Date.now();
     }
   } catch (e) {
-    const errStr = String(e);
+    // 先用裸 String(e) 识别 cancel 标记（协议串），再用 errMsg(e) 翻译展示。
+    const rawStr = String(e);
     const cur = find(id);
     if (cur) {
-      cur.status = errStr.includes(CANCELLED_TAG) ? "cancelled" : "failed";
-      cur.error = errStr;
+      cur.status = rawStr.includes(CANCELLED_TAG) ? "cancelled" : "failed";
+      cur.error = errMsg(e);
       cur.finishedAt = Date.now();
     }
   } finally {

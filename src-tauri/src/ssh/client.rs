@@ -896,18 +896,12 @@ pub async fn authenticate_with_agent_or_default_keys(
     username: String,
     ctx: Option<&AuthCtx>,
 ) -> AppResult<()> {
-    let agent_err = match authenticate_with_agent(handle, username.clone()).await {
-        Ok(()) => return Ok(()),
-        Err(e) => e,
-    };
-
-    match authenticate_with_default_keys(handle, username, ctx).await {
-        Ok(()) => Ok(()),
-        Err(key_err) => Err(AppError::ssh(
-            "ssh_agent_and_default_failed",
-            json!({ "agent_code": agent_err.code(), "key_code": key_err.code() }),
-        )),
+    // agent 失败是常态（多数用户没起 agent），真正阻塞用户的是 default keys 那条；
+    // 直接 propagate key_err，避免给前端塞嵌套结构化数据。
+    if authenticate_with_agent(handle, username.clone()).await.is_ok() {
+        return Ok(());
     }
+    authenticate_with_default_keys(handle, username, ctx).await
 }
 
 /// 用系统 SSH agent（$SSH_AUTH_SOCK / Pageant）尝试逐个 identity 认证。
@@ -1018,7 +1012,10 @@ pub async fn authenticate_with_default_keys(
     ctx: Option<&AuthCtx>,
 ) -> AppResult<()> {
     let paths = default_identity_paths();
-    let mut errors = Vec::new();
+    // 只记最后一条 (path, code) — 多个 key 都失败时，第一条与最后一条 code 一般差不多，
+    // 给前端一条标量信息足够；要全量明细去看 stderr/日志。
+    let mut last_path: Option<String> = None;
+    let mut last_code: Option<&'static str> = None;
     let mut found = 0usize;
 
     for path in paths {
@@ -1026,7 +1023,8 @@ pub async fn authenticate_with_default_keys(
             Ok(pem) => pem,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(_) => {
-                errors.push(json!({ "path": path.display().to_string(), "code": "io_error" }));
+                last_path = Some(path.display().to_string());
+                last_code = Some("io_error");
                 continue;
             }
         };
@@ -1037,14 +1035,18 @@ pub async fn authenticate_with_default_keys(
         let key = match decode_key_with_prompt(&pem, Some(&cache_key), &prompt_label, ctx).await {
             Ok(k) => k,
             Err(e) => {
-                errors.push(json!({ "path": path.display().to_string(), "code": e.code() }));
+                last_path = Some(path.display().to_string());
+                last_code = Some(e.code());
                 continue;
             }
         };
 
         match authenticate_private_key(handle, username.clone(), key).await {
             Ok(()) => return Ok(()),
-            Err(e) => errors.push(json!({ "path": path.display().to_string(), "code": e.code() })),
+            Err(e) => {
+                last_path = Some(path.display().to_string());
+                last_code = Some(e.code());
+            }
         }
     }
 
@@ -1054,7 +1056,10 @@ pub async fn authenticate_with_default_keys(
 
     Err(AppError::ssh(
         "ssh_default_keys_unavailable",
-        json!({ "errors": errors }),
+        json!({
+            "path": last_path.unwrap_or_default(),
+            "code": last_code.unwrap_or("unknown"),
+        }),
     ))
 }
 
