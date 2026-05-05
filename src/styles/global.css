@@ -1,7 +1,7 @@
 @import "@xterm/xterm/css/xterm.css";
 /* Shape implementations — each scoped under [data-shape="..."].
    Order matters only as far as later files override earlier ones for
-   the same selector; in practice the four files are disjoint. */
+   the same selector; in practice the three files are disjoint. */
 @import "./shapes/neumorphism.css";
 @import "./shapes/flat.css";
 @import "./shapes/material.css";

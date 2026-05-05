@@ -189,7 +189,8 @@ export function isTermPaletteRef(v: unknown): v is TermPaletteRef {
  * Accepts the xterm.js ITheme JSON shape directly — that's what the
  * iTerm2-Color-Schemes/xterm folder exports. Required keys: background,
  * foreground. ANSI 16 are recommended; missing ones fall back to xterm
- * defaults at render time, so we don't reject on those.
+ * defaults at render time, so we don't reject on those — and PaletteTerm
+ * marks them optional, so the cast below is type-safe (no force cast).
  */
 export function parseCustomTermJson(raw: string): PaletteTerm {
   let parsed: unknown;
@@ -205,11 +206,27 @@ export function parseCustomTermJson(raw: string): PaletteTerm {
   if (typeof obj.background !== "string" || typeof obj.foreground !== "string") {
     throw new Error("JSON must include 'background' and 'foreground' (hex strings)");
   }
-  // Pass through — xterm.js is tolerant of partial themes. We also normalise
-  // a couple of legacy key names we see in the wild.
-  const term = { ...obj } as Record<string, string>;
-  if (typeof term.selection === "string" && !term.selectionBackground) {
-    term.selectionBackground = term.selection;
+  // Normalise common field aliases so users can paste JSON from the
+  // iTerm2-Color-Schemes/windowsterminal folder directly:
+  //   cursorColor      → cursor                (Windows Terminal naming)
+  //   purple/brightPurple → magenta/brightMagenta (WT vs xterm.js)
+  //   selection        → selectionBackground   (legacy xterm.js)
+  const term = { ...obj } as Record<string, unknown>;
+  const aliases: Record<string, string> = {
+    cursorColor: "cursor",
+    purple: "magenta",
+    brightPurple: "brightMagenta",
+    selection: "selectionBackground",
+  };
+  for (const [from, to] of Object.entries(aliases)) {
+    if (typeof term[from] === "string" && term[to] === undefined) {
+      term[to] = term[from];
+    }
+    delete term[from];
   }
-  return term as unknown as PaletteTerm;
+  // Drop any keys with non-string values to keep the shape clean.
+  for (const k of Object.keys(term)) {
+    if (typeof term[k] !== "string") delete term[k];
+  }
+  return term as PaletteTerm;
 }

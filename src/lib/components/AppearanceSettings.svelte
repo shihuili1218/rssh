@@ -8,7 +8,7 @@
     import { parseCustomTermJson, type TermPaletteRef } from "../themes/term-palettes.ts";
     import { t } from "../i18n/index.svelte.ts";
 
-    const SCHEMES_URL = "https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/xterm";
+    const SCHEMES_URL = "https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/windowsterminal";
     function openSchemesUrl() {
         invoke("open_external_url", { url: SCHEMES_URL }).catch(e =>
             console.error("open_external_url failed:", e)
@@ -154,7 +154,7 @@
             onclick={pickInherit}
         >
             <div class="term-preview term-inherit">
-                <div class="term-inherit-label">↳ Inherit</div>
+                <div class="term-inherit-label">↳ {t("settings.appearance.term.inherit")}</div>
             </div>
             <div class="layout-label">{t("settings.appearance.term.inherit")}</div>
         </button>
@@ -212,7 +212,7 @@
             {:else}
                 <div class="term-preview term-custom">
                     <div class="term-custom-icon">+</div>
-                    <div class="term-custom-label">Custom</div>
+                    <div class="term-custom-label">{t("settings.appearance.term.custom")}</div>
                 </div>
             {/if}
             <div class="layout-label">{t("settings.appearance.term.custom")}</div>
@@ -333,7 +333,7 @@
         <div class="dialog-hint">
             {t("settings.appearance.term.import_hint")}
             <button class="link-btn" type="button" onclick={openSchemesUrl}>
-                iTerm2-Color-Schemes (xterm folder)
+                iTerm2-Color-Schemes (windowsterminal folder)
             </button>
         </div>
         <textarea
@@ -363,6 +363,13 @@
         display: flex;
         flex-direction: column;
         gap: 12px;
+        /* Required so the bottom sections stay reachable when the
+           panel content is taller than the window — settings now has
+           7 stacked sections (palette / term-palette / shape /
+           density / sidebar pos / AI pos / terminal display). */
+        flex: 1;
+        overflow-y: auto;
+        min-height: 0;
     }
     /* ── Mini-window preview cards (used by both menu position and AI panel position) ── */
     .layout-grid {

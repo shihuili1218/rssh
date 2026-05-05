@@ -81,7 +81,7 @@ const en = {
   "settings.appearance.term.inherit": "Inherit",
   "settings.appearance.term.custom": "Custom",
   "settings.appearance.term.import_title": "Import xterm color scheme",
-  "settings.appearance.term.import_hint": "Paste an xterm.js theme JSON. iTerm2 .itermcolors files won't work directly — use the pre-converted xterm.js JSON at",
+  "settings.appearance.term.import_hint": "Paste an xterm.js theme JSON. iTerm2 .itermcolors files won't work directly — use the JSON files at (cursorColor / purple / brightPurple are auto-translated):",
   "settings.appearance.term.import": "Import",
   "settings.appearance.term.cancel": "Cancel",
   "settings.appearance.command_block_bar": "Command block bar",

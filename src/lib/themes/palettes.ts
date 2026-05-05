@@ -39,28 +39,33 @@ export interface PaletteUi {
   purple: string;
 }
 
-/** xterm theme — passed to xterm.options.theme. */
+/** xterm theme — passed to xterm.options.theme.
+ *
+ *  Only background/foreground are strictly required; everything else
+ *  is optional because (a) xterm.js ITheme is itself partial-tolerant
+ *  and (b) custom palettes pasted by users may omit ANSI keys. Built-in
+ *  presets always supply the full set. */
 export interface PaletteTerm {
   background: string;
   foreground: string;
-  cursor: string;
-  selectionBackground: string;
-  black: string;
-  white: string;
-  red: string;
-  green: string;
-  yellow: string;
-  blue: string;
-  magenta: string;
-  cyan: string;
-  brightBlack: string;
-  brightWhite: string;
-  brightRed: string;
-  brightGreen: string;
-  brightYellow: string;
-  brightBlue: string;
-  brightMagenta: string;
-  brightCyan: string;
+  cursor?: string;
+  selectionBackground?: string;
+  black?: string;
+  white?: string;
+  red?: string;
+  green?: string;
+  yellow?: string;
+  blue?: string;
+  magenta?: string;
+  cyan?: string;
+  brightBlack?: string;
+  brightWhite?: string;
+  brightRed?: string;
+  brightGreen?: string;
+  brightYellow?: string;
+  brightBlue?: string;
+  brightMagenta?: string;
+  brightCyan?: string;
 }
 
 export interface Palette {
@@ -133,10 +138,12 @@ const LIGHT_SOFT: Palette = {
   term: {
     background: "#ECEFF4", foreground: "#2E3440", cursor: "#5267E0",
     selectionBackground: "rgba(82,103,224,0.25)",
-    black: "#2E3440", white: "#2E3440",
+    // Light palette: ANSI white must read as "light" against a light bg,
+    // not be aliased to the same dark color as black/foreground.
+    black: "#2E3440", white: "#D2D7DF",
     red: "#C0392B", green: "#3CA875", yellow: "#B58900",
     blue: "#5267E0", magenta: "#7E57C2", cyan: "#0590A0",
-    brightBlack: "#7A8493", brightWhite: "#1A1D24",
+    brightBlack: "#7A8493", brightWhite: "#FFFFFF",
     brightRed: "#D14B3C", brightGreen: "#4FBE8E", brightYellow: "#D4A017",
     brightBlue: "#6A82F5", brightMagenta: "#9968D6", brightCyan: "#1FA8B8",
   },

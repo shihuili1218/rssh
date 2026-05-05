@@ -149,15 +149,8 @@ export function listTermPresets() { return TERM_PRESETS; }
 
 export async function setTermPalette(ref: TermPaletteRef): Promise<void> {
   _termRef = ref;
+  writeTermVars();
   notifyXterms();
-  // Also refresh the --term-* CSS vars so CSS that references them
-  // (selection color, cursor) stays in sync with what xterm shows.
-  const root = document.documentElement;
-  const t = currentTermTheme();
-  root.style.setProperty("--term-bg",     t.background);
-  root.style.setProperty("--term-fg",     t.foreground);
-  root.style.setProperty("--term-cursor", t.cursor);
-  root.style.setProperty("--term-sel",    t.selectionBackground);
   try {
     await invoke("set_setting", { key: SETTING_KEY_TERM, value: JSON.stringify(ref) });
   } catch {
@@ -210,14 +203,22 @@ function writeRootVars(p: Palette): void {
   // Derived: --accent-soft is accent at --alpha-soft.
   // We compute via color-mix so it auto-tracks.
   root.style.setProperty("--accent-soft", `color-mix(in srgb, ${ui.accent} 15%, transparent)`);
-  // Terminal palette mirrors term.{background,foreground,cursor,selectionBackground}
-  // — kept for any CSS that needs to reach into terminal colors.
-  root.style.setProperty("--term-bg",     p.term.background);
-  root.style.setProperty("--term-fg",     p.term.foreground);
-  root.style.setProperty("--term-cursor", p.term.cursor);
-  root.style.setProperty("--term-sel",    p.term.selectionBackground);
   // Mode hint (light/dark) on <html> for any future shape variants.
   root.dataset.mode = p.mode;
+}
+
+/**
+ * Write --term-* CSS variables from the *effective* term theme (which
+ * may be a preset/custom, not the UI palette's term). Called whenever
+ * either the UI palette or the term-palette ref changes — keeps CSS
+ * in sync with what xterm actually displays. */
+function writeTermVars(): void {
+  const root = document.documentElement;
+  const t = currentTermTheme();
+  root.style.setProperty("--term-bg",     t.background);
+  root.style.setProperty("--term-fg",     t.foreground);
+  root.style.setProperty("--term-cursor", t.cursor ?? t.foreground);
+  root.style.setProperty("--term-sel",    t.selectionBackground ?? "");
 }
 
 function notifyXterms(): void {
@@ -227,6 +228,7 @@ function notifyXterms(): void {
 
 function apply(p: Palette): void {
   writeRootVars(p);
+  writeTermVars();
   notifyXterms();
 }
 

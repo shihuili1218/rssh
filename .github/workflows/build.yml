@@ -66,6 +66,13 @@ jobs:
         run: |
           INPUT="${{ github.event.inputs.version }}"
           if [ -n "$INPUT" ]; then
+            # Reject anything that isn't a semver-shaped tag — input goes
+            # straight into sed and $GITHUB_OUTPUT, so a stray newline /
+            # slash / shell-meta would corrupt manifests or step outputs.
+            if [[ ! "$INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.+-]+)?$ ]]; then
+              echo "::error::Invalid version '$INPUT' — expected semver (e.g. 1.0.0 or 1.0.0-rc.1)"
+              exit 1
+            fi
             VERSION="$INPUT"
           else
             VERSION=$(node -p "require('./package.json').version")
@@ -145,6 +152,13 @@ jobs:
         run: |
           INPUT="${{ github.event.inputs.version }}"
           if [ -n "$INPUT" ]; then
+            # Reject anything that isn't a semver-shaped tag — input goes
+            # straight into sed and $GITHUB_OUTPUT, so a stray newline /
+            # slash / shell-meta would corrupt manifests or step outputs.
+            if [[ ! "$INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.+-]+)?$ ]]; then
+              echo "::error::Invalid version '$INPUT' — expected semver (e.g. 1.0.0 or 1.0.0-rc.1)"
+              exit 1
+            fi
             VERSION="$INPUT"
           else
             VERSION=$(node -p "require('./package.json').version")
