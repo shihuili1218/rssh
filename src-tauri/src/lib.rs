@@ -165,7 +165,6 @@ pub fn run() {
             commands::window::open_external_url,
             #[cfg(not(target_os = "android"))]
             commands::window::clipboard_read,
-            #[cfg(not(target_os = "android"))]
             commands::window::fetch_latest_release_tag,
             // sync
             commands::sync::export_config,

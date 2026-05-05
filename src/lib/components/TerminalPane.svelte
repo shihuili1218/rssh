@@ -170,7 +170,7 @@
     let paintTick = $state(0);
     let isAltBuffer = $state(false);
 
-    type BlockRect = { id: number; y: number; h: number; color: string };
+    type BlockRect = { id: number; y: number; h: number; color: string; startLine: number; endLine: number };
 
     const blockRects = $derived.by((): BlockRect[] => {
         paintTick; // dependency
@@ -200,10 +200,30 @@
                 y: (top - viewportY) * rowHeight,
                 h: (bot - top + 1) * rowHeight,
                 color: b.color,
+                startLine,
+                endLine,
             });
         }
         return out;
     });
+
+    // Anchor for shift-extend. Plain click sets it; shift+click extends from
+    // it without moving it (Finder-style). Snapshot is fine even if the
+    // anchored block is still growing — the live r.endLine on subsequent
+    // shift+clicks dominates via max().
+    let selectionAnchor: { start: number; end: number } | undefined;
+
+    function selectBlock(r: BlockRect, shift: boolean) {
+        if (!terminal) return;
+        if (shift && selectionAnchor) {
+            const start = Math.min(selectionAnchor.start, r.startLine);
+            const end = Math.max(selectionAnchor.end, r.endLine);
+            terminal.selectLines(start, end);
+        } else {
+            selectionAnchor = { start: r.startLine, end: r.endLine };
+            terminal.selectLines(r.startLine, r.endLine);
+        }
+    }
 
     // Listener tracking — disposed on cleanup/reconnect
     let unlisteners: UnlistenFn[] = [];
@@ -735,10 +755,13 @@
         {#if app.commandBlockBar()}
             <svg class="block-bar" aria-hidden="true">
                 {#if isAltBuffer}
-                    <rect x="0" y="0" width="3" height="100%" rx="1.5" fill="#6B7A99" opacity="0.5" />
+                    <rect x="5" y="0" width="3" height="100%" rx="1.5" fill="#6B7A99" opacity="0.5" />
                 {:else}
                     {#each blockRects as r (r.id)}
-                        <rect x="0" y={r.y} width="3" height={r.h} rx="1.5" fill={r.color} />
+                        <rect x="5" y={r.y} width="3" height={r.h} rx="1.5" fill={r.color} />
+                        <rect class="block-hit" x="0" y={r.y} width="12" height={r.h}
+                              fill="transparent"
+                              onclick={(e) => selectBlock(r, e.shiftKey)} />
                     {/each}
                 {/if}
             </svg>
@@ -778,16 +801,21 @@
         padding: 4px;
     }
 
-    /* Overlay painted inside the enlarged left padding. Sits above xterm's
-       canvas/DOM but ignores pointer events so text selection still works. */
+    /* Overlay painted inside the enlarged left padding. SVG itself ignores
+       pointer events so text selection still works; only the per-block
+       hit-box rects opt back in for click-to-select. */
     .block-bar {
         position: absolute;
-        left: 5px;
+        left: 0;
         top: 4px;
-        width: 4px;
+        width: 12px;
         height: calc(100% - 8px);
         pointer-events: none;
         overflow: visible;
+    }
+    .block-hit {
+        pointer-events: auto;
+        cursor: pointer;
     }
 
     .search-bar {
