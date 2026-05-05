@@ -4,6 +4,7 @@
   import { FitAddon } from "@xterm/addon-fit";
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
+  import * as theme from "../themes/store.svelte.ts";
 
   let containerEl: HTMLDivElement;
   let terminal: Terminal;
@@ -16,6 +17,7 @@
   let totalDuration = $state(0);
   let elapsed = $state(0);
   let timerId: ReturnType<typeof setTimeout> | null = null;
+  let unsubscribeTheme: (() => void) | null = null;
 
   const fileName = $derived(app.editingId() ?? "");
   let progress = $derived(totalDuration > 0 ? (elapsed / totalDuration) * 100 : 0);
@@ -25,10 +27,10 @@
       cursorBlink: false,
       fontSize: 13,
       fontFamily: "Menlo, Monaco, 'Courier New', monospace",
-      theme: {
-        background: "#2B2D3A", foreground: "#E0E5EC", cursor: "#4A6CF7",
-        selectionBackground: "rgba(74,108,247,0.3)",
-      },
+      theme: theme.currentTermTheme(),
+    });
+    unsubscribeTheme = theme.registerXtermThemeListener((t) => {
+      if (terminal) terminal.options.theme = t;
     });
     fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
@@ -43,6 +45,7 @@
 
   onDestroy(() => {
     stop();
+    unsubscribeTheme?.();
     window.removeEventListener("resize", handleResize);
     terminal?.dispose();
   });

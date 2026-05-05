@@ -83,6 +83,6 @@
   .page { padding: 24px; }
   .form { display: flex; flex-direction: column; gap: 10px; }
   textarea { font-family: monospace; font-size: 12px; resize: vertical; }
-  .hint { font-size: 13px; color: var(--text-muted, #888); margin: 4px 0; line-height: 1.55; }
+  .hint { font-size: 13px; color: var(--text-dim); margin: 4px 0; line-height: 1.55; }
   .agent-hint { white-space: pre-line; }
 </style>

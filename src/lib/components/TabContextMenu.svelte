@@ -53,7 +53,7 @@
      onclick={onClose}
      oncontextmenu={(e) => { e.preventDefault(); onClose(); }}></div>
 
-<div class="ctx-menu"
+<div class="ctx-menu surface-raised"
      class:ready
      bind:this={menuEl}
      style="left: {x + dx}px; top: {y + dy}px;">
@@ -81,7 +81,7 @@
         position: fixed;
         z-index: 501;
         min-width: 200px;
-        padding: 4px;
+        padding: calc(4px * var(--density));
         background: var(--bg);
         box-shadow: var(--raised);
         border-radius: var(--radius);

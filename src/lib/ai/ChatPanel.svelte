@@ -176,7 +176,7 @@
     }
     .title { font-weight: 600; font-size: 13px; }
     .grow { flex: 1; }
-    .btn-primary { background: #4a86e8; color: #fff; border-color: #4a86e8; }
+    .btn-primary { background: var(--accent); color: var(--white); border-color: var(--accent); }
     .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
     .btn-ghost { background: transparent; }
     .btn-icon {
@@ -187,8 +187,8 @@
     .banner {
         display: flex; align-items: center; gap: 8px;
         padding: 8px 12px;
-        background: color-mix(in srgb, #c0392b 18%, var(--bg));
-        color: #c0392b;
+        background: color-mix(in srgb, var(--error) 18%, var(--bg));
+        color: var(--error);
         border-bottom: 1px solid var(--divider);
         font-size: 12px;
         flex-shrink: 0;
@@ -197,7 +197,7 @@
 
     .placeholder {
         padding: 24px; text-align: center;
-        color: var(--text-dim, #888);
+        color: var(--text-dim);
         line-height: 1.6;
     }
     .placeholder.dim { font-size: 13px; padding: 32px; }
@@ -209,7 +209,7 @@
     }
     .item { display: flex; flex-direction: column; gap: 1px; }
     .ts {
-        font-size: 10px; color: var(--text-dim, #888);
+        font-size: 10px; color: var(--text-dim);
         font-family: monospace;
     }
     .bubble {
@@ -218,7 +218,7 @@
         font-size: 13px;
     }
     .bubble.user {
-        background: #4a86e8; color: #fff;
+        background: var(--accent); color: var(--white);
         align-self: flex-end;
     }
     .bubble.assistant {
@@ -233,7 +233,7 @@
         display: inline-block;
         margin-left: 2px;
         animation: blink 1s steps(2, start) infinite;
-        color: var(--text-dim, #888);
+        color: var(--text-dim);
     }
     @keyframes blink {
         to { visibility: hidden; }
@@ -265,7 +265,7 @@
     .bubble.md :global(li > ul), .bubble.md :global(li > ol) { margin: 0; }
     .bubble.md :global(strong) { font-weight: 600; }
     .bubble.md :global(em) { font-style: italic; }
-    .bubble.md :global(a) { color: var(--accent, #4a86e8); }
+    .bubble.md :global(a) { color: var(--accent); }
     .bubble.md :global(h1),
     .bubble.md :global(h2),
     .bubble.md :global(h3),
@@ -279,7 +279,7 @@
     .bubble.md :global(blockquote) {
         border-left: 2px solid var(--divider);
         padding-left: 5px; margin: 1px 0;
-        color: var(--text-dim, #888);
+        color: var(--text-dim);
     }
     .bubble.md :global(hr) {
         border: 0; border-top: 1px solid var(--divider);
@@ -292,13 +292,13 @@
         border: 1px solid var(--divider); padding: 1px 5px;
     }
     .bubble.error {
-        background: color-mix(in srgb, #c0392b 15%, var(--bg));
-        color: #c0392b;
+        background: color-mix(in srgb, var(--error) 15%, var(--bg));
+        color: var(--error);
         font-size: 12px;
     }
     .bubble.note {
         background: transparent;
-        color: var(--text-dim, #888);
+        color: var(--text-dim);
         font-size: 12px;
         font-style: italic;
         align-self: center;

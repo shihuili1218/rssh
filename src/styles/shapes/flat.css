@@ -1,0 +1,86 @@
+/* ═══════════════════════════════════════════════════════
+   Shape: Flat
+   No shadows. 1px borders define edges. Crisp, low-stim.
+
+   IMPORTANT: every selector here is prefixed with :root[data-shape="flat"]
+   (not the bare attribute selector). Reason: components write
+   `border: none` in their Svelte scoped CSS to drop the browser's default
+   button border, which is rendered as `.foo.s-XYZ` (specificity 0,2,0).
+   A bare `[data-shape="flat"] .surface-*` is also 0,2,0 — same specificity,
+   later in source order wins, so the component's `border: none` overrides
+   us. Adding :root pushes shape rules to 0,3,0 and we win cleanly.
+   ═══════════════════════════════════════════════════════ */
+:root[data-shape="flat"] {
+    --elevation-low:     none;
+    --elevation-mid:     none;
+    --elevation-pressed: none;
+    /* A solid hairline. Mix text into bg (not transparent) — opaque,
+       doesn't drift on alpha surfaces. ~45 brightness diff vs bg, both
+       light and dark palettes. */
+    --flat-border:         1px solid color-mix(in srgb, var(--text) 25%, var(--bg));
+    --flat-border-strong:  1px solid color-mix(in srgb, var(--text) 35%, var(--bg));
+}
+
+/* Outline raised surfaces with a 1px border so they remain
+   visible without shadows. .neu-* aliases share the rule. */
+:root[data-shape="flat"] .surface-raised,
+:root[data-shape="flat"] .surface-raised-sm,
+:root[data-shape="flat"] .surface-pressed,
+:root[data-shape="flat"] .surface-flat,
+:root[data-shape="flat"] .neu-raised,
+:root[data-shape="flat"] .neu-sm,
+:root[data-shape="flat"] .neu-pressed,
+:root[data-shape="flat"] .neu-flat,
+:root[data-shape="flat"] .card,
+:root[data-shape="flat"] .switch-card {
+    border: var(--flat-border);
+}
+
+/* Buttons: stronger border (interactive surfaces stand out more), hover tint. */
+:root[data-shape="flat"] .btn {
+    border: var(--flat-border-strong);
+}
+:root[data-shape="flat"] .btn:hover {
+    background: color-mix(in srgb, var(--text) 6%, var(--bg));
+    box-shadow: none;
+}
+:root[data-shape="flat"] .btn:active {
+    background: color-mix(in srgb, var(--text) 12%, var(--bg));
+    transform: scale(0.98);
+}
+
+/* Accent button: solid fill, no glow. */
+:root[data-shape="flat"] .btn-accent {
+    border-color: var(--accent);
+    box-shadow: none;
+}
+:root[data-shape="flat"] .btn-accent:hover {
+    background: color-mix(in srgb, var(--accent) 85%, var(--text));
+    box-shadow: none;
+}
+:root[data-shape="flat"] .btn-accent:active {
+    background: color-mix(in srgb, var(--accent) 75%, var(--black));
+    box-shadow: none;
+}
+
+/* Inputs: border instead of inset shadow. */
+:root[data-shape="flat"] input,
+:root[data-shape="flat"] select,
+:root[data-shape="flat"] textarea {
+    border: var(--flat-border);
+}
+
+/* Checkbox/radio: outline when unchecked, solid when checked. */
+:root[data-shape="flat"] input[type="checkbox"],
+:root[data-shape="flat"] input[type="radio"] {
+    border: var(--flat-border);
+}
+:root[data-shape="flat"] input[type="checkbox"]:checked,
+:root[data-shape="flat"] input[type="radio"]:checked {
+    box-shadow: none;
+}
+
+/* Switch slider: thin border instead of inset. */
+:root[data-shape="flat"] .switch .slider {
+    border: var(--flat-border);
+}

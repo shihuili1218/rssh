@@ -93,7 +93,7 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <div class="forward-pane">
-  <div class="card">
+  <div class="card surface-raised">
     <div class="header">
       <span class="type-badge" class:remote={isRemote}>{dirLabel}</span>
       <h3>{meta.name ?? "Port Forward"}</h3>
@@ -159,12 +159,12 @@
     background: var(--surface);
     border: 1px solid var(--divider);
     border-radius: 12px;
-    padding: 28px 32px;
+    padding: calc(28px * var(--density)) calc(32px * var(--density));
     min-width: 340px;
     max-width: 420px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: calc(12px * var(--density));
   }
 
   .header {
@@ -187,14 +187,14 @@
     letter-spacing: 0.5px;
     padding: 2px 8px;
     border-radius: 4px;
-    background: rgba(74,108,247,0.15);
+    background: var(--accent-soft);
     color: var(--accent);
     flex-shrink: 0;
   }
 
   .type-badge.remote {
-    background: rgba(155,114,228,0.15);
-    color: var(--magenta, #9B72E4);
+    background: color-mix(in srgb, var(--magenta) 15%, transparent);
+    color: var(--magenta);
   }
 
   .route {
@@ -299,12 +299,12 @@
   }
 
   .btn-stop {
-    background: rgba(214,68,68,0.15);
+    background: color-mix(in srgb, var(--error) 15%, transparent);
     color: var(--error);
   }
 
   .btn-stop:hover {
-    background: rgba(214,68,68,0.25);
+    background: color-mix(in srgb, var(--error) 25%, transparent);
   }
 
   .btn-reconnect {

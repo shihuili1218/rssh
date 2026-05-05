@@ -8,6 +8,7 @@
     import {listen, type UnlistenFn} from "@tauri-apps/api/event";
     import type {HighlightRule} from "../stores/app.svelte.ts";
     import * as app from "../stores/app.svelte.ts";
+    import * as theme from "../themes/store.svelte.ts";
     import MobileKeybar from "./MobileKeybar.svelte";
     import {registerRsshOscHandlers} from "../osc/handler.ts";
     import {createCommandBlockTracker, type CommandBlockTracker} from "../terminal/command-blocks.ts";
@@ -530,22 +531,20 @@
         };
     }
 
+    let unsubscribeTheme: (() => void) | null = null;
+
     onMount(async () => {
         terminal = new Terminal({
             cursorBlink: true,
             fontSize: 13,
             fontFamily: "'JetBrainsMono Nerd Font', 'FiraCode Nerd Font', 'Hack Nerd Font', 'MesloLGS NF', 'Symbols Nerd Font Mono', Menlo, Monaco, 'Apple Color Emoji', 'Apple Symbols', 'PingFang SC', 'Courier New', monospace",
             allowProposedApi: true,
-            theme: {
-                background: "#2B2D3A", foreground: "#E0E5EC", cursor: "#4A6CF7",
-                selectionBackground: "rgba(74,108,247,0.3)",
-                black: "#1E2028", white: "#E0E5EC",
-                red: "#E05555", green: "#4CB88A", yellow: "#DDAA33",
-                blue: "#4A6CF7", magenta: "#9B72E4", cyan: "#2898AC",
-                brightBlack: "#6B7A99", brightWhite: "#FFFFFF",
-                brightRed: "#FF6B6B", brightGreen: "#6EDAA0", brightYellow: "#FFD060",
-                brightBlue: "#6B8FF8", brightMagenta: "#B894F6", brightCyan: "#40C8E0",
-            },
+            theme: theme.currentTermTheme(),
+        });
+        // Listener fires immediately with current theme (already applied above)
+        // and on every palette change. Keep the unsubscribe for onDestroy.
+        unsubscribeTheme = theme.registerXtermThemeListener((t) => {
+            if (terminal) terminal.options.theme = t;
         });
         fitAddon = new FitAddon();
         searchAddon = new SearchAddon();
@@ -683,6 +682,7 @@
     });
 
     onDestroy(() => {
+        unsubscribeTheme?.();
         unlisteners.forEach(u => u());
         dataDisposable?.dispose();
         resizeDisposable?.dispose();
@@ -755,7 +755,7 @@
         {#if app.commandBlockBar()}
             <svg class="block-bar" aria-hidden="true">
                 {#if isAltBuffer}
-                    <rect x="5" y="0" width="3" height="100%" rx="1.5" fill="#6B7A99" opacity="0.5" />
+                    <rect x="5" y="0" width="3" height="100%" rx="1.5" style="fill: var(--text-dim)" opacity="0.5" />
                 {:else}
                     {#each blockRects as r (r.id)}
                         <rect x="5" y={r.y} width="3" height={r.h} rx="1.5" fill={r.color} />
@@ -858,7 +858,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: rgba(0,0,0,0.5);
+        background: var(--overlay-strong);
     }
 
     .auth-dialog {

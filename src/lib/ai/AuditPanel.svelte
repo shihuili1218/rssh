@@ -114,20 +114,20 @@
     }
     .audit-toolbar button:disabled { opacity: 0.5; cursor: not-allowed; }
     .audit-list { flex: 1; overflow-y: auto; padding: 8px; }
-    .placeholder { color: var(--text-dim, #888); text-align: center; padding: 24px; }
+    .placeholder { color: var(--text-dim); text-align: center; padding: 24px; }
     .audit-entry {
         font-size: 12px; padding: 6px 0;
         border-bottom: 1px solid color-mix(in srgb, var(--divider) 50%, transparent);
     }
-    .ts { color: var(--text-dim, #888); margin-right: 8px; font-family: monospace; }
+    .ts { color: var(--text-dim); margin-right: 8px; font-family: monospace; }
     .text { word-break: break-word; }
     .dropdown { margin-top: 4px; font-size: 11px; }
-    .dropdown summary { cursor: pointer; color: var(--text-dim, #888); }
+    .dropdown summary { cursor: pointer; color: var(--text-dim); }
     .dropdown pre {
         max-height: 200px; overflow: auto;
         background: color-mix(in srgb, var(--text) 5%, var(--bg));
         padding: 6px 8px; border-radius: 4px;
         font-size: 11px; white-space: pre-wrap;
     }
-    .cmd-detail { margin-top: 4px; padding-left: 8px; color: var(--text-dim, #888); font-size: 11px; }
+    .cmd-detail { margin-top: 4px; padding-left: 8px; color: var(--text-dim); font-size: 11px; }
 </style>

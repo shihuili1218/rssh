@@ -38,7 +38,7 @@
         <ul class="list">
             {#each list as item (item.id)}
                 {@const showError = !!(item.error && item.status === "failed")}
-                <li class="row"
+                <li class="row surface-pressed"
                     class:failed={item.status === "failed"}
                     class:done={item.status === "done"}
                     class:cancelled={item.status === "cancelled"}
@@ -144,7 +144,7 @@
         background: var(--bg);
         box-shadow: var(--pressed);
         border-radius: var(--radius-sm);
-        padding: 10px 14px;
+        padding: calc(10px * var(--density)) calc(14px * var(--density));
         display: grid;
         grid-template-columns:
             28px              /* icon */
@@ -243,9 +243,9 @@
         text-align: center;
     }
 
-    .status-running   { background: rgba(76, 184, 138, 0.15); color: #4cb88a; }
+    .status-running   { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
     .status-done      { background: var(--surface); color: var(--text-dim); }
-    .status-failed    { background: rgba(214, 68, 68, 0.15); color: var(--error); }
+    .status-failed    { background: color-mix(in srgb, var(--error) 15%, transparent); color: var(--error); }
     .status-cancelled { background: var(--surface); color: var(--text-sub); }
 
     .row-actions {

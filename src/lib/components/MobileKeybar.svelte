@@ -84,7 +84,7 @@
     }
     .key.mod.active {
         background: var(--accent);
-        color: #fff;
+        color: var(--white);
     }
     .key.dim { opacity: 0.45; }
 </style>

@@ -44,7 +44,7 @@
     }
 </script>
 
-<div class="cmd-card" class:pending={isPending} class:done={!!result} class:rejected={!!rejected}>
+<div class="cmd-card surface-flat" class:pending={isPending} class:done={!!result} class:rejected={!!rejected}>
     <div class="head">
         <span class="tag">[AI proposed]</span>
         <code class="cmd">{cmd.cmd}</code>
@@ -96,22 +96,22 @@
     .cmd-card {
         border: 1px solid var(--divider);
         border-radius: 6px;
-        padding: 8px 10px;
-        margin: 4px 0;
+        padding: calc(8px * var(--density)) calc(10px * var(--density));
+        margin: calc(4px * var(--density)) 0;
         background: var(--bg);
     }
     .cmd-card.pending {
-        border-left: 3px solid #d9b341;
-        background: color-mix(in srgb, #d9b341 6%, var(--bg));
+        border-left: 3px solid var(--warning);
+        background: color-mix(in srgb, var(--warning) 6%, var(--bg));
     }
-    .cmd-card.done { border-left: 3px solid #4caf50; }
-    .cmd-card.rejected { opacity: 0.6; border-left: 3px solid #888; }
+    .cmd-card.done { border-left: 3px solid var(--success); }
+    .cmd-card.rejected { opacity: 0.6; border-left: 3px solid var(--text-dim); }
 
     .head { display: flex; gap: 8px; align-items: baseline; }
     .tag {
         font-size: 11px;
-        background: #d9b341;
-        color: #000;
+        background: var(--warning);
+        color: var(--black);
         padding: 1px 6px;
         border-radius: 3px;
         font-weight: 600;
@@ -121,24 +121,24 @@
         font-size: 13px;
         word-break: break-all;
     }
-    .meta { font-size: 12px; margin-top: 6px; color: var(--text-dim, #888); }
+    .meta { font-size: 12px; margin-top: 6px; color: var(--text-dim); }
     .meta > div { display: flex; gap: 8px; }
-    .label { min-width: 50px; color: var(--text-dim, #888); }
+    .label { min-width: 50px; color: var(--text-dim); }
     .actions { margin-top: 8px; display: flex; gap: 8px; }
     .btn { padding: 4px 12px; border-radius: 4px; cursor: pointer; }
-    .btn-approve { background: #4caf50; color: #fff; border: none; }
-    .btn-reject { background: transparent; border: 1px solid #888; color: var(--text); }
+    .btn-approve { background: var(--success); color: var(--white); border: none; }
+    .btn-reject { background: transparent; border: 1px solid var(--text-dim); color: var(--text); }
     .btn-ghost { background: transparent; border: 1px solid var(--divider); color: var(--text); }
     .reject-form { margin-top: 8px; display: flex; gap: 6px; }
     .reject-form input {
         flex: 1; padding: 4px 8px; border: 1px solid var(--divider);
         border-radius: 4px; background: var(--bg); color: var(--text);
     }
-    .rejected-note { font-size: 12px; margin-top: 6px; color: #888; }
-    .hint { font-size: 11px; color: var(--text-dim, #888); margin-top: 4px; font-style: italic; }
+    .rejected-note { font-size: 12px; margin-top: 6px; color: var(--text-dim); }
+    .hint { font-size: 11px; color: var(--text-dim); margin-top: 4px; font-style: italic; }
     .result { margin-top: 8px; }
-    .result-meta { display: flex; gap: 8px; font-size: 11px; color: var(--text-dim, #888); }
-    .result-meta .warn { color: #d9b341; }
+    .result-meta { display: flex; gap: 8px; font-size: 11px; color: var(--text-dim); }
+    .result-meta .warn { color: var(--warning); }
     .output {
         margin-top: 4px;
         padding: 6px 8px;

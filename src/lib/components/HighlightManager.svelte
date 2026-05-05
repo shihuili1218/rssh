@@ -48,7 +48,7 @@
 
   <div class="rules-list">
     {#each items as h (h.keyword)}
-      <div class="rule-row">
+      <div class="rule-row surface-raised-sm">
         <span class="rule-dot" style="background: {h.color};"></span>
         <span class="rule-kw">{h.keyword}</span>
         <span class="rule-color">{h.color}</span>
@@ -76,8 +76,8 @@
 
   .rules-list { display: flex; flex-direction: column; gap: 4px; }
   .rule-row {
-    display: flex; align-items: center; gap: 10px;
-    padding: 10px 14px;
+    display: flex; align-items: center; gap: calc(10px * var(--density));
+    padding: calc(10px * var(--density)) calc(14px * var(--density));
     background: var(--bg);
     box-shadow: var(--raised-sm);
     border-radius: var(--radius-sm);

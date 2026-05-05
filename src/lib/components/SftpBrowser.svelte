@@ -125,7 +125,7 @@
         <button class="btn btn-sm" disabled={!sftpId} onclick={upload}>⬆ Upload</button>
         <button class="btn btn-sm btn-link" onclick={gotoDownloads}>Transfers →</button>
     </div>
-    <div class="breadcrumb">{cwd}</div>
+    <div class="breadcrumb surface-pressed">{cwd}</div>
 
     {#if error}
         <div class="error-banner">{error}</div>
@@ -174,15 +174,15 @@
         font-family: monospace;
         font-size: 12px;
         color: var(--text-sub);
-        padding: 6px 10px;
-        margin-bottom: 8px;
+        padding: calc(6px * var(--density)) calc(10px * var(--density));
+        margin-bottom: calc(8px * var(--density));
         background: var(--bg);
         box-shadow: var(--pressed);
         border-radius: var(--radius-sm);
     }
 
     .error-banner {
-        background: rgba(214, 68, 68, 0.1);
+        background: color-mix(in srgb, var(--error) 10%, transparent);
         border-left: 3px solid var(--error);
         color: var(--error);
         padding: 8px 12px;
@@ -192,9 +192,9 @@
     }
 
     .notice-banner {
-        background: rgba(76, 184, 138, 0.1);
-        border-left: 3px solid #4cb88a;
-        color: #4cb88a;
+        background: color-mix(in srgb, var(--success) 10%, transparent);
+        border-left: 3px solid var(--success);
+        color: var(--success);
         padding: 8px 12px;
         border-radius: var(--radius-sm);
         margin-bottom: 8px;
@@ -223,7 +223,7 @@
     }
 
     .file-row:hover {
-        background: rgba(163, 177, 198, 0.15);
+        background: color-mix(in srgb, var(--text-sub) 15%, transparent);
     }
 
     .file-name {

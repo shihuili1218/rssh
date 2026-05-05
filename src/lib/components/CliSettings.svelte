@@ -125,8 +125,8 @@ rssh completions powershell  # paste into $PROFILE</pre>
         font-weight: 600;
         width: fit-content;
     }
-    .badge.installed { background: rgba(76,184,138,0.15); color: #4cb88a; }
-    .badge.not-installed { background: rgba(224,85,85,0.15); color: #e05555; }
+    .badge.installed { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
+    .badge.not-installed { background: color-mix(in srgb, var(--error) 15%, transparent); color: var(--error); }
     .path { font-family: monospace; font-size: 12px; color: var(--text-sub); }
     .hint { font-size: 13px; color: var(--text-sub); }
     .msg { font-size: 12px; color: var(--accent); }

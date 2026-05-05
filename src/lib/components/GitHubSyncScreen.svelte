@@ -97,7 +97,7 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="dialog-backdrop" onclick={() => showPwDialog = false}>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="dialog" onclick={(e) => e.stopPropagation()}>
+        <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()}>
             <h3>{pwMode === "push" ? "Set Encryption Password" : "Enter Decryption Password"}</h3>
             <input type="password" bind:value={pw1} placeholder="Password"
                    onkeydown={(e) => { if (e.key === "Enter") confirmPassword(); }}/>
@@ -141,7 +141,7 @@
         position: fixed;
         inset: 0;
         z-index: 500;
-        background: rgba(0, 0, 0, 0.5);
+        background: var(--overlay-strong);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -151,7 +151,7 @@
         background: var(--bg);
         box-shadow: var(--raised);
         border-radius: var(--radius);
-        padding: 24px;
+        padding: calc(24px * var(--density));
         min-width: 300px;
         display: flex;
         flex-direction: column;

@@ -1,39 +1,102 @@
 @import "@xterm/xterm/css/xterm.css";
+/* Shape implementations — each scoped under [data-shape="..."].
+   Order matters only as far as later files override earlier ones for
+   the same selector; in practice the four files are disjoint. */
+@import "./shapes/neumorphism.css";
+@import "./shapes/flat.css";
+@import "./shapes/material.css";
 
 /* ═══════════════════════════════════════════════════════
-   Dark Neumorphism Theme Tokens
+   THEME TOKENS — single source of truth
+   These tokens are consumed by:
+     • UI components (via CSS custom properties)
+     • xterm.js (via JS store reading the same values)
+     • Shape implementations (via [data-shape="..."] selectors)
+   Default values below = "dark-neumorphism" preset.
    ═══════════════════════════════════════════════════════ */
 :root {
+  /* ── Palette: surfaces ──────────────────────────────── */
   --bg:           #2B2D3A;
   --surface:      #32343F;
   --shadow-dark:  #1E2028;
   --shadow-light: #383B4A;
+  --divider:      #3C3F50;
+
+  /* ── Palette: text ──────────────────────────────────── */
   --text:         #E0E5EC;
   --text-sub:     #A0A8BB;
   --text-dim:     #6B7A99;
+
+  /* ── Palette: brand & status ────────────────────────── */
   --accent:       #4A6CF7;
   --accent-soft:  rgba(74,108,247,0.15);
   --error:        #E05555;
   --success:      #4CB88A;
   --warning:      #DDAA33;
-  --divider:      #3C3F50;
+  --magenta:      #9B72E4;
+  --purple:       #A855F7;       /* AI panel accent */
 
-  /* Shadows */
-  --raised:        5px 5px 10px var(--shadow-dark), -5px -5px 10px var(--shadow-light);
-  --raised-sm:     3px 3px 6px var(--shadow-dark), -3px -3px 6px var(--shadow-light);
-  --pressed:       inset 3px 3px 6px var(--shadow-dark), inset -3px -3px 6px var(--shadow-light);
+  /* ── Palette: constants (do not theme) ──────────────── */
+  --white:        #FFFFFF;
+  --black:        #000000;
 
-  /* Terminal colors */
-  --term-bg:       #2B2D3A;
-  --term-fg:       #E0E5EC;
-  --term-cursor:   #4A6CF7;
-  --term-sel:      rgba(74,108,247,0.3);
+  /* ── Alpha levels (semantic transparency) ───────────── */
+  --alpha-faint:   8%;
+  --alpha-soft:    15%;
+  --alpha-medium:  30%;
+  --alpha-strong:  50%;
 
-  /* Layout */
-  --radius:        14px;
-  --radius-sm:     10px;
-  --topbar-h:      44px;
+  /* ── Overlay backdrops (modal/dialog scrims) ────────── */
+  --overlay-soft:   color-mix(in srgb, var(--black) 40%, transparent);
+  --overlay-strong: color-mix(in srgb, var(--black) 50%, transparent);
+
+  /* ── Density (padding/gap multiplier) ───────────────── */
+  /* Default = "cozy" (1.0). Compact (0.85) and comfortable (1.15)
+     are set via [data-density="..."] on <html>. */
+  --density: 1;
+
+  /* ── Spacing scale (multiplied by --density) ────────── */
+  --space-1: calc(4px  * var(--density));
+  --space-2: calc(8px  * var(--density));
+  --space-3: calc(12px * var(--density));
+  --space-4: calc(16px * var(--density));
+  --space-5: calc(20px * var(--density));
+  --space-6: calc(24px * var(--density));
+
+  /* ── Radii ──────────────────────────────────────────── */
+  --radius-xs: 4px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius:    14px;             /* alias for --radius-md, back-compat */
+
+  /* ── Layout ─────────────────────────────────────────── */
+  --topbar-h: 44px;
+
+  /* ── Elevation (semantic shadow tokens) ─────────────── */
+  /* Shape implementations override these for Flat/Material. */
+  --elevation-low:     3px 3px 6px var(--shadow-dark), -3px -3px 6px var(--shadow-light);
+  --elevation-mid:     5px 5px 10px var(--shadow-dark), -5px -5px 10px var(--shadow-light);
+  --elevation-pressed: inset 3px 3px 6px var(--shadow-dark), inset -3px -3px 6px var(--shadow-light);
+  /* Back-compat aliases (legacy --raised/--pressed) */
+  --raised:    var(--elevation-mid);
+  --raised-sm: var(--elevation-low);
+  --pressed:   var(--elevation-pressed);
+
+  /* ── Terminal palette (xterm consumes this via JS) ──── */
+  --term-bg:     #2B2D3A;
+  --term-fg:     #E0E5EC;
+  --term-cursor: #4A6CF7;
+  --term-sel:    rgba(74,108,247,0.3);
 }
+
+/* ═══════════════════════════════════════════════════════
+   Density modes — applied via [data-density="..."] on <html>.
+   Multiplies --density, which propagates through --space-*.
+   ═══════════════════════════════════════════════════════ */
+[data-density="compact"]     { --density: 0.85; }
+[data-density="cozy"]        { --density: 1; }
+[data-density="comfortable"] { --density: 1.15; }
 
 /* ═══════════════════════════════════════════════════════
    Reset & Base
@@ -61,11 +124,20 @@ html, body {
 }
 
 /* ═══════════════════════════════════════════════════════
-   Neumorphism Primitives
+   Surface Semantics — components consume these classes.
+   Shape implementations (neumorphism/flat/material)
+   override the visual style without touching components.
+   Legacy .neu-* names kept as aliases for back-compat.
    ═══════════════════════════════════════════════════════ */
-.neu-raised  { box-shadow: var(--raised); border-radius: var(--radius); background: var(--bg); }
-.neu-sm      { box-shadow: var(--raised-sm); border-radius: var(--radius-sm); background: var(--bg); }
-.neu-pressed { box-shadow: var(--pressed); border-radius: var(--radius); background: var(--bg); }
+.surface-raised    { box-shadow: var(--elevation-mid);     border-radius: var(--radius); background: var(--bg); }
+.surface-raised-sm { box-shadow: var(--elevation-low);     border-radius: var(--radius-sm); background: var(--bg); }
+.surface-pressed   { box-shadow: var(--elevation-pressed); border-radius: var(--radius); background: var(--bg); }
+.surface-flat      { border-radius: var(--radius); background: var(--bg); }
+
+/* Legacy aliases — DO NOT use in new code. Use .surface-* above. */
+.neu-raised  { box-shadow: var(--elevation-mid);     border-radius: var(--radius); background: var(--bg); }
+.neu-sm      { box-shadow: var(--elevation-low);     border-radius: var(--radius-sm); background: var(--bg); }
+.neu-pressed { box-shadow: var(--elevation-pressed); border-radius: var(--radius); background: var(--bg); }
 .neu-flat    { border-radius: var(--radius); background: var(--bg); }
 
 /* ═══════════════════════════════════════════════════════
@@ -77,7 +149,7 @@ input, select, textarea {
   border: 1.5px solid transparent;
   border-radius: var(--radius-sm);
   color: var(--text);
-  padding: 10px 14px;
+  padding: calc(10px * var(--density)) calc(14px * var(--density));
   font-family: inherit;
   font-size: 13px;
   outline: none;
@@ -132,7 +204,7 @@ input[type="checkbox"], input[type="radio"] {
 input[type="radio"] { border-radius: 50%; }
 input[type="checkbox"]:checked, input[type="radio"]:checked {
   background: var(--accent);
-  box-shadow: 0 0 8px rgba(74,108,247,0.4);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 40%, transparent);
   border-color: var(--accent);
 }
 input[type="checkbox"]:checked::after {
@@ -140,7 +212,7 @@ input[type="checkbox"]:checked::after {
   position: absolute;
   left: 5px; top: 2px;
   width: 5px; height: 9px;
-  border: solid #fff;
+  border: solid var(--white);
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
@@ -150,7 +222,7 @@ input[type="radio"]:checked::after {
   left: 4px; top: 4px;
   width: 8px; height: 8px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--white);
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -159,8 +231,8 @@ input[type="radio"]:checked::after {
 .switch-card {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
+  gap: calc(12px * var(--density));
+  padding: calc(14px * var(--density)) calc(16px * var(--density));
   background: var(--bg);
   box-shadow: var(--raised);
   border-radius: var(--radius);
@@ -217,7 +289,7 @@ input[type="radio"]:checked::after {
   transition: transform 0.2s, background 0.2s;
 }
 .switch input:checked + .slider {
-  background: rgba(74,108,247,0.5);
+  background: color-mix(in srgb, var(--accent) 50%, transparent);
 }
 .switch input:checked + .slider::before {
   transform: translateX(20px);
@@ -231,8 +303,8 @@ input[type="radio"]:checked::after {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 10px 20px;
+  gap: calc(6px * var(--density));
+  padding: calc(10px * var(--density)) calc(20px * var(--density));
   border: none;
   border-radius: 12px;
   background: var(--bg);
@@ -252,14 +324,14 @@ input[type="radio"]:checked::after {
 
 .btn-accent {
   background: var(--accent);
-  color: #fff;
-  box-shadow: 3px 3px 8px rgba(74,108,247,0.3), -2px -2px 6px var(--shadow-light);
+  color: var(--white);
+  box-shadow: 3px 3px 8px color-mix(in srgb, var(--accent) 30%, transparent), -2px -2px 6px var(--shadow-light);
 }
-.btn-accent:hover { box-shadow: 4px 4px 12px rgba(74,108,247,0.4), -3px -3px 8px var(--shadow-light); }
-.btn-accent:active { box-shadow: inset 2px 2px 5px rgba(0,0,0,0.3); }
+.btn-accent:hover { box-shadow: 4px 4px 12px color-mix(in srgb, var(--accent) 40%, transparent), -3px -3px 8px var(--shadow-light); }
+.btn-accent:active { box-shadow: inset 2px 2px 5px color-mix(in srgb, var(--black) 30%, transparent); }
 
 .btn-danger { color: var(--error); }
-.btn-sm { padding: 8px 16px; font-size: 13px; font-weight: 500; }
+.btn-sm { padding: calc(8px * var(--density)) calc(16px * var(--density)); font-size: 13px; font-weight: 500; }
 .btn-icon {
   width: 34px; height: 34px; padding: 0;
   border-radius: 50%;
@@ -273,7 +345,7 @@ input[type="radio"]:checked::after {
   background: var(--bg);
   box-shadow: var(--raised);
   border-radius: var(--radius);
-  padding: 16px;
+  padding: calc(16px * var(--density));
 }
 .section-label {
   font-size: 11px;
@@ -281,12 +353,12 @@ input[type="radio"]:checked::after {
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 1px;
-  padding: 16px 0 8px;
+  padding: calc(16px * var(--density)) 0 calc(8px * var(--density));
 }
 .divider {
   height: 1px;
   background: var(--divider);
-  margin: 8px 0;
+  margin: calc(8px * var(--density)) 0;
 }
 
 /* ═══════════════════════════════════════════════════════

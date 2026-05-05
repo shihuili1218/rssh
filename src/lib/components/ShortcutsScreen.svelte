@@ -45,7 +45,7 @@
     <div class="key-list">
       {#each s.keys as [key, desc]}
         <div class="key-row">
-          <kbd class="kbd">{key}</kbd>
+          <kbd class="kbd surface-pressed">{key}</kbd>
           <span class="key-desc">{desc}</span>
         </div>
       {/each}
@@ -63,7 +63,7 @@
   .kbd {
     display: inline-block;
     min-width: 80px;
-    padding: 3px 8px;
+    padding: calc(3px * var(--density)) calc(8px * var(--density));
     background: var(--surface);
     box-shadow: var(--pressed);
     border-radius: 6px;

@@ -274,8 +274,8 @@
     }
 
     .warn {
-        background: color-mix(in srgb, #d9b341 12%, var(--bg));
-        border-left: 3px solid #d9b341;
+        background: color-mix(in srgb, var(--warning) 12%, var(--bg));
+        border-left: 3px solid var(--warning);
         padding: 8px 12px;
         border-radius: 4px;
         font-size: 12px;
@@ -322,8 +322,8 @@
         animation: confirmPulse 1.2s ease-in-out infinite;
     }
     @keyframes confirmPulse {
-        0%, 100% { box-shadow: 0 0 0 0 rgba(192, 57, 43, 0.45); }
-        50%      { box-shadow: 0 0 0 6px rgba(192, 57, 43, 0); }
+        0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--error) 45%, transparent); }
+        50%      { box-shadow: 0 0 0 6px color-mix(in srgb, var(--error) 0%, transparent); }
     }
     .note {
         font-size: 12px;
@@ -342,8 +342,8 @@
         align-items: center;
         gap: 8px;
         padding: 6px 12px;
-        background: color-mix(in srgb, var(--error, #c0392b) 12%, var(--bg));
-        color: var(--error, #c0392b);
+        background: color-mix(in srgb, var(--error) 12%, var(--bg));
+        color: var(--error);
         border-radius: 4px;
         font-size: 12px;
     }

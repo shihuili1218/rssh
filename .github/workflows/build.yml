@@ -2,6 +2,11 @@ name: Build All Platforms
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 0.1.0). Leave empty to use the version already in package.json.'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -51,6 +56,28 @@ jobs:
             libgtk-3-dev libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev librsvg2-dev
 
+      # Sync version across the three manifests (package.json /
+      # tauri.conf.json / Cargo.toml). Pattern lifted from release.yml
+      # — Cargo.toml MUST be updated too, otherwise some bundle metadata
+      # ends up at the stale version. Ephemeral: runner-only, no commit.
+      - name: Sync version
+        id: ver
+        shell: bash
+        run: |
+          INPUT="${{ github.event.inputs.version }}"
+          if [ -n "$INPUT" ]; then
+            VERSION="$INPUT"
+          else
+            VERSION=$(node -p "require('./package.json').version")
+          fi
+          npm version "${VERSION}" --no-git-tag-version --allow-same-version
+          cd src-tauri
+          sed -i.bak "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" tauri.conf.json && rm -f tauri.conf.json.bak
+          sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml && rm -f Cargo.toml.bak
+          cd ..
+          echo "v=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
       - name: Build CLI
         working-directory: src-tauri
         run: cargo build --release --features cli --bin rssh-cli --target ${{ matrix.target }}
@@ -71,7 +98,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: rssh-${{ matrix.name }}
+          name: rssh-${{ steps.ver.outputs.v }}-${{ matrix.name }}
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
             src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
@@ -111,6 +138,25 @@ jobs:
       - name: Install Android targets
         run: rustup target add aarch64-linux-android armv7-linux-androideabi
 
+      # Same as desktop job, but Linux runner so plain `sed -i` (no .bak).
+      - name: Sync version
+        id: ver
+        shell: bash
+        run: |
+          INPUT="${{ github.event.inputs.version }}"
+          if [ -n "$INPUT" ]; then
+            VERSION="$INPUT"
+          else
+            VERSION=$(node -p "require('./package.json').version")
+          fi
+          npm version "${VERSION}" --no-git-tag-version --allow-same-version
+          cd src-tauri
+          sed -i "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" tauri.conf.json
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+          cd ..
+          echo "v=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
       - name: Setup signing
         run: |
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > src-tauri/gen/android/release.jks
@@ -128,5 +174,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: rssh-android
+          name: rssh-${{ steps.ver.outputs.v }}-android
           path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk

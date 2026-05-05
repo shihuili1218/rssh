@@ -1,8 +1,19 @@
 <script lang="ts">
     import { onMount } from "svelte";
+    import { invoke } from "@tauri-apps/api/core";
     import * as app from "../stores/app.svelte.ts";
     import * as ai from "../ai/store.svelte.ts";
+    import * as theme from "../themes/store.svelte.ts";
+    import type { PaletteId } from "../themes/palettes.ts";
+    import { parseCustomTermJson, type TermPaletteRef } from "../themes/term-palettes.ts";
     import { t } from "../i18n/index.svelte.ts";
+
+    const SCHEMES_URL = "https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/xterm";
+    function openSchemesUrl() {
+        invoke("open_external_url", { url: SCHEMES_URL }).catch(e =>
+            console.error("open_external_url failed:", e)
+        );
+    }
 
     const positions = [
         { value: "left",   labelKey: "settings.appearance.pos.left" },
@@ -34,9 +45,208 @@
         aiPos = p;
         ai.setPosition(p);
     }
+
+    // ─── Theme: palette ──────────────────────────────────────────────
+    const palettes = theme.listPalettes();
+    let paletteId = $state<PaletteId>(theme.paletteId());
+    async function pickPalette(id: PaletteId) {
+        paletteId = id;
+        await theme.setPalette(id);
+    }
+
+    // ─── Theme: shape (surface style) ────────────────────────────────
+    const shapes = theme.listShapes();
+    let shapeId = $state<theme.ShapeId>(theme.shapeId());
+    async function pickShape(id: theme.ShapeId) {
+        shapeId = id;
+        await theme.setShape(id);
+    }
+
+    // ─── Theme: density ──────────────────────────────────────────────
+    const densities = theme.listDensities();
+    let densityId = $state<theme.DensityId>(theme.densityId());
+    async function pickDensity(id: theme.DensityId) {
+        densityId = id;
+        await theme.setDensity(id);
+    }
+
+    // ─── Theme: terminal palette (xterm colors, independent of UI) ───
+    const termPresets = theme.listTermPresets();
+    let termRef = $state<TermPaletteRef>(theme.termPaletteRef());
+
+    function isInherit(): boolean { return termRef.kind === "inherit"; }
+    function isPreset(id: string): boolean {
+        return termRef.kind === "preset" && termRef.id === id;
+    }
+    function isCustom(): boolean { return termRef.kind === "custom"; }
+
+    async function pickInherit() {
+        termRef = { kind: "inherit" };
+        await theme.setTermPalette(termRef);
+    }
+    async function pickPreset(id: string) {
+        termRef = { kind: "preset", id };
+        await theme.setTermPalette(termRef);
+    }
+
+    // Custom import dialog
+    let showCustomDialog = $state(false);
+    let customJsonInput = $state("");
+    let customError = $state("");
+
+    function openCustomDialog() {
+        // Pre-fill with current custom if any, else a minimal template.
+        if (termRef.kind === "custom") {
+            customJsonInput = JSON.stringify(termRef.term, null, 2);
+        } else {
+            customJsonInput = '{\n  "background": "#1e1e1e",\n  "foreground": "#d4d4d4"\n}';
+        }
+        customError = "";
+        showCustomDialog = true;
+    }
+    async function importCustom() {
+        try {
+            const term = parseCustomTermJson(customJsonInput);
+            termRef = { kind: "custom", term };
+            await theme.setTermPalette(termRef);
+            showCustomDialog = false;
+        } catch (e: any) {
+            customError = e.message || String(e);
+        }
+    }
 </script>
 
 <div class="page">
+    <div class="section-label">{t("settings.appearance.color_palette")}</div>
+    <div class="layout-grid">
+        {#each palettes as p}
+            <button
+                class="layout-card"
+                class:active={paletteId === p.id}
+                onclick={() => pickPalette(p.id)}
+            >
+                <div
+                    class="palette-preview"
+                    style="background: {p.ui.bg}; border-color: {p.ui.divider};"
+                >
+                    <div class="palette-row">
+                        <span class="swatch" style="background: {p.ui.surface}"></span>
+                        <span class="swatch" style="background: {p.ui.text}"></span>
+                        <span class="swatch" style="background: {p.ui.accent}"></span>
+                    </div>
+                    <div class="palette-row">
+                        <span class="swatch" style="background: {p.ui.success}"></span>
+                        <span class="swatch" style="background: {p.ui.warning}"></span>
+                        <span class="swatch" style="background: {p.ui.error}"></span>
+                    </div>
+                </div>
+                <div class="layout-label">{p.label}</div>
+            </button>
+        {/each}
+    </div>
+
+    <div class="section-label">{t("settings.appearance.terminal_palette")}</div>
+    <div class="layout-grid">
+        <!-- Inherit: follow the UI palette -->
+        <button
+            class="layout-card"
+            class:active={isInherit()}
+            onclick={pickInherit}
+        >
+            <div class="term-preview term-inherit">
+                <div class="term-inherit-label">↳ Inherit</div>
+            </div>
+            <div class="layout-label">{t("settings.appearance.term.inherit")}</div>
+        </button>
+
+        <!-- Built-in presets — preview is a mini ls --color session. -->
+        {#each termPresets as p}
+            <button
+                class="layout-card"
+                class:active={isPreset(p.id)}
+                onclick={() => pickPreset(p.id)}
+            >
+                <div class="term-preview" style="background: {p.term.background};">
+                    <div class="term-line">
+                        <span style="color: {p.term.green};">~/code</span><span
+                              style="color: {p.term.foreground};">$ </span><span
+                              style="color: {p.term.foreground};">ls</span>
+                    </div>
+                    <div class="term-line">
+                        <span style="color: {p.term.blue};">bin</span>
+                        <span style="color: {p.term.green};">build.sh</span>
+                        <span style="color: {p.term.foreground};">README</span>
+                    </div>
+                    <div class="term-line">
+                        <span style="color: {p.term.yellow};">warn:</span>
+                        <span style="color: {p.term.red};">error</span>
+                    </div>
+                </div>
+                <div class="layout-label">{p.label}</div>
+            </button>
+        {/each}
+
+        <!-- Custom: paste xterm.js JSON -->
+        <button
+            class="layout-card"
+            class:active={isCustom()}
+            onclick={openCustomDialog}
+        >
+            {#if isCustom() && termRef.kind === "custom"}
+                <div class="term-preview" style="background: {termRef.term.background};">
+                    <div class="term-line">
+                        <span style="color: {termRef.term.green ?? termRef.term.foreground};">~/code</span><span
+                              style="color: {termRef.term.foreground};">$ </span><span
+                              style="color: {termRef.term.foreground};">ls</span>
+                    </div>
+                    <div class="term-line">
+                        <span style="color: {termRef.term.blue ?? termRef.term.foreground};">bin</span>
+                        <span style="color: {termRef.term.green ?? termRef.term.foreground};">build.sh</span>
+                        <span style="color: {termRef.term.foreground};">README</span>
+                    </div>
+                    <div class="term-line">
+                        <span style="color: {termRef.term.yellow ?? termRef.term.foreground};">warn:</span>
+                        <span style="color: {termRef.term.red ?? termRef.term.foreground};">error</span>
+                    </div>
+                </div>
+            {:else}
+                <div class="term-preview term-custom">
+                    <div class="term-custom-icon">+</div>
+                    <div class="term-custom-label">Custom</div>
+                </div>
+            {/if}
+            <div class="layout-label">{t("settings.appearance.term.custom")}</div>
+        </button>
+    </div>
+
+    <div class="section-label">{t("settings.appearance.surface_style")}</div>
+    <div class="layout-grid">
+        {#each shapes as s}
+            <button
+                class="layout-card"
+                class:active={shapeId === s.id}
+                onclick={() => pickShape(s.id)}
+            >
+                <div class="shape-preview shape-{s.id}">
+                    <div class="shape-card"></div>
+                    <div class="shape-btn">Aa</div>
+                </div>
+                <div class="layout-label">{s.label}</div>
+            </button>
+        {/each}
+    </div>
+
+    <div class="section-label">{t("settings.appearance.density")}</div>
+    <div class="density-row">
+        {#each densities as d}
+            <button
+                class="density-btn"
+                class:active={densityId === d.id}
+                onclick={() => pickDensity(d.id)}
+            >{t(`settings.appearance.density.${d.id}` as any)}</button>
+        {/each}
+    </div>
+
     <div class="section-label">{t("settings.appearance.sidebar_position")}</div>
     <div class="layout-grid">
         {#each positions as p}
@@ -103,11 +313,11 @@
         {/each}
     </div>
 
-    <div class="section-label">TERMINAL DISPLAY</div>
+    <div class="section-label">{t("settings.appearance.terminal_display")}</div>
     <div class="switch-card">
         <div class="switch-card-body">
-            <div class="switch-card-title" class:on={commandBlockBar} class:off={!commandBlockBar}>COMMAND BLOCK BAR</div>
-            <div class="switch-card-desc">Show a colored side bar next to each command to visually group its input and output. A gray bar marks full-screen programs (vim, top, less).</div>
+            <div class="switch-card-title" class:on={commandBlockBar} class:off={!commandBlockBar}>{t("settings.appearance.command_block_bar")}</div>
+            <div class="switch-card-desc">{t("settings.appearance.command_block_bar_desc")}</div>
         </div>
         <label class="switch">
             <input type="checkbox" bind:checked={commandBlockBar} onchange={saveCommandBlockBar} />
@@ -115,6 +325,37 @@
         </label>
     </div>
 </div>
+
+{#if showCustomDialog}
+<div class="dialog-backdrop" onclick={() => showCustomDialog = false} role="presentation">
+    <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <div class="dialog-title">{t("settings.appearance.term.import_title")}</div>
+        <div class="dialog-hint">
+            {t("settings.appearance.term.import_hint")}
+            <button class="link-btn" type="button" onclick={openSchemesUrl}>
+                iTerm2-Color-Schemes (xterm folder)
+            </button>
+        </div>
+        <textarea
+            bind:value={customJsonInput}
+            spellcheck="false"
+            rows="14"
+            class="dialog-textarea"
+        ></textarea>
+        {#if customError}
+            <div class="dialog-error">{customError}</div>
+        {/if}
+        <div class="dialog-actions">
+            <button class="btn" onclick={() => showCustomDialog = false}>
+                {t("settings.appearance.term.cancel")}
+            </button>
+            <button class="btn btn-accent" onclick={importCustom}>
+                {t("settings.appearance.term.import")}
+            </button>
+        </div>
+    </div>
+</div>
+{/if}
 
 <style>
     .page {
@@ -168,6 +409,122 @@
         display: flex;
         flex-direction: column;
     }
+
+    /* Palette preview card — same footprint as .mini-window so the
+       layout grid stays uniform across palette / position cards. */
+    .palette-preview {
+        width: 160px;
+        height: 100px;
+        border: 1px solid;
+        border-radius: 6px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 8px;
+        padding: 12px;
+    }
+    .palette-row {
+        display: flex;
+        gap: 6px;
+        justify-content: center;
+    }
+    .swatch {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-dim) 30%, transparent);
+    }
+
+    /* Shape preview — each card renders a sample card + button using
+       the shape's own style, NOT the active [data-shape], so users
+       can compare all four side-by-side. Uniform footprint with the
+       palette / position cards. */
+    .shape-preview {
+        width: 160px;
+        height: 100px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        background: var(--bg);
+        border-radius: 6px;
+        overflow: hidden;
+    }
+    .shape-card {
+        width: 50px;
+        height: 50px;
+        background: var(--bg);
+        border-radius: 8px;
+    }
+    .shape-btn {
+        padding: 6px 12px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--white);
+        background: var(--accent);
+        border-radius: 8px;
+    }
+
+    /* Neumorphism: dual-shadow embossed surface */
+    .shape-neumorphism .shape-card {
+        box-shadow: 3px 3px 6px var(--shadow-dark), -3px -3px 6px var(--shadow-light);
+    }
+    .shape-neumorphism .shape-btn {
+        box-shadow:
+            2px 2px 5px color-mix(in srgb, var(--accent) 30%, transparent),
+            -1px -1px 4px var(--shadow-light);
+    }
+
+    /* Flat: thin border, no shadow */
+    .shape-flat .shape-card {
+        border: 1px solid var(--divider);
+    }
+    .shape-flat .shape-btn {
+        border: 1px solid var(--accent);
+    }
+
+    /* Material: single-direction drop shadow */
+    .shape-material .shape-card {
+        box-shadow:
+            0 2px 4px color-mix(in srgb, var(--shadow-dark) 50%, transparent),
+            0 4px 12px color-mix(in srgb, var(--shadow-dark) 30%, transparent);
+        border-radius: 12px;
+    }
+    .shape-material .shape-btn {
+        box-shadow:
+            0 2px 4px color-mix(in srgb, var(--accent) 35%, transparent),
+            0 4px 12px color-mix(in srgb, var(--accent) 25%, transparent);
+        border-radius: 12px;
+    }
+
+    /* Density: simple segmented control. Three buttons, active one
+       gets the accent color. */
+    .density-row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .density-btn {
+        padding: 8px 18px;
+        border: 1px solid var(--divider);
+        border-radius: var(--radius-sm);
+        background: var(--bg);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: border-color 0.15s, background 0.15s, color 0.15s;
+    }
+    .density-btn:hover:not(.active) {
+        background: var(--surface);
+    }
+    .density-btn.active {
+        border-color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+        color: var(--accent);
+    }
     .mini-titlebar {
         height: 14px;
         background: var(--bg);
@@ -182,9 +539,9 @@
         height: 6px;
         border-radius: 50%;
     }
-    .mini-dot.red    { background: #e05555; }
-    .mini-dot.yellow { background: #ddaa33; }
-    .mini-dot.green  { background: #4cb88a; }
+    .mini-dot.red    { background: var(--error); }
+    .mini-dot.yellow { background: var(--warning); }
+    .mini-dot.green  { background: var(--success); }
     .mini-body {
         flex: 1;
         display: flex;
@@ -198,8 +555,8 @@
     /* AI panel (purple) — 只支持 left/right */
     .mini-ai {
         width: 38%;
-        background: color-mix(in srgb, #a855f7 22%, var(--surface));
-        border-right: 1px solid color-mix(in srgb, #a855f7 35%, transparent);
+        background: color-mix(in srgb, var(--purple) 22%, var(--surface));
+        border-right: 1px solid color-mix(in srgb, var(--purple) 35%, transparent);
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -208,12 +565,12 @@
     }
     .mini-body.dir-right .mini-ai {
         border-right: none;
-        border-left: 1px solid color-mix(in srgb, #a855f7 35%, transparent);
+        border-left: 1px solid color-mix(in srgb, var(--purple) 35%, transparent);
     }
     .mini-ai-line {
         height: 3px;
         border-radius: 2px;
-        background: color-mix(in srgb, #a855f7 60%, transparent);
+        background: color-mix(in srgb, var(--purple) 60%, transparent);
     }
 
     /* Menu sidebar (accent / blue) */
@@ -280,5 +637,127 @@
     .layout-card.active .layout-label {
         color: var(--text);
         font-weight: 600;
+    }
+
+    /* ── Terminal palette preview cards ── */
+    /* Mini terminal session: prompt + ls + warn/error lines, each
+       span colored by the actual ANSI role (blue=dir, green=exec,
+       yellow=warn, red=error). User sees colors in context. */
+    .term-preview {
+        width: 160px;
+        height: 100px;
+        border: 1px solid var(--divider);
+        border-radius: 6px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 4px;
+        padding: 10px 12px;
+        font-family: 'JetBrainsMono Nerd Font', Menlo, Monaco, monospace;
+        font-size: 11px;
+        line-height: 1.3;
+    }
+    .term-line {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        white-space: nowrap;
+    }
+    /* Inherit card — neutral, with arrow-style label */
+    .term-inherit {
+        background: var(--surface);
+        align-items: center;
+        justify-content: center;
+    }
+    .term-inherit-label {
+        font-size: 14px;
+        font-weight: 600;
+        font-family: monospace;
+        color: var(--text-sub);
+    }
+    /* Custom card — empty placeholder when no custom set */
+    .term-custom {
+        background: var(--surface);
+        color: var(--text-dim);
+        border-style: dashed;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+    }
+    .term-custom-icon {
+        font-size: 28px;
+        font-weight: 300;
+        line-height: 1;
+        color: var(--text-sub);
+    }
+    .term-custom-label {
+        font-size: 12px;
+        font-weight: 500;
+    }
+
+    /* ── Custom JSON import dialog ── */
+    .dialog-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 500;
+        background: var(--overlay-strong);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+    }
+    .dialog {
+        width: min(560px, 100%);
+        max-height: 90vh;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 24px;
+        overflow-y: auto;
+    }
+    .dialog-title {
+        font-size: 15px;
+        font-weight: 600;
+    }
+    .dialog-hint {
+        font-size: 12px;
+        color: var(--text-sub);
+        line-height: 1.5;
+    }
+    .dialog-hint .link-btn {
+        background: none;
+        border: none;
+        padding: 0;
+        margin: 0;
+        font: inherit;
+        color: var(--accent);
+        cursor: pointer;
+        text-decoration: none;
+    }
+    .dialog-hint .link-btn:hover {
+        text-decoration: underline;
+    }
+    .dialog-textarea {
+        width: 100%;
+        font-family: monospace;
+        font-size: 12px;
+        line-height: 1.5;
+        resize: vertical;
+        min-height: 200px;
+    }
+    .dialog-error {
+        font-size: 12px;
+        color: var(--error);
+        padding: 8px 12px;
+        background: color-mix(in srgb, var(--error) 12%, transparent);
+        border-radius: var(--radius-sm);
+        font-family: monospace;
+    }
+    .dialog-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 4px;
     }
 </style>

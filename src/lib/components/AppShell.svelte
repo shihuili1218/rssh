@@ -884,7 +884,7 @@
     .backdrop {
         position: fixed;
         inset: 0;
-        background: rgba(0, 0, 0, 0.4);
+        background: var(--overlay-soft);
         z-index: 100;
     }
 
@@ -937,7 +937,7 @@
     }
     .ai-resize-handle:hover,
     .ai-resize-handle:active {
-        background: var(--accent, #4A6CF7);
+        background: var(--accent);
         opacity: 0.45;
     }
 

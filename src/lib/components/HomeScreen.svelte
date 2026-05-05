@@ -307,8 +307,8 @@
   .pin-btn:hover { color: var(--accent); }
 
   .card-btn {
-    display: flex; align-items: flex-start; gap: 12px;
-    padding: 14px; text-align: left; width: 100%;
+    display: flex; align-items: flex-start; gap: calc(12px * var(--density));
+    padding: calc(14px * var(--density)); text-align: left; width: 100%;
     border: none; cursor: pointer; font-family: inherit;
     transition: box-shadow 0.2s, transform 0.1s;
   }
@@ -322,7 +322,7 @@
     display: flex; align-items: center; justify-content: center;
     font-weight: 700; font-size: 14px; flex-shrink: 0;
   }
-  .card-icon.fwd { background: rgba(76,184,138,0.15); color: var(--success); }
+  .card-icon.fwd { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
 
   .card-body { flex: 1; min-width: 0; }
   .card-name { font-weight: 600; font-size: 14px; color: var(--text); margin-bottom: 2px; }

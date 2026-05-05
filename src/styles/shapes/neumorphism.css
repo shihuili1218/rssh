@@ -1,0 +1,27 @@
+/* ═══════════════════════════════════════════════════════
+   Shape: Neumorphism (default)
+   Soft dual-shadow surfaces, no border. The :root values in
+   global.css already match this — keeping the tokens declared
+   here makes the shape's identity explicit and switching back
+   from another shape works without page reload.
+   ═══════════════════════════════════════════════════════ */
+/* :root[data-shape="..."] beats plain :root in specificity (0,2,0 > 0,1,0).
+   Required because @import places this file before :root in source order,
+   so a same-specificity rule would lose. */
+:root[data-shape="neumorphism"] {
+    --elevation-low:     3px 3px 6px var(--shadow-dark), -3px -3px 6px var(--shadow-light);
+    --elevation-mid:     5px 5px 10px var(--shadow-dark), -5px -5px 10px var(--shadow-light);
+    --elevation-pressed: inset 3px 3px 6px var(--shadow-dark), inset -3px -3px 6px var(--shadow-light);
+}
+
+/* Accent button keeps its glow. */
+[data-shape="neumorphism"] .btn-accent {
+    box-shadow:
+        3px 3px 8px color-mix(in srgb, var(--accent) 30%, transparent),
+        -2px -2px 6px var(--shadow-light);
+}
+[data-shape="neumorphism"] .btn-accent:hover {
+    box-shadow:
+        4px 4px 12px color-mix(in srgb, var(--accent) 40%, transparent),
+        -3px -3px 8px var(--shadow-light);
+}

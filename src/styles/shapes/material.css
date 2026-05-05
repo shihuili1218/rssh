@@ -1,0 +1,47 @@
+/* ═══════════════════════════════════════════════════════
+   Shape: Material
+   Single-direction drop shadows, larger radii, no inner shadow.
+   Inspired by Material Design elevation, simplified.
+   ═══════════════════════════════════════════════════════ */
+/* :root[data-shape="..."] beats plain :root in specificity. See neumorphism.css. */
+:root[data-shape="material"] {
+    --elevation-low:
+        0 1px 2px color-mix(in srgb, var(--shadow-dark) 50%, transparent),
+        0 2px 4px color-mix(in srgb, var(--shadow-dark) 30%, transparent);
+    --elevation-mid:
+        0 2px 4px color-mix(in srgb, var(--shadow-dark) 50%, transparent),
+        0 4px 12px color-mix(in srgb, var(--shadow-dark) 30%, transparent);
+    /* "Pressed" in Material isn't an inset — it's a tint overlay. */
+    --elevation-pressed: 0 1px 2px color-mix(in srgb, var(--shadow-dark) 40%, transparent);
+    /* Slightly larger radii feel more "material". */
+    --radius:    18px;
+    --radius-md: 18px;
+}
+
+/* Pressed inputs: tint background instead of inset shadow. */
+[data-shape="material"] input,
+[data-shape="material"] select,
+[data-shape="material"] textarea {
+    background: var(--surface);
+    box-shadow: var(--elevation-pressed);
+}
+
+/* Accent button: lifted, with colored shadow. */
+[data-shape="material"] .btn-accent {
+    box-shadow:
+        0 2px 4px color-mix(in srgb, var(--accent) 35%, transparent),
+        0 4px 12px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+[data-shape="material"] .btn-accent:hover {
+    box-shadow:
+        0 4px 8px color-mix(in srgb, var(--accent) 40%, transparent),
+        0 8px 20px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+[data-shape="material"] .btn-accent:active {
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* Switch slider: outer shadow instead of inset. */
+[data-shape="material"] .switch .slider {
+    box-shadow: var(--elevation-low);
+}

@@ -86,11 +86,11 @@
 
   <div class="update">
     {#if update.kind === "outdated"}
-      <button class="update-btn primary" onclick={() => openUrl(RELEASES_PAGE)}>
+      <button class="update-btn primary surface-raised-sm" onclick={() => openUrl(RELEASES_PAGE)}>
         {t("about.update.download")} v{update.latest}
       </button>
     {:else}
-      <button class="update-btn"
+      <button class="update-btn surface-raised-sm"
               disabled={update.kind === "checking"}
               onclick={checkUpdate}>
         {update.kind === "checking" ? t("about.update.checking") : t("about.update.check")}
@@ -104,22 +104,22 @@
   </div>
 
   <div class="links">
-    <button class="link-row" onclick={() => openUrl(REPO_URL)}>
+    <button class="link-row surface-raised-sm" onclick={() => openUrl(REPO_URL)}>
       <span class="link-label">{t("about.repo")}</span>
       <span class="link-url">{REPO_URL}</span>
     </button>
-    <button class="link-row" onclick={() => openUrl(ISSUES_URL)}>
+    <button class="link-row surface-raised-sm" onclick={() => openUrl(ISSUES_URL)}>
       <span class="link-label">{t("about.issues")}</span>
       <span class="link-url">{ISSUES_URL}</span>
     </button>
-    <button class="link-row" onclick={() => openUrl(LICENSE_URL)}>
+    <button class="link-row surface-raised-sm" onclick={() => openUrl(LICENSE_URL)}>
       <span class="link-label">{t("about.license")}</span>
       <span class="link-url">MIT</span>
     </button>
   </div>
 
   <div class="diag">
-    <button class="diag-btn" class:copied={justCopied} onclick={copyDiagnostics}>
+    <button class="diag-btn surface-raised-sm" class:copied={justCopied} onclick={copyDiagnostics}>
       {justCopied ? t("about.copied") : t("about.diagnostics")}
     </button>
     <span class="diag-hint">{t("about.diagnostics.hint")}</span>
@@ -159,8 +159,8 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 16px;
-    padding: 12px 16px;
+    gap: calc(16px * var(--density));
+    padding: calc(12px * var(--density)) calc(16px * var(--density));
     border: none;
     border-radius: var(--radius-sm);
     background: var(--bg);
@@ -189,7 +189,7 @@
     gap: 12px;
   }
   .diag-btn {
-    padding: 8px 16px;
+    padding: calc(8px * var(--density)) calc(16px * var(--density));
     border: none;
     border-radius: var(--radius-sm);
     background: var(--bg);
@@ -210,7 +210,7 @@
     gap: 12px;
   }
   .update-btn {
-    padding: 8px 16px;
+    padding: calc(8px * var(--density)) calc(16px * var(--density));
     border: none;
     border-radius: var(--radius-sm);
     background: var(--bg);
@@ -227,5 +227,5 @@
   .update-btn.primary { color: var(--accent); }
   .update-hint { font-size: 12px; }
   .update-hint.ok { color: var(--text-dim); }
-  .update-hint.err { color: var(--danger, #c0392b); }
+  .update-hint.err { color: var(--error); }
 </style>

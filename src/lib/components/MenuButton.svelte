@@ -203,8 +203,8 @@
         height: 14px;
         padding: 0 3px;
         border-radius: 7px;
-        background: var(--error, #d64444);
-        color: white;
+        background: var(--error);
+        color: var(--white);
         font-size: 9px;
         font-weight: 700;
         line-height: 14px;

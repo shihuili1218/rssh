@@ -110,7 +110,7 @@
       <div class="section-label">{s.section}</div>
       {#each s.items as item}
         <button
-          class="menu-item"
+          class="menu-item surface-raised-sm"
           class:active={isActive(item.id)}
           onclick={() => app.settingsNavigate(item.id)}
         >
@@ -185,8 +185,8 @@
   .menu-item {
     display: block;
     width: 100%;
-    padding: 9px 12px;
-    margin-bottom: 10px;
+    padding: calc(9px * var(--density)) calc(12px * var(--density));
+    margin-bottom: calc(10px * var(--density));
     border: none;
     border-radius: var(--radius-sm);
     background: var(--bg);

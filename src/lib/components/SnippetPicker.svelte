@@ -35,7 +35,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="picker-backdrop" onclick={() => app.closeSnippetPicker()}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="picker" onclick={(e) => e.stopPropagation()}>
+  <div class="picker surface-raised" onclick={(e) => e.stopPropagation()}>
     <input bind:this={inputEl} type="text" bind:value={filter} placeholder="Search snippets..."
       onkeydown={handleKey} />
     <div class="picker-list">
@@ -54,7 +54,7 @@
 <style>
   .picker-backdrop {
     position: fixed; inset: 0; z-index: 400;
-    background: rgba(0,0,0,0.4);
+    background: var(--overlay-soft);
     display: flex; align-items: flex-start; justify-content: center;
     padding-top: 80px;
   }

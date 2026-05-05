@@ -47,7 +47,7 @@
     ".cm-activeLine": { backgroundColor: "var(--surface)" },
     "&.cm-focused .cm-cursor": { borderLeftColor: "var(--accent)" },
     "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
-      backgroundColor: "rgba(74,108,247,0.3)",
+      backgroundColor: "color-mix(in srgb, var(--accent) 30%, transparent)",
     },
   }, { dark: true });
 
@@ -209,7 +209,7 @@
     border: none;
     border-radius: var(--radius-sm);
     background: var(--accent);
-    color: #fff;
+    color: var(--white);
     font-family: inherit;
     font-size: 13px;
     font-weight: 600;
