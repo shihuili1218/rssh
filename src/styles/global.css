@@ -68,7 +68,7 @@
   --radius-sm: 10px;
   --radius-md: 14px;
   --radius-lg: 18px;
-  --radius:    14px;             /* alias for --radius-md, back-compat */
+  --radius:    var(--radius-md); /* alias for --radius-md, back-compat */
 
   /* ── Layout ─────────────────────────────────────────── */
   --topbar-h: 44px;

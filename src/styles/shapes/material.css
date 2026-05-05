@@ -13,8 +13,9 @@
         0 4px 12px color-mix(in srgb, var(--shadow-dark) 30%, transparent);
     /* "Pressed" in Material isn't an inset — it's a tint overlay. */
     --elevation-pressed: 0 1px 2px color-mix(in srgb, var(--shadow-dark) 40%, transparent);
-    /* Slightly larger radii feel more "material". */
-    --radius:    18px;
+    /* Slightly larger radii feel more "material".
+       --radius is aliased to --radius-md in :root, so changing the
+       latter cascades to both. */
     --radius-md: 18px;
 }
 

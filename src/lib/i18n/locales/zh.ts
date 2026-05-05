@@ -83,7 +83,7 @@ const zh: Messages = {
   "settings.appearance.term.inherit": "跟随主题",
   "settings.appearance.term.custom": "自定义",
   "settings.appearance.term.import_title": "导入 xterm 配色方案",
-  "settings.appearance.term.import_hint": "粘贴 xterm.js 格式的主题 JSON。iTerm2 原生 .itermcolors 不能直接用，请用此处的 JSON（cursorColor / purple / brightPurple 会自动转换）：",
+  "settings.appearance.term.import_hint": "粘贴主题 JSON。可从此处的 Windows Terminal 文件夹复制：",
   "settings.appearance.term.import": "导入",
   "settings.appearance.term.cancel": "取消",
   "settings.appearance.command_block_bar": "命令块侧栏",

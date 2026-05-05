@@ -159,14 +159,18 @@
             <div class="layout-label">{t("settings.appearance.term.inherit")}</div>
         </button>
 
-        <!-- Built-in presets — preview is a mini ls --color session. -->
+        <!-- Built-in presets — preview is a mini ls --color session.
+             Background uses var(--bg) (the UI palette) because the runtime
+             term theme always overrides background to UI bg for visual
+             cohesion. Showing the preset's own background here would lie
+             about what users actually see after they pick the preset. -->
         {#each termPresets as p}
             <button
                 class="layout-card"
                 class:active={isPreset(p.id)}
                 onclick={() => pickPreset(p.id)}
             >
-                <div class="term-preview" style="background: {p.term.background};">
+                <div class="term-preview" style="background: var(--bg);">
                     <div class="term-line">
                         <span style="color: {p.term.green};">~/code</span><span
                               style="color: {p.term.foreground};">$ </span><span
@@ -193,7 +197,7 @@
             onclick={openCustomDialog}
         >
             {#if isCustom() && termRef.kind === "custom"}
-                <div class="term-preview" style="background: {termRef.term.background};">
+                <div class="term-preview" style="background: var(--bg);">
                     <div class="term-line">
                         <span style="color: {termRef.term.green ?? termRef.term.foreground};">~/code</span><span
                               style="color: {termRef.term.foreground};">$ </span><span
