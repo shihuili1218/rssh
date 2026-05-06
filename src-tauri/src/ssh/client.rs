@@ -1340,13 +1340,13 @@ async fn session_task(
         match event {
             Event::Ssh(Some(ChannelMsg::Data { data })) => {
                 if let Some(ref mut rec) = recorder {
-                    let _ = rec.record(&String::from_utf8_lossy(&data));
+                    let _ = rec.record(&data);
                 }
                 let _ = app.emit(&data_event, data.to_vec());
             }
             Event::Ssh(Some(ChannelMsg::ExtendedData { data, .. })) => {
                 if let Some(ref mut rec) = recorder {
-                    let _ = rec.record(&String::from_utf8_lossy(&data));
+                    let _ = rec.record(&data);
                 }
                 let _ = app.emit(&data_event, data.to_vec());
             }

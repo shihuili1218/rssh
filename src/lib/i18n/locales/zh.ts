@@ -173,11 +173,11 @@ const zh: Messages = {
   // ── AI 排障：ChatPanel ──
   "ai.resize_hint": "拖拽改宽 · 双击重置",
   "ai.title": "AI 排障",
-  "ai.toolbar.audit": "📋 审计",
+  "ai.toolbar.audit": "✎𓂃审计",
   "ai.toolbar.back_to_chat": "← 对话",
   "ai.toolbar.close_session": "关闭并结束会话",
   "ai.error.no_api_key": "请先到 设置 → AI 排障 配置 API key",
-  "ai.placeholder.welcome": "直接说说怎么了，AI 会自己挑路径。",
+  "ai.placeholder.welcome": "直接说说怎么了",
   "ai.placeholder.example_hint": "例如：\"这台机器 CPU 飙到 100% 了\"、\"Java 进程内存涨得很猛\"。",
   "ai.placeholder.confirm_hint": "所有提议命令都会经你点击确认才执行；命令输出本地脱敏后再发给 LLM。",
   "ai.input.replying": "AI 正在回复…",
@@ -188,9 +188,9 @@ const zh: Messages = {
   "ai.session.ended_note": "会话已结束",
 
   // ── AI 排障：AuditPanel ──
-  "ai.audit.refresh": "🔄 刷新",
+  "ai.audit.refresh": "𖦹 刷新",
   "ai.audit.refresh_loading": "加载…",
-  "ai.audit.save_to_file": "💾 保存到文件",
+  "ai.audit.save_to_file": "⬇ 保存到文件",
   "ai.audit.placeholder.loading": "加载中...",
   "ai.audit.placeholder.empty": "暂无审计记录",
   "ai.audit.toggle.payload": "查看 payload (脱敏后)",

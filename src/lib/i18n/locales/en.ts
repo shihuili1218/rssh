@@ -171,11 +171,11 @@ const en = {
   // ── AI Diagnose: ChatPanel ──
   "ai.resize_hint": "Drag to resize · double-click to reset",
   "ai.title": "AI Diagnose",
-  "ai.toolbar.audit": "📋 Audit",
+  "ai.toolbar.audit": "✎𓂃Audit",
   "ai.toolbar.back_to_chat": "← Chat",
   "ai.toolbar.close_session": "Close and end session",
   "ai.error.no_api_key": "Configure your API key in Settings → AI Diagnose first",
-  "ai.placeholder.welcome": "Just tell me what's wrong — the AI will pick the path.",
+  "ai.placeholder.welcome": "Just tell me what's wrong",
   "ai.placeholder.example_hint": "For example: \"this box's CPU shot to 100%\", \"the Java process is leaking memory\".",
   "ai.placeholder.confirm_hint": "Every proposed command requires your click to run; output is sanitized locally before being sent to the LLM.",
   "ai.input.replying": "AI is replying…",
@@ -186,9 +186,9 @@ const en = {
   "ai.session.ended_note": "Session ended",
 
   // ── AI Diagnose: AuditPanel ──
-  "ai.audit.refresh": "🔄 Refresh",
+  "ai.audit.refresh": "𖦹 Refresh",
   "ai.audit.refresh_loading": "Loading…",
-  "ai.audit.save_to_file": "💾 Save to file",
+  "ai.audit.save_to_file": "⬇ Save to file",
   "ai.audit.placeholder.loading": "Loading…",
   "ai.audit.placeholder.empty": "No audit entries yet",
   "ai.audit.toggle.payload": "Show payload (redacted)",
