@@ -57,6 +57,8 @@ export interface CommandResult {
   id: string;
   exit_code: number;
   timed_out: boolean;
+  /** 用户在执行中点了"提前终止"。 */
+  early_terminated?: boolean;
   duration_ms: number;
   output: string;
   original_bytes: number;

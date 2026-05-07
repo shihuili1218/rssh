@@ -211,6 +211,7 @@ pub async fn ai_command_result(
     exit_code: i32,
     output: String,
     timed_out: bool,
+    early_terminated: Option<bool>,
 ) -> AppResult<()> {
     let tx = locked(&state.ai_sessions)?
         .get(&session_id)
@@ -221,6 +222,7 @@ pub async fn ai_command_result(
         exit_code,
         output,
         timed_out,
+        early_terminated: early_terminated.unwrap_or(false),
     })
     .map_err(|_| AppError::other("ai_session_stopped", json!({})))?;
     Ok(())

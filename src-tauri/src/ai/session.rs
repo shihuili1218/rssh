@@ -38,6 +38,8 @@ pub enum UserAction {
         exit_code: i32,
         output: String,
         timed_out: bool,
+        /// 用户在执行中点了"提前终止"（前端发了 Ctrl+C）。
+        early_terminated: bool,
     },
     Stop,
 }
@@ -525,6 +527,7 @@ impl Actor {
                     exit_code,
                     output,
                     timed_out,
+                    early_terminated,
                 } if tool_call_id == tc.id => {
                     let redacted = sanitize::redact(&output, &self.cfg.redact_rules);
                     let trunc = sanitize::truncate(&redacted, self.cfg.max_output_bytes);
@@ -535,6 +538,7 @@ impl Actor {
                             "id": cmd_id,
                             "exit_code": exit_code,
                             "timed_out": timed_out,
+                            "early_terminated": early_terminated,
                             "output": trunc.text,
                             "original_bytes": trunc.original_bytes,
                             "truncated_bytes": trunc.truncated_bytes,
@@ -551,13 +555,13 @@ impl Actor {
                     });
 
                     let tool_payload = format!(
-                        "exit={exit_code} timed_out={timed_out}\n--- output ---\n{}",
+                        "exit={exit_code} timed_out={timed_out} early_terminated={early_terminated}\n--- output ---\n{}",
                         trunc.text
                     );
                     self.history.push(ChatMessage::ToolResult {
                         tool_call_id: tc.id,
                         content: tool_payload,
-                        is_error: timed_out || exit_code != 0,
+                        is_error: timed_out || early_terminated || exit_code != 0,
                     });
                     return Ok(());
                 }

@@ -129,6 +129,13 @@ export async function sendMessage(session_id: string, text: string) {
   await invoke("ai_user_message", { sessionId: session_id, text });
 }
 
+/** 在途执行的控制句柄；按 tool_call_id 索引。`terminate` 给 UI 上的"提前终止"按钮用。 */
+const _runningExecutions: Record<string, { terminate: () => Promise<void> }> = {};
+
+export function isCommandRunning(tool_call_id: string): boolean {
+  return tool_call_id in _runningExecutions;
+}
+
 /**
  * 执行 AI 提议的命令：把 `full_cmd`（含 sentinel + exit code 回显）粘到 active terminal
  * 自动回车，监听输出流找 sentinel 拿 exit code，然后把脱敏前的 output 上报后端。
@@ -148,8 +155,15 @@ export async function executeCommand(
 
   let buffer = "";
   let resolved = false;
+  let userInterrupted = false;
   let unlisten: UnlistenFn | null = null;
   let timer: number | null = null;
+  // 整个函数返回的 Promise 只在 finish() 真正跑完才 resolve——UI 上的 executing
+  // 状态因此能持续覆盖整个执行周期，否则之前 await invoke(writeCmd) 一返回
+  // executing 就被翻回 false，按钮立刻又能点。
+  let resolveDone!: () => void;
+  const done = new Promise<void>((r) => { resolveDone = r; });
+
   const sentinelRegex = new RegExp(
     proposed.sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ":(-?\\d+)"
   );
@@ -164,6 +178,7 @@ export async function executeCommand(
     resolved = true;
     if (unlisten) unlisten();
     if (timer != null) clearTimeout(timer);
+    delete _runningExecutions[proposed.tool_call_id];
     try {
       await invoke("ai_command_result", {
         sessionId: session_id,
@@ -171,10 +186,12 @@ export async function executeCommand(
         exitCode: exit_code,
         output,
         timedOut: timed_out,
+        earlyTerminated: userInterrupted,
       });
     } catch (e) {
       console.error("[ai] ai_command_result failed:", e);
     }
+    resolveDone();
   };
 
   unlisten = await listen<number[]>(dataEvent, (e) => {
@@ -195,6 +212,18 @@ export async function executeCommand(
     }
   });
 
+  // 注册控制句柄：用户点"提前终止"时打 Ctrl+C 给 PTY，让 shell 走到 sentinel 那一行
+  // 拿到 130 退出码（SIGINT）。userInterrupted 标志会在 finish() 里上报后端，让 LLM
+  // 区分"命令正常失败"和"用户主动打断"。如果 Ctrl+C 后 shell 半天回不来，timer 兜底。
+  _runningExecutions[proposed.tool_call_id] = {
+    terminate: async () => {
+      if (resolved) return;
+      userInterrupted = true;
+      const ctrlC = Array.from(new TextEncoder().encode("\x03"));
+      await invoke(writeCmd, { sessionId: target_session_id, data: ctrlC });
+    },
+  };
+
   // 写命令到 PTY；末尾 \n 触发 shell 执行
   const data = Array.from(new TextEncoder().encode(proposed.full_cmd + "\n"));
   await invoke(writeCmd, { sessionId: target_session_id, data });
@@ -202,6 +231,14 @@ export async function executeCommand(
   timer = window.setTimeout(() => {
     void finish(stripAnsi(buffer).trim(), -1, true);
   }, Math.max(1000, proposed.timeout_s * 1000)) as unknown as number;
+
+  return done;
+}
+
+/** 提前终止：发 Ctrl+C 到目标终端。finish() 之后的上报会带 early_terminated=true。 */
+export async function terminateCommand(tool_call_id: string): Promise<void> {
+  const ctl = _runningExecutions[tool_call_id];
+  if (ctl) await ctl.terminate();
 }
 
 export async function rejectCommand(session_id: string, tool_call_id: string, reason: string) {

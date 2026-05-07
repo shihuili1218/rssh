@@ -15,6 +15,7 @@
     let askingReason = $state(false);
     let rejectReason = $state("");
     let executing = $state(false);
+    let terminating = $state(false);
 
     let isPending = $derived(!result && !rejected);
 
@@ -28,6 +29,7 @@
             alert(t("ai.cmd.alert.exec_failed", { error: errMsg(e) }));
         } finally {
             executing = false;
+            terminating = false;
         }
     }
 
@@ -41,6 +43,18 @@
         await ai.rejectCommand(sessionId, cmd.tool_call_id, reason);
         askingReason = false;
         rejectReason = "";
+    }
+
+    /** 执行中点的"提前终止"：发 Ctrl+C；后续 finish() 会上报 early_terminated=true。 */
+    async function terminate() {
+        if (terminating) return;
+        terminating = true;
+        try {
+            await ai.terminateCommand(cmd.tool_call_id);
+        } catch (e) {
+            console.error("[ai] terminate failed:", e);
+            terminating = false;
+        }
     }
 </script>
 
@@ -61,7 +75,13 @@
                 <button class="btn btn-approve" onclick={approve} disabled={executing}>
                     {executing ? t("ai.cmd.btn.executing") : t("ai.cmd.btn.approve")}
                 </button>
-                <button class="btn btn-reject" onclick={reject} disabled={executing}>{t("ai.cmd.btn.reject")}</button>
+                {#if executing}
+                    <button class="btn btn-terminate" onclick={terminate} disabled={terminating}>
+                        {terminating ? t("ai.cmd.btn.terminating") : t("ai.cmd.btn.terminate")}
+                    </button>
+                {:else}
+                    <button class="btn btn-reject" onclick={reject}>{t("ai.cmd.btn.reject")}</button>
+                {/if}
             </div>
             {#if executing}
                 <div class="hint">{t("ai.cmd.hint.executing")}</div>
@@ -85,6 +105,7 @@
                 <span>exit={result.exit_code}</span>
                 <span>{result.duration_ms}ms</span>
                 {#if result.timed_out}<span class="warn">{t("ai.cmd.warn.timed_out")}</span>{/if}
+                {#if result.early_terminated}<span class="warn">{t("ai.cmd.warn.early_terminated")}</span>{/if}
                 {#if result.truncated_bytes > 0}<span class="warn">{t("ai.cmd.warn.truncated", { bytes: result.truncated_bytes })}</span>{/if}
             </div>
             <pre class="output">{result.output || t("ai.cmd.empty_output")}</pre>
@@ -128,6 +149,12 @@
     .btn { padding: 4px 12px; border-radius: 4px; cursor: pointer; }
     .btn-approve { background: var(--success); color: var(--white); border: none; }
     .btn-reject { background: transparent; border: 1px solid var(--text-dim); color: var(--text); }
+    .btn-terminate {
+        background: var(--warning);
+        color: var(--black);
+        border: none;
+    }
+    .btn-terminate:disabled { opacity: 0.6; cursor: default; }
     .btn-ghost { background: transparent; border: 1px solid var(--divider); color: var(--text); }
     .reject-form { margin-top: 8px; display: flex; gap: 6px; }
     .reject-form input {
