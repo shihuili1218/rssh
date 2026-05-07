@@ -21,8 +21,8 @@ use super::skills::{self, SkillRecord};
 fn key_provider() -> String {
     setting_key("ai_provider")
 }
-fn key_model() -> String {
-    setting_key("ai_model")
+fn key_model(provider: &str) -> String {
+    setting_key(&format!("ai_{provider}_model"))
 }
 fn key_endpoint(provider: &str) -> String {
     setting_key(&format!("ai_{provider}_endpoint"))
@@ -339,16 +339,24 @@ pub struct AiSettings {
     pub has_api_key: bool,
 }
 
+/// `provider` 入参：传 `Some(p)` → 拉该 provider 的快照（不改 active）；
+/// `None` → 拉当前 active provider 的快照。无任何兜底默认值，未存就是空。
 #[tauri::command]
-pub async fn ai_settings_get(state: State<'_, AppState>) -> AppResult<AiSettings> {
-    let provider = state
-        .secret_store
-        .get(&key_provider())?
-        .unwrap_or_else(|| "anthropic".into());
+pub async fn ai_settings_get(
+    state: State<'_, AppState>,
+    provider: Option<String>,
+) -> AppResult<AiSettings> {
+    let provider = match provider.filter(|s| !s.is_empty()) {
+        Some(p) => p,
+        None => state
+            .secret_store
+            .get(&key_provider())?
+            .unwrap_or_else(|| "anthropic".into()),
+    };
     let model = state
         .secret_store
-        .get(&key_model())?
-        .unwrap_or_else(|| default_model_for(&provider).into());
+        .get(&key_model(&provider))?
+        .unwrap_or_default();
     let endpoint = state.secret_store.get(&key_endpoint(&provider))?;
     let has_api_key = state
         .secret_store
@@ -363,11 +371,30 @@ pub async fn ai_settings_get(state: State<'_, AppState>) -> AppResult<AiSettings
     })
 }
 
-fn default_model_for(provider: &str) -> &'static str {
-    match provider {
-        "anthropic" => "claude-sonnet-4-6",
-        _ => "gpt-4o-mini",
-    }
+/// 拉取指定 provider 的模型列表。
+///
+/// 优先用入参 `api_key` / `endpoint`（"试一下再保存"流程）；缺省时回落到
+/// secret_store 里已保存的值。GLM 这种官方不开放 `/models` 的厂商，会返回
+/// 硬编码白名单（见 `llm::glm`）。
+#[tauri::command]
+pub async fn ai_list_models(
+    state: State<'_, AppState>,
+    provider: String,
+    api_key: Option<String>,
+    endpoint: Option<String>,
+) -> AppResult<Vec<llm::ModelInfo>> {
+    let api_key = match api_key.filter(|s| !s.is_empty()) {
+        Some(k) => k,
+        None => state
+            .secret_store
+            .get(&key_api_key(&provider))?
+            .ok_or_else(|| AppError::config("api_key_missing", json!({ "provider": provider })))?,
+    };
+    let endpoint = endpoint
+        .filter(|s| !s.is_empty())
+        .or_else(|| state.secret_store.get(&key_endpoint(&provider)).ok().flatten());
+    let client = llm::build_client(&provider, api_key, endpoint)?;
+    client.list_models().await
 }
 
 #[tauri::command]
@@ -381,13 +408,13 @@ pub async fn ai_settings_set(
     if let Some(p) = provider.as_ref() {
         state.secret_store.set(&key_provider(), p)?;
     }
-    if let Some(m) = model.as_ref() {
-        state.secret_store.set(&key_model(), m)?;
-    }
     let active_provider = provider
         .clone()
         .or_else(|| state.secret_store.get(&key_provider()).ok().flatten())
         .unwrap_or_else(|| "anthropic".into());
+    if let Some(m) = model.as_ref() {
+        state.secret_store.set(&key_model(&active_provider), m)?;
+    }
     if let Some(e) = endpoint {
         state
             .secret_store

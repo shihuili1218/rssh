@@ -10,13 +10,18 @@ export interface SkillRecord {
   builtin: boolean;
 }
 
-export type LlmProvider = "anthropic" | "openai";
+export type LlmProvider = "anthropic" | "openai" | "deepseek" | "glm";
 
 export interface AiSettings {
   provider: LlmProvider;
   model: string;
   endpoint: string | null;
   has_api_key: boolean;
+}
+
+export interface ModelInfo {
+  id: string;
+  display_name: string | null;
 }
 
 export interface AiSessionInfo {

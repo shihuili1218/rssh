@@ -1,12 +1,11 @@
-//! OpenAI 官方 Chat Completions。
+//! DeepSeek（深度求索）。完全 OpenAI 兼容，只是端点和模型不同。
 //!
-//! 端点：https://api.openai.com/v1
+//! 端点：https://api.deepseek.com/v1
 //! 模型（示例，实际以 list_models 拉取为准）：
-//!   - gpt-4o / gpt-4o-mini / gpt-4-turbo
-//!   - o1 / o1-mini / o3 / o3-mini
-//!   - gpt-3.5-turbo
+//!   - deepseek-chat       —— 通用对话
+//!   - deepseek-reasoner   —— 带思维链的推理模型
 //!
-//! chat 与 list_models 走 `protocol.rs` 的共享实现，本文件只装配端点 + 认证。
+//! 文档：https://api-docs.deepseek.com/
 
 use async_trait::async_trait;
 
@@ -14,15 +13,15 @@ use super::protocol;
 use super::{ChatRequest, ChatResponse, DeltaSink, LlmClient, ModelInfo};
 use crate::error::AppResult;
 
-const DEFAULT_BASE: &str = "https://api.openai.com/v1";
+const DEFAULT_BASE: &str = "https://api.deepseek.com/v1";
 
-pub struct OpenAiClient {
+pub struct DeepSeekClient {
     api_key: String,
     chat_endpoint: String,
     http: reqwest::Client,
 }
 
-impl OpenAiClient {
+impl DeepSeekClient {
     pub fn new(api_key: String, endpoint: Option<String>) -> Self {
         Self {
             api_key,
@@ -33,9 +32,9 @@ impl OpenAiClient {
 }
 
 #[async_trait]
-impl LlmClient for OpenAiClient {
+impl LlmClient for DeepSeekClient {
     fn provider(&self) -> &'static str {
-        "openai"
+        "deepseek"
     }
 
     async fn chat(&self, req: ChatRequest, sink: DeltaSink) -> AppResult<ChatResponse> {

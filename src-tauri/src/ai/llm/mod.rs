@@ -1,10 +1,20 @@
 //! BYOK LLM 客户端（流式）。
 //!
-//! 决议 #5：手写 reqwest，适配 Anthropic + OpenAI 兼容端点。
-//! 流式：SSE → DeltaSink 增量回调 + 最终 ChatResponse。
+//! 决议 #5：手写 reqwest + 自解析 SSE，零额外 SDK 依赖。
+//!
+//! 协议 → 厂商映射：
+//! - **Anthropic Messages API**（自家协议） → `anthropic.rs`
+//! - **OpenAI Chat Completions**（事实上的标准） → `protocol.rs` 实现，
+//!   被以下 vendor 文件复用：`openai.rs` / `deepseek.rs` / `glm.rs`
+//!
+//! 新增厂商的步骤：写一个 ~40 行的 vendor 文件指定 endpoint + 默认模型 +
+//! list_models 实现，然后在 `build_client` 加一行分发即可。
 
 pub mod anthropic;
+pub mod deepseek;
+pub mod glm;
 pub mod openai;
+mod protocol;
 
 use std::sync::Arc;
 
@@ -22,6 +32,11 @@ pub enum ChatMessage {
     Assistant {
         content: String,
         tool_calls: Vec<ToolCall>,
+        /// 部分模型（如 DeepSeek `deepseek-reasoner`）会输出"思考链"。
+        /// 这些厂商要求多轮对话时把 reasoning 原样塞回去，否则 400。
+        /// 其他厂商：传 None，序列化时不会出现该字段，零影响。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_content: Option<String>,
     },
     ToolResult {
         tool_call_id: String,
@@ -60,6 +75,14 @@ pub struct ChatResponse {
     pub stop_reason: String,
     pub tokens_in: Option<u32>,
     pub tokens_out: Option<u32>,
+    /// 思考链（DeepSeek reasoner 之类）。原样传回 history 给下一轮。
+    pub reasoning_content: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelInfo {
+    pub id: String,
+    pub display_name: Option<String>,
 }
 
 /// 流式增量回调。Text 用于 UI 实时渲染；其余仅供调试 / 暂不消费。
@@ -81,6 +104,7 @@ pub type DeltaSink = Arc<dyn Fn(ChatDelta) + Send + Sync>;
 #[async_trait]
 pub trait LlmClient: Send + Sync {
     async fn chat(&self, req: ChatRequest, sink: DeltaSink) -> AppResult<ChatResponse>;
+    async fn list_models(&self) -> AppResult<Vec<ModelInfo>>;
     fn provider(&self) -> &'static str;
 }
 
@@ -94,6 +118,8 @@ pub fn build_client(
         "openai" | "openai-compatible" => {
             Ok(Box::new(openai::OpenAiClient::new(api_key, endpoint)))
         }
+        "deepseek" => Ok(Box::new(deepseek::DeepSeekClient::new(api_key, endpoint))),
+        "glm" => Ok(Box::new(glm::GlmClient::new(api_key, endpoint))),
         other => Err(crate::error::AppError::config(
             "llm_unknown_provider",
             serde_json::json!({ "provider": other }),

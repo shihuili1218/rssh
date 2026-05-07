@@ -199,6 +199,7 @@ impl Actor {
             self.history.push(ChatMessage::Assistant {
                 content: resp.text.clone(),
                 tool_calls: resp.tool_calls.clone(),
+                reasoning_content: resp.reasoning_content.clone(),
             });
 
             if resp.tool_calls.is_empty() {

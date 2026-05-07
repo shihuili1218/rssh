@@ -188,6 +188,7 @@ pub fn run() {
             ai::commands::ai_list_sessions,
             ai::commands::ai_settings_get,
             ai::commands::ai_settings_set,
+            ai::commands::ai_list_models,
         ])
         .run(tauri::generate_context!())
         .expect("RSSH startup failed");

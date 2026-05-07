@@ -15,6 +15,7 @@ import type {
   ChatItem,
   CommandProposed,
   CommandResult,
+  ModelInfo,
   SkillRecord,
 } from "./types.ts";
 
@@ -222,13 +223,31 @@ export async function saveAuditWithDialog(session_id: string): Promise<string | 
 // ─── Settings ─────────────────────────────────────────────────────
 
 export function settings() { return _settings; }
-export async function loadSettings(): Promise<AiSettings> {
-  _settings = await invoke<AiSettings>("ai_settings_get");
+/** provider 为空 → 拉 active provider 的快照；非空 → 拉指定 provider 的快照（不改 active）。 */
+export async function loadSettings(provider?: string): Promise<AiSettings> {
+  _settings = await invoke<AiSettings>("ai_settings_get", { provider: provider || null });
   return _settings;
 }
 export async function saveSettings(s: Partial<{ provider: string; model: string; endpoint: string | null; apiKey: string | null }>) {
   await invoke("ai_settings_set", s);
   await loadSettings();
+}
+
+/**
+ * 拉取指定 provider 的模型列表。
+ * apiKey/endpoint 为空时后端从 secret_store 取已保存值。
+ * GLM 没有公开 /models，会返回硬编码白名单。
+ */
+export async function listModels(
+  provider: string,
+  apiKey?: string,
+  endpoint?: string,
+): Promise<ModelInfo[]> {
+  return invoke<ModelInfo[]>("ai_list_models", {
+    provider,
+    apiKey: apiKey || null,
+    endpoint: endpoint || null,
+  });
 }
 
 // ─── 事件监听 ─────────────────────────────────────────────────────
