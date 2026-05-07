@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount } from "svelte";
+    import { onMount, onDestroy } from "svelte";
     import * as ai from "../ai/store.svelte.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import type { LlmProvider, ModelInfo, SkillRecord } from "../ai/types.ts";
@@ -14,18 +14,39 @@
     let byokNote = $state<string | null>(null);
     let modelOptions = $state<ModelInfo[]>([]);
     let loadingModels = $state(false);
+    /** byokNote 自清 timer 句柄，避免后续动作被旧 timer 误清。 */
+    let byokNoteTimer: number | null = null;
+    /** 切 provider 的代际号：在途的 loadSettings 解到一半时如果代际过期，丢弃结果。 */
+    let providerGen = 0;
+
+    function setByokNote(msg: string | null, autoClearMs?: number) {
+        if (byokNoteTimer !== null) {
+            clearTimeout(byokNoteTimer);
+            byokNoteTimer = null;
+        }
+        byokNote = msg;
+        if (msg !== null && autoClearMs !== undefined) {
+            byokNoteTimer = window.setTimeout(() => {
+                byokNote = null;
+                byokNoteTimer = null;
+            }, autoClearMs);
+        }
+    }
 
     /**
      * 切换 provider：清空所有字段，从后端拉**该 provider** 已保存的快照回显。
      * 没存过 → 字段保持空。这是用户唯一显式触发数据替换的入口，不再用 $effect 做隐式同步。
      */
     async function onProviderChange() {
+        const gen = ++providerGen;
+        setByokNote(null);
         modelOptions = [];
         apiKey = "";
         model = "";
         endpoint = "";
         hasKey = false;
         const s = await ai.loadSettings(provider);
+        if (gen !== providerGen) return; // 用户又切了，丢弃过期结果
         model = s.model;
         endpoint = s.endpoint ?? "";
         hasKey = s.has_api_key;
@@ -49,11 +70,11 @@
     /** 显式按钮：失败要给反馈。 */
     async function loadModels() {
         if (!apiKey && !hasKey) {
-            byokNote = t("ai.settings.note.api_key_required");
+            setByokNote(t("ai.settings.note.api_key_required"));
             return;
         }
         loadingModels = true;
-        byokNote = null;
+        setByokNote(null);
         try {
             const list = await ai.listModels(
                 provider,
@@ -61,10 +82,9 @@
                 endpoint.trim() || undefined,
             );
             modelOptions = list;
-            byokNote = t("ai.settings.note.models_loaded", { count: list.length });
-            setTimeout(() => (byokNote = null), 2000);
+            setByokNote(t("ai.settings.note.models_loaded", { count: list.length }), 2000);
         } catch (e) {
-            byokNote = t("ai.settings.note.models_failed", { error: errMsg(e) });
+            setByokNote(t("ai.settings.note.models_failed", { error: errMsg(e) }));
         } finally {
             loadingModels = false;
         }
@@ -101,6 +121,11 @@
         await refreshSkills();
     });
 
+    onDestroy(() => {
+        if (byokNoteTimer !== null) clearTimeout(byokNoteTimer);
+        if (confirmDeleteTimer !== null) clearTimeout(confirmDeleteTimer);
+    });
+
     async function refreshSkills() {
         try {
             skills = await ai.listSkills();
@@ -111,7 +136,7 @@
 
     async function saveByok() {
         savingByok = true;
-        byokNote = null;
+        setByokNote(null);
         try {
             await ai.saveSettings({
                 provider,
@@ -122,10 +147,9 @@
             const s = await ai.loadSettings();
             hasKey = s.has_api_key;
             apiKey = "";
-            byokNote = t("ai.settings.note.saved");
-            setTimeout(() => (byokNote = null), 2000);
+            setByokNote(t("ai.settings.note.saved"), 2000);
         } catch (e) {
-            byokNote = t("ai.settings.note.save_failed", { error: errMsg(e) });
+            setByokNote(t("ai.settings.note.save_failed", { error: errMsg(e) }));
         } finally {
             savingByok = false;
         }
@@ -216,7 +240,7 @@
         （<a href="https://www.anthropic.com/legal/privacy" target="_blank" rel="noopener">Anthropic</a>
          / <a href="https://openai.com/policies/privacy-policy/" target="_blank" rel="noopener">OpenAI</a>
          / <a href="https://platform.deepseek.com/downloads" target="_blank" rel="noopener">DeepSeek</a>
-         / <a href="https://bigmodel.cn/dev/api" target="_blank" rel="noopener">GLM</a>）。
+         / <a href="https://docs.bigmodel.cn/cn/terms/privacy-policy" target="_blank" rel="noopener">GLM</a>）。
     </div>
 
     <div class="section-label">{t("ai.settings.section.provider")}</div>

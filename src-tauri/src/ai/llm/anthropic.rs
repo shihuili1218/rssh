@@ -73,17 +73,15 @@ enum AnthropicBlock {
 
 impl AnthropicClient {
     /// 把 messages endpoint 替换成 models endpoint。
-    /// 用户用默认值时直接走 MODELS_ENDPOINT；用代理时按 `/messages` → `/models` 推断。
+    /// 先归一化（去尾斜杠/空白），再判等比较——避免 `.../messages/` 这种尾斜杠落到错误分支。
     fn models_url(&self) -> String {
-        if self.endpoint == DEFAULT_ENDPOINT {
+        let ep = self.endpoint.trim().trim_end_matches('/');
+        if ep == DEFAULT_ENDPOINT {
             MODELS_ENDPOINT.to_string()
-        } else if self.endpoint.ends_with("/messages") {
-            format!(
-                "{}/models",
-                self.endpoint.trim_end_matches("/messages").trim_end_matches('/')
-            )
+        } else if let Some(base) = ep.strip_suffix("/messages") {
+            format!("{}/models", base.trim_end_matches('/'))
         } else {
-            format!("{}/models", self.endpoint.trim_end_matches('/'))
+            format!("{ep}/models")
         }
     }
 }

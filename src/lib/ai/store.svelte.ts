@@ -15,6 +15,7 @@ import type {
   ChatItem,
   CommandProposed,
   CommandResult,
+  LlmProvider,
   ModelInfo,
   SkillRecord,
 } from "./types.ts";
@@ -227,7 +228,7 @@ export function settings() { return _settings; }
  * provider 为空 → 拉 active provider 的快照，**更新**全局 `_settings`（ChatPanel 起 session 读它）；
  * provider 非空 → 仅返回该 provider 的快照，**不动**全局缓存（避免设置页切下拉污染聊天）。
  */
-export async function loadSettings(provider?: string): Promise<AiSettings> {
+export async function loadSettings(provider?: LlmProvider): Promise<AiSettings> {
   const snapshot = await invoke<AiSettings>("ai_settings_get", { provider: provider || null });
   if (!provider) _settings = snapshot;
   return snapshot;
@@ -243,7 +244,7 @@ export async function saveSettings(s: Partial<{ provider: string; model: string;
  * GLM 没有公开 /models，会返回硬编码白名单。
  */
 export async function listModels(
-  provider: string,
+  provider: LlmProvider,
   apiKey?: string,
   endpoint?: string,
 ): Promise<ModelInfo[]> {

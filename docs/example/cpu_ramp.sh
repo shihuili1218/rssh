@@ -7,5 +7,5 @@ for i in itertools.count(1):
     print(f'workers={i}',flush=True);time.sleep(5)" > /tmp/cpu_ramp.log 2>&1 &
 echo $! > /tmp/cpu_ramp.pid
 
-# 干掉所有子进程：
-pkill -f "python3 -c import multiprocessing as m,time,itertools"
+# 干掉父进程及其子进程组（PID 文件由 nohup 那一行写入）：
+kill -- "-$(ps -o pgid= "$(cat /tmp/cpu_ramp.pid)" | tr -d ' ')"
