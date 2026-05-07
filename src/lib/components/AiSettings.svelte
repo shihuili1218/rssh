@@ -58,7 +58,7 @@
         try {
             const list = await ai.listModels(
                 provider,
-                apiKey || undefined,
+                apiKey.trim() || undefined,
                 endpoint.trim() || undefined,
             );
             modelOptions = list;
@@ -69,7 +69,7 @@
 
     /** 显式按钮：失败要给反馈。 */
     async function loadModels() {
-        if (!apiKey && !hasKey) {
+        if (!apiKey.trim() && !hasKey) {
             setByokNote(t("ai.settings.note.api_key_required"));
             return;
         }
@@ -78,7 +78,7 @@
         try {
             const list = await ai.listModels(
                 provider,
-                apiKey || undefined,
+                apiKey.trim() || undefined,
                 endpoint.trim() || undefined,
             );
             modelOptions = list;
@@ -142,7 +142,7 @@
                 provider,
                 model: model.trim(),
                 endpoint: endpoint.trim() || null,
-                apiKey: apiKey || null,
+                apiKey: apiKey.trim() || null,
             });
             const s = await ai.loadSettings();
             hasKey = s.has_api_key;

@@ -385,14 +385,17 @@ pub async fn ai_list_models(
     api_key: Option<String>,
     endpoint: Option<String>,
 ) -> AppResult<Vec<llm::ModelInfo>> {
-    let api_key = match api_key.filter(|s| !s.is_empty()) {
+    // 入参先 trim：纯空白当作"未提供"，回落到 secret_store
+    let api_key = match api_key.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
         Some(k) => k,
         None => state
             .secret_store
             .get(&key_api_key(&provider))?
+            .filter(|s| !s.is_empty())
             .ok_or_else(|| AppError::config("api_key_missing", json!({ "provider": provider })))?,
     };
     let endpoint = endpoint
+        .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .or_else(|| state.secret_store.get(&key_endpoint(&provider)).ok().flatten());
     let client = llm::build_client(&provider, api_key, endpoint)?;
