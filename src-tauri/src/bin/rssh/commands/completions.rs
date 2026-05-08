@@ -156,7 +156,15 @@ complete -F _rssh rssh
 
 const POWERSHELL_COMPLETIONS: &str = r#"Register-ArgumentCompleter -Native -CommandName rssh -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
-    $words = $commandAst.ToString().Split(' ')
+    # 用 AST 的 CommandElements 而非朴素 Split(' ')，否则 `rssh open "my prod"` 这类
+    # 含空格 / 引号的 name 会被切碎，导致补全跳错分支。
+    # Extent.Text 保留原始引号，这里手工剥一层让后面 -eq / -in 比对正常。
+    $words = @($commandAst.CommandElements | ForEach-Object {
+        $t = $_.Extent.Text
+        if ($t.Length -ge 2 -and (($t.StartsWith('"') -and $t.EndsWith('"')) -or ($t.StartsWith("'") -and $t.EndsWith("'")))) {
+            $t.Substring(1, $t.Length - 2)
+        } else { $t }
+    })
     $cmd = if ($words.Length -gt 1) { $words[1] } else { '' }
     $pos = $words.Length
 
@@ -195,6 +203,10 @@ const POWERSHELL_COMPLETIONS: &str = r#"Register-ArgumentCompleter -Native -Comm
 }
 "#;
 
+// 注：Copilot 评论建议 fish 用 `string escape` 防空格，但 fish 的命令替换
+// `(...)` **默认按换行符切分**（不像 bash 按 IFS 切空格），所以
+// `(rssh _names profiles)` 输出 "my profile\nother" 已经正确拆成两条候选。
+// 现状无需改动。
 const FISH_COMPLETIONS: &str = r#"# rssh fish completions
 complete -c rssh -n '__fish_use_subcommand' -a 'ls' -d 'List profiles/credentials/forwards'
 complete -c rssh -n '__fish_use_subcommand' -a 'open' -d 'Connect via SSH'

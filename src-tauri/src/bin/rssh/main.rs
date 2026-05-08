@@ -61,7 +61,7 @@ enum Cmd {
     },
     /// Generate shell completion script
     Completions {
-        /// "zsh" or "bash"
+        /// "zsh", "bash", "fish", or "powershell" (alias: "pwsh")
         shell: String,
     },
     /// (hidden) Output entity names for tab completion

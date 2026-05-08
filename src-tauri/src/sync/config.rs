@@ -21,7 +21,9 @@ use crate::error::{AppError, AppResult};
 use crate::models::{Credential, Forward, Group, Profile};
 use crate::secret::{cred_secret_key, SecretStore};
 
-/// 失败项的结构化记录。前端只展示首条，但内部保留全量供日志诊断。
+/// 失败项的结构化记录。当前 `first_failure` 把 Vec 折成单条 AppError 抛给
+/// 前端（前端只渲染首条 + 总数），剩余项不会落日志——保留 Vec 形态是为了
+/// 将来要加结构化日志时不再改公共签名。
 #[derive(Debug, Clone)]
 pub struct ImportError {
     pub kind: &'static str,
@@ -215,9 +217,10 @@ pub fn replace_import(db: &Db, ss: &dyn SecretStore, data: &Value) -> AppResult<
     };
 
     // 旧 cred id 列表 —— 必须在 tx 前抓快照（tx 后表已清空，list 就是新的了）。
-    // 留作 tx 成功后清理被淘汰 cred secret 用。
-    let old_cred_ids: Vec<String> = credential::list(db)
-        .unwrap_or_default()
+    // 留作 tx 成功后清理被淘汰 cred secret 用。`?` 而非 `unwrap_or_default()`：
+    // list 失败（DB 锁/损坏）时，跑事务清空又写不回旧 secret = 用户密码丢光。
+    // 早 fail 让 DB 维持原状。
+    let old_cred_ids: Vec<String> = credential::list(db)?
         .into_iter()
         .map(|c| c.id)
         .collect();
@@ -287,10 +290,20 @@ pub fn replace_import(db: &Db, ss: &dyn SecretStore, data: &Value) -> AppResult<
 // helpers
 // ---------------------------------------------------------------------------
 
+/// 字段缺失（payload 没这个 key 或为 null）→ `Ok(Vec::new())`，兼容老 v1 payload；
+/// 字段存在但**不是 array**（比如 `"profiles": {}`）→ `Err`，避免被 replace_import
+/// 当成空列表然后清表 = 数据丢失。
 fn parse_array<T: for<'de> serde::Deserialize<'de>>(data: &Value, key: &str) -> AppResult<Vec<T>> {
-    let Some(arr) = data[key].as_array() else {
-        return Ok(Vec::new());
+    let val = match data.get(key) {
+        Some(v) if !v.is_null() => v,
+        _ => return Ok(Vec::new()),
     };
+    let arr = val.as_array().ok_or_else(|| {
+        AppError::config(
+            "import_parse_failed",
+            json!({ "field": key, "index": 0, "err": "field is not an array" }),
+        )
+    })?;
     let mut out = Vec::with_capacity(arr.len());
     for (i, item) in arr.iter().enumerate() {
         let parsed = serde_json::from_value::<T>(item.clone()).map_err(|e| {

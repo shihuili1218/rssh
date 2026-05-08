@@ -231,6 +231,8 @@ impl SftpHandle {
 
         let mut transferred: u64 = 0;
         let mut buf = vec![0u8; 32768];
+        // 事件名每个 chunk emit 一次；预算一次避免循环里反复 String 分配。
+        let event = format!("sftp:progress:{transfer_id}");
 
         loop {
             if cancel.load(Ordering::Relaxed) {
@@ -248,7 +250,7 @@ impl SftpHandle {
             transferred += n as u64;
 
             let _ = app.emit(
-                &format!("sftp:progress:{transfer_id}"),
+                &event,
                 serde_json::json!({ "transferred": transferred, "total": total }),
             );
         }
@@ -285,6 +287,8 @@ impl SftpHandle {
 
         let mut transferred: u64 = 0;
         let mut buf = vec![0u8; 32768];
+        // 事件名每个 chunk emit 一次；预算一次避免循环里反复 String 分配。
+        let event = format!("sftp:progress:{transfer_id}");
 
         loop {
             if cancel.load(Ordering::Relaxed) {
@@ -302,7 +306,7 @@ impl SftpHandle {
             transferred += n as u64;
 
             let _ = app.emit(
-                &format!("sftp:progress:{transfer_id}"),
+                &event,
                 serde_json::json!({ "transferred": transferred, "total": total }),
             );
         }

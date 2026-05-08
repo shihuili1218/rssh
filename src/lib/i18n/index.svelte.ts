@@ -18,8 +18,14 @@ const STORAGE_KEY = "rssh.locale";
 function detectLocale(): Locale {
   const stored = localStorage.getItem(STORAGE_KEY) as Locale | null;
   if (stored && stored in CATALOGS) return stored;
-  const sys = (navigator.language || "en").toLowerCase();
-  return sys.startsWith("zh") ? "zh" : "en";
+  // navigator 在 Tauri webview 里一定有，但 Vitest `environment: "node"` 的
+  // vm context 不暴露它（即便宿主是 Node 21+）。defensive 访问让测试和
+  // 任何无 navigator 的非典型宿主都能跑。
+  const lang =
+    typeof navigator !== "undefined" && navigator.language
+      ? navigator.language
+      : "en";
+  return lang.toLowerCase().startsWith("zh") ? "zh" : "en";
 }
 
 let _locale = $state<Locale>(detectLocale());

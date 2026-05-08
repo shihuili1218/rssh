@@ -470,20 +470,31 @@ pub async fn authenticate_interactive(
                     .map(|p| serde_json::json!({ "prompt": p.prompt, "echo": p.echo }))
                     .collect();
 
+                // state 拿出来一次，让 &state.auth_waiters 的借用横跨 insert + guard。
+                let state = app.state::<AppState>();
                 // 必须先注册 sender 再 emit。否则前端响应快到能在 insert 之前
                 // 调 ssh_auth_respond，找不到 waiter → 响应被丢，rx 永远 hang。
-                {
-                    let state = app.state::<AppState>();
-                    locked(&state.auth_waiters)?.insert(tab_id.clone(), tx);
-                }
-                let _ = app.emit(
+                locked(&state.auth_waiters)?.insert(tab_id.clone(), tx);
+                // RAII：emit 失败 / rx 异常 / 提前 return 时自动清 sender。
+                // 正常 await 到响应时 sender 已被 ssh_auth_respond 取走，guard 的
+                // remove 是 no-op。
+                let _guard = AuthWaiterGuard {
+                    waiters: &state.auth_waiters,
+                    tab_id: &tab_id,
+                };
+                if let Err(e) = app.emit(
                     &format!("ssh:auth_prompt:{tab_id}"),
                     serde_json::json!({
                         "name": name,
                         "instructions": instructions,
                         "prompts": prompt_data,
                     }),
-                );
+                ) {
+                    return Err(AppError::other(
+                        "emit_failed",
+                        json!({ "channel": "ssh:auth_prompt", "err": e.to_string() }),
+                    ));
+                }
 
                 let responses = rx
                     .await
@@ -494,6 +505,23 @@ pub async fn authenticate_interactive(
                     .await
                     .map_err(|e| AppError::ssh("ssh_kbi_response_failed", json!({ "err": e.to_string() })))?;
             }
+        }
+    }
+}
+
+/// auth_waiters 的 RAII 清理器。同 `ssh::prompt::WaiterGuard` 模式，但目标
+/// map 元素类型是 `Vec<String>`（kbd-interactive 多 prompt 一次性回收）。
+struct AuthWaiterGuard<'a> {
+    waiters: &'a std::sync::Mutex<
+        std::collections::HashMap<String, tokio::sync::oneshot::Sender<Vec<String>>>,
+    >,
+    tab_id: &'a str,
+}
+
+impl Drop for AuthWaiterGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut m) = locked(self.waiters) {
+            m.remove(self.tab_id);
         }
     }
 }

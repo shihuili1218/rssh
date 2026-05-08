@@ -8,11 +8,15 @@ use crate::error::{AppError, AppResult};
 //   base64( version[1] || salt[16] || nonce[12] || ciphertext_with_tag )
 //
 //   version = 0x02
-//   KDF     = Argon2id（RustCrypto `argon2` 0.5 默认参数：
-//             m_cost=19456 KiB, t_cost=2, p_cost=1，符合 OWASP 推荐）
+//   KDF     = Argon2id（**显式参数**，钉死在 ARGON2_*_COST 常量）
 //   AEAD    = ChaCha20-Poly1305（key 32B, nonce 12B, tag 16B）
 //
 // v1（手搓 SHA256 KDF + 手搓流密码）已废弃，旧 blob 无法解密。
+//
+// **不使用 `Argon2::default()`**：默认值跨 crate 版本可能漂移，导致同一密码 +
+// 同一 salt 在不同 rssh 版本派生出不同 key，旧 blob 解不开。显式钉死参数 +
+// 用 V2 版本字节做演进锚点：未来要升参数就 V3，旧 V2 仍可识别（即便我们决定
+// 不再支持解 V2 也至少能给出"老版本备份"的明确错误，而不是"密码错"）。
 // ---------------------------------------------------------------------------
 
 const V2: u8 = 0x02;
@@ -23,15 +27,29 @@ const KEY_LEN: usize = 32;
 /// 解密合法 blob 的最小字节数：版本 + salt + nonce + tag（空明文也带 16 字节 tag）。
 const MIN_BLOB: usize = 1 + SALT_LEN + NONCE_LEN + TAG_LEN;
 
+// Argon2id 参数。值与 OWASP 2024 推荐基线对齐（19 MiB / 2 iter / 1 lane）。
+// 改这些数 = wire format 不兼容；改完一定要 bump V2 → V3 同时支持新旧解码。
+const ARGON2_M_COST_KIB: u32 = 19_456; // 19 MiB
+const ARGON2_T_COST: u32 = 2;
+const ARGON2_P_COST: u32 = 1;
+
 fn random(buf: &mut [u8]) -> AppResult<()> {
     getrandom::getrandom(buf)
         .map_err(|e| AppError::other("crypto_rng_failed", json!({ "err": e.to_string() })))
 }
 
 fn derive_key(password: &str, salt: &[u8]) -> AppResult<[u8; KEY_LEN]> {
-    use argon2::Argon2;
+    use argon2::{Algorithm, Argon2, Params, Version};
+    let params = Params::new(
+        ARGON2_M_COST_KIB,
+        ARGON2_T_COST,
+        ARGON2_P_COST,
+        Some(KEY_LEN),
+    )
+    .map_err(|e| AppError::other("crypto_kdf_failed", json!({ "err": e.to_string() })))?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut key = [0u8; KEY_LEN];
-    Argon2::default()
+    argon2
         .hash_password_into(password.as_bytes(), salt, &mut key)
         .map_err(|e| AppError::other("crypto_kdf_failed", json!({ "err": e.to_string() })))?;
     Ok(key)

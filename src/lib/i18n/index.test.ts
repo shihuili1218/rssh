@@ -17,8 +17,9 @@ vi.hoisted(() => {
     key: () => null,
     length: 0,
   });
-  // 不 stub navigator —— Node 21+ 自带；detectLocale() 拿到的 default 取决
-  // 于宿主系统 locale（en 或 zh），测试不钉死它，只钉 setLocale 行为。
+  // 不 stub navigator —— `index.svelte.ts::detectLocale` 已对 navigator 做
+  // typeof undefined 防御，没它就 fallback 到 "en"。default locale 不钉死
+  // （宿主有 navigator 时取决于系统 locale），只钉 setLocale 行为。
 });
 
 import {
