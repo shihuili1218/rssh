@@ -46,8 +46,10 @@ russh-sftp = "2"
 # HTTP + crypto
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 base64 = "0.22"
-sha2 = "0.10"
-hmac = "0.12"
+# 配置备份/同步走 Argon2id（KDF）+ ChaCha20-Poly1305（AEAD），
+# 标准 RustCrypto 实现；不再手搓。getrandom 用于生成 salt + nonce。
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
 getrandom = "0.2"
 regex = "1"
 futures-util = "0.3"

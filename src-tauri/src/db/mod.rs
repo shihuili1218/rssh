@@ -38,6 +38,20 @@ impl Db {
     pub(in crate::db) fn lock(&self) -> AppResult<MutexGuard<'_, Connection>> {
         locked(&self.conn)
     }
+
+    /// 把一组写操作包进单个事务。闭包里调 `*_tx(&Connection, ...)` 系列，
+    /// 任何错误自动回滚（tx 不 commit 即 drop = ROLLBACK）。
+    /// 成功才 commit。用于"全量替换"语义（github_pull、未来 import-replace）。
+    pub fn with_transaction<F, T>(&self, f: F) -> AppResult<T>
+    where
+        F: FnOnce(&rusqlite::Transaction<'_>) -> AppResult<T>,
+    {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        let result = f(&tx)?;
+        tx.commit()?;
+        Ok(result)
+    }
 }
 
 /// 数据目录：桌面用 ~/.rssh，Android 用 app_data_dir

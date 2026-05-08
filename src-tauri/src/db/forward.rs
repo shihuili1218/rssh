@@ -2,7 +2,7 @@ use rusqlite::params;
 
 use super::Db;
 use crate::error::AppResult;
-use crate::models::{Forward, ForwardType};
+use crate::models::{validate_name, Forward, ForwardType};
 
 fn parse_type(s: &str) -> ForwardType {
     match s {
@@ -55,16 +55,23 @@ pub fn list(db: &Db) -> AppResult<Vec<Forward>> {
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-pub fn insert(db: &Db, f: &Forward) -> AppResult<()> {
-    let conn = db.lock()?;
+pub fn insert_tx(conn: &rusqlite::Connection, f: &Forward) -> AppResult<()> {
+    validate_name(&f.name)?;
     conn.execute(
-        "INSERT INTO forwards (id, name, profile_id, type, local_port, remote_host, remote_port) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO forwards (id, name, profile_id, type, local_port, remote_host, remote_port) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+         ON CONFLICT(id) DO UPDATE SET name=excluded.name, profile_id=excluded.profile_id, type=excluded.type, local_port=excluded.local_port, remote_host=excluded.remote_host, remote_port=excluded.remote_port",
         params![f.id, f.name, f.profile_id, type_str(f.forward_type), f.local_port as u32, f.remote_host, f.remote_port as u32],
     )?;
     Ok(())
 }
 
+pub fn insert(db: &Db, f: &Forward) -> AppResult<()> {
+    let conn = db.lock()?;
+    insert_tx(&conn, f)
+}
+
 pub fn update(db: &Db, f: &Forward) -> AppResult<()> {
+    validate_name(&f.name)?;
     let conn = db.lock()?;
     conn.execute(
         "UPDATE forwards SET name=?1, profile_id=?2, type=?3, local_port=?4, remote_host=?5, remote_port=?6 WHERE id=?7",
@@ -79,8 +86,12 @@ pub fn delete(db: &Db, id: &str) -> AppResult<()> {
     Ok(())
 }
 
-pub fn clear_all(db: &Db) -> AppResult<()> {
-    let conn = db.lock()?;
+pub fn clear_all_tx(conn: &rusqlite::Connection) -> AppResult<()> {
     conn.execute("DELETE FROM forwards", [])?;
     Ok(())
+}
+
+pub fn clear_all(db: &Db) -> AppResult<()> {
+    let conn = db.lock()?;
+    clear_all_tx(&conn)
 }

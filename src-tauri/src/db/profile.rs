@@ -2,7 +2,7 @@ use rusqlite::params;
 
 use super::Db;
 use crate::error::{AppError, AppResult};
-use crate::models::Profile;
+use crate::models::{validate_name, Profile};
 
 fn row_to_profile(row: &rusqlite::Row) -> rusqlite::Result<Profile> {
     Ok(Profile {
@@ -40,8 +40,8 @@ pub fn get(db: &Db, id: &str) -> AppResult<Profile> {
     })
 }
 
-pub fn insert(db: &Db, p: &Profile) -> AppResult<()> {
-    let conn = db.lock()?;
+pub fn insert_tx(conn: &rusqlite::Connection, p: &Profile) -> AppResult<()> {
+    validate_name(&p.name)?;
     conn.execute(
         "INSERT INTO profiles (id, name, host, port, credential_id, bastion_profile_id, init_command, group_id) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
@@ -54,7 +54,13 @@ pub fn insert(db: &Db, p: &Profile) -> AppResult<()> {
     Ok(())
 }
 
+pub fn insert(db: &Db, p: &Profile) -> AppResult<()> {
+    let conn = db.lock()?;
+    insert_tx(&conn, p)
+}
+
 pub fn update(db: &Db, p: &Profile) -> AppResult<()> {
+    validate_name(&p.name)?;
     let conn = db.lock()?;
     conn.execute(
         "UPDATE profiles SET name=?1, host=?2, port=?3, credential_id=?4, bastion_profile_id=?5, init_command=?6, group_id=?7 WHERE id=?8",
@@ -69,8 +75,12 @@ pub fn delete(db: &Db, id: &str) -> AppResult<()> {
     Ok(())
 }
 
-pub fn clear_all(db: &Db) -> AppResult<()> {
-    let conn = db.lock()?;
+pub fn clear_all_tx(conn: &rusqlite::Connection) -> AppResult<()> {
     conn.execute("DELETE FROM profiles", [])?;
     Ok(())
+}
+
+pub fn clear_all(db: &Db) -> AppResult<()> {
+    let conn = db.lock()?;
+    clear_all_tx(&conn)
 }

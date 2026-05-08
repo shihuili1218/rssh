@@ -310,23 +310,27 @@ fn in_rssh_app() -> bool {
     std::env::var("RSSH_APP").is_ok()
 }
 
-fn osc_open(kind: &str, name: &str) {
-    // OSC 7337 ; <kind>:<name> ST
+/// 把 `kind:name` 编进 OSC 7337，让宿主 GUI 终端 catch 后接管。
+/// 防御式校验 name —— DB 层（`db::profile/forward::insert/update`）已经拒绝
+/// 控制符，理论上 osc_open 拿不到坏值。这里再校一次：万一 DB 被外部工具
+/// 写了脏数据 / 旧版本残留，宁可拒绝打印也不让恶意 ESC/BEL 注入终端。
+fn osc_open(kind: &str, name: &str) -> AppResult<()> {
+    rssh_lib::models::validate_name(name)?;
+    // OSC 7337 ; <kind>:<name> ST   （kind 永远是字面量 "open" / "fwd"，不需校）
     print!("\x1b]7337;{}:{}\x07", kind, name);
+    Ok(())
 }
 
 fn cmd_open(conn: &CliCtx, target: &str, name: Option<&str>) -> AppResult<()> {
     if target == "fwd" {
         let fname = name.unwrap_or_else(|| die("Usage: rssh open fwd <name>"));
         if in_rssh_app() {
-            osc_open("fwd", fname);
-            return Ok(());
+            return osc_open("fwd", fname);
         }
         return cmd_open_fwd(conn, fname);
     }
     if in_rssh_app() {
-        osc_open("open", target);
-        return Ok(());
+        return osc_open("open", target);
     }
     cmd_open_ssh(conn, target)
 }
@@ -959,42 +963,22 @@ fn build_config_json(conn: &CliCtx) -> AppResult<String> {
     .unwrap_or_else(|e| die(format!("Serialization failed: {e}"))))
 }
 
-fn import_config_json(conn: &CliCtx, json: &str) -> AppResult<()> {
+/// 解析 JSON 后委派给共享同步逻辑。`merge` = 增量合并（local 数据保留，按 id upsert）；
+/// `replace` = 全量替换（clear+insert 包事务）。CLI 与 GUI 共用 sync::config 这一份。
+fn import_config_json(conn: &CliCtx, json: &str, mode: ImportMode) -> AppResult<()> {
     let data: serde_json::Value = serde_json::from_str(json)
         .unwrap_or_else(|e| die(format!("JSON parse error: {e}")));
+    let ss: &dyn SecretStore = conn.secret_store().as_ref();
+    match mode {
+        ImportMode::Merge => rssh_lib::sync::config::merge_import(conn, ss, &data),
+        ImportMode::Replace => rssh_lib::sync::config::replace_import(conn, ss, &data),
+    }
+}
 
-    // 清空旧 secrets
-    if let Ok(old) = db::credential::list(conn) {
-        for c in old {
-            let _ = conn.secret_store().delete(&cred_secret_key(&c.id));
-        }
-    }
-    db::credential::clear_all(conn)?;
-    db::profile::clear_all(conn)?;
-    db::forward::clear_all(conn)?;
-
-    if let Some(arr) = data["credentials"].as_array() {
-        for item in arr {
-            if let Ok(c) = serde_json::from_value::<Credential>(item.clone()) {
-                let _ = upsert_cred_with_secrets(conn, &c);
-            }
-        }
-    }
-    if let Some(arr) = data["profiles"].as_array() {
-        for item in arr {
-            if let Ok(p) = serde_json::from_value::<Profile>(item.clone()) {
-                let _ = db::profile::insert(conn, &p);
-            }
-        }
-    }
-    if let Some(arr) = data["forwards"].as_array() {
-        for item in arr {
-            if let Ok(f) = serde_json::from_value::<Forward>(item.clone()) {
-                let _ = db::forward::insert(conn, &f);
-            }
-        }
-    }
-    Ok(())
+#[derive(Clone, Copy)]
+enum ImportMode {
+    Merge,
+    Replace,
 }
 
 fn config_export(conn: &CliCtx, file: &str) -> AppResult<()> {
@@ -1015,7 +999,8 @@ fn config_import(conn: &CliCtx, file: &str) -> AppResult<()> {
     let encrypted = std::fs::read_to_string(file)?;
     let pw = read_password("Decryption password: ");
     let json = rssh_lib::crypto::decrypt(&encrypted, &pw)?;
-    import_config_json(conn, &json)?;
+    // 文件 import：增量合并，本地数据保留；同 id 实体被覆盖。
+    import_config_json(conn, &json, ImportMode::Merge)?;
     println!("Imported from {file}");
     Ok(())
 }
@@ -1112,7 +1097,8 @@ fn config_pull(conn: &CliCtx) -> AppResult<()> {
 
     let pw = read_password("Decryption password: ");
     let json = rssh_lib::crypto::decrypt(&encrypted, &pw)?;
-    import_config_json(conn, &json)?;
+    // pull：全量替换语义，clear+insert 包事务。
+    import_config_json(conn, &json, ImportMode::Replace)?;
     println!("Pulled from GitHub.");
     Ok(())
 }

@@ -1,16 +1,37 @@
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use tauri::Emitter;
 
 use crate::error::{locked, AppError, AppResult};
 
+/// 子进程持有者：保证 PtyHandle 最后一份 clone 被 drop 时（tab 关闭 / session 结束），
+/// 显式 kill + wait 子 shell。否则 Box<dyn Child> 在 spawn() 返回后立刻 drop，
+/// 子进程退出后无人 reap，留 zombie 占 PID。
+struct ChildReaper {
+    child: Mutex<Option<Box<dyn Child + Send + Sync>>>,
+}
+
+impl Drop for ChildReaper {
+    fn drop(&mut self) {
+        // Drop 在 Arc 计数归零时跑一次。kill + wait 通常 < 100ms（SIGKILL → 内核 reap）。
+        if let Ok(mut g) = self.child.lock() {
+            if let Some(mut c) = g.take() {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+        }
+    }
+}
+
 /// 本地 PTY 会话句柄，Clone + Send + Sync。
+/// `_reaper` 跟着 PtyHandle 走，最后一份 clone 消失时回收子进程。
 #[derive(Clone)]
 pub struct PtyHandle {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    _reaper: Arc<ChildReaper>,
 }
 
 impl PtyHandle {
@@ -76,7 +97,7 @@ pub fn spawn(
     if !cfg!(target_os = "windows") {
         cmd.arg("-l");
     }
-    let _child = pair
+    let child = pair
         .slave
         .spawn_command(cmd)
         .map_err(|e| AppError::pty("pty_op_failed", serde_json::json!({ "err": e.to_string() })))?;
@@ -95,6 +116,9 @@ pub fn spawn(
     let handle = PtyHandle {
         writer: Arc::new(Mutex::new(writer)),
         master: Arc::new(Mutex::new(pair.master)),
+        _reaper: Arc::new(ChildReaper {
+            child: Mutex::new(Some(child)),
+        }),
     };
 
     // 读取线程：PTY stdout → Tauri 事件

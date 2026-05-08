@@ -50,8 +50,7 @@ pub fn get(db: &Db, id: &str) -> AppResult<Option<UserSkill>> {
     Ok(res)
 }
 
-pub fn upsert(db: &Db, skill: &UserSkill) -> AppResult<()> {
-    let conn = db.lock()?;
+pub fn upsert_tx(conn: &rusqlite::Connection, skill: &UserSkill) -> AppResult<()> {
     let now = chrono::Utc::now().timestamp();
     conn.execute(
         "INSERT INTO ai_skills (id, name, description, content, created_at, updated_at)
@@ -66,9 +65,19 @@ pub fn upsert(db: &Db, skill: &UserSkill) -> AppResult<()> {
     Ok(())
 }
 
+pub fn upsert(db: &Db, skill: &UserSkill) -> AppResult<()> {
+    let conn = db.lock()?;
+    upsert_tx(&conn, skill)
+}
+
 pub fn delete(db: &Db, id: &str) -> AppResult<()> {
     let conn = db.lock()?;
     conn.execute("DELETE FROM ai_skills WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+pub fn clear_all_tx(conn: &rusqlite::Connection) -> AppResult<()> {
+    conn.execute("DELETE FROM ai_skills", [])?;
     Ok(())
 }
 
@@ -76,6 +85,5 @@ pub fn delete(db: &Db, id: &str) -> AppResult<()> {
 /// 字段时才调，老 v1 payload（无字段）不会触发，避免清空用户本地数据。
 pub fn clear_all(db: &Db) -> AppResult<()> {
     let conn = db.lock()?;
-    conn.execute("DELETE FROM ai_skills", [])?;
-    Ok(())
+    clear_all_tx(&conn)
 }

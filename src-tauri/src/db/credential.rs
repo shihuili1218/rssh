@@ -5,7 +5,7 @@ use rusqlite::params;
 
 use super::Db;
 use crate::error::{AppError, AppResult};
-use crate::models::{Credential, CredentialType};
+use crate::models::{validate_name, Credential, CredentialType};
 
 fn row_to_credential(row: &rusqlite::Row) -> rusqlite::Result<Credential> {
     Ok(Credential {
@@ -41,10 +41,11 @@ pub fn get(db: &Db, id: &str) -> AppResult<Credential> {
     })
 }
 
-pub fn insert(db: &Db, cred: &Credential) -> AppResult<()> {
-    let conn = db.lock()?;
+pub fn insert_tx(conn: &rusqlite::Connection, cred: &Credential) -> AppResult<()> {
+    validate_name(&cred.name)?;
     conn.execute(
-        "INSERT INTO credentials (id, name, username, type, save_to_remote) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO credentials (id, name, username, type, save_to_remote) VALUES (?1, ?2, ?3, ?4, ?5) \
+         ON CONFLICT(id) DO UPDATE SET name=excluded.name, username=excluded.username, type=excluded.type, save_to_remote=excluded.save_to_remote",
         params![
             cred.id, cred.name, cred.username, cred.credential_type.as_str(),
             cred.save_to_remote as i32,
@@ -53,7 +54,13 @@ pub fn insert(db: &Db, cred: &Credential) -> AppResult<()> {
     Ok(())
 }
 
+pub fn insert(db: &Db, cred: &Credential) -> AppResult<()> {
+    let conn = db.lock()?;
+    insert_tx(&conn, cred)
+}
+
 pub fn update(db: &Db, cred: &Credential) -> AppResult<()> {
+    validate_name(&cred.name)?;
     let conn = db.lock()?;
     conn.execute(
         "UPDATE credentials SET name=?1, username=?2, type=?3, save_to_remote=?4 WHERE id=?5",
@@ -74,8 +81,12 @@ pub fn delete(db: &Db, id: &str) -> AppResult<()> {
     Ok(())
 }
 
-pub fn clear_all(db: &Db) -> AppResult<()> {
-    let conn = db.lock()?;
+pub fn clear_all_tx(conn: &rusqlite::Connection) -> AppResult<()> {
     conn.execute("DELETE FROM credentials", [])?;
     Ok(())
+}
+
+pub fn clear_all(db: &Db) -> AppResult<()> {
+    let conn = db.lock()?;
+    clear_all_tx(&conn)
 }

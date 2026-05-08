@@ -152,20 +152,31 @@ impl Actor {
 
     async fn dialogue_turn(&mut self) -> AppResult<()> {
         loop {
+            // 脱敏在 LLM 边界统一发生。原文留在 self.history（永不离开本机），
+            // 副本送 LLM 也送 audit —— LLM 看到的就是 audit 记录的，一致。
+            // ToolResult 在 push 时已 redact 过一次（handle_run_command），这里
+            // 再过一遍是 idempotent，没成本。User/Assistant.content 此前从未脱敏。
+            let rules = &self.cfg.redact_rules;
+            let redacted_system = sanitize::redact(&self.system_prompt, rules);
+            let redacted_history: Vec<ChatMessage> = self
+                .history
+                .iter()
+                .map(|m| sanitize::redact_message(m, rules))
+                .collect();
+
             let req = ChatRequest {
-                system_prompt: self.system_prompt.clone(),
-                messages: self.history.clone(),
+                system_prompt: redacted_system,
+                messages: redacted_history.clone(),
                 tools: tools::all_tools(),
                 model: self.cfg.model.clone(),
                 max_tokens: 4096,
             };
 
-            let payload_text = serde_json::to_string_pretty(&self.history)
+            let payload_text = serde_json::to_string_pretty(&redacted_history)
                 .unwrap_or_else(|_| "<unserializable>".into());
-            let redacted = sanitize::redact(&payload_text, &self.cfg.redact_rules);
             self.audit_push(AuditKind::LlmRequest {
                 model: self.cfg.model.clone(),
-                redacted_payload: redacted,
+                redacted_payload: payload_text,
             });
 
             // 流式：先 emit start 给前端开一条空 streaming bubble；

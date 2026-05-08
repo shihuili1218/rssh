@@ -8,6 +8,8 @@
 use regex::Regex;
 use serde::Serialize;
 
+use super::llm::ChatMessage;
+
 pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 1_048_576; // 1 MB
 
 // ─── 脱敏 ────────────────────────────────────────────────────────────
@@ -58,6 +60,35 @@ pub fn redact(text: &str, rules: &[RedactRule]) -> String {
             .into_owned();
     }
     out
+}
+
+/// 对一条 ChatMessage 的所有自由文本字段过 redact。
+/// `tool_calls` 不动 —— 它们是 LLM 从已脱敏 history 生成的，本就不含真敏感数据；
+/// 改写它会破坏前端粘贴执行的 cmd 字面（用户终端会 echo `<REDACTED:...>`）。
+pub fn redact_message(msg: &ChatMessage, rules: &[RedactRule]) -> ChatMessage {
+    match msg {
+        ChatMessage::User { content } => ChatMessage::User {
+            content: redact(content, rules),
+        },
+        ChatMessage::Assistant {
+            content,
+            tool_calls,
+            reasoning_content,
+        } => ChatMessage::Assistant {
+            content: redact(content, rules),
+            tool_calls: tool_calls.clone(),
+            reasoning_content: reasoning_content.as_ref().map(|r| redact(r, rules)),
+        },
+        ChatMessage::ToolResult {
+            tool_call_id,
+            content,
+            is_error,
+        } => ChatMessage::ToolResult {
+            tool_call_id: tool_call_id.clone(),
+            content: redact(content, rules),
+            is_error: *is_error,
+        },
+    }
 }
 
 // ─── 字符编码 + 截断 ─────────────────────────────────────────────────
@@ -265,6 +296,102 @@ mod tests {
         let rules = default_rules();
         assert!(redact("0123456789abcdef0123456789abcdef", &rules).contains("<REDACTED:hex>"));
         assert_eq!(redact("short=abc123", &rules), "short=abc123");
+    }
+
+    #[test]
+    fn redact_message_user_content() {
+        let rules = default_rules();
+        let m = ChatMessage::User {
+            content: "ssh root@10.0.0.1".into(),
+        };
+        match redact_message(&m, &rules) {
+            ChatMessage::User { content } => assert!(content.contains("<REDACTED:ip-10>")),
+            _ => panic!("variant changed"),
+        }
+    }
+
+    #[test]
+    fn redact_message_assistant_content_and_reasoning() {
+        let rules = default_rules();
+        let m = ChatMessage::Assistant {
+            content: "checked 192.168.1.1".into(),
+            tool_calls: vec![],
+            reasoning_content: Some("thinking about 172.16.0.1".into()),
+        };
+        match redact_message(&m, &rules) {
+            ChatMessage::Assistant {
+                content,
+                reasoning_content,
+                ..
+            } => {
+                assert!(content.contains("<REDACTED:ip-192>"));
+                assert!(reasoning_content.unwrap().contains("<REDACTED:ip-172>"));
+            }
+            _ => panic!("variant changed"),
+        }
+    }
+
+    #[test]
+    fn redact_message_tool_result() {
+        let rules = default_rules();
+        let m = ChatMessage::ToolResult {
+            tool_call_id: "tc1".into(),
+            content: "Bearer abcdefghijklmnopqrstuvwxyz1234".into(),
+            is_error: false,
+        };
+        match redact_message(&m, &rules) {
+            ChatMessage::ToolResult {
+                tool_call_id,
+                content,
+                is_error,
+            } => {
+                assert_eq!(tool_call_id, "tc1");
+                assert!(content.contains("<REDACTED:bearer>"));
+                assert!(!is_error);
+            }
+            _ => panic!("variant changed"),
+        }
+    }
+
+    /// LLM 工具调用的 input 是 LLM 从已脱敏 history 生成的；改写它会破坏
+    /// 前端粘进终端的 cmd 字面。redact_message 必须保留 tool_calls 不变。
+    #[test]
+    fn redact_message_preserves_tool_calls() {
+        let rules = default_rules();
+        let tc = super::super::llm::ToolCall {
+            id: "tc1".into(),
+            name: "run_command".into(),
+            input: serde_json::json!({"cmd": "ping 10.0.0.1"}),
+        };
+        let m = ChatMessage::Assistant {
+            content: "running".into(),
+            tool_calls: vec![tc.clone()],
+            reasoning_content: None,
+        };
+        match redact_message(&m, &rules) {
+            ChatMessage::Assistant { tool_calls, .. } => {
+                assert_eq!(tool_calls.len(), 1);
+                assert_eq!(tool_calls[0].input["cmd"], "ping 10.0.0.1");
+            }
+            _ => panic!("variant changed"),
+        }
+    }
+
+    #[test]
+    fn redact_message_idempotent() {
+        let rules = default_rules();
+        let original = ChatMessage::User {
+            content: "ssh 10.0.0.1".into(),
+        };
+        let once = redact_message(&original, &rules);
+        let twice = redact_message(&once, &rules);
+        // 已脱敏内容再过一遍 redact 必须等价
+        match (once, twice) {
+            (ChatMessage::User { content: a }, ChatMessage::User { content: b }) => {
+                assert_eq!(a, b);
+            }
+            _ => panic!("variant changed"),
+        }
     }
 
     #[test]

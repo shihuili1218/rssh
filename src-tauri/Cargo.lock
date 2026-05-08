@@ -763,6 +763,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "chacha20poly1305"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10cd79432192d1c0f4e1a0fef9527696cc039165d729fb41b3f4f4f354c2dc35"
+dependencies = [
+ "aead 0.5.2",
+ "chacha20 0.9.1",
+ "cipher 0.4.4",
+ "poly1305",
+ "zeroize",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -784,6 +797,7 @@ checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
 dependencies = [
  "crypto-common 0.1.7",
  "inout 0.1.4",
+ "zeroize",
 ]
 
 [[package]]
@@ -1062,6 +1076,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array 0.14.7",
+ "rand_core 0.6.4",
  "typenum",
 ]
 
@@ -4882,8 +4897,10 @@ name = "rssh"
 version = "0.0.1"
 dependencies = [
  "arboard",
+ "argon2",
  "async-trait",
  "base64 0.22.1",
+ "chacha20poly1305",
  "chrono",
  "clap",
  "dirs 5.0.1",
@@ -4893,7 +4910,6 @@ dependencies = [
  "env_logger",
  "futures-util",
  "getrandom 0.2.17",
- "hmac 0.12.1",
  "keyring",
  "log",
  "p256",
@@ -4912,7 +4928,6 @@ dependencies = [
  "russh-sftp",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "tauri",
  "tauri-build",
  "tempfile",

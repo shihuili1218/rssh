@@ -1,5 +1,28 @@
 use serde::{Deserialize, Serialize};
 
+use crate::error::{AppError, AppResult};
+
+/// 用户可见 name 字段的字符校验。拒绝所有 C0 控制符（含 ESC `\x1b` 和 BEL `\x07`）
+/// 以及 DEL `\x7f`。这些字符会破坏 OSC 7337 协议（CLI → GUI 的 `rssh open <name>`
+/// 转义序列），让恶意 profile/forward 名能注入额外终端转义。
+/// 普通可打印 ASCII、空格、UTF-8 多字节字符均允许。
+pub fn validate_name(name: &str) -> AppResult<()> {
+    if name.is_empty() {
+        return Err(AppError::config("name_empty", serde_json::json!({})));
+    }
+    for ch in name.chars() {
+        let c = ch as u32;
+        // C0 controls: 0x00-0x1F；DEL: 0x7F。任一都能终止 / 注入终端转义。
+        if c < 0x20 || c == 0x7f {
+            return Err(AppError::config(
+                "name_has_control_char",
+                serde_json::json!({ "byte": c }),
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Profile {
     pub id: String,
@@ -154,6 +177,47 @@ mod tests {
         assert_eq!(CredentialType::from_str("Password"), CredentialType::None);
         // 大小写敏感
         assert_eq!(CredentialType::from_str("PASSWORD"), CredentialType::None);
+    }
+
+    #[test]
+    fn validate_name_accepts_normal() {
+        assert!(validate_name("prod-web").is_ok());
+        assert!(validate_name("生产 1 号").is_ok());
+        assert!(validate_name("a:b@c.example").is_ok());
+        assert!(validate_name("with spaces").is_ok());
+        assert!(validate_name(";semicolons;").is_ok()); // ; 不是 OSC 终止符
+    }
+
+    #[test]
+    fn validate_name_rejects_empty() {
+        assert_eq!(validate_name("").unwrap_err().code(), "name_empty");
+    }
+
+    #[test]
+    fn validate_name_rejects_esc_and_bel() {
+        // ESC \x1b 和 BEL \x07 是 OSC 7337 的关键终止符 —— 注入主战场
+        assert_eq!(
+            validate_name("evil\x1b]52;c;...\x07").unwrap_err().code(),
+            "name_has_control_char"
+        );
+        assert_eq!(
+            validate_name("end\x07start").unwrap_err().code(),
+            "name_has_control_char"
+        );
+    }
+
+    #[test]
+    fn validate_name_rejects_other_c0_and_del() {
+        // 任何 C0 控制符都拦：NUL / TAB / LF / CR / DEL
+        for c in ['\x00', '\t', '\n', '\r', '\x7f'] {
+            let s = format!("a{c}b");
+            assert_eq!(
+                validate_name(&s).unwrap_err().code(),
+                "name_has_control_char",
+                "char {:?} should be rejected",
+                c
+            );
+        }
     }
 
     #[test]
