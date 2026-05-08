@@ -116,3 +116,59 @@ pub struct CastHeader {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CastEvent(pub f64, pub String, pub String);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// DB credentials.type 列存的就是这套小写字符串——CLI 直接读 DB（AGENT.md P5）。
+    /// 改 as_str 字面值 = 数据库里存量 credential 全部解不出。
+    #[test]
+    fn credential_type_as_str_stable_literals() {
+        assert_eq!(CredentialType::Password.as_str(), "password");
+        assert_eq!(CredentialType::Key.as_str(), "key");
+        assert_eq!(CredentialType::Interactive.as_str(), "interactive");
+        assert_eq!(CredentialType::Agent.as_str(), "agent");
+        assert_eq!(CredentialType::None.as_str(), "none");
+    }
+
+    #[test]
+    fn credential_type_roundtrip_through_string() {
+        for t in [
+            CredentialType::Password,
+            CredentialType::Key,
+            CredentialType::Interactive,
+            CredentialType::Agent,
+            CredentialType::None,
+        ] {
+            assert_eq!(CredentialType::from_str(t.as_str()), t);
+        }
+    }
+
+    #[test]
+    fn credential_type_unknown_falls_back_to_none() {
+        // 防御 schema 漂移：DB 里出现未知 type 时不该 panic，
+        // 也不该错认成某个有效类型——退到 None 让上层显式处理。
+        assert_eq!(CredentialType::from_str(""), CredentialType::None);
+        assert_eq!(CredentialType::from_str("bogus"), CredentialType::None);
+        assert_eq!(CredentialType::from_str("Password"), CredentialType::None);
+        // 大小写敏感
+        assert_eq!(CredentialType::from_str("PASSWORD"), CredentialType::None);
+    }
+
+    #[test]
+    fn credential_type_serde_matches_as_str() {
+        // serde 的 rename_all = "lowercase" 必须和 as_str 完全一致——
+        // 不一致会让 JSON 序列化和 DB 字符串对不上。
+        for t in [
+            CredentialType::Password,
+            CredentialType::Key,
+            CredentialType::Interactive,
+            CredentialType::Agent,
+            CredentialType::None,
+        ] {
+            let json = serde_json::to_string(&t).unwrap();
+            assert_eq!(json, format!("\"{}\"", t.as_str()));
+        }
+    }
+}
