@@ -19,7 +19,9 @@
 
   async function doImport() {
     if (!importJson.trim()) return;
-    if (!confirm("Confirm import? This will overwrite all local Profiles, Credentials, and Port Forwards!")) return;
+    // 后端 import_config 走 merge_import：本地数据保留；同 id 实体被覆盖，其余条目新增。
+    // 文案必须与后端语义一致，避免误导。
+    if (!confirm("Import will merge into local config: matching entries (by id) get overwritten, others stay. Continue?")) return;
     importing = true;
     try {
       await invoke("import_config", { json: importJson });
@@ -63,7 +65,7 @@
   <div class="action-card neu-raised">
     <div class="action-info">
       <div class="action-title">Import Config</div>
-      <div class="action-desc">Paste previously exported JSON. This will overwrite all local data.</div>
+      <div class="action-desc">Paste previously exported JSON. Merges into local config: matching entries (by id) are overwritten, others stay.</div>
     </div>
   </div>
   <textarea class="mono-area" bind:value={importJson} rows="4" placeholder="Paste JSON..."></textarea>

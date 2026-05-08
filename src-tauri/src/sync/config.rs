@@ -197,11 +197,11 @@ pub fn merge_import(db: &Db, ss: &dyn SecretStore, data: &Value) -> AppResult<()
 // ---------------------------------------------------------------------------
 
 /// 全量替换本地配置，DB 部分包在单一 transaction 里：任一插入失败整体回滚。
-/// SecretStore 不属于 SQL 事务范围 —— 按 (1) 删旧 (2) DB tx (3) 写新 顺序。
-/// 第 (3) 步失败留下"DB 已更新但 secret 未到位"的少数 cred，需用户重新输入；
-/// 但 DB 永远不会处于"半新半旧"的状态。
+/// SecretStore 不属于 SQL 事务范围 —— 顺序：(1) parse all (2) DB tx (3) secret 同步。
+/// **关键**：旧 secret 的清理在 DB tx **之后**进行——tx 失败时本地 secrets
+/// 不动，与 DB 一起完整回滚到旧状态；tx 成功后才清理"被新配置淘汰"的旧 cred secret。
 pub fn replace_import(db: &Db, ss: &dyn SecretStore, data: &Value) -> AppResult<()> {
-    // 先解析所有条目，全部解析成功才进事务。任何 parse 失败 → 早 fail，不动 DB。
+    // (1) 先解析所有条目，全部解析成功才进事务。任何 parse 失败 → 早 fail，不动 DB。
     let creds: Vec<Credential> = parse_array(data, "credentials")?;
     let profiles: Vec<Profile> = parse_array(data, "profiles")?;
     let forwards: Vec<Forward> = parse_array(data, "forwards")?;
@@ -214,15 +214,15 @@ pub fn replace_import(db: &Db, ss: &dyn SecretStore, data: &Value) -> AppResult<
         Vec::new()
     };
 
-    // 取旧 cred id 列表用于第 (1) 步清 secret
-    let old_creds = credential::list(db).unwrap_or_default();
+    // 旧 cred id 列表 —— 必须在 tx 前抓快照（tx 后表已清空，list 就是新的了）。
+    // 留作 tx 成功后清理被淘汰 cred secret 用。
+    let old_cred_ids: Vec<String> = credential::list(db)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| c.id)
+        .collect();
 
-    // (1) 清旧 secret —— 失败忽略（best-effort，与原 apply_import 行为一致）
-    for c in &old_creds {
-        let _ = ss.delete(&cred_secret_key(&c.id));
-    }
-
-    // (2) DB 事务：clear + insert 整体原子
+    // (2) DB 事务：clear + insert 整体原子。失败回滚，secrets 不动。
     db.with_transaction(|tx| {
         credential::clear_all_tx(tx)?;
         profile::clear_all_tx(tx)?;
@@ -250,7 +250,17 @@ pub fn replace_import(db: &Db, ss: &dyn SecretStore, data: &Value) -> AppResult<
         Ok(())
     })?;
 
-    // (3) 写新 secret —— 单条失败不回滚 DB，只记错；用户可手动补救
+    // (3) DB 已 commit。处理 SecretStore（非事务范围）：
+    //   a. 先删被淘汰的旧 cred secret（new 列表里没有的）
+    //   b. 再写每条新 cred 的 secret（None / 空 → delete 该 key）
+    // 顺序换一下也行，但先删再写更接近"全量替换"语义。
+    let new_ids: std::collections::HashSet<&str> = creds.iter().map(|c| c.id.as_str()).collect();
+    for old_id in &old_cred_ids {
+        if !new_ids.contains(old_id.as_str()) {
+            let _ = ss.delete(&cred_secret_key(old_id));
+        }
+    }
+
     let mut errors: Vec<ImportError> = Vec::new();
     for c in &creds {
         let sk = cred_secret_key(&c.id);

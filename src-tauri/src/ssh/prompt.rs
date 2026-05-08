@@ -23,6 +23,23 @@ pub struct AuthCtx {
     pub tab_id: String,
 }
 
+/// RAII：rx await 走完前如果路径上失败（比如 emit 失败），guard drop 时
+/// 把 sender 从 map 清掉，避免该 tab_id 永远卡在 "已存在 sender" 状态。
+/// rx 正常 await 到结果时，sender 已被 commands::session::*_respond / *_cancel
+/// 取走，map 里已无对应条目，guard 的 remove 是 no-op。
+struct WaiterGuard<'a> {
+    waiters: &'a Mutex<HashMap<String, oneshot::Sender<String>>>,
+    tab_id: &'a str,
+}
+
+impl Drop for WaiterGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut m) = locked(self.waiters) {
+            m.remove(self.tab_id);
+        }
+    }
+}
+
 /// 通用终端 prompt：注册 oneshot sender 到指定 waiters map，emit 事件，等用户回应。
 /// passphrase / host_key 等 xterm 内交互都走这条路；差异只在 waiters / 事件名 / payload。
 pub(crate) async fn prompt_oneshot(
@@ -47,6 +64,8 @@ pub(crate) async fn prompt_oneshot(
         }
         w.insert(tab_id.to_string(), tx);
     }
+    // guard 在 emit 失败 / rx 错误时自动从 map 清掉 sender；正常落地是 no-op。
+    let _guard = WaiterGuard { waiters, tab_id };
     app.emit(&format!("{event_prefix}:{tab_id}"), payload)
         .map_err(|e| AppError::other("emit_failed", json!({ "channel": event_prefix, "err": e.to_string() })))?;
     rx.await.map_err(|_| AppError::ssh(cancel_code, json!({})))

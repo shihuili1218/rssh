@@ -8,7 +8,7 @@ use rssh_lib::error::AppResult;
 use rssh_lib::secret::{cred_secret_key, setting_key, SecretStore};
 
 use crate::ctx::CliCtx;
-use crate::helpers::{die, prompt_default, read_password};
+use crate::helpers::{die, prompt_default, prompt_secret_default, read_password};
 
 #[derive(Subcommand)]
 pub enum ConfigCmd {
@@ -40,19 +40,47 @@ pub fn cmd_config(conn: &CliCtx, action: ConfigCmd) -> AppResult<()> {
     }
 }
 
-fn build_config_json(conn: &CliCtx) -> AppResult<String> {
+/// 构造 export / push 共用的 JSON 形态。
+///
+/// 形态必须**完整覆盖** GUI export 的字段集（profiles / credentials / forwards /
+/// groups / skills），否则 CLI 产出的 backup 在 GUI replace_pull 时会把缺失的
+/// 表清空。CLI ↔ GUI 互导互拉是默认场景，不能在格式上漂移。
+///
+/// `respect_save_to_remote = true`（push 路径）时把 `save_to_remote=false`
+/// 的凭证 secret 置 None；本地 export 路径传 false，所有 secret 都进加密文件。
+fn build_config_json(conn: &CliCtx, respect_save_to_remote: bool) -> AppResult<String> {
     let profiles = rssh_lib::db::profile::list(conn)?;
     let mut credentials = rssh_lib::db::credential::list(conn)?;
     for c in credentials.iter_mut() {
         c.secret = conn.secret_store().get(&cred_secret_key(&c.id))?;
+        if respect_save_to_remote && !c.save_to_remote {
+            c.secret = None;
+        }
     }
     let forwards = rssh_lib::db::forward::list(conn)?;
+    let groups = rssh_lib::db::group::list(conn)?;
+    // ai_skill 表只有 user 自定义条目，builtin "general" 不入表。
+    // SkillRecord wire format 需要 builtin 字段，inline 拼出来避免依赖 ai 模块。
+    let skills: Vec<serde_json::Value> = rssh_lib::db::ai_skill::list(conn)?
+        .into_iter()
+        .map(|u| {
+            serde_json::json!({
+                "id": u.id,
+                "name": u.name,
+                "description": u.description,
+                "content": u.content,
+                "builtin": false,
+            })
+        })
+        .collect();
     Ok(serde_json::to_string_pretty(&serde_json::json!({
         "version": 1,
         "exported_at": chrono::Utc::now().to_rfc3339(),
         "profiles": profiles,
         "credentials": credentials,
         "forwards": forwards,
+        "groups": groups,
+        "skills": skills,
     }))
     .unwrap_or_else(|e| die(format!("Serialization failed: {e}"))))
 }
@@ -69,7 +97,8 @@ fn import_config_json(conn: &CliCtx, json: &str, mode: ImportMode) -> AppResult<
 }
 
 fn config_export(conn: &CliCtx, file: &str) -> AppResult<()> {
-    let json = build_config_json(conn)?;
+    // 本地 export：所有 secret 都加密落盘，不看 save_to_remote。
+    let json = build_config_json(conn, false)?;
     let pw = read_password("Encryption password: ");
     let pw2 = read_password("Confirm password: ");
     if pw != pw2 {
@@ -100,14 +129,9 @@ fn config_set(conn: &CliCtx) -> AppResult<()> {
     let cur_repo = rssh_lib::db::settings::get(conn, "github_repo")?.unwrap_or_default();
     let cur_branch = rssh_lib::db::settings::get(conn, "github_branch")?.unwrap_or("main".into());
 
-    let token = prompt_default(
-        "GitHub PAT",
-        if cur_token.is_empty() {
-            "ghp_..."
-        } else {
-            &cur_token
-        },
-    );
+    // PAT 是 secret —— 不能在 prompt 默认值里 echo 出来（屏幕录制 / 终端历史
+    // 都会抓到）。走 prompt_secret_default：占位显示 `(stored)`，输入不回显。
+    let token = prompt_secret_default("GitHub PAT", &cur_token);
     let repo = prompt_default("Repo (owner/repo)", &cur_repo);
     let branch = prompt_default("Branch", &cur_branch);
 
@@ -135,22 +159,8 @@ fn config_push(conn: &CliCtx) -> AppResult<()> {
         .unwrap_or_else(|| die("GitHub repo not set"));
     let branch = rssh_lib::db::settings::get(conn, "github_branch")?.unwrap_or("main".into());
 
-    let mut json_data = {
-        let profiles = rssh_lib::db::profile::list(conn)?;
-        let mut credentials = rssh_lib::db::credential::list(conn)?;
-        for c in credentials.iter_mut() {
-            c.secret = conn.secret_store().get(&cred_secret_key(&c.id))?;
-            if !c.save_to_remote {
-                c.secret = None;
-            }
-        }
-        let forwards = rssh_lib::db::forward::list(conn)?;
-        serde_json::to_string_pretty(&serde_json::json!({
-            "version": 1, "exported_at": chrono::Utc::now().to_rfc3339(),
-            "profiles": profiles, "credentials": credentials, "forwards": forwards,
-        }))
-        .unwrap_or_else(|e| die(format!("Serialization failed: {e}")))
-    };
+    // push 路径：尊重 save_to_remote — 不同步的凭证 secret 置 None。
+    let mut json_data = build_config_json(conn, true)?;
 
     let pw = read_password("Encryption password: ");
     let encrypted = rssh_lib::crypto::encrypt(&json_data, &pw)?;

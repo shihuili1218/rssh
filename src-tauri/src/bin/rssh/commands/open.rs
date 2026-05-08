@@ -53,7 +53,7 @@ fn cmd_open_ssh(conn: &CliCtx, name: &str) -> AppResult<()> {
         .map(|c| load_cred_secrets(conn, c));
 
     let mut cmd = Command::new("ssh");
-    let _key_files = build_ssh_command(&mut cmd, conn, profile, cred.as_ref())?;
+    let key_files = build_ssh_command(&mut cmd, conn, profile, cred.as_ref())?;
 
     cmd.arg("-o").arg("StrictHostKeyChecking=accept-new");
 
@@ -73,7 +73,11 @@ fn cmd_open_ssh(conn: &CliCtx, name: &str) -> AppResult<()> {
     let status = cmd
         .status()
         .unwrap_or_else(|e| die(format!("Failed to run ssh: {e}")));
-    std::process::exit(status.code().unwrap_or(1));
+    let code = status.code().unwrap_or(1);
+    // 必须显式 drop —— `process::exit` 跳过 stack unwind，NamedTempFile 的
+    // Drop 不会跑，私钥临时文件留在磁盘。
+    drop(key_files);
+    std::process::exit(code);
 }
 
 fn cmd_open_fwd(conn: &CliCtx, name: &str) -> AppResult<()> {
@@ -107,7 +111,7 @@ fn cmd_open_fwd(conn: &CliCtx, name: &str) -> AppResult<()> {
     };
     cmd.arg(flag).arg(&fwd_arg);
 
-    let _key_files = build_ssh_command(&mut cmd, conn, &profile, cred.as_ref())?;
+    let key_files = build_ssh_command(&mut cmd, conn, &profile, cred.as_ref())?;
 
     cmd.arg(&profile.host);
 
@@ -115,5 +119,8 @@ fn cmd_open_fwd(conn: &CliCtx, name: &str) -> AppResult<()> {
     let status = cmd
         .status()
         .unwrap_or_else(|e| die(format!("Failed to run ssh: {e}")));
-    std::process::exit(status.code().unwrap_or(1));
+    let code = status.code().unwrap_or(1);
+    // 同 cmd_open_ssh：process::exit 跳过 NamedTempFile 的 Drop，必须先显式 drop。
+    drop(key_files);
+    std::process::exit(code);
 }

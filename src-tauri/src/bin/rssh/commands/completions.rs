@@ -41,10 +41,14 @@ _rssh() {
                     _describe 'type' ls_opts
                     ;;
                 open)
+                    # ${(f)...} 按行切，保留含空格的 name（validate_name 允许空格）；
+                    # 普通 $(...) 会按 IFS 字 break。
                     if [[ $CURRENT -eq 2 ]]; then
-                        compadd fwd $(rssh _names profiles 2>/dev/null)
+                        local -a _profs=("${(@f)$(rssh _names profiles 2>/dev/null)}")
+                        compadd fwd -- "${_profs[@]}"
                     elif [[ $words[2] == "fwd" && $CURRENT -eq 3 ]]; then
-                        compadd $(rssh _names fwd 2>/dev/null)
+                        local -a _fwds=("${(@f)$(rssh _names fwd 2>/dev/null)}")
+                        compadd -- "${_fwds[@]}"
                     fi
                     ;;
                 add)
@@ -54,11 +58,13 @@ _rssh() {
                     if [[ $CURRENT -eq 2 ]]; then
                         compadd profile cred fwd
                     elif [[ $CURRENT -eq 3 ]]; then
+                        local -a _names
                         case $words[2] in
-                            profile) compadd $(rssh _names profiles 2>/dev/null) ;;
-                            cred)    compadd $(rssh _names creds 2>/dev/null) ;;
-                            fwd)     compadd $(rssh _names fwd 2>/dev/null) ;;
+                            profile) _names=("${(@f)$(rssh _names profiles 2>/dev/null)}") ;;
+                            cred)    _names=("${(@f)$(rssh _names creds 2>/dev/null)}") ;;
+                            fwd)     _names=("${(@f)$(rssh _names fwd 2>/dev/null)}") ;;
                         esac
+                        compadd -- "${_names[@]}"
                     fi
                     ;;
                 config)
@@ -94,12 +100,23 @@ const BASH_COMPLETIONS: &str = r#"_rssh() {
             COMPREPLY=($(compgen -W "cred fwd" -- "$cur"))
             ;;
         open)
+            # mapfile -t 按行读，保留含空格的 name；compgen -W 仍会按 IFS 切，
+            # 所以手动 push 进 COMPREPLY 而不是用 compgen。
             if [[ $cword -eq 2 ]]; then
-                local profiles=$(rssh _names profiles 2>/dev/null)
-                COMPREPLY=($(compgen -W "fwd $profiles" -- "$cur"))
+                local -a _profs
+                mapfile -t _profs < <(rssh _names profiles 2>/dev/null)
+                COMPREPLY=()
+                [[ "fwd" == "$cur"* ]] && COMPREPLY+=("fwd")
+                for _n in "${_profs[@]}"; do
+                    [[ "$_n" == "$cur"* ]] && COMPREPLY+=("$_n")
+                done
             elif [[ ${words[2]} == "fwd" && $cword -eq 3 ]]; then
-                local fwds=$(rssh _names fwd 2>/dev/null)
-                COMPREPLY=($(compgen -W "$fwds" -- "$cur"))
+                local -a _fwds
+                mapfile -t _fwds < <(rssh _names fwd 2>/dev/null)
+                COMPREPLY=()
+                for _n in "${_fwds[@]}"; do
+                    [[ "$_n" == "$cur"* ]] && COMPREPLY+=("$_n")
+                done
             fi
             ;;
         add)
@@ -109,11 +126,16 @@ const BASH_COMPLETIONS: &str = r#"_rssh() {
             if [[ $cword -eq 2 ]]; then
                 COMPREPLY=($(compgen -W "profile cred fwd" -- "$cur"))
             elif [[ $cword -eq 3 ]]; then
+                local -a _names
                 case ${words[2]} in
-                    profile) COMPREPLY=($(compgen -W "$(rssh _names profiles 2>/dev/null)" -- "$cur")) ;;
-                    cred)    COMPREPLY=($(compgen -W "$(rssh _names creds 2>/dev/null)" -- "$cur")) ;;
-                    fwd)     COMPREPLY=($(compgen -W "$(rssh _names fwd 2>/dev/null)" -- "$cur")) ;;
+                    profile) mapfile -t _names < <(rssh _names profiles 2>/dev/null) ;;
+                    cred)    mapfile -t _names < <(rssh _names creds 2>/dev/null) ;;
+                    fwd)     mapfile -t _names < <(rssh _names fwd 2>/dev/null) ;;
                 esac
+                COMPREPLY=()
+                for _n in "${_names[@]}"; do
+                    [[ "$_n" == "$cur"* ]] && COMPREPLY+=("$_n")
+                done
             fi
             ;;
         config)

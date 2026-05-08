@@ -73,6 +73,25 @@ pub fn read_password(label: &str) -> String {
     rpassword::read_password().unwrap_or_default()
 }
 
+/// 敏感字段（token / password）的 prompt：不 echo 当前值，避免被屏幕录制 /
+/// 终端历史抓走。占位显示 `(stored)`；用户回车保留旧，输入新值则覆盖。
+/// 输入本身走 rpassword 不回显字符。
+pub fn prompt_secret_default(label: &str, current: &str) -> String {
+    let placeholder = if current.is_empty() {
+        "(none)"
+    } else {
+        "(stored, press Enter to keep)"
+    };
+    eprint!("{} [{}]: ", label, placeholder);
+    io::stderr().flush().unwrap();
+    let val = rpassword::read_password().unwrap_or_default();
+    if val.is_empty() {
+        current.to_string()
+    } else {
+        val
+    }
+}
+
 pub fn read_multiline() -> String {
     let mut lines = Vec::new();
     loop {

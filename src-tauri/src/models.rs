@@ -16,7 +16,7 @@ pub fn validate_name(name: &str) -> AppResult<()> {
         if c < 0x20 || c == 0x7f {
             return Err(AppError::config(
                 "name_has_control_char",
-                serde_json::json!({ "byte": c }),
+                serde_json::json!({ "codepoint": c }),
             ));
         }
     }
