@@ -217,7 +217,8 @@ mod tests {
         for w in stamps.windows(2) {
             assert!(w[1] >= w[0], "timestamps not monotonic: {stamps:?}");
         }
-        // 第一个事件时间应 ≥ 0；第二个应 ≥ 5ms
+        // 不断言具体 sleep 时长——CI sleep 精度受 OS 调度影响易 flaky，
+        // 单调 + 非负就够了（thread::sleep 5ms 只是保证两个事件时间不同）。
         assert!(stamps[0] >= 0.0);
     }
 }

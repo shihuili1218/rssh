@@ -17,8 +17,9 @@ interface FakeMarker {
 
 function fakeTerm() {
   let bufferType: BufType = "normal";
-  const dataListeners: Array<(s: string) => void> = [];
-  const bufferChangeListeners: Array<(b: { type: BufType }) => void> = [];
+  // Set 而非 Array：disposer 能 O(1) 拆订阅，且能在测试里观察"还剩几个 listener"。
+  const dataListeners = new Set<(s: string) => void>();
+  const bufferChangeListeners = new Set<(b: { type: BufType }) => void>();
   let markerCounter = 0;
   const allMarkers: FakeMarker[] = [];
 
@@ -43,16 +44,16 @@ function fakeTerm() {
 
   const term = {
     onData(fn: (s: string) => void) {
-      dataListeners.push(fn);
-      return { dispose: () => {} };
+      dataListeners.add(fn);
+      return { dispose: () => dataListeners.delete(fn) };
     },
     buffer: {
       get active() {
         return { type: bufferType };
       },
       onBufferChange(fn: (b: { type: BufType }) => void) {
-        bufferChangeListeners.push(fn);
-        return { dispose: () => {} };
+        bufferChangeListeners.add(fn);
+        return { dispose: () => bufferChangeListeners.delete(fn) };
       },
     },
     registerMarker(_line: number): FakeMarker | undefined {
@@ -70,6 +71,7 @@ function fakeTerm() {
       bufferChangeListeners.forEach((f) => f({ type: t }));
     },
     markers: allMarkers,
+    listenerCount: () => dataListeners.size + bufferChangeListeners.size,
   };
 }
 
@@ -229,5 +231,29 @@ describe("createCommandBlockTracker — marker disposal", () => {
     for (const m of f.markers) {
       expect(m.disposed).toBe(true);
     }
+  });
+
+  it("dispose() unsubscribes onData / onBufferChange listeners", () => {
+    // 不止断言"看不到副作用"——直接验证 listener 集合被清掉。
+    // 这是真 leak 探针：tracker 漏不取消订阅会让 fake term 的 Set size 不归零。
+    const f = fakeTerm();
+    const t = createCommandBlockTracker(f.term);
+    expect(f.listenerCount()).toBeGreaterThan(0);
+    t.dispose();
+    expect(f.listenerCount()).toBe(0);
+  });
+
+  it("after dispose() further pushData / setBuffer cause no state change", () => {
+    const f = fakeTerm();
+    const t = createCommandBlockTracker(f.term);
+    f.pushData("\r");
+    t.dispose();
+    let onChangeCalls = 0;
+    t.onChange(() => onChangeCalls++);
+    f.pushData("\r"); // 不应再开 block
+    f.setBuffer("alternate");
+    f.setBuffer("normal");
+    expect(t.blocks.length).toBe(0);
+    expect(onChangeCalls).toBe(0);
   });
 });

@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn payload_too_short_rejected() {
-        // len < 49（salt 16 + mac 32 + cipher ≥1）
+        // 合法 blob 下限 = 48（salt 16 + mac 32 + cipher 0+）；< 48 必拒
         let raw = vec![0u8; 40];
         let blob = STANDARD.encode(&raw);
         let err = decrypt(&blob, "pw").unwrap_err();
