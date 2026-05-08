@@ -1085,6 +1085,83 @@ fn default_identity_paths() -> Vec<PathBuf> {
     .collect()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── check_auth_result ──────────────────────────────────────────
+
+    #[test]
+    fn check_auth_success() {
+        assert!(check_auth_result(client::AuthResult::Success).is_ok());
+    }
+
+    #[test]
+    fn check_auth_failure_maps_to_ssh_auth_rejected() {
+        let result = client::AuthResult::Failure {
+            remaining_methods: russh::MethodSet::empty(),
+            partial_success: false,
+        };
+        let err = check_auth_result(result).unwrap_err();
+        assert_eq!(err.code(), "ssh_auth_rejected");
+    }
+
+    // ── default_identity_paths ─────────────────────────────────────
+
+    #[test]
+    fn default_identity_paths_match_openssh_order_when_home_present() {
+        // CI 环境 HOME 不存在的话函数返回空 Vec — 那就跳过断言。
+        if dirs::home_dir().is_none() {
+            assert!(default_identity_paths().is_empty());
+            return;
+        }
+        let paths = default_identity_paths();
+        assert_eq!(paths.len(), 5);
+        let names: Vec<_> = paths
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            ["id_rsa", "id_ecdsa", "id_ecdsa_sk", "id_ed25519", "id_ed25519_sk"]
+        );
+        // 全部位于 .ssh/ 子目录
+        for p in &paths {
+            assert!(p.parent().unwrap().ends_with(".ssh"));
+        }
+    }
+
+    // ── map_connect_error ──────────────────────────────────────────
+
+    #[test]
+    fn map_connect_error_when_mismatch_flag_set() {
+        let mismatch = StdMutex::new(true);
+        let err = map_connect_error(russh::Error::Version, "h", 22, &mismatch);
+        assert_eq!(err.code(), "ssh_host_key_changed");
+    }
+
+    #[test]
+    fn map_connect_error_when_no_mismatch() {
+        let mismatch = StdMutex::new(false);
+        let err = map_connect_error(russh::Error::Version, "h", 22, &mismatch);
+        assert_eq!(err.code(), "ssh_connect_failed");
+    }
+
+    // ── publickey_signature_label ──────────────────────────────────
+
+    #[test]
+    fn publickey_label_for_ed25519_ignores_rsa_hash() {
+        let kp = russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[7u8; 32]);
+        let key: PrivateKey = kp.into();
+        // 即便传 SHA-512，ed25519 也走 algorithm.as_str() 那条路
+        let label = publickey_signature_label(&key, Some(HashAlg::Sha512));
+        assert_eq!(label, "ssh-ed25519");
+        // 没传 hash 一样
+        let label2 = publickey_signature_label(&key, None);
+        assert_eq!(label2, "ssh-ed25519");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 键盘交互认证
 // ---------------------------------------------------------------------------

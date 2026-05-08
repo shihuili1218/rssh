@@ -103,11 +103,15 @@ export function createCommandBlockTracker(term: Terminal): CommandBlockTracker {
     },
     dispose() {
       disposables.forEach(d => d.dispose());
-      // Explicitly dispose any markers still alive — otherwise they linger
-      // until the terminal itself is disposed.
-      blocks.forEach(b => { b.start.dispose(); b.end?.dispose(); });
-      listeners.clear();
+      // 用快照迭代：start.dispose() 的 onDispose 会 splice blocks，
+      // 直接 forEach(blocks) 会跳过后续 index，导致 marker 泄漏。
+      const snapshot = blocks.slice();
       blocks.length = 0;
+      for (const b of snapshot) {
+        b.start.dispose();
+        b.end?.dispose();
+      }
+      listeners.clear();
     },
   };
 }

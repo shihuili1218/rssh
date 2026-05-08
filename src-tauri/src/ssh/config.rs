@@ -95,3 +95,138 @@ fn expand_tilde(path: &str) -> String {
     }
     path.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_basic_entry() {
+        let cfg = "\
+Host alpha
+    HostName 10.0.0.1
+    User root
+    Port 2222
+";
+        let entries = parse(cfg);
+        assert_eq!(entries.len(), 1);
+        let e = &entries[0];
+        assert_eq!(e.host_alias, "alpha");
+        assert_eq!(e.hostname, "10.0.0.1");
+        assert_eq!(e.port, 2222);
+        assert_eq!(e.user.as_deref(), Some("root"));
+        assert!(e.identity_file.is_none());
+        assert!(e.proxy_jump.is_none());
+    }
+
+    #[test]
+    fn parse_default_port_when_missing() {
+        let cfg = "Host bare\n    HostName x.example\n";
+        let entries = parse(cfg);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].port, 22);
+    }
+
+    #[test]
+    fn parse_invalid_port_falls_back_to_22() {
+        // 实现里 `value.parse().unwrap_or(22)` — 坏值不应让进程炸
+        let cfg = "Host bad\n    HostName x\n    Port not-a-number\n";
+        let entries = parse(cfg);
+        assert_eq!(entries[0].port, 22);
+    }
+
+    #[test]
+    fn parse_skips_wildcard_hosts() {
+        let cfg = "\
+Host *
+    User defaultuser
+
+Host real
+    HostName real.example
+";
+        let entries = parse(cfg);
+        // 通配符 `*` 整段丢掉，只保留 real
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].host_alias, "real");
+    }
+
+    #[test]
+    fn parse_first_alias_when_host_has_multiple_tokens() {
+        // OpenSSH 允许 `Host a b c` 复用同一段配置；这里只取第一个 alias
+        let cfg = "Host alpha beta gamma\n    HostName x\n";
+        let entries = parse(cfg);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].host_alias, "alpha");
+    }
+
+    #[test]
+    fn parse_proxy_jump_and_identity_file() {
+        let cfg = "\
+Host inner
+    HostName inner.local
+    ProxyJump bastion
+    IdentityFile ~/.ssh/work_ed25519
+";
+        let entries = parse(cfg);
+        assert_eq!(entries.len(), 1);
+        let e = &entries[0];
+        assert_eq!(e.proxy_jump.as_deref(), Some("bastion"));
+        // ~/ 必须被展开为绝对路径（home 在 CI 里可能不同，所以只校验形态）
+        let id = e.identity_file.as_deref().unwrap();
+        assert!(!id.starts_with("~/"));
+        assert!(id.ends_with("/.ssh/work_ed25519") || id.ends_with("\\.ssh\\work_ed25519"));
+    }
+
+    #[test]
+    fn parse_ignores_comments_and_blank_lines() {
+        let cfg = "\
+# top-level comment
+
+Host x
+    # inline-ish
+    HostName host.example
+    Port 22
+
+";
+        let entries = parse(cfg);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].hostname, "host.example");
+    }
+
+    #[test]
+    fn parse_multiple_entries_independent() {
+        let cfg = "\
+Host one
+    HostName 1.example
+    User a
+
+Host two
+    HostName 2.example
+    User b
+    Port 2202
+";
+        let entries = parse(cfg);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].host_alias, "one");
+        assert_eq!(entries[0].port, 22);
+        assert_eq!(entries[1].host_alias, "two");
+        assert_eq!(entries[1].port, 2202);
+        assert_eq!(entries[1].user.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn parse_keys_are_case_insensitive() {
+        // OpenSSH 关键字大小写无关，实现里 `key.to_lowercase()`
+        let cfg = "HOST alpha\n    HOSTNAME 1.2.3.4\n    PORT 33\n";
+        let entries = parse(cfg);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].hostname, "1.2.3.4");
+        assert_eq!(entries[0].port, 33);
+    }
+
+    #[test]
+    fn parse_empty_input() {
+        assert!(parse("").is_empty());
+        assert!(parse("\n\n# only comment\n").is_empty());
+    }
+}

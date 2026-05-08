@@ -8,8 +8,45 @@ permissions:
   contents: write
 
 jobs:
+  # ── Tests (gate for all build jobs) ──────────────────────────────
+  # 跑一次 ubuntu 即可：测试是平台无关的纯函数 + 协议解析。
+  # build-desktop / build-android 都 needs: test —— 失败时不浪费 runner。
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # cargo test 会编译整个 crate（含 wry / tauri）。复用 build-desktop
+      # linux 的同款 system deps，否则 webkit2gtk 链接失败。
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Frontend tests (vitest)
+        run: npm test
+
+      - name: Backend tests (cargo)
+        working-directory: src-tauri
+        run: cargo test
+
   # ── Desktop (macOS / Linux / Windows) ────────────────────────────
   build-desktop:
+    needs: test
     strategy:
       fail-fast: false
       matrix:
@@ -111,6 +148,7 @@ jobs:
 
   # ── Android ──────────────────────────────────────────────────────
   build-android:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

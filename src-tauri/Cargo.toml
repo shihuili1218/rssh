@@ -76,6 +76,11 @@ default = []
 cli = ["clap", "rpassword", "tempfile"]
 custom-protocol = ["tauri/custom-protocol"]
 
+# 测试专用依赖：让 `cargo test`（默认 feature 集）可以无条件用 tempfile，
+# 不必带 `--features cli`。release build 不受影响。
+[dev-dependencies]
+tempfile = "3"
+
 [[bin]]
 name = "rssh"
 path = "src/main.rs"

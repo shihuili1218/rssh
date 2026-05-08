@@ -409,3 +409,174 @@ pub async fn start_dynamic(
         connections,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+    use tokio::net::{TcpListener, TcpStream};
+
+    /// 起一对 loopback TCP socket：返回 (server_side, client_side)。
+    /// 端口 0 让内核分配，避免冲突。
+    async fn loopback_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let connect = tokio::spawn(async move { TcpStream::connect(addr).await.unwrap() });
+        let (server, _) = listener.accept().await.unwrap();
+        let client = connect.await.unwrap();
+        (server, client)
+    }
+
+    /// SOCKS5 greeting + 吃回 [0x05, 0x00]。封 helper 让每个测试只关心 connect req。
+    async fn negotiate_no_auth(client: &mut TcpStream) {
+        client.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
+        let mut reply = [0u8; 2];
+        client.read_exact(&mut reply).await.unwrap();
+        assert_eq!(reply, [0x05, 0x00]);
+    }
+
+    #[tokio::test]
+    async fn socks5_ipv4() {
+        let (mut server, mut client) = loopback_pair().await;
+        let driver = tokio::spawn(async move {
+            negotiate_no_auth(&mut client).await;
+            // CONNECT 1.2.3.4:80
+            client
+                .write_all(&[0x05, 0x01, 0x00, 0x01, 1, 2, 3, 4, 0x00, 0x50])
+                .await
+                .unwrap();
+            let mut reply = [0u8; 10];
+            client.read_exact(&mut reply).await.unwrap();
+            assert_eq!(&reply[..2], &[0x05, 0x00]);
+        });
+        let (host, port) = socks5_handshake(&mut server).await.unwrap();
+        assert_eq!(host, "1.2.3.4");
+        assert_eq!(port, 80);
+        driver.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn socks5_domain() {
+        let (mut server, mut client) = loopback_pair().await;
+        let domain = b"example.com";
+        let driver = tokio::spawn(async move {
+            negotiate_no_auth(&mut client).await;
+            let mut req = vec![0x05, 0x01, 0x00, 0x03, domain.len() as u8];
+            req.extend_from_slice(domain);
+            req.extend_from_slice(&443u16.to_be_bytes());
+            client.write_all(&req).await.unwrap();
+            let mut reply = [0u8; 10];
+            client.read_exact(&mut reply).await.unwrap();
+            assert_eq!(&reply[..2], &[0x05, 0x00]);
+        });
+        let (host, port) = socks5_handshake(&mut server).await.unwrap();
+        assert_eq!(host, "example.com");
+        assert_eq!(port, 443);
+        driver.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn socks5_ipv6() {
+        let (mut server, mut client) = loopback_pair().await;
+        // 2001:db8::1
+        let addr_bytes: [u8; 16] = [
+            0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01,
+        ];
+        let driver = tokio::spawn(async move {
+            negotiate_no_auth(&mut client).await;
+            let mut req = vec![0x05, 0x01, 0x00, 0x04];
+            req.extend_from_slice(&addr_bytes);
+            req.extend_from_slice(&8080u16.to_be_bytes());
+            client.write_all(&req).await.unwrap();
+            let mut reply = [0u8; 10];
+            client.read_exact(&mut reply).await.unwrap();
+            assert_eq!(&reply[..2], &[0x05, 0x00]);
+        });
+        let (host, port) = socks5_handshake(&mut server).await.unwrap();
+        // 实现里 IPv6 全 8 段拼接，不压缩
+        assert_eq!(host, "2001:db8:0:0:0:0:0:1");
+        assert_eq!(port, 8080);
+        driver.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn socks5_rejects_non_v5() {
+        let (mut server, mut client) = loopback_pair().await;
+        let driver = tokio::spawn(async move {
+            client.write_all(&[0x04, 0x01, 0x00]).await.unwrap();
+        });
+        let err = socks5_handshake(&mut server).await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        driver.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn socks5_rejects_bind_command() {
+        let (mut server, mut client) = loopback_pair().await;
+        let driver = tokio::spawn(async move {
+            negotiate_no_auth(&mut client).await;
+            // CMD=0x02 (BIND) — 不支持
+            client
+                .write_all(&[0x05, 0x02, 0x00, 0x01, 1, 2, 3, 4, 0x00, 0x50])
+                .await
+                .unwrap();
+            let mut reply = [0u8; 10];
+            client.read_exact(&mut reply).await.unwrap();
+            assert_eq!(reply[1], 0x07); // command not supported
+        });
+        let err = socks5_handshake(&mut server).await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+        driver.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn socks5_rejects_unknown_atyp() {
+        let (mut server, mut client) = loopback_pair().await;
+        let driver = tokio::spawn(async move {
+            negotiate_no_auth(&mut client).await;
+            // atyp=0xff 不存在 — 实现走 default 分支直接 Err
+            client.write_all(&[0x05, 0x01, 0x00, 0xff]).await.unwrap();
+        });
+        let err = socks5_handshake(&mut server).await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        driver.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn counted_copy_streams_and_counts() {
+        // tokio 没给 std::io::Cursor 实现 AsyncRead/Write，用官方 duplex。
+        let (a_read, mut a_write) = tokio::io::duplex(64);
+        let (mut b_read, b_write) = tokio::io::duplex(64);
+        let counter = Arc::new(AtomicU64::new(0));
+        let counter_clone = counter.clone();
+
+        let copier = tokio::spawn(async move {
+            let mut a = a_read;
+            let mut b = b_write;
+            counted_copy(&mut a, &mut b, &counter_clone).await
+        });
+
+        let payload = b"the quick brown fox jumps over the lazy dog";
+        a_write.write_all(payload).await.unwrap();
+        drop(a_write); // EOF → 退出 loop
+
+        let mut received = Vec::new();
+        b_read.read_to_end(&mut received).await.unwrap();
+        copier.await.unwrap().unwrap();
+
+        assert_eq!(received, payload);
+        assert_eq!(counter.load(Ordering::Relaxed), payload.len() as u64);
+    }
+
+    #[tokio::test]
+    async fn counted_copy_zero_bytes() {
+        let (a_read, a_write) = tokio::io::duplex(64);
+        let (_b_read, b_write) = tokio::io::duplex(64);
+        let counter = AtomicU64::new(0);
+        drop(a_write); // 立刻 EOF
+        let mut a = a_read;
+        let mut b = b_write;
+        counted_copy(&mut a, &mut b, &counter).await.unwrap();
+        assert_eq!(counter.load(Ordering::Relaxed), 0);
+    }
+}

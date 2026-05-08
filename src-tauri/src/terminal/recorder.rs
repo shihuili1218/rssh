@@ -77,3 +77,147 @@ impl Recorder {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    /// 读取 cast 文件并按行解析为 (header_json, event_jsons)。
+    fn parse_cast(path: &std::path::Path) -> (Value, Vec<Value>) {
+        let body = std::fs::read_to_string(path).unwrap();
+        let mut lines = body.lines().filter(|l| !l.is_empty());
+        let header: Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        let events: Vec<Value> = lines
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .collect();
+        (header, events)
+    }
+
+    /// 提取所有事件的 stdout 字符串拼接。
+    fn cat_outputs(events: &[Value]) -> String {
+        events
+            .iter()
+            .filter(|e| e[1] == "o")
+            .map(|e| e[2].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn header_has_v2_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.cast");
+        let r = Recorder::new(p.clone(), 80, 24).unwrap();
+        r.finish().unwrap();
+        let (header, events) = parse_cast(&p);
+        assert_eq!(header["version"], 2);
+        assert_eq!(header["width"], 80);
+        assert_eq!(header["height"], 24);
+        assert!(header["timestamp"].is_i64());
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn ascii_recorded_inline() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("b.cast");
+        let mut r = Recorder::new(p.clone(), 80, 24).unwrap();
+        r.record(b"hello").unwrap();
+        r.finish().unwrap();
+        let (_h, events) = parse_cast(&p);
+        assert_eq!(cat_outputs(&events), "hello");
+    }
+
+    #[test]
+    fn split_utf8_recovered_across_chunks() {
+        // "中" = E4 B8 AD（3 字节），分两次喂入。最终输出必须完整无损。
+        // 这个测试**只**看 finish 后的最终状态——BufWriter 中间不刷盘，
+        // record 之间读文件不可靠。
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("c.cast");
+        let mut r = Recorder::new(p.clone(), 80, 24).unwrap();
+        r.record(&[0xE4, 0xB8]).unwrap();
+        r.record(&[0xAD]).unwrap();
+        r.finish().unwrap();
+        let (_h, events) = parse_cast(&p);
+        assert_eq!(cat_outputs(&events), "中");
+    }
+
+    #[test]
+    fn split_utf8_count_distinguishes_buffering() {
+        // 如果实现没缓冲不完整 UTF-8，半中字会立刻 lossy → 多产一个事件。
+        // 缓冲版：半中字(无事件) + 余字(1 事件) + 'x'(1 事件) = 2 事件
+        // 不缓冲：半中字(1 lossy 事件) + 余字(1 事件) + 'x'(1 事件) = 3 事件
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("d.cast");
+        let mut r = Recorder::new(p.clone(), 80, 24).unwrap();
+        r.record(&[0xE4, 0xB8]).unwrap();
+        r.record(&[0xAD]).unwrap();
+        r.record(b"x").unwrap();
+        r.finish().unwrap();
+        let (_h, events) = parse_cast(&p);
+        assert_eq!(events.len(), 2, "events: {events:?}");
+        assert_eq!(cat_outputs(&events), "中x");
+    }
+
+    #[test]
+    fn ascii_then_split_utf8_split_then_complete() {
+        // 头有 ASCII + 尾不完整：split=valid_up_to() 让 ASCII 当场写出，
+        // 尾巴留到下次。最终拼回完整。
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("e.cast");
+        let mut r = Recorder::new(p.clone(), 80, 24).unwrap();
+        r.record(b"ab\xE4\xB8").unwrap();
+        r.record(&[0xAD]).unwrap();
+        r.finish().unwrap();
+        let (_h, events) = parse_cast(&p);
+        assert_eq!(cat_outputs(&events), "ab中");
+    }
+
+    #[test]
+    fn truly_invalid_byte_lossy_inline() {
+        // 0xFF 是真正非法 UTF-8 起始 — 不应该缓冲，立即 lossy 写出
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("e.cast");
+        let mut r = Recorder::new(p.clone(), 80, 24).unwrap();
+        r.record(&[0xFF, b'x']).unwrap();
+        r.finish().unwrap();
+        let (_h, events) = parse_cast(&p);
+        let out = cat_outputs(&events);
+        assert!(out.contains('\u{FFFD}'));
+        assert!(out.contains('x'));
+    }
+
+    #[test]
+    fn finish_flushes_residual_pending_lossy() {
+        // 只写半个多字节字符然后 finish — pending 必须 lossy 出来，不能丢
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("f.cast");
+        let mut r = Recorder::new(p.clone(), 80, 24).unwrap();
+        r.record(&[0xE4, 0xB8]).unwrap(); // 半个"中"
+        r.finish().unwrap();
+        let (_h, events) = parse_cast(&p);
+        assert!(!events.is_empty());
+        // lossy → U+FFFD
+        assert!(cat_outputs(&events).contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn event_timestamps_monotonic() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("g.cast");
+        let mut r = Recorder::new(p.clone(), 80, 24).unwrap();
+        r.record(b"first").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        r.record(b"second").unwrap();
+        r.finish().unwrap();
+        let (_h, events) = parse_cast(&p);
+        let stamps: Vec<f64> = events.iter().map(|e| e[0].as_f64().unwrap()).collect();
+        assert!(stamps.len() >= 2);
+        for w in stamps.windows(2) {
+            assert!(w[1] >= w[0], "timestamps not monotonic: {stamps:?}");
+        }
+        // 第一个事件时间应 ≥ 0；第二个应 ≥ 5ms
+        assert!(stamps[0] >= 0.0);
+    }
+}
