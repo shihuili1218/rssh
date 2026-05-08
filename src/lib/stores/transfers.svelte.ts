@@ -66,8 +66,21 @@ async function runTransfer(id: string): Promise<void> {
   const snap = find(id);
   if (!snap) return;
   let mySftpId: string | null = null;
-  // listener 必须先 attach 后再 invoke：避免后端 emit 早于前端 listen 时丢首批事件
-  const unlisten = await attachProgressListener(id);
+  // listener 必须先 attach 后再 invoke：避免后端 emit 早于前端 listen 时丢首批事件。
+  // 如果 listen() 本身就失败（事件系统没就绪等罕见情况），把 transfer 标 failed
+  // 并退出 —— 不能让 attachProgressListener 抛出未捕获 rejection（caller 只 void 了）。
+  let unlisten: UnlistenFn;
+  try {
+    unlisten = await attachProgressListener(id);
+  } catch (e) {
+    const cur = find(id);
+    if (cur) {
+      cur.status = "failed";
+      cur.error = errMsg(e);
+      cur.finishedAt = Date.now();
+    }
+    return;
+  }
   try {
     mySftpId = await invoke<string>("sftp_connect_session", { sessionId: snap.sessionId });
     if (snap.kind === "download") {

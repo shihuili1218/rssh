@@ -1,6 +1,6 @@
 //! `rssh add <profile|cred|fwd>` —— 交互式新增。
 
-use rssh_lib::error::AppResult;
+use rssh_lib::error::{AppError, AppResult};
 use rssh_lib::models::{Credential, CredentialType, Forward, ForwardType, Profile};
 
 use crate::ctx::CliCtx;
@@ -14,10 +14,12 @@ pub fn cmd_add(conn: &CliCtx, kind: &str) -> AppResult<()> {
         "profile" => add_profile(conn),
         "cred" | "creds" => add_credential(conn),
         "fwd" => add_forward(conn),
-        _ => {
-            eprintln!("Unknown kind: {kind}. Use: profile, cred, fwd");
-            Ok(())
-        }
+        // 返回 Err 让 main 走 exit(1)；返回 Ok = 退出码 0 把无效输入伪装成成功，
+        // 脚本调用看不出问题。
+        _ => Err(AppError::config(
+            "cli_unknown_kind",
+            serde_json::json!({ "kind": kind, "valid": "profile, cred, fwd" }),
+        )),
     }
 }
 
@@ -127,18 +129,26 @@ fn add_forward(conn: &CliCtx) -> AppResult<()> {
 
     let profiles = rssh_lib::db::profile::list(conn)?;
     if profiles.is_empty() {
-        eprintln!("No profiles. Create one first with 'rssh add profile'.");
-        return Ok(());
+        return Err(AppError::config(
+            "cli_no_profiles",
+            serde_json::json!({}),
+        ));
     }
     println!("Profile:");
     for (i, p) in profiles.iter().enumerate() {
         println!("  {} - {} ({})", i + 1, p.name, p.host);
     }
-    let pidx = prompt("Profile #: ").parse::<usize>().unwrap_or(0);
+    // 必须真选中一项 —— wrapping_sub(0) 会绕成 usize::MAX，再 unwrap_or_default
+    // 写入空 profile_id，DB 里残留孤儿 forward。直接 Err 让 main 输出错误码。
+    let pidx = prompt("Profile #: ")
+        .parse::<usize>()
+        .ok()
+        .and_then(|n| n.checked_sub(1))
+        .ok_or_else(|| AppError::config("cli_invalid_profile_index", serde_json::json!({})))?;
     let profile_id = profiles
-        .get(pidx.wrapping_sub(1))
+        .get(pidx)
         .map(|p| p.id.clone())
-        .unwrap_or_default();
+        .ok_or_else(|| AppError::config("cli_invalid_profile_index", serde_json::json!({})))?;
 
     let f = Forward {
         id: uuid::Uuid::new_v4().to_string(),

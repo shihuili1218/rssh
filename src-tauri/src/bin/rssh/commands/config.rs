@@ -4,7 +4,7 @@
 //! 共用 `rssh_lib::sync::config` —— GUI 同一份逻辑。
 
 use clap::Subcommand;
-use rssh_lib::error::AppResult;
+use rssh_lib::error::{AppError, AppResult};
 use rssh_lib::secret::{cred_secret_key, setting_key, SecretStore};
 
 use crate::ctx::CliCtx;
@@ -102,8 +102,7 @@ fn config_export(conn: &CliCtx, file: &str) -> AppResult<()> {
     let pw = read_password("Encryption password: ");
     let pw2 = read_password("Confirm password: ");
     if pw != pw2 {
-        eprintln!("Passwords do not match.");
-        std::process::exit(1);
+        return Err(AppError::config("cli_password_mismatch", serde_json::json!({})));
     }
     let encrypted = rssh_lib::crypto::encrypt(&json, &pw)?;
     std::fs::write(file, &encrypted)?;

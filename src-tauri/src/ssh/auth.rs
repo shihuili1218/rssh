@@ -163,7 +163,23 @@ pub async fn authenticate(
                 .map_err(|e| AppError::ssh("ssh_auth_failed", json!({ "err": e.to_string() })))?;
             check_auth_result(result)
         }
-        CredentialType::Interactive => Ok(()),
+        CredentialType::Interactive => {
+            // Connect 路径在调本函数前已分流到 authenticate_interactive；
+            // 没分流就走到这里的全是后台路径（forward / SFTP），它们传 ctx=None
+            // 也没法弹 prompt —— 必须报错，不能 silent Ok 让 caller 误以为登成功。
+            // 有 ctx 时仍然委派给 authenticate_interactive，让"统一通过 authenticate()
+            // 入口"成立。
+            let ctx = ctx.ok_or_else(|| {
+                AppError::ssh("ssh_interactive_requires_terminal", json!({}))
+            })?;
+            authenticate_interactive(
+                handle,
+                credential.username,
+                ctx.app.clone(),
+                ctx.tab_id.clone(),
+            )
+            .await
+        }
     }
 }
 
@@ -453,6 +469,13 @@ pub async fn authenticate_interactive(
                     .iter()
                     .map(|p| serde_json::json!({ "prompt": p.prompt, "echo": p.echo }))
                     .collect();
+
+                // 必须先注册 sender 再 emit。否则前端响应快到能在 insert 之前
+                // 调 ssh_auth_respond，找不到 waiter → 响应被丢，rx 永远 hang。
+                {
+                    let state = app.state::<AppState>();
+                    locked(&state.auth_waiters)?.insert(tab_id.clone(), tx);
+                }
                 let _ = app.emit(
                     &format!("ssh:auth_prompt:{tab_id}"),
                     serde_json::json!({
@@ -461,11 +484,6 @@ pub async fn authenticate_interactive(
                         "prompts": prompt_data,
                     }),
                 );
-
-                {
-                    let state = app.state::<AppState>();
-                    locked(&state.auth_waiters)?.insert(tab_id.clone(), tx);
-                }
 
                 let responses = rx
                     .await

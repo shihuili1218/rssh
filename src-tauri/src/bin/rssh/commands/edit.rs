@@ -1,6 +1,6 @@
 //! `rssh edit <profile|cred|fwd> <name>` —— 交互式修改。
 
-use rssh_lib::error::AppResult;
+use rssh_lib::error::{AppError, AppResult};
 use rssh_lib::models::CredentialType;
 
 use crate::ctx::CliCtx;
@@ -14,10 +14,10 @@ pub fn cmd_edit(conn: &CliCtx, kind: &str, name: &str) -> AppResult<()> {
         "profile" => edit_profile(conn, name),
         "cred" | "creds" => edit_credential(conn, name),
         "fwd" => edit_forward(conn, name),
-        _ => {
-            eprintln!("Unknown kind: {kind}");
-            Ok(())
-        }
+        _ => Err(AppError::config(
+            "cli_unknown_kind",
+            serde_json::json!({ "kind": kind, "valid": "profile, cred, fwd" }),
+        )),
     }
 }
 
@@ -100,7 +100,7 @@ fn edit_credential(conn: &CliCtx, name: &str) -> AppResult<()> {
         .unwrap_or_else(|| die(format!("Credential '{name}' not found")));
 
     // 把 SecretStore 里的 secret 灌进当前值，便于后面"保留"判定
-    let mut updated = load_cred_secrets(conn, c.clone());
+    let mut updated = load_cred_secrets(conn, c.clone())?;
     updated.name = prompt_default("Name", &c.name);
     updated.username = prompt_default("Username", &c.username);
 

@@ -1,6 +1,6 @@
 //! `rssh rm <profile|cred|fwd> <name>` —— 带二次确认的删除。
 
-use rssh_lib::error::AppResult;
+use rssh_lib::error::{AppError, AppResult};
 use rssh_lib::secret::cred_secret_key;
 
 use crate::ctx::CliCtx;
@@ -36,7 +36,12 @@ pub fn cmd_rm(conn: &CliCtx, kind: &str, name: &str) -> AppResult<()> {
             rssh_lib::db::forward::delete(conn, &id)?;
             println!("Deleted.");
         }
-        _ => eprintln!("Unknown kind: {kind}"),
+        _ => {
+            return Err(AppError::config(
+                "cli_unknown_kind",
+                serde_json::json!({ "kind": kind, "valid": "profile, cred, fwd" }),
+            ))
+        }
     }
     Ok(())
 }

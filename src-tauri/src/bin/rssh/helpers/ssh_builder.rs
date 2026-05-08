@@ -30,12 +30,14 @@ pub fn build_ssh_command(
     if !chain.is_empty() {
         let mut hops: Vec<String> = Vec::with_capacity(chain.len());
         for hop in &chain {
-            let bc = hop
-                .credential_id
-                .as_deref()
-                .filter(|id| !id.is_empty())
-                .and_then(|id| rssh_lib::db::credential::get(conn, id).ok())
-                .map(|c| load_cred_secrets(conn, c));
+            // 同 cmd_open_ssh：credential_id 引用 broken 必须报错，不要静默降级。
+            let bc = match hop.credential_id.as_deref().filter(|id| !id.is_empty()) {
+                Some(id) => Some(load_cred_secrets(
+                    conn,
+                    rssh_lib::db::credential::get(conn, id)?,
+                )?),
+                None => None,
+            };
             let mut s = String::new();
             if let Some(ref c) = bc {
                 s.push_str(&c.username);

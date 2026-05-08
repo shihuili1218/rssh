@@ -9,8 +9,11 @@ use crate::error::{locked, AppError, AppResult};
 /// 子进程持有者：保证 PtyHandle 最后一份 clone 被 drop 时（tab 关闭 / session 结束），
 /// 显式 kill + wait 子 shell。否则 Box<dyn Child> 在 spawn() 返回后立刻 drop，
 /// 子进程退出后无人 reap，留 zombie 占 PID。
+/// `Box<dyn Child + Send>` 不带 `Sync`：portable_pty 的 Child 实现普遍只是
+/// Send。`Mutex<T>` 自身在 `T: Send` 时即是 Sync，无需 inner 也 Sync——
+/// 加多余的 Sync bound 在某些平台上会编不过。
 struct ChildReaper {
-    child: Mutex<Option<Box<dyn Child + Send + Sync>>>,
+    child: Mutex<Option<Box<dyn Child + Send>>>,
 }
 
 impl Drop for ChildReaper {

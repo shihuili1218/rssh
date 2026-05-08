@@ -57,15 +57,13 @@ pub fn find_id_by_name<T: Named>(items: &[T], name: &str, kind_label: &str) -> A
 // ─── Credential helpers ————————————————————————————————————
 
 /// 从 SecretStore 把 secret 灌到 Credential 上。
-pub fn load_cred_secrets(conn: &CliCtx, mut c: Credential) -> Credential {
+/// keychain 后端报错（系统锁定 / 权限）会传播出来——把它当成"没 secret"会
+/// 让 ssh 走错认证路径，且 update 写回时还可能误删一条尚有效的 secret。
+pub fn load_cred_secrets(conn: &CliCtx, mut c: Credential) -> AppResult<Credential> {
     if !c.id.is_empty() {
-        c.secret = conn
-            .secret_store()
-            .get(&cred_secret_key(&c.id))
-            .ok()
-            .flatten();
+        c.secret = conn.secret_store().get(&cred_secret_key(&c.id))?;
     }
-    c
+    Ok(c)
 }
 
 /// 把 Credential 完整写入（DB INSERT + SecretStore secret）。
