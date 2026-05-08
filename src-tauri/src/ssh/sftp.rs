@@ -248,8 +248,8 @@ impl SftpHandle {
             transferred += n as u64;
 
             let _ = app.emit(
-                "sftp:progress",
-                serde_json::json!({ "id": transfer_id, "transferred": transferred, "total": total }),
+                &format!("sftp:progress:{transfer_id}"),
+                serde_json::json!({ "transferred": transferred, "total": total }),
             );
         }
 
@@ -302,8 +302,8 @@ impl SftpHandle {
             transferred += n as u64;
 
             let _ = app.emit(
-                "sftp:progress",
-                serde_json::json!({ "id": transfer_id, "transferred": transferred, "total": total }),
+                &format!("sftp:progress:{transfer_id}"),
+                serde_json::json!({ "transferred": transferred, "total": total }),
             );
         }
 

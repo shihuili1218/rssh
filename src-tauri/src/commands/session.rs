@@ -169,9 +169,22 @@ pub async fn ssh_resize(
     get_session(&state, &session_id)?.resize(cols, rows)
 }
 
+/// `tab_id`（== log_session_id）选传。已建连后三张 waiters 理应空，传 tab_id
+/// 只作防御性 belt-and-suspenders 清理；漏传不致命。
 #[tauri::command]
-pub async fn ssh_disconnect(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
+pub async fn ssh_disconnect(
+    state: State<'_, AppState>,
+    session_id: String,
+    tab_id: Option<String>,
+) -> AppResult<()> {
     crate::commands::lifecycle::unregister_window_session(&state, &session_id);
+
+    // 0) 防御性清理三张 waiters，避免任何遗留 sender 永挂。
+    if let Some(tid) = tab_id.as_deref() {
+        let _ = locked(&state.auth_waiters).map(|mut m| m.remove(tid));
+        let _ = locked(&state.passphrase_waiters).map(|mut m| m.remove(tid));
+        let _ = locked(&state.host_key_waiters).map(|mut m| m.remove(tid));
+    }
 
     // 1) 先把挂在这条 SSH 上的 SFTP children 清掉。Drop Arc 让传输任务下次
     //    访问 channel 时立刻 IO error 退出 —— 不依赖 frontend 的 finally。
@@ -185,6 +198,15 @@ pub async fn ssh_disconnect(state: State<'_, AppState>, session_id: String) -> A
         .remove(&session_id)
         .ok_or_else(|| AppError::not_found("session_not_found", json!({})))?;
     session.force_disconnect();
+    Ok(())
+}
+
+/// 用户在 keyboard-interactive prompt 前关 tab 时调用，drop sender 让
+/// authenticate_interactive 立即报错退出。与 ssh_passphrase_cancel /
+/// ssh_host_key_cancel 对称。
+#[tauri::command]
+pub async fn ssh_auth_cancel(state: State<'_, AppState>, tab_id: String) -> AppResult<()> {
+    locked(&state.auth_waiters)?.remove(&tab_id);
     Ok(())
 }
 

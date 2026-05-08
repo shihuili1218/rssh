@@ -51,6 +51,8 @@ base64 = "0.22"
 argon2 = "0.5"
 chacha20poly1305 = "0.10"
 getrandom = "0.2"
+# 进程内 passphrase 缓存的内存清零保护（drop 时擦写底层字节）
+zeroize = { version = "1", features = ["derive"] }
 regex = "1"
 futures-util = "0.3"
 
@@ -89,5 +91,5 @@ path = "src/main.rs"
 
 [[bin]]
 name = "rssh-cli"
-path = "src/bin/rssh.rs"
+path = "src/bin/rssh/main.rs"
 required-features = ["cli"]

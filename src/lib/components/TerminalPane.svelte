@@ -689,12 +689,15 @@
         reconnectDisposable?.dispose();
         // 关 tab 时若停在 prompt 阶段，主动取消让后端 connect 流程跳出，
         // 否则 ssh_connect 会在 worker 线程上挂着等用户输入。
+        // 三类 prompt（auth / passphrase / host_key）都无脑发 cancel；后端 remove
+        // 不存在的 key 是 no-op，幂等。
         if (passphraseInputDisposable) {
             invoke("ssh_passphrase_cancel", { tabId }).catch(() => {});
         }
         if (hostKeyInputDisposable) {
             invoke("ssh_host_key_cancel", { tabId }).catch(() => {});
         }
+        invoke("ssh_auth_cancel", { tabId }).catch(() => {});
         passphraseInputDisposable?.dispose();
         hostKeyInputDisposable?.dispose();
         resizeObs?.disconnect();
@@ -705,8 +708,12 @@
         app.unregisterTerminalControls(tabId);
         app.unregisterSession(tabId);
         if (sessionId && !disconnected) {
-            const cmd = isLocal ? "pty_close" : "ssh_disconnect";
-            invoke(cmd, {sessionId}).catch(() => {});
+            if (isLocal) {
+                invoke("pty_close", { sessionId }).catch(() => {});
+            } else {
+                // 把 tabId 一并传给后端做防御性 waiters 清理；漏传不致命。
+                invoke("ssh_disconnect", { sessionId, tabId }).catch(() => {});
+            }
         }
         terminal?.dispose();
     });

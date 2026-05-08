@@ -9,18 +9,28 @@ use crate::models::{Credential, CredentialType};
 use crate::ssh::sftp::{RemoteEntry, SftpHandle};
 use crate::state::AppState;
 
-/// 注册一个 cancel flag 给 transfer_id；返回需要传给 streaming 函数的 Arc。
-/// 调用方负责在结束（成功 / 失败 / 取消）时 unregister，否则会泄漏到下次重启。
-fn register_cancel_flag(state: &State<'_, AppState>, transfer_id: &str) -> AppResult<Arc<AtomicBool>> {
-    let flag = Arc::new(AtomicBool::new(false));
-    locked(&state.transfer_cancels)?.insert(transfer_id.to_string(), flag.clone());
-    Ok(flag)
+/// RAII：注册 cancel flag 并在 drop 时自动 unregister，无论 streaming 正常返回、
+/// 早 `?`、还是 panic。替代旧的手写 register/unregister 配对。
+struct CancelGuard<'a> {
+    state: &'a AppState,
+    transfer_id: String,
 }
 
-fn unregister_cancel_flag(state: &State<'_, AppState>, transfer_id: &str) {
-    if let Ok(mut m) = locked(&state.transfer_cancels) {
-        m.remove(transfer_id);
-    };
+impl<'a> CancelGuard<'a> {
+    /// 注册 flag。返回 (guard, flag)：guard 控生命周期，flag 喂给 streaming 函数。
+    fn register(state: &'a AppState, transfer_id: String) -> AppResult<(Self, Arc<AtomicBool>)> {
+        let flag = Arc::new(AtomicBool::new(false));
+        locked(&state.transfer_cancels)?.insert(transfer_id.clone(), flag.clone());
+        Ok((Self { state, transfer_id }, flag))
+    }
+}
+
+impl Drop for CancelGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut m) = locked(&self.state.transfer_cancels) {
+            m.remove(&self.transfer_id);
+        }
+    }
 }
 
 #[tauri::command]
@@ -167,12 +177,9 @@ pub async fn sftp_save_file(
 
     let sftp = get_sftp(&state, &sftp_id)?;
     let transfer_id = uuid::Uuid::new_v4().to_string();
-    let cancel = register_cancel_flag(&state, &transfer_id)?;
-    let result = sftp
-        .download_streaming(&remote_path, &local, &app, &transfer_id, cancel)
-        .await;
-    unregister_cancel_flag(&state, &transfer_id);
-    result?;
+    let (_guard, cancel) = CancelGuard::register(&state, transfer_id.clone())?;
+    sftp.download_streaming(&remote_path, &local, &app, &transfer_id, cancel)
+        .await?;
     Ok(Some(local.display().to_string()))
 }
 
@@ -202,12 +209,9 @@ pub async fn sftp_pick_and_upload(
 
     let sftp = get_sftp(&state, &sftp_id)?;
     let transfer_id = uuid::Uuid::new_v4().to_string();
-    let cancel = register_cancel_flag(&state, &transfer_id)?;
-    let result = sftp
-        .upload_streaming(&local, &remote_path, &app, &transfer_id, cancel)
-        .await;
-    unregister_cancel_flag(&state, &transfer_id);
-    result?;
+    let (_guard, cancel) = CancelGuard::register(&state, transfer_id.clone())?;
+    sftp.upload_streaming(&local, &remote_path, &app, &transfer_id, cancel)
+        .await?;
     Ok(Some(name))
 }
 
@@ -231,7 +235,8 @@ pub async fn sftp_pick_open_path() -> AppResult<Option<String>> {
 }
 
 /// Stream-download to a caller-supplied local path. transfer_id is used as the
-/// `sftp:progress` event id so the frontend can multiplex concurrent transfers.
+/// `sftp:progress:{transfer_id}` event suffix (R1) so the frontend listens
+/// per-transfer instead of multiplexing one global stream.
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn sftp_download_to(
@@ -244,12 +249,10 @@ pub async fn sftp_download_to(
 ) -> AppResult<()> {
     let sftp = get_sftp(&state, &sftp_id)?;
     let local = std::path::PathBuf::from(&local_path);
-    let cancel = register_cancel_flag(&state, &transfer_id)?;
-    let result = sftp
-        .download_streaming(&remote_path, &local, &app, &transfer_id, cancel)
-        .await;
-    unregister_cancel_flag(&state, &transfer_id);
-    result.map(|_| ())
+    let (_guard, cancel) = CancelGuard::register(&state, transfer_id.clone())?;
+    sftp.download_streaming(&remote_path, &local, &app, &transfer_id, cancel)
+        .await
+        .map(|_| ())
 }
 
 /// Stream-upload from a caller-supplied local path. transfer_id mirrors above.
@@ -265,12 +268,10 @@ pub async fn sftp_upload_from(
 ) -> AppResult<()> {
     let sftp = get_sftp(&state, &sftp_id)?;
     let local = std::path::PathBuf::from(&local_path);
-    let cancel = register_cancel_flag(&state, &transfer_id)?;
-    let result = sftp
-        .upload_streaming(&local, &remote_path, &app, &transfer_id, cancel)
-        .await;
-    unregister_cancel_flag(&state, &transfer_id);
-    result.map(|_| ())
+    let (_guard, cancel) = CancelGuard::register(&state, transfer_id.clone())?;
+    sftp.upload_streaming(&local, &remote_path, &app, &transfer_id, cancel)
+        .await
+        .map(|_| ())
 }
 
 /// 用户在传输页点"取消"调用：把 transfer_id 对应的 cancel flag 置 1，

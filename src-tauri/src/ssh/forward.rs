@@ -7,7 +7,7 @@ use serde_json::json;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::error::{AppError, AppResult};
+use crate::error::{locked, AppError, AppResult};
 use crate::models::Profile;
 use crate::models::{Credential, Forward};
 use crate::ssh::client::{self, LogFn};
@@ -169,7 +169,7 @@ pub async fn start_remote(
     // Register a channel to receive forwarded connections from the Handler
     let (ch_tx, mut ch_rx) = tokio::sync::mpsc::unbounded_channel();
     {
-        let mut guard = fwd_sender.lock().unwrap();
+        let mut guard = locked(&fwd_sender)?;
         *guard = Some(ch_tx);
     }
 

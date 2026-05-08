@@ -32,8 +32,9 @@ pub struct AppState {
     /// 用户在 xterm 中输入 yes / no / 指纹，由 ssh_host_key_respond 把字符串送回 check_server_key。
     pub host_key_waiters: Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>,
     /// 进程内 passphrase 缓存：cache_key（credential_id 或文件路径）→ passphrase。
-    /// 进程退出即丢，绝不落盘。
-    pub passphrase_cache: Mutex<HashMap<String, String>>,
+    /// 进程退出即丢，绝不落盘。值用 `Zeroizing<String>` 包裹，drop 时擦写底层字节，
+    /// 减少内存 dump / swap 中残留明文的窗口。
+    pub passphrase_cache: Mutex<HashMap<String, zeroize::Zeroizing<String>>>,
     /// window_label → session IDs owned by that window (for per-window cleanup)
     pub window_sessions: Mutex<HashMap<String, HashSet<String>>>,
     /// AI 排障会话表（ai_session_id → DiagnoseSession）

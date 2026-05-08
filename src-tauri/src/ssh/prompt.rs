@@ -1,0 +1,84 @@
+//! 终端内 oneshot 交互：xterm 弹 prompt → 用户输入 → 后端 await。
+//!
+//! 三类 prompt（passphrase / host_key / kbd-interactive）共享同一套
+//! "注册 sender → emit → await rx" 模板；差异只在 waiters map / 事件名 /
+//! 取消错误码 / payload。
+//!
+//! `AuthCtx` 是终端可达性凭证：有 ctx 才能与具体的 tab 通信。SFTP / forward
+//! 等无前端的子流程用 `None`，遇加密私钥 / 未知主机时直接报错。
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use serde_json::json;
+use tauri::Emitter;
+use tokio::sync::oneshot;
+
+use crate::error::{locked, AppError, AppResult};
+use crate::state::AppState;
+
+#[derive(Clone)]
+pub struct AuthCtx {
+    pub app: tauri::AppHandle,
+    pub tab_id: String,
+}
+
+/// 通用终端 prompt：注册 oneshot sender 到指定 waiters map，emit 事件，等用户回应。
+/// passphrase / host_key 等 xterm 内交互都走这条路；差异只在 waiters / 事件名 / payload。
+pub(crate) async fn prompt_oneshot(
+    waiters: &Mutex<HashMap<String, oneshot::Sender<String>>>,
+    app: &tauri::AppHandle,
+    tab_id: &str,
+    event_prefix: &str,
+    payload: serde_json::Value,
+    cancel_code: &'static str,
+) -> AppResult<String> {
+    let (tx, rx) = oneshot::channel::<String>();
+    {
+        let mut w = locked(waiters)?;
+        // dialogue 串行：上一个 prompt 不到 ok / cancel 不会发起下一个。
+        // 已存在 = 上层并发设计被破坏；refuse 比 silent overwrite 更安全（旧
+        // receiver 永远 hang，资源泄漏）。
+        if w.contains_key(tab_id) {
+            return Err(AppError::other(
+                "ssh_prompt_already_pending",
+                json!({ "tab_id": tab_id, "channel": event_prefix }),
+            ));
+        }
+        w.insert(tab_id.to_string(), tx);
+    }
+    app.emit(&format!("{event_prefix}:{tab_id}"), payload)
+        .map_err(|e| AppError::other("emit_failed", json!({ "channel": event_prefix, "err": e.to_string() })))?;
+    rx.await.map_err(|_| AppError::ssh(cancel_code, json!({})))
+}
+
+/// 向终端弹一次 passphrase 提示，等用户输完回车。
+pub(crate) async fn prompt_passphrase(ctx: &AuthCtx, prompt: &str) -> AppResult<String> {
+    use tauri::Manager;
+    let state = ctx.app.state::<AppState>();
+    prompt_oneshot(
+        &state.passphrase_waiters,
+        &ctx.app,
+        &ctx.tab_id,
+        "ssh:passphrase_prompt",
+        json!({ "prompt": prompt }),
+        "ssh_user_cancelled_passphrase",
+    )
+    .await
+}
+
+/// 向终端弹一次主机密钥 TOFU 确认，等用户输入 yes / no / 指纹。
+/// 调用方负责按返回字符串决定是否信任。
+pub(crate) async fn prompt_host_key(ctx: &AuthCtx, banner: &str) -> AppResult<String> {
+    use tauri::Manager;
+    let state = ctx.app.state::<AppState>();
+    prompt_oneshot(
+        &state.host_key_waiters,
+        &ctx.app,
+        &ctx.tab_id,
+        "ssh:host_key_prompt",
+        json!({ "banner": banner }),
+        "ssh_user_cancelled_hostkey",
+    )
+    .await
+}

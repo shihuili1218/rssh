@@ -63,14 +63,15 @@ pub fn update(db: &Db, g: &Group) -> AppResult<()> {
 }
 
 pub fn delete(db: &Db, id: &str) -> AppResult<()> {
-    let conn = db.lock()?;
-    conn.execute("DELETE FROM groups WHERE id = ?1", params![id])?;
-    // Clear group_id references in profiles
-    conn.execute(
-        "UPDATE profiles SET group_id = NULL WHERE group_id = ?1",
-        params![id],
-    )?;
-    Ok(())
+    // 删 group + 清 profiles.group_id 必须原子。中途崩 = 残留 profile 指向已删 group。
+    db.with_transaction(|tx| {
+        tx.execute("DELETE FROM groups WHERE id = ?1", params![id])?;
+        tx.execute(
+            "UPDATE profiles SET group_id = NULL WHERE group_id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    })
 }
 
 pub fn clear_all_tx(conn: &rusqlite::Connection) -> AppResult<()> {

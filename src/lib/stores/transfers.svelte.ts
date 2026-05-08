@@ -4,6 +4,9 @@
  * Each transfer opens its own sftp subsystem on a live SSH session, runs to
  * completion, then closes. Closing the browser does not affect anything here:
  * we never share its sftp_id.
+ *
+ * 进度事件遵守 AGENT.md R1：`sftp:progress:{transfer_id}` 三段式。每条 transfer
+ * 起一个 listener、跑完即解绑——避免一个全局 listener 被全部 transfer 喂事件。
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -31,27 +34,19 @@ export interface Transfer {
 }
 
 let _list = $state<Transfer[]>([]);
-let _unlisten: UnlistenFn | null = null;
-let _initPromise: Promise<void> | null = null;
 
 interface ProgressPayload {
-  id: string;
   transferred: number;
   total: number;
 }
 
-async function ensureListener(): Promise<void> {
-  if (_unlisten) return;
-  if (_initPromise) return _initPromise;
-  _initPromise = (async () => {
-    _unlisten = await listen<ProgressPayload>("sftp:progress", (ev) => {
-      const t = _list.find((x) => x.id === ev.payload.id);
-      if (!t) return;
-      t.transferred = ev.payload.transferred;
-      t.total = ev.payload.total;
-    });
-  })();
-  return _initPromise;
+async function attachProgressListener(id: string): Promise<UnlistenFn> {
+  return await listen<ProgressPayload>(`sftp:progress:${id}`, (ev) => {
+    const t = _list.find((x) => x.id === id);
+    if (!t) return;
+    t.transferred = ev.payload.transferred;
+    t.total = ev.payload.total;
+  });
 }
 
 export function list(): Transfer[] {
@@ -71,6 +66,8 @@ async function runTransfer(id: string): Promise<void> {
   const snap = find(id);
   if (!snap) return;
   let mySftpId: string | null = null;
+  // listener 必须先 attach 后再 invoke：避免后端 emit 早于前端 listen 时丢首批事件
+  const unlisten = await attachProgressListener(id);
   try {
     mySftpId = await invoke<string>("sftp_connect_session", { sessionId: snap.sessionId });
     if (snap.kind === "download") {
@@ -104,6 +101,7 @@ async function runTransfer(id: string): Promise<void> {
       cur.finishedAt = Date.now();
     }
   } finally {
+    unlisten();
     if (mySftpId) invoke("sftp_close", { sftpId: mySftpId }).catch(() => {});
   }
 }
@@ -114,7 +112,6 @@ export async function startDownload(args: {
   localPath: string;
   sizeHint?: number;
 }): Promise<string> {
-  await ensureListener();
   const id = crypto.randomUUID();
   const t: Transfer = {
     id,
@@ -137,7 +134,6 @@ export async function startUpload(args: {
   localPath: string;
   remotePath: string;
 }): Promise<string> {
-  await ensureListener();
   const id = crypto.randomUUID();
   const t: Transfer = {
     id,
@@ -158,7 +154,6 @@ export async function startUpload(args: {
 export async function retry(id: string): Promise<void> {
   const t = find(id);
   if (!t || t.status === "running") return;
-  await ensureListener();
   t.status = "running";
   t.error = undefined;
   t.transferred = 0;
