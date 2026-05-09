@@ -42,6 +42,9 @@ export interface FoldStore extends IDisposable {
   fold(blockId: number): boolean;
   unfold(blockId: number): boolean;
   isFolded(blockId: number): boolean;
+  /** O(1) 取 fold 记录。derive blockRects 等高频路径必走这条，
+   *  避免每帧都对 folds 数组做线性 find。 */
+  getFold(blockId: number): Fold | undefined;
   /** 折叠状态变化时通知（fold/unfold/scrollback 失效）。 */
   onChange(fn: () => void): IDisposable;
 }
@@ -209,6 +212,9 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     unfold,
     isFolded(blockId) {
       return folds.has(blockId);
+    },
+    getFold(blockId) {
+      return folds.get(blockId);
     },
     onChange(fn) {
       listeners.add(fn);

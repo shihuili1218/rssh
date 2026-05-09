@@ -217,7 +217,7 @@
             const top = Math.max(startLine, viewportY);
             const bot = Math.min(endLine, viewportY + rows - 1);
             if (top > bot) continue;
-            const fold = folded ? foldStore?.folds.find((f) => f.blockId === b.id) : undefined;
+            const fold = folded ? foldStore?.getFold(b.id) : undefined;
             out.push({
                 id: b.id,
                 y: (top - viewportY) * rowHeight,
@@ -900,16 +900,16 @@
         pointer-events: none;
         overflow: visible;
     }
-    /* 折叠角标：行末右侧贴一个灰字 "⋯ N lines"，提示这一行下面有内容被折掉。
-       pointer-events: none 让 xterm 本身的选中、链接、滚动手势全部穿透。 */
+    /* 折叠角标：行末右侧贴一个灰字 "⋯ N lines"。
+       pointer-events: none 让 xterm 本身的选中、链接、滚动手势全部穿透。
+       transform: translateZ(0) 让浏览器把它单独 promote 成合成层，
+       避免每次 top 变化都触发 paint 而不只是 transform。 */
     .fold-label {
         position: absolute;
         right: 8px;
-        height: 0; /* 行高靠 line-height 撑出，避免遮住下一行 */
-        line-height: 1;
-        padding: 2px 6px;
-        margin-top: 2px;
         font-size: 11px;
+        line-height: 1.4;
+        padding: 0 6px;
         color: var(--text-dim, #888);
         background: var(--surface, rgba(0, 0, 0, 0.4));
         border-radius: 3px;
@@ -917,6 +917,8 @@
         white-space: nowrap;
         opacity: 0.85;
         z-index: 5;
+        transform: translateZ(0);
+        will-change: top;
     }
 
     .block-hit {
