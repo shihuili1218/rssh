@@ -23,10 +23,6 @@ import type { CommandBlock } from "./command-blocks";
 import { resolveBlockRanges } from "./block-content";
 
 export interface RenderOptions {
-  /** 每块上下额外的内边距（行数）。默认 1。 */
-  blockPadRows?: number;
-  /** 块之间的间隔行数。默认 1。 */
-  blockGapRows?: number;
   /** 彩色竖线宽度 px。默认 4。 */
   barWidth?: number;
   /** 竖线和文字之间的间距 px。默认 10。 */
@@ -233,8 +229,6 @@ async function renderRowsToBlob(
   const outerPad = opts.outerPad ?? 14;
   const barWidth = opts.barWidth ?? 4;
   const gutter = opts.gutter ?? 10;
-  const blockPadRows = opts.blockPadRows ?? 1;
-  const blockGapRows = opts.blockGapRows ?? 1;
 
   // 测量 cell 宽度（'M' 在等宽字体下是标准基准）
   const measureCanvas = document.createElement("canvas");
@@ -253,14 +247,9 @@ async function renderRowsToBlob(
   if (maxCells === 0) maxCells = 1;
 
   const groups = groupRows(rows);
-  const numBlocks = groups.length;
-  const totalContentRows =
-    rows.length +
-    numBlocks * blockPadRows * 2 +
-    Math.max(0, numBlocks - 1) * blockGapRows;
 
   const canvasW = outerPad * 2 + barWidth + gutter + maxCells * cellWidth;
-  const canvasH = outerPad * 2 + totalContentRows * lineHeight;
+  const canvasH = outerPad * 2 + rows.length * lineHeight;
 
   const dpr = (typeof window !== "undefined" && window.devicePixelRatio) || 1;
   const canvas = document.createElement("canvas");
@@ -276,31 +265,22 @@ async function renderRowsToBlob(
 
   ctx.textBaseline = "top";
 
-  let cursorRow = 0;
-  for (let bi = 0; bi < groups.length; bi++) {
-    const grp = groups[bi];
-    const blockTopRow = cursorRow;                 // 块顶（含上 pad）
-    const textStartRow = blockTopRow + blockPadRows;
-    const blockBottomRow = textStartRow + grp.rowCount + blockPadRows; // exclusive
-
-    // 彩色竖线（覆盖 block 整高，跟文字一起留 outerPad）
+  // bar 紧贴文本：覆盖块文本 N 行的精确 Y 范围，无上下 pad、块间无 gap。
+  // 不同色 bar 直接相邻——颜色已经是分隔，多余空白只是噪音。
+  const textStartX = outerPad + barWidth + gutter;
+  for (const grp of groups) {
     const barX = outerPad;
-    const barY = outerPad + blockTopRow * lineHeight + 4;
-    const barH = (grp.rowCount + blockPadRows * 2) * lineHeight - 8;
+    const barY = outerPad + grp.startRow * lineHeight;
+    const barH = grp.rowCount * lineHeight;
     ctx.fillStyle = grp.color;
     roundRect(ctx, barX, barY, barWidth, barH, barWidth / 2);
     ctx.fill();
 
-    // 文字行
-    const textStartX = outerPad + barWidth + gutter;
     for (let i = 0; i < grp.rowCount; i++) {
       const row = rows[grp.startRow + i];
-      const rowY = outerPad + (textStartRow + i) * lineHeight;
+      const rowY = outerPad + (grp.startRow + i) * lineHeight;
       drawRow(ctx, row, rowY, lineHeight, cellWidth, fontSize, fontFamily, textStartX, bgColor);
     }
-
-    cursorRow = blockBottomRow;
-    if (bi < groups.length - 1) cursorRow += blockGapRows;
   }
 
   return new Promise((resolve) => {
