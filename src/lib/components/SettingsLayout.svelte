@@ -78,7 +78,9 @@
     { id: "about", label: t("settings.section.about"), section: "Help" },
   ]);
 
-  const hiddenOnCompact = new Set<string>(["cli", "shortcuts"]);
+  // import-export 走 rfd 原生文件对话框，rfd 没 Android backend，
+  // 后端命令在 mobile 上根本没注册（见 src-tauri/Cargo.toml + sync.rs）。
+  const hiddenOnCompact = new Set<string>(["cli", "shortcuts", "import-export"]);
   let menu = $derived(compact ? allMenu.filter(m => !hiddenOnCompact.has(m.id)) : allMenu);
 
   let sections = $derived((() => {
