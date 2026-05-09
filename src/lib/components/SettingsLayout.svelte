@@ -13,6 +13,7 @@
   import HighlightManager from "./HighlightManager.svelte";
   import GitHubSyncScreen from "./GitHubSyncScreen.svelte";
   import ImportExportScreen from "./ImportExportScreen.svelte";
+  import SshConfigImportScreen from "./SshConfigImportScreen.svelte";
   import RecordingSettings from "./RecordingSettings.svelte";
   import PlaybackScreen from "./PlaybackScreen.svelte";
   import ShortcutsScreen from "./ShortcutsScreen.svelte";
@@ -37,6 +38,7 @@
     "highlights":         { component: HighlightManager },
     "github-sync":        { component: GitHubSyncScreen },
     "import-export":      { component: ImportExportScreen },
+    "import-ssh-config":  { component: SshConfigImportScreen },
     "shell-settings":     { component: ShellSettings },
     "recording-settings": { component: RecordingSettings },
     "playback":           { component: PlaybackScreen },
@@ -98,6 +100,7 @@
     if (id === "credentials" && p === "credential-edit") return true;
     if (id === "forwards" && p === "forward-edit") return true;
     if (id === "groups" && p === "group-edit") return true;
+    if (id === "import-export" && p === "import-ssh-config") return true;
     return false;
   }
 </script>

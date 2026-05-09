@@ -96,6 +96,8 @@ pub fn run() {
             commands::profile::update_credential,
             commands::profile::delete_credential,
             commands::profile::import_ssh_config,
+            commands::profile::read_ssh_config_default,
+            commands::profile::import_ssh_entries,
             // groups
             commands::group::list_groups,
             commands::group::create_group,
@@ -185,6 +187,10 @@ pub fn run() {
             // sync
             commands::sync::export_config,
             commands::sync::import_config,
+            #[cfg(not(target_os = "android"))]
+            commands::sync::export_config_to_file,
+            #[cfg(not(target_os = "android"))]
+            commands::sync::import_config_from_file,
             commands::sync::github_push,
             commands::sync::github_pull,
             // AI 排障

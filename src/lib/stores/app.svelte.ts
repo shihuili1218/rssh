@@ -29,6 +29,7 @@ export type SettingsPage =
   | "highlights"
   | "github-sync"
   | "import-export"
+  | "import-ssh-config"
   | "recording-settings"
   | "playback"
   | "shell-settings"
@@ -161,6 +162,7 @@ export function settingsBack() {
   if (_settingsPage === "profile-edit") _settingsPage = "profiles";
   else if (_settingsPage === "credential-edit") _settingsPage = "credentials";
   else if (_settingsPage === "forward-edit") _settingsPage = "forwards";
+  else if (_settingsPage === "import-ssh-config") _settingsPage = "import-export";
   else _settingsPage = "menu";
 }
 
