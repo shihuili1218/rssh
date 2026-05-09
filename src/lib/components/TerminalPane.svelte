@@ -328,19 +328,31 @@
 
     function copyBlocksAsImage(blocks: CommandBlock[]) {
         if (!terminal || blocks.length === 0) return;
+        // 特性检测：某些 WebView/旧浏览器没有 ClipboardItem 或 clipboard.write，
+        // `new ClipboardItem(...)` 会同步 throw ReferenceError，那是发生在
+        // .catch() 前的，会冒泡到 click handler 把 UI 搞炸。先 bail out。
+        if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
+            console.warn("copy image: ClipboardItem / clipboard.write unavailable");
+            return;
+        }
         // 关键：clipboard.write 必须**同步**地在 click handler 里调用，
         // ClipboardItem 接受 Promise<Blob> 由浏览器自己等。中间任何 await
         // 都会让 user gesture 失效 → NotAllowedError。
         const term = terminal;
         const fs = foldStore;
-        const pngPromise = renderBlocksToBlob(term, blocks, {}, fs).then((b) => {
-            if (!b) throw new Error("render produced no blob");
-            return b;
-        });
-        navigator.clipboard
-            .write([new ClipboardItem({ "image/png": pngPromise })])
-            .then(() => clearBlockSelection())
-            .catch((e) => console.warn("copy image failed:", e));
+        try {
+            const pngPromise = renderBlocksToBlob(term, blocks, {}, fs).then((b) => {
+                if (!b) throw new Error("render produced no blob");
+                return b;
+            });
+            navigator.clipboard
+                .write([new ClipboardItem({ "image/png": pngPromise })])
+                .then(() => clearBlockSelection())
+                .catch((e) => console.warn("copy image failed:", e));
+        } catch (e) {
+            // ClipboardItem 构造或 clipboard.write 调用本身的 sync throw 兜底
+            console.warn("copy image failed (sync):", e);
+        }
     }
 
     function openBlockMenu(r: BlockRect, e: MouseEvent) {

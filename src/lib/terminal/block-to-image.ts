@@ -51,7 +51,7 @@ export interface ImageRow {
 
 /* ───────────────────────── 入口 ───────────────────────── */
 
-/** 渲染选中块到 PNG Blob。空集合 / 渲染失败 → null。
+/** 渲染选中块到 PNG Blob。空集合 / 渲染失败 / 非 DOM 环境 → null。
  *  传 foldStore 让折叠块走 saved body 路径——否则会拉到 cursorAbs。 */
 export async function renderBlocksToBlob(
   term: Terminal,
@@ -60,8 +60,11 @@ export async function renderBlocksToBlob(
   foldStore?: FoldLookup,
 ): Promise<Blob | null> {
   if (blocks.length === 0) return null;
+  // 非 DOM 环境（vitest node / SSR）→ null。否则下方 createElement 会 throw，
+  // 跟函数契约（"失败返回 null"）不符。
+  if (typeof document === "undefined") return null;
   // 字体未 ready 时 measureText 会拿 fallback 字宽，整图错位。必等。
-  if (typeof document !== "undefined" && document.fonts?.ready) {
+  if (document.fonts?.ready) {
     await document.fonts.ready;
   }
   const rows = extractImageRows(term, blocks, foldStore);
