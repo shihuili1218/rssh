@@ -34,7 +34,7 @@
     <div class="toast">{msg}</div>
   {/if}
 
-  <div class="action-card neu-raised">
+  <div class="action-card surface-raised">
     <div class="action-info">
       <div class="action-title">Export Config</div>
       <div class="action-desc">Save all Profiles, Credentials, and Port Forwards to a JSON file</div>
@@ -42,7 +42,7 @@
     <button class="btn btn-accent btn-sm" onclick={doExport}>Export</button>
   </div>
 
-  <div class="action-card neu-raised">
+  <div class="action-card surface-raised">
     <div class="action-info">
       <div class="action-title">Import Config</div>
       <div class="action-desc">Load a previously exported JSON file. Merges into local config: matching entries (by id) are overwritten, others stay.</div>
@@ -52,7 +52,7 @@
     </button>
   </div>
 
-  <div class="action-card neu-raised">
+  <div class="action-card surface-raised">
     <div class="action-info">
       <div class="action-title">Import SSH Config</div>
       <div class="action-desc">Read ~/.ssh/config and pick which Host entries to import as Profiles</div>
