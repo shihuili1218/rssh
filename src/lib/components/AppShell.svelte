@@ -261,6 +261,13 @@
     });
     let aiPos = $derived(ai.position());
 
+    // SFTP per-tab：tabsWithSftp 是所有"开了 SFTP"的 tab（每个挂一个 SftpBrowser 实例保活）。
+    // sftpVisible 只控制 aside 视觉是否展开 + 哪个 pane 显示 —— 切到无 SFTP 的 tab 时实例不 unmount。
+    let sftpTabs = $derived(app.tabsWithSftp());
+    let sftpVisible = $derived(
+        !app.settingsActive() && !app.downloadsActive() && app.sftpOpen()
+    );
+
     /* ── AI 面板宽度：用户拖拽 → localStorage，覆盖响应式默认值。
        未设置时回落到 CSS 中的 380px / 320px / mobile-takeover 媒体查询。 */
     const AI_PANEL_WIDTH_KEY = "ai-panel-width";
@@ -311,6 +318,57 @@
     function resetAiWidth() {
         aiPanelWidth = null;
         localStorage.removeItem(AI_PANEL_WIDTH_KEY);
+    }
+
+    /* ── SFTP 面板宽度：跟 AI 镜像一份，独立 localStorage key。
+       SFTP 永远走 AI 的对侧（aiPos=right → SFTP 左；aiPos=left → SFTP 右），
+       靠 .content.ai-left 的 row-reverse 自动翻边，不引入新位置 config。 */
+    const SFTP_PANEL_WIDTH_KEY = "sftp-panel-width";
+    const SFTP_PANEL_MIN_WIDTH = 280;
+    const SFTP_PANEL_MIN_MAIN = 320;
+    let sftpPanelWidth = $state<number | null>(null);
+
+    onMount(() => {
+        const saved = localStorage.getItem(SFTP_PANEL_WIDTH_KEY);
+        if (saved) {
+            const n = parseInt(saved, 10);
+            if (Number.isFinite(n) && n >= SFTP_PANEL_MIN_WIDTH) sftpPanelWidth = n;
+        }
+    });
+
+    let sftpSideStyle = $derived(
+        sftpPanelWidth != null
+            ? `flex: 0 0 ${sftpPanelWidth}px; max-width: ${sftpPanelWidth}px;`
+            : ""
+    );
+
+    function startSftpResize(e: MouseEvent) {
+        e.preventDefault();
+        const startX = e.clientX;
+        const sideEl = (e.currentTarget as HTMLElement).parentElement as HTMLElement | null;
+        const startWidth = sftpPanelWidth ?? (sideEl?.getBoundingClientRect().width ?? 380);
+        // SFTP 视觉在左（aiPos=right）：handle 在 SFTP 的右边缘，光标右移 → SFTP 变宽（dx 直接用）
+        // SFTP 视觉在右（aiPos=left）：handle 在 SFTP 的左边缘，光标左移 → SFTP 变宽（dx 取反）
+        const sign = aiPos === "left" ? -1 : 1;
+
+        const onMove = (ev: MouseEvent) => {
+            const dx = ev.clientX - startX;
+            const maxWidth = window.innerWidth - SFTP_PANEL_MIN_MAIN;
+            const next = Math.max(SFTP_PANEL_MIN_WIDTH, Math.min(maxWidth, startWidth + sign * dx));
+            sftpPanelWidth = next;
+        };
+        const onUp = () => {
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+            if (sftpPanelWidth != null) localStorage.setItem(SFTP_PANEL_WIDTH_KEY, String(sftpPanelWidth));
+        };
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+    }
+
+    function resetSftpWidth() {
+        sftpPanelWidth = null;
+        localStorage.removeItem(SFTP_PANEL_WIDTH_KEY);
     }
 
     /* Menu data — sections describe layout (header / scrollable list / footer),
@@ -656,18 +714,6 @@
     />
 {/if}
 
-{#if app.sftpOpen()}
-    <div class="sftp-overlay">
-        <div class="sftp-bar">
-            <button class="btn btn-sm" onclick={() => app.closeSftp()}>← Back</button>
-            <span class="sftp-title">SFTP</span>
-        </div>
-        <div class="sftp-body">
-            <SftpBrowser meta={{...app.activeTab()?.meta ?? {}, sessionId: app.sessionIdForTab(app.activeTabId()) ?? ''}}/>
-        </div>
-    </div>
-{/if}
-
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
     class="shell"
@@ -759,7 +805,28 @@
         class="content"
         class:ai-on={aiVisible}
         class:ai-left={aiVisible && aiPos === "left"}
+        class:sftp-on={sftpVisible}
     >
+        <!-- 任何 tab 开了 SFTP 就把 aside 挂上（保留所有 tab 的 SftpBrowser 实例 → 切回时 cwd 不丢）。
+             active tab 没开 / 进入 settings / downloads 时整块 aside 走 .hidden 收掉视觉宽度，但 DOM 留着。
+             SFTP 走 AI 对侧：aiPos=right(default) → SFTP 视觉左、handle 右边缘；
+             aiPos=left 下 .content.ai-left 翻 row → SFTP 视觉右、handle 左边缘。 -->
+        {#if sftpTabs.length > 0}
+            <aside class="sftp-side" class:hidden={!sftpVisible} style={sftpSideStyle}>
+                <div class="sftp-resize-handle"
+                     class:on-left={aiPos === "left"}
+                     onmousedown={startSftpResize}
+                     ondblclick={resetSftpWidth}
+                     role="separator"
+                     aria-orientation="vertical"
+                     title="拖拽调整宽度，双击恢复"></div>
+                {#each sftpTabs as tab (tab.id)}
+                    <div class="sftp-pane" class:visible={tab.id === app.activeTabId() && sftpVisible}>
+                        <SftpBrowser meta={{...tab.meta ?? {}, sessionId: app.sessionIdForTab(tab.id) ?? ''}}/>
+                    </div>
+                {/each}
+            </aside>
+        {/if}
         <div class="main-area">
             {#if app.settingsActive()}
                 <div class="pane visible">
@@ -958,34 +1025,60 @@
         flex-direction: column;
     }
 
-    /* ── SFTP overlay ── */
-    .sftp-overlay {
-        position: fixed;
+    /* ── SFTP side panel —— 跟 .ai-side 镜像；位置由 .content 的 row / row-reverse 决定 ── */
+    .sftp-side {
+        flex: 0 0 380px;
+        background: var(--bg);
+        position: relative;
+        border-right: 1px solid var(--divider);
+    }
+    /* aside 里挂多个 SftpBrowser 实例（每 tab 一个），靠 .visible 决定显示哪个。
+       绝对定位让所有非活跃实例不占布局空间，但 DOM 留着 → cwd / 网络连接保活。 */
+    .sftp-pane {
+        position: absolute;
         inset: 0;
-        z-index: 300;
+        display: none;
+    }
+    .sftp-pane.visible {
         display: flex;
         flex-direction: column;
-        background: var(--bg);
-        padding-top: env(safe-area-inset-top, 0px);
+    }
+    /* active tab 没开 SFTP / settings / downloads 状态下整块 aside 折叠为 0，
+       内部 SftpBrowser 实例保持 mount —— 切回有 SFTP 的 tab 时立刻恢复。 */
+    .sftp-side.hidden {
+        flex-basis: 0 !important;
+        max-width: 0 !important;
+        overflow: hidden;
+        border: none;
+    }
+    /* aiPos=left 时 .content 翻 row-reverse → SFTP 视觉在右，
+       该侧的 border 应该贴左边缘。简单起见用 :where 替换两边都没边框，
+       直接靠 ChatPanel 风格——SFTP 不画自己的 border，由 main-area 决定就行。 */
+    .content.ai-left .sftp-side {
+        border-right: none;
+        border-left: 1px solid var(--divider);
+    }
+    @media (max-width: 800px) { .sftp-side { flex-basis: 320px; } }
+
+    .sftp-resize-handle {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        right: -3px;        /* SFTP 视觉在左 → handle 在右边缘 */
+        width: 6px;
+        cursor: col-resize;
+        z-index: 10;
+        background: transparent;
+        transition: background 0.12s ease;
+    }
+    .sftp-resize-handle.on-left {  /* SFTP 视觉在右（aiPos=left）→ handle 翻到左边缘 */
+        right: auto;
+        left: -3px;
+    }
+    .sftp-resize-handle:hover,
+    .sftp-resize-handle:active {
+        background: var(--accent);
+        opacity: 0.45;
     }
 
-    .sftp-bar {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        padding: 8px 16px;
-        border-bottom: 1px solid var(--divider);
-        flex-shrink: 0;
-    }
-
-    .sftp-title {
-        font-size: 14px;
-        font-weight: 600;
-        color: var(--text);
-    }
-
-    .sftp-body {
-        flex: 1;
-        overflow-y: auto;
-    }
 </style>

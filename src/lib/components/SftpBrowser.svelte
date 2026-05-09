@@ -119,6 +119,11 @@
 </script>
 
 <div class="sftp">
+    <div class="toolbar">
+        <span class="title">SFTP</span>
+        <span class="grow"></span>
+        <button class="btn-icon" onclick={() => app.closeSftp()} title="Close">×</button>
+    </div>
     <div class="header">
         <button class="btn btn-sm" onclick={goUp}>← Up</button>
         <button class="btn btn-sm" onclick={() => listDir(cwd)}>Refresh</button>
@@ -158,16 +163,55 @@
 
 <style>
     .sftp {
-        padding: 16px;
-        max-width: 700px;
-        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        padding: 12px 14px;
+        box-sizing: border-box;
+        overflow-y: auto;
+        /* aside 把 SFTP 收成侧边栏；不再做 max-width 居中。窄宽度下让按钮换行而不是溢出。 */
     }
+
+    .toolbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--divider);
+        margin-bottom: 10px;
+    }
+
+    .title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-sub);
+        letter-spacing: 0.4px;
+    }
+
+    .grow { flex: 1; }
+
+    .btn-icon {
+        width: 24px;
+        height: 24px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        background: transparent;
+        color: var(--text-sub);
+        font-size: 18px;
+        line-height: 1;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+    }
+    .btn-icon:hover { color: var(--text); background: var(--accent-soft); }
 
     .header {
         display: flex;
         align-items: center;
         gap: 8px;
         margin-bottom: 8px;
+        flex-wrap: wrap;
     }
 
     .breadcrumb {

@@ -71,8 +71,10 @@ let _settingsActive = $state(false);
 let _settingsPage = $state<SettingsPage>("menu");
 let _editingId = $state<string | null>(null);
 
-/* SFTP overlay (opened from terminal via ⌘O) */
-let _sftpOpen = $state(false);
+/* SFTP per-tab：每个 ssh/local tab 独立 open/close。SFTP 共用对应 tab 的 SSH 连接，
+   切 tab 不影响其他 tab 已打开的 SFTP；新开 tab 不自动开 SFTP——每个 tab 手动开。
+   (老的全局 _sftpOpen 已废，那是 fullscreen overlay 时代的产物。) */
+let _sftpOpenByTab = $state<Record<string, boolean>>({});
 /* Background transfers screen — sibling of settings, mutually exclusive */
 let _downloadsActive = $state(false);
 let _pinnedProfileIds = $state<string[]>(JSON.parse(localStorage.getItem("pinned_profiles") ?? "[]"));
@@ -87,7 +89,12 @@ export function activeTab() { return _tabs.find(t => t.id === _activeTabId); }
 export function settingsActive() { return _settingsActive; }
 export function settingsPage() { return _settingsPage; }
 export function editingId() { return _editingId; }
-export function sftpOpen() { return _sftpOpen; }
+/** 当前活跃 tab 的 SFTP 是否打开（toolbar / Esc / × 按钮等用这个）。 */
+export function sftpOpen() { return !!_sftpOpenByTab[_activeTabId]; }
+/** 任意 tab 是否查询；用 tab id 显式问。 */
+export function sftpOpenForTab(tabId: string) { return !!_sftpOpenByTab[tabId]; }
+/** 模板 {#each} 遍历所有"开了 SFTP"的 tab 用——保持 SftpBrowser 实例存活以便切回时 cwd 不丢。 */
+export function tabsWithSftp(): Tab[] { return _tabs.filter(t => _sftpOpenByTab[t.id]); }
 export function downloadsActive() { return _downloadsActive; }
 export function pinnedProfileIds() { return _pinnedProfileIds; }
 export function terminalTitle(tabId: string) { return _terminalTitles[tabId]; }
@@ -97,7 +104,7 @@ export function setActiveTab(id: string) {
   _activeTabId = id;
   _settingsActive = false;
   _downloadsActive = false;
-  _sftpOpen = false;
+  // SFTP per-tab：切 tab 不动其他 tab 的 SFTP 状态（mirror AI panel 的"跨导航持久"模型）
 }
 
 export function addTab(tab: Tab) {
@@ -105,7 +112,6 @@ export function addTab(tab: Tab) {
   _activeTabId = tab.id;
   _settingsActive = false;
   _downloadsActive = false;
-  _sftpOpen = false;
 }
 
 export function moveTab(fromIdx: number, toIdx: number) {
@@ -123,9 +129,14 @@ export function closeTab(id: string) {
   const wasActive = _activeTabId === id;
   _tabs.splice(idx, 1);
   delete _terminalTitles[id];
+  // tab 自身没了，对应的 SFTP 实例也得 unmount —— 删 map entry 让 {#each} 收掉
+  if (_sftpOpenByTab[id]) {
+    const next = { ..._sftpOpenByTab };
+    delete next[id];
+    _sftpOpenByTab = next;
+  }
   if (wasActive) {
     _activeTabId = _tabs[Math.min(idx, _tabs.length - 1)]?.id ?? "home";
-    _sftpOpen = false;
   }
 }
 
@@ -142,13 +153,12 @@ export function setTerminalTitle(tabId: string, title: string) {
 export function openSettings() {
   _settingsActive = true;
   _downloadsActive = false;
-  _sftpOpen = false;
+  // SFTP 不强制关 —— settings 路径下走可见性 derived 隐藏，state 保留
 }
 
 export function openDownloads() {
   _downloadsActive = true;
   _settingsActive = false;
-  _sftpOpen = false;
 }
 
 export function closeDownloads() { _downloadsActive = false; }
@@ -311,8 +321,18 @@ export function requestSearch(tabId: string) {
 }
 
 /* ─── SFTP overlay (desktop only — rfd has no Android native dialog) ─── */
-export function openSftp() { if (!isMobile) _sftpOpen = true; }
-export function closeSftp() { _sftpOpen = false; }
+/** 给当前活跃 tab 开 SFTP；mobile 屏蔽。SSH/local tab 才有意义但不在这里校验
+ *  （UI 层入口已 gate）—— 防御深度由 SftpBrowser 自身的 sessionId 校验兜底。 */
+export function openSftp() {
+  if (isMobile || !_activeTabId) return;
+  _sftpOpenByTab = { ..._sftpOpenByTab, [_activeTabId]: true };
+}
+export function closeSftp() {
+  if (!_activeTabId || !_sftpOpenByTab[_activeTabId]) return;
+  const next = { ..._sftpOpenByTab };
+  delete next[_activeTabId];
+  _sftpOpenByTab = next;
+}
 
 /* ─── Pinned profiles ─── */
 function savePins() { localStorage.setItem("pinned_profiles", JSON.stringify(_pinnedProfileIds)); }
