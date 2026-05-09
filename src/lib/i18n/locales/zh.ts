@@ -183,7 +183,7 @@ const zh: Messages = {
   "forward.active_connections": "活跃连接",
 
   // ── AI 排障：ChatPanel ──
-  "ai.resize_hint": "拖拽改宽 · 双击重置",
+  "common.resize_hint": "拖拽改宽 · 双击重置",
   "ai.title": "AI 排障",
   "ai.toolbar.audit": "✎𓂃审计",
   "ai.toolbar.back_to_chat": "← 对话",

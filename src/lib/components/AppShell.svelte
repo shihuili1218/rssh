@@ -279,7 +279,11 @@
         const saved = localStorage.getItem(AI_PANEL_WIDTH_KEY);
         if (saved) {
             const n = parseInt(saved, 10);
-            if (Number.isFinite(n) && n >= AI_PANEL_MIN_WIDTH) aiPanelWidth = n;
+            if (Number.isFinite(n) && n >= AI_PANEL_MIN_WIDTH) {
+                // 大屏存的值切到小屏会溢出主区。restore 时 clamp 到当前视口可用宽度。
+                const maxWidth = Math.max(AI_PANEL_MIN_WIDTH, window.innerWidth - AI_PANEL_MIN_MAIN);
+                aiPanelWidth = Math.min(n, maxWidth);
+            }
         }
     });
 
@@ -332,7 +336,10 @@
         const saved = localStorage.getItem(SFTP_PANEL_WIDTH_KEY);
         if (saved) {
             const n = parseInt(saved, 10);
-            if (Number.isFinite(n) && n >= SFTP_PANEL_MIN_WIDTH) sftpPanelWidth = n;
+            if (Number.isFinite(n) && n >= SFTP_PANEL_MIN_WIDTH) {
+                const maxWidth = Math.max(SFTP_PANEL_MIN_WIDTH, window.innerWidth - SFTP_PANEL_MIN_MAIN);
+                sftpPanelWidth = Math.min(n, maxWidth);
+            }
         }
     });
 
@@ -819,7 +826,7 @@
                      ondblclick={resetSftpWidth}
                      role="separator"
                      aria-orientation="vertical"
-                     title="拖拽调整宽度，双击恢复"></div>
+                     title={t("common.resize_hint")}></div>
                 {#each sftpTabs as tab (tab.id)}
                     <div class="sftp-pane" class:visible={tab.id === app.activeTabId() && sftpVisible}>
                         <SftpBrowser meta={{...tab.meta ?? {}, sessionId: app.sessionIdForTab(tab.id) ?? ''}}/>
@@ -863,7 +870,7 @@
                      ondblclick={resetAiWidth}
                      role="separator"
                      aria-orientation="vertical"
-                     title={t("ai.resize_hint")}></div>
+                     title={t("common.resize_hint")}></div>
                 <ChatPanel
                     tabId={aiActiveTab.id}
                     targetKind={aiActiveTab.type as "ssh" | "local"}

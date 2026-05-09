@@ -181,7 +181,7 @@ const en = {
   "forward.active_connections": "Active connections",
 
   // ── AI Diagnose: ChatPanel ──
-  "ai.resize_hint": "Drag to resize · double-click to reset",
+  "common.resize_hint": "Drag to resize · double-click to reset",
   "ai.title": "AI Diagnose",
   "ai.toolbar.audit": "✎𓂃Audit",
   "ai.toolbar.back_to_chat": "← Chat",

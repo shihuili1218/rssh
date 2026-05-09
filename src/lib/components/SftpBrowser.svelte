@@ -122,7 +122,7 @@
     <div class="toolbar">
         <span class="title">SFTP</span>
         <span class="grow"></span>
-        <button class="btn-icon" onclick={() => app.closeSftp()} title="Close">×</button>
+        <button type="button" class="btn-icon" onclick={() => app.closeSftp()} aria-label="Close SFTP" title="Close">×</button>
     </div>
     <div class="header">
         <button class="btn btn-sm" onclick={goUp}>← Up</button>

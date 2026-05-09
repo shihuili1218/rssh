@@ -321,10 +321,13 @@ export function requestSearch(tabId: string) {
 }
 
 /* ─── SFTP overlay (desktop only — rfd has no Android native dialog) ─── */
-/** 给当前活跃 tab 开 SFTP；mobile 屏蔽。SSH/local tab 才有意义但不在这里校验
- *  （UI 层入口已 gate）—— 防御深度由 SftpBrowser 自身的 sessionId 校验兜底。 */
+/** 给当前活跃 tab 开 SFTP；mobile 屏蔽。仅 ssh tab 有意义（共用其 SSH channel；
+ *  local PTY 没有远端文件系统）。UI 入口已 gate `!isSsh`，这里再 gate 防止
+ *  键盘 navigate("sftp") 等路径绕过 UI，把 home/local/edit tab 错误标为 open。 */
 export function openSftp() {
   if (isMobile || !_activeTabId) return;
+  const tab = _tabs.find(t => t.id === _activeTabId);
+  if (!tab || tab.type !== "ssh") return;
   _sftpOpenByTab = { ..._sftpOpenByTab, [_activeTabId]: true };
 }
 export function closeSftp() {
