@@ -236,23 +236,54 @@
         return out;
     });
 
-    // Block 选中集合 — 块是一等公民，与 xterm 文本选区彻底解耦。
-    // 单击 bar = toggle；点击其他地方或 Esc = 清空；多块可同时荧光。
-    // 复制操作（菜单里）按 Finder 规则消费这个 Set。
+    // Block 选中集合 — Finder 风格多选，halo 是它的视觉投影。
+    //   单击          → 排他选中 + 顺带选中文本（让 Cmd+C 直接复制单块输出）
+    //   Shift+click   → 锚点 .. 目标范围（清旧、填范围、anchor 不动、不动文本选区）
+    //   Cmd/Ctrl+click → toggle 该块（anchor 移到此块、不动文本选区）
     //
     // 必须用 SvelteSet：原生 Set 在 $state 里 add/delete 不会让消费者
     // ($derived、模板表达式) 重算 —— Svelte 5 不给原生 Set 自动加代理。
-    // 现象：click 后 selectedBlockIds 已变，但 blockRects 不重算，halo 不出现，
-    //      只有别的事（比如 fold）顺带触发 derive 时才会"恍然出现"。
     const selectedBlockIds = new SvelteSet<number>();
+    let selectionAnchorId: number | null = null;
 
-    function toggleBlockSelection(id: number) {
-        if (selectedBlockIds.has(id)) selectedBlockIds.delete(id);
-        else selectedBlockIds.add(id);
+    function handleBlockClick(r: BlockRect, ev: MouseEvent) {
+        if (ev.shiftKey) rangeSelectTo(r);
+        else if (ev.metaKey || ev.ctrlKey) toggleSelect(r);
+        else singleSelect(r);
+    }
+
+    function singleSelect(r: BlockRect) {
+        selectedBlockIds.clear();
+        selectedBlockIds.add(r.id);
+        selectionAnchorId = r.id;
+        // 顺带选中文本——单块复制是最高频场景，让 Cmd+C 直接走通
+        terminal?.selectLines(r.startLine, r.endLine);
+    }
+
+    function toggleSelect(r: BlockRect) {
+        if (selectedBlockIds.has(r.id)) selectedBlockIds.delete(r.id);
+        else selectedBlockIds.add(r.id);
+        selectionAnchorId = r.id;
+    }
+
+    function rangeSelectTo(r: BlockRect) {
+        // 没 anchor 时退化为单击——Finder 同款行为
+        if (selectionAnchorId === null || !blockTracker) {
+            singleSelect(r);
+            return;
+        }
+        const lo = Math.min(selectionAnchorId, r.id);
+        const hi = Math.max(selectionAnchorId, r.id);
+        selectedBlockIds.clear();
+        for (const b of blockTracker.blocks) {
+            if (b.id >= lo && b.id <= hi) selectedBlockIds.add(b.id);
+        }
+        // anchor 不动：shift 是"扩展"，不重置锚点
     }
 
     function clearBlockSelection() {
         if (selectedBlockIds.size > 0) selectedBlockIds.clear();
+        selectionAnchorId = null;
     }
 
     function onWindowMouseDown(e: MouseEvent) {
@@ -726,12 +757,15 @@
         blockTracker = createCommandBlockTracker(terminal);
         blockTracker.onChange(() => {
             paintTick++;
-            // 剪枝：被 GC 的块从选中集合里清掉，避免 stale id 累积。
-            if (selectedBlockIds.size > 0 && blockTracker) {
-                const live = new Set(blockTracker.blocks.map(b => b.id));
-                for (const id of selectedBlockIds) {
-                    if (!live.has(id)) selectedBlockIds.delete(id);
-                }
+            // 剪枝：被 GC 的块从选中集合里清掉，anchor 失效也复位。
+            if (!blockTracker) return;
+            if (selectedBlockIds.size === 0 && selectionAnchorId === null) return;
+            const live = new Set(blockTracker.blocks.map(b => b.id));
+            for (const id of selectedBlockIds) {
+                if (!live.has(id)) selectedBlockIds.delete(id);
+            }
+            if (selectionAnchorId !== null && !live.has(selectionAnchorId)) {
+                selectionAnchorId = null;
             }
         });
 
@@ -931,7 +965,7 @@
                         {/if}
                         <rect class="block-hit" x="0" y={r.y} width="12" height={r.h}
                               fill="transparent"
-                              onclick={() => toggleBlockSelection(r.id)}
+                              onclick={(e) => handleBlockClick(r, e)}
                               oncontextmenu={(e) => openBlockMenu(r, e)} />
                     {/each}
                 {/if}
