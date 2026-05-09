@@ -1,7 +1,7 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// 从 ~/.ssh/config 解析出 SSH 连接配置。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshConfigEntry {
     pub host_alias: String,
     pub hostname: String,
