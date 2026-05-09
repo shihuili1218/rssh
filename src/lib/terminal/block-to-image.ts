@@ -20,7 +20,7 @@
  */
 import type { Terminal, ITheme, IBufferCell } from "@xterm/xterm";
 import type { CommandBlock } from "./command-blocks";
-import { resolveBlockRanges } from "./block-content";
+import { resolveBlockLines, type FoldLookup } from "./block-content";
 
 export interface RenderOptions {
   /** 彩色竖线宽度 px。默认 4。 */
@@ -51,42 +51,42 @@ export interface ImageRow {
 
 /* ───────────────────────── 入口 ───────────────────────── */
 
-/** 渲染选中块到 PNG Blob。空集合 / 渲染失败 → null。 */
+/** 渲染选中块到 PNG Blob。空集合 / 渲染失败 → null。
+ *  传 foldStore 让折叠块走 saved body 路径——否则会拉到 cursorAbs。 */
 export async function renderBlocksToBlob(
   term: Terminal,
   blocks: ReadonlyArray<CommandBlock>,
   opts: RenderOptions = {},
+  foldStore?: FoldLookup,
 ): Promise<Blob | null> {
   if (blocks.length === 0) return null;
   // 字体未 ready 时 measureText 会拿 fallback 字宽，整图错位。必等。
   if (typeof document !== "undefined" && document.fonts?.ready) {
     await document.fonts.ready;
   }
-  const rows = extractImageRows(term, blocks);
+  const rows = extractImageRows(term, blocks, foldStore);
   if (rows.length === 0) return null;
   return renderRowsToBlob(rows, term, opts);
 }
 
 /* ───────────────────────── 数据抽取（纯函数，可测） ───────────────────────── */
 
-/** 选中块 → 视觉行序列。视觉行不合并软换行（图片是"截图"，要保留视觉布局）。 */
+/** 选中块 → 视觉行序列。视觉行不合并软换行（图片是"截图"，要保留视觉布局）。
+ *  传 foldStore 让折叠块用 saved body 而非 buffer cursorAbs。 */
 export function extractImageRows(
   term: Terminal,
   blocks: ReadonlyArray<CommandBlock>,
+  foldStore?: FoldLookup,
 ): ImageRow[] {
-  const ranges = resolveBlockRanges(term, blocks);
-  if (ranges.length === 0) return [];
-  const buf = term.buffer.active;
+  const sorted = [...blocks]
+    .filter((b) => !b.start.isDisposed)
+    .sort((a, b) => a.id - b.id);
+  if (sorted.length === 0) return [];
   const theme: ITheme = term.options.theme ?? {};
-  const blockColorById = new Map<number, string>();
-  for (const b of blocks) blockColorById.set(b.id, b.color);
-
   const out: ImageRow[] = [];
-  for (const r of ranges) {
-    const color = blockColorById.get(r.id) ?? "#888";
-    for (let y = r.startLine; y <= r.endLine; y++) {
-      const line = buf.getLine(y);
-      if (!line) continue;
+  for (const block of sorted) {
+    const lines = resolveBlockLines(term, block, foldStore);
+    for (const line of lines) {
       const cells: ImageCell[] = [];
       for (let x = 0; x < line.length; x++) {
         const cell = line.getCell(x);
@@ -100,7 +100,7 @@ export function extractImageRows(
         if (last.ch === " " && last.bg === defaultBg(theme)) cells.pop();
         else break;
       }
-      out.push({ blockId: r.id, blockColor: color, cells });
+      out.push({ blockId: block.id, blockColor: block.color, cells });
     }
   }
   return out;
@@ -131,14 +131,14 @@ function cellToImageCell(cell: IBufferCell, theme: ITheme): ImageCell {
 export function resolveFg(cell: IBufferCell, theme: ITheme): string {
   if (cell.isFgDefault()) return defaultFg(theme);
   if (cell.isFgRGB()) return rgbFromInt(cell.getFgColor());
-  if (cell.isFgPalette()) return paletteToColor(cell.getFgColor(), theme);
+  if (cell.isFgPalette()) return paletteToColor(cell.getFgColor(), theme, defaultFg(theme));
   return defaultFg(theme);
 }
 
 export function resolveBg(cell: IBufferCell, theme: ITheme): string {
   if (cell.isBgDefault()) return defaultBg(theme);
   if (cell.isBgRGB()) return rgbFromInt(cell.getBgColor());
-  if (cell.isBgPalette()) return paletteToColor(cell.getBgColor(), theme);
+  if (cell.isBgPalette()) return paletteToColor(cell.getBgColor(), theme, defaultBg(theme));
   return defaultBg(theme);
 }
 
@@ -157,13 +157,15 @@ function rgbFromInt(n: number): string {
   return `rgb(${r},${g},${b})`;
 }
 
-/** 256 色调色板：0-15 走 theme，16-231 是 6×6×6 立方体，232-255 是灰阶。 */
-export function paletteToColor(idx: number, theme: ITheme): string {
-  if (idx < 0) return defaultFg(theme);
+/** 256 色调色板：0-15 走 theme，16-231 是 6×6×6 立方体，232-255 是灰阶。
+ *  fallback 用于越界 idx——前景调用方传 defaultFg，背景传 defaultBg，
+ *  不能在这里硬编码方向（之前 bg 越界时错跑成 defaultFg 是个 bug）。 */
+export function paletteToColor(idx: number, theme: ITheme, fallback: string): string {
+  if (idx < 0) return fallback;
   if (idx < 16) return ansi16(idx, theme);
   if (idx < 232) return ansi256Cube(idx);
   if (idx < 256) return ansi256Gray(idx);
-  return defaultFg(theme);
+  return fallback;
 }
 
 function ansi16(idx: number, theme: ITheme): string {

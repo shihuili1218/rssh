@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   extractBlocksText,
   extractRangeLines,
+  resolveBlockLines,
   resolveBlockRanges,
 } from "./block-content.ts";
 import type { CommandBlock } from "./command-blocks.ts";
@@ -237,5 +238,92 @@ describe("extractBlocksText", () => {
       lineFromSpec("{w2}你{w2}好           "),
     ]);
     expect(extractBlocksText(term, [fakeBlock(1, 0, 1)])).toBe("$ echo 你好\n你好");
+  });
+});
+
+/* ───────────────────────── resolveBlockLines + folded path ───────────────────────── */
+
+describe("resolveBlockLines (folded blocks)", () => {
+  it("without foldStore: returns lines from buffer [start..end]", () => {
+    const term = fakeTerm([
+      lineFromSpec("$ ls"),
+      lineFromSpec("a.txt"),
+      lineFromSpec("b.txt"),
+    ]);
+    const lines = resolveBlockLines(term as any, fakeBlock(1, 0, 2));
+    expect(lines).toHaveLength(3);
+  });
+
+  it("with foldStore: folded block returns prompt + savedLines", () => {
+    // Folded 状态：fold() disposed 了 block.end，buffer 里只剩 prompt 行
+    // 没 foldStore 时旧路径会 fallback 到 cursorAbs 把后续命令也卷进来 (#5 bug)
+    const promptLine = lineFromSpec("$ npm install   ");
+    const savedBody1 = lineFromSpec("added 234 packages");
+    const savedBody2 = lineFromSpec("done in 3.2s");
+    const term = fakeTerm([
+      promptLine,
+      lineFromSpec("$ ls"),                // 后续命令——不该被卷进来
+      lineFromSpec("a.txt"),
+    ]);
+    // folded block: end disposed, body 在 fold.savedLines
+    const block: CommandBlock = {
+      id: 7,
+      color: "#abc",
+      start: { line: 0, isDisposed: false } as any,
+      end: { line: 99, isDisposed: true } as any, // disposed by fold()
+    };
+    const foldStore = {
+      getFold: (id: number) =>
+        id === 7 ? { savedLines: [savedBody1, savedBody2] } : undefined,
+    };
+    const lines = resolveBlockLines(term as any, block, foldStore);
+    expect(lines).toHaveLength(3); // prompt + 2 saved body lines
+    expect(lines[0]).toBe(promptLine);
+    expect(lines[1]).toBe(savedBody1);
+    expect(lines[2]).toBe(savedBody2);
+  });
+
+  it("with foldStore but block not folded: falls back to buffer range", () => {
+    const term = fakeTerm([
+      lineFromSpec("$ ls"),
+      lineFromSpec("a.txt"),
+    ]);
+    const foldStore = { getFold: () => undefined };
+    const lines = resolveBlockLines(term as any, fakeBlock(1, 0, 1), foldStore);
+    expect(lines).toHaveLength(2);
+  });
+});
+
+describe("extractBlocksText with foldStore", () => {
+  it("folded block: copies prompt + saved body, NOT cursorAbs fallback", () => {
+    // 这是 PR #24 reviewer 报的真 bug：折叠块复制会拉到 cursorAbs，
+    // 把后续命令的输出全卷进来。foldStore-aware 修了这个
+    const term = fakeTerm([
+      lineFromSpec("$ npm install     "),
+      lineFromSpec("$ ls              "),     // 后续命令，不该出现在复制结果
+      lineFromSpec("a.txt b.txt       "),
+    ]);
+    const block: CommandBlock = {
+      id: 1,
+      color: "#abc",
+      start: { line: 0, isDisposed: false } as any,
+      end: { line: 99, isDisposed: true } as any,
+    };
+    const foldStore = {
+      getFold: (id: number) =>
+        id === 1
+          ? {
+              savedLines: [
+                lineFromSpec("added 234 packages"),
+                lineFromSpec("done in 3.2s"),
+              ],
+            }
+          : undefined,
+    };
+    const text = extractBlocksText(term as any, [block], foldStore);
+    expect(text).toBe("$ npm install\nadded 234 packages\ndone in 3.2s");
+    // 没卷进 "$ ls" 也没卷进 "a.txt b.txt"
+    expect(text).not.toContain("ls");
+    expect(text).not.toContain("a.txt");
   });
 });

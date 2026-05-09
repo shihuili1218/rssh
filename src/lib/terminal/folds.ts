@@ -46,6 +46,11 @@ export interface Fold {
   pushCount: number;
   /** splice 抽出的 BufferLine 实例（对我们透明） */
   savedLines: unknown[];
+  /** 这次 fold push 进 buffer 末尾的空行 refs。
+   *  fold 记录被丢弃时（unfold-bail / tracker GC），这些 refs 要从全局
+   *  pushedBlanks 里删掉，否则 Set 会无限增长——即便 xterm 已经 trim
+   *  了那些 BufferLine，我们的 Set 还持有引用，构成内存泄漏。 */
+  pushedBlankRefs: unknown[];
 }
 
 export interface FoldStore extends IDisposable {
@@ -121,6 +126,9 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     const cursorAbs = buf.ybase + buf.y;
     if (endLine >= cursorAbs) return false; // 折叠区间含 cursor 或之后 — 拒绝
     const count = endLine - startLine + 1;
+    // 抓 wasLive 在 mutation 之前——和 unfold 对称。用户在底部活线时折叠
+    // 上方旧块，ydisp -= count 会把视口推上去脱离底部，体感像"自动滚动"。
+    const wasLive = buf.ydisp === buf.ybase;
 
     const saved: unknown[] = [];
     for (let i = 0; i < count; i++) saved.push(buf.lines.get(startLine + i));
@@ -138,10 +146,12 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     //   splice 后 lines.length 减了 count
     //   ybase 减 ybaseDrain，rows 不变
     //   缺口 = count - ybaseDrain = pushCount → 末尾补 pushCount 行
+    const pushedRefs: unknown[] = [];
     for (let i = 0; i < pushCount; i++) {
       const blank = buf.getBlankLine(BLANK_ATTR);
       buf.lines.push(blank);
       pushedBlanks.add(blank);
+      pushedRefs.push(blank);
     }
 
     // 不变量 (2)：cursor 跟随内容。绝对位置 -= count。
@@ -154,12 +164,23 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     if (buf.ydisp >= startLine + count) buf.ydisp -= count;
     else if (buf.ydisp >= startLine) buf.ydisp = startLine;
     if (buf.ydisp > buf.ybase) buf.ydisp = buf.ybase;
+    // wasLive 钉在底部：上面的位移逻辑会把活线模式打破，这里把它拉回来
+    if (wasLive) buf.ydisp = buf.ybase;
 
-    folds.set(blockId, { id: nextId++, blockId, count, pushCount, savedLines: saved });
+    folds.set(blockId, {
+      id: nextId++, blockId, count, pushCount,
+      savedLines: saved, pushedBlankRefs: pushedRefs,
+    });
     syncViewport(term);
     term.refresh(0, term.rows - 1);
     emit();
     return true;
+  }
+
+  /** 清理 fold 记录的 pushed blank refs。fold 记录被丢弃前必走这条
+   *  （unfold-bail / 完成 unfold / tracker GC），否则全局 Set 会泄漏。 */
+  function discardFold(f: Fold): void {
+    for (const b of f.pushedBlankRefs) pushedBlanks.delete(b);
   }
 
   function unfold(blockId: number): boolean {
@@ -168,6 +189,7 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     const block = tracker.blocks.find((b) => b.id === blockId);
     if (!block || block.start.isDisposed) {
       // block 已被 scrollback 吞噬 — 丢弃 saved（用户也看不见原内容了）
+      discardFold(f);
       folds.delete(blockId);
       emit();
       return false;
@@ -177,7 +199,13 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     const wasLive = buf.ydisp === buf.ybase;
 
     // splice 塞回 → marker 反向迁移
-    buf.lines.splice(insertAt, 0, ...f.savedLines);
+    // 分块插：Array spread 在 V8 上有 ~65k 参数硬上限（large build log /
+    // find / 输出轻易就超过）。一次性 splice(...savedLines) 会抛 RangeError。
+    const SPLICE_CHUNK = 32768;
+    for (let i = 0; i < f.savedLines.length; i += SPLICE_CHUNK) {
+      const chunk = f.savedLines.slice(i, i + SPLICE_CHUNK);
+      buf.lines.splice(insertAt + i, 0, ...chunk);
+    }
 
     // 目标：pop 掉 fold 时 push 进末尾的 pushCount 行（只有这些是我们的）。
     // count = pushCount + ybaseDrain；ybaseDrain 那部分通过"还原 ybase"恢复，
@@ -215,6 +243,9 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
       // addMarker 异常则保持 end=disposed，block-bar 会回退到 cursor 位置 — 可接受
     }
 
+    // 清剩余 refs：pop 循环已删过 popped 个，剩下 remaining 个还在 Set 里。
+    // discardFold 是幂等的（重复 delete 同 key 是 no-op），统一收口更清楚。
+    discardFold(f);
     folds.delete(blockId);
     syncViewport(term);
     term.refresh(0, term.rows - 1);
@@ -238,6 +269,8 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     let dropped = false;
     for (const blockId of Array.from(folds.keys())) {
       if (!trackedIds.has(blockId)) {
+        const f = folds.get(blockId);
+        if (f) discardFold(f);
         folds.delete(blockId);
         dropped = true;
       }

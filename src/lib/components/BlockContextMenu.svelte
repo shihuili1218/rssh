@@ -48,10 +48,12 @@
     });
 </script>
 
-<div bind:this={containerEl} class="block-menu" style="left: {x}px; top: {y}px;">
+<div bind:this={containerEl} class="block-menu" role="menu"
+     style="left: {x}px; top: {y}px;">
     {#each items as item}
         <button
             class="menu-item"
+            role="menuitem"
             disabled={item.disabled}
             onclick={() => {
                 if (item.disabled) return;
@@ -88,10 +90,10 @@
         font-family: inherit;
     }
     .menu-item:hover:not(:disabled) {
-        background: var(--hover, rgba(255, 255, 255, 0.06));
+        background: color-mix(in srgb, var(--text) 8%, transparent);
     }
     .menu-item:disabled {
-        color: var(--text-dim, #777);
+        color: var(--text-dim);
         cursor: not-allowed;
     }
 </style>

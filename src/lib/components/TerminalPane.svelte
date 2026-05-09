@@ -314,7 +314,9 @@
 
     async function copyBlocksAsText(blocks: CommandBlock[]) {
         if (!terminal || blocks.length === 0) return;
-        const text = extractBlocksText(terminal, blocks);
+        // 传 foldStore：折叠块走 saved body，否则会被拉到 cursorAbs 把后续
+        // 命令输出全卷进来（PR #24 reviewer 发现的 bug）
+        const text = extractBlocksText(terminal, blocks, foldStore);
         if (!text) return;
         try {
             await navigator.clipboard.writeText(text);
@@ -330,7 +332,8 @@
         // ClipboardItem 接受 Promise<Blob> 由浏览器自己等。中间任何 await
         // 都会让 user gesture 失效 → NotAllowedError。
         const term = terminal;
-        const pngPromise = renderBlocksToBlob(term, blocks).then((b) => {
+        const fs = foldStore;
+        const pngPromise = renderBlocksToBlob(term, blocks, {}, fs).then((b) => {
             if (!b) throw new Error("render produced no blob");
             return b;
         });
@@ -970,10 +973,12 @@
                     {/each}
                 {/if}
             </svg>
-            <!-- 折叠后的行数角标。pointer-events 关掉，不挡选中。 -->
+            <!-- 折叠后的行数角标。pointer-events 关掉，不挡选中。
+                 r.y 是 SVG 坐标系；SVG 自身有 top: 4px 的偏移，这个 div 是
+                 .term-wrap 子节点，要把那 4px 加回来才能跟主条对齐。 -->
             {#each blockRects as r (r.id)}
                 {#if r.folded}
-                    <div class="fold-label" style="top: {r.y}px;">
+                    <div class="fold-label" style="top: calc({r.y}px + 4px);">
                         ⋯ {r.foldCount} {r.foldCount === 1 ? "line" : "lines"}
                     </div>
                 {/if}
@@ -1042,8 +1047,8 @@
         font-size: 11px;
         line-height: 1.4;
         padding: 0 6px;
-        color: var(--text-dim, #888);
-        background: var(--surface, rgba(0, 0, 0, 0.4));
+        color: var(--text-dim);
+        background: var(--surface);
         border-radius: 3px;
         pointer-events: none;
         white-space: nowrap;

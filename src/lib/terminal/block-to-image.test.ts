@@ -32,38 +32,38 @@ const THEME: ITheme = {
 /* ───────────────────────── paletteToColor ───────────────────────── */
 
 describe("paletteToColor", () => {
+  const FALLBACK = "#fallback";
   it("maps 0..7 to ANSI 8 base colors via theme", () => {
-    expect(paletteToColor(0, THEME)).toBe("#000000");
-    expect(paletteToColor(1, THEME)).toBe("#cc0000");
-    expect(paletteToColor(7, THEME)).toBe("#cccccc");
+    expect(paletteToColor(0, THEME, FALLBACK)).toBe("#000000");
+    expect(paletteToColor(1, THEME, FALLBACK)).toBe("#cc0000");
+    expect(paletteToColor(7, THEME, FALLBACK)).toBe("#cccccc");
   });
 
   it("maps 8..15 to bright ANSI via theme", () => {
-    expect(paletteToColor(8, THEME)).toBe("#666666");
-    expect(paletteToColor(15, THEME)).toBe("#ffffff");
+    expect(paletteToColor(8, THEME, FALLBACK)).toBe("#666666");
+    expect(paletteToColor(15, THEME, FALLBACK)).toBe("#ffffff");
   });
 
   it("maps 16 (cube origin) to pure black", () => {
-    expect(paletteToColor(16, THEME)).toBe("rgb(0,0,0)");
+    expect(paletteToColor(16, THEME, FALLBACK)).toBe("rgb(0,0,0)");
   });
 
   it("maps 231 (cube max) to pure white-ish (5,5,5 → 255 each)", () => {
-    expect(paletteToColor(231, THEME)).toBe("rgb(255,255,255)");
+    expect(paletteToColor(231, THEME, FALLBACK)).toBe("rgb(255,255,255)");
   });
 
   it("cube formula: idx 196 → red corner (5,0,0)", () => {
-    // i = 180; r=5, g=0, b=0 → (255, 0, 0)
-    expect(paletteToColor(196, THEME)).toBe("rgb(255,0,0)");
+    expect(paletteToColor(196, THEME, FALLBACK)).toBe("rgb(255,0,0)");
   });
 
   it("maps grayscale 232..255", () => {
-    expect(paletteToColor(232, THEME)).toBe("rgb(8,8,8)");
-    expect(paletteToColor(255, THEME)).toBe("rgb(238,238,238)");
+    expect(paletteToColor(232, THEME, FALLBACK)).toBe("rgb(8,8,8)");
+    expect(paletteToColor(255, THEME, FALLBACK)).toBe("rgb(238,238,238)");
   });
 
-  it("clamps out-of-range indices to default fg", () => {
-    expect(paletteToColor(-1, THEME)).toBe("#eeeeee");
-    expect(paletteToColor(999, THEME)).toBe("#eeeeee");
+  it("returns caller-supplied fallback for out-of-range indices", () => {
+    expect(paletteToColor(-1, THEME, FALLBACK)).toBe(FALLBACK);
+    expect(paletteToColor(999, THEME, FALLBACK)).toBe(FALLBACK);
   });
 });
 
