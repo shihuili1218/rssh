@@ -1,5 +1,6 @@
 <script lang="ts">
     import {onDestroy, onMount, untrack} from "svelte";
+    import {SvelteSet} from "svelte/reactivity";
     import {Terminal, type IDisposable} from "@xterm/xterm";
     import {FitAddon} from "@xterm/addon-fit";
     import {SearchAddon} from "@xterm/addon-search";
@@ -11,8 +12,10 @@
     import * as theme from "../themes/store.svelte.ts";
     import MobileKeybar from "./MobileKeybar.svelte";
     import {registerRsshOscHandlers} from "../osc/handler.ts";
-    import {createCommandBlockTracker, type CommandBlockTracker} from "../terminal/command-blocks.ts";
+    import {createCommandBlockTracker, type CommandBlock, type CommandBlockTracker} from "../terminal/command-blocks.ts";
     import {createFoldStore, type FoldStore} from "../terminal/folds.ts";
+    import {extractBlocksText} from "../terminal/block-content.ts";
+    import {renderBlocksToBlob} from "../terminal/block-to-image.ts";
     import BlockContextMenu, {type MenuItem} from "./BlockContextMenu.svelte";
 
     const RST = "\x1b[0m";
@@ -191,6 +194,7 @@
 
     const blockRects = $derived.by((): BlockRect[] => {
         paintTick; // dependency
+        // selectedBlockIds 是 SvelteSet，下方 .has() 调用自带 reactivity
         if (!app.commandBlockBar()) return [];
         if (!terminal || !blockTracker || !containerEl || isAltBuffer) return [];
         const firstRow = containerEl.querySelector(".xterm-rows")?.firstElementChild as HTMLElement | null;
@@ -232,22 +236,77 @@
         return out;
     });
 
-    // Anchor for shift-extend. Plain click sets it; shift+click extends from
-    // it without moving it (Finder-style). Snapshot is fine even if the
-    // anchored block is still growing — the live r.endLine on subsequent
-    // shift+clicks dominates via max().
-    let selectionAnchor: { start: number; end: number } | undefined;
+    // Block 选中集合 — 块是一等公民，与 xterm 文本选区彻底解耦。
+    // 单击 bar = toggle；点击其他地方或 Esc = 清空；多块可同时荧光。
+    // 复制操作（菜单里）按 Finder 规则消费这个 Set。
+    //
+    // 必须用 SvelteSet：原生 Set 在 $state 里 add/delete 不会让消费者
+    // ($derived、模板表达式) 重算 —— Svelte 5 不给原生 Set 自动加代理。
+    // 现象：click 后 selectedBlockIds 已变，但 blockRects 不重算，halo 不出现，
+    //      只有别的事（比如 fold）顺带触发 derive 时才会"恍然出现"。
+    const selectedBlockIds = new SvelteSet<number>();
 
-    function selectBlock(r: BlockRect, shift: boolean) {
-        if (!terminal) return;
-        if (shift && selectionAnchor) {
-            const start = Math.min(selectionAnchor.start, r.startLine);
-            const end = Math.max(selectionAnchor.end, r.endLine);
-            terminal.selectLines(start, end);
-        } else {
-            selectionAnchor = { start: r.startLine, end: r.endLine };
-            terminal.selectLines(r.startLine, r.endLine);
+    function toggleBlockSelection(id: number) {
+        if (selectedBlockIds.has(id)) selectedBlockIds.delete(id);
+        else selectedBlockIds.add(id);
+    }
+
+    function clearBlockSelection() {
+        if (selectedBlockIds.size > 0) selectedBlockIds.clear();
+    }
+
+    function onWindowMouseDown(e: MouseEvent) {
+        if (selectedBlockIds.size === 0) return;
+        const t = e.target as Element | null;
+        if (!t) return;
+        // 点 bar 自身或菜单内部不清空——分别由 toggle / 菜单 action 处理。
+        if (t.closest(".block-hit") || t.closest(".block-menu")) return;
+        clearBlockSelection();
+    }
+
+    function onWindowKeyDown(e: KeyboardEvent) {
+        if (e.key === "Escape" && selectedBlockIds.size > 0) {
+            clearBlockSelection();
+            // 不 preventDefault：Esc 仍要送到 shell（vim/less 等需要）。
         }
+    }
+
+    /** Finder 规则：右键对象 ∈ 已选集 → 作用于全部已选；否则 → 仅作用于该块。
+     *  用于"复制"类操作。fold 仍是 per-block 动作，不走这条。 */
+    function copyTargetBlocks(rightClickedId: number): CommandBlock[] {
+        if (!blockTracker) return [];
+        const ids = selectedBlockIds.has(rightClickedId)
+            ? new Set(selectedBlockIds)
+            : new Set([rightClickedId]);
+        return blockTracker.blocks.filter((b) => ids.has(b.id));
+    }
+
+    async function copyBlocksAsText(blocks: CommandBlock[]) {
+        if (!terminal || blocks.length === 0) return;
+        const text = extractBlocksText(terminal, blocks);
+        if (!text) return;
+        try {
+            await navigator.clipboard.writeText(text);
+            clearBlockSelection();
+        } catch (e) {
+            console.warn("copy text failed:", e);
+        }
+    }
+
+    function copyBlocksAsImage(blocks: CommandBlock[]) {
+        if (!terminal || blocks.length === 0) return;
+        // 关键：clipboard.write 必须**同步**地在 click handler 里调用，
+        // ClipboardItem 接受 Promise<Blob> 由浏览器自己等。中间任何 await
+        // 都会让 user gesture 失效 → NotAllowedError。
+        const term = terminal;
+        const pngPromise = renderBlocksToBlob(term, blocks).then((b) => {
+            if (!b) throw new Error("render produced no blob");
+            return b;
+        });
+        navigator.clipboard
+            .write([new ClipboardItem({ "image/png": pngPromise })])
+            .then(() => clearBlockSelection())
+            .catch((e) => console.warn("copy image failed:", e));
     }
 
     function openBlockMenu(r: BlockRect, e: MouseEvent) {
@@ -260,6 +319,12 @@
         const block = blockTracker.blocks.find((b) => b.id === r.id);
         const canFold = !!block && !!block.end && !block.end.isDisposed
                           && block.start.line + 1 <= block.end.line;
+        // Finder 规则确定"复制"目标。snapshot：菜单弹出那一刻的选区
+        // 决定操作对象，后续 selectedBlockIds 变化不影响 onClick 闭包。
+        const targets = copyTargetBlocks(r.id);
+        const n = targets.length;
+        const textLabel = n > 1 ? `复制 ${n} 块为文本` : "复制文本";
+        const imageLabel = n > 1 ? `复制 ${n} 块为图片` : "复制为图片";
         ctxMenu = {
             x: e.clientX,
             y: e.clientY,
@@ -271,6 +336,16 @@
                         if (folded) foldStore!.unfold(r.id);
                         else foldStore!.fold(r.id);
                     },
+                },
+                {
+                    label: textLabel,
+                    disabled: n === 0,
+                    action: () => copyBlocksAsText(targets),
+                },
+                {
+                    label: imageLabel,
+                    disabled: n === 0,
+                    action: () => copyBlocksAsImage(targets),
                 },
             ],
         };
@@ -649,7 +724,16 @@
 
         // Command block tracker — marks Enter keypresses in normal buffer.
         blockTracker = createCommandBlockTracker(terminal);
-        blockTracker.onChange(() => paintTick++);
+        blockTracker.onChange(() => {
+            paintTick++;
+            // 剪枝：被 GC 的块从选中集合里清掉，避免 stale id 累积。
+            if (selectedBlockIds.size > 0 && blockTracker) {
+                const live = new Set(blockTracker.blocks.map(b => b.id));
+                for (const id of selectedBlockIds) {
+                    if (!live.has(id)) selectedBlockIds.delete(id);
+                }
+            }
+        });
 
         // Fold store — splice-based fold/unfold with auto-cleanup on resize and
         // scrollback trim. See folds.ts for the invariant analysis.
@@ -677,6 +761,11 @@
             if (isLocal) app.updateTabLabel(tabId, title);
             else app.setTerminalTitle(tabId, title);
         });
+
+        // 块选中清空：点击非 .block-hit / 非 .block-menu 处 → 清空荧光。
+        // Esc → 清空荧光（不 preventDefault，让 Esc 仍传到 shell）。
+        window.addEventListener("mousedown", onWindowMouseDown);
+        window.addEventListener("keydown", onWindowKeyDown);
 
         resizeObs = new ResizeObserver((entries) => {
             // Skip fitting when the container is hidden (display:none
@@ -738,6 +827,8 @@
 
     onDestroy(() => {
         unsubscribeTheme?.();
+        window.removeEventListener("mousedown", onWindowMouseDown);
+        window.removeEventListener("keydown", onWindowKeyDown);
         unlisteners.forEach(u => u());
         dataDisposable?.dispose();
         resizeDisposable?.dispose();
@@ -821,6 +912,15 @@
                     <rect x="5" y="0" width="3" height="100%" rx="1.5" style="fill: var(--text-dim)" opacity="0.5" />
                 {:else}
                     {#each blockRects as r (r.id)}
+                        {#if selectedBlockIds.has(r.id)}
+                            <!-- Halo：选中时画在主条之下，加宽加高、半透明。
+                                 实体矩形——视觉信号不依赖 filter 是否生效，
+                                 在 WKWebView/Tauri 等对 SVG filter 支持差的
+                                 环境也能稳定显示。blur 是锦上添花，没了也行。 -->
+                            <rect class="block-halo"
+                                  x="2" y={r.y - 2} width="9" height={r.h + 4} rx="3"
+                                  fill={r.color} opacity="0.45" />
+                        {/if}
                         {#if r.folded}
                             <!-- 虚线 stroke 表示折叠态；fill 透明让背景透出 -->
                             <rect x="5" y={r.y} width="3" height={r.h} rx="1.5"
@@ -831,7 +931,7 @@
                         {/if}
                         <rect class="block-hit" x="0" y={r.y} width="12" height={r.h}
                               fill="transparent"
-                              onclick={(e) => selectBlock(r, e.shiftKey)}
+                              onclick={() => toggleBlockSelection(r.id)}
                               oncontextmenu={(e) => openBlockMenu(r, e)} />
                     {/each}
                 {/if}
@@ -920,6 +1020,13 @@
     .block-hit {
         pointer-events: auto;
         cursor: pointer;
+    }
+
+    /* Halo 光晕：实体半透明矩形，模糊柔化边缘。
+       blur 在某些 WebView 上失效也无妨——半透明矩形本身就承载视觉信号。 */
+    .block-halo {
+        filter: blur(2px);
+        pointer-events: none;
     }
 
     .search-bar {
