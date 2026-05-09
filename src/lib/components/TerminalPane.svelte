@@ -12,6 +12,8 @@
     import MobileKeybar from "./MobileKeybar.svelte";
     import {registerRsshOscHandlers} from "../osc/handler.ts";
     import {createCommandBlockTracker, type CommandBlockTracker} from "../terminal/command-blocks.ts";
+    import {createFoldStore, type FoldStore} from "../terminal/folds.ts";
+    import BlockContextMenu, {type MenuItem} from "./BlockContextMenu.svelte";
 
     const RST = "\x1b[0m";
 
@@ -168,10 +170,24 @@
     // whenever something that affects the overlay changes — scroll, render,
     // block list change. The $derived below recomputes svg rects from it.
     let blockTracker: CommandBlockTracker | undefined;
+    let foldStore: FoldStore | undefined;
     let paintTick = $state(0);
     let isAltBuffer = $state(false);
 
-    type BlockRect = { id: number; y: number; h: number; color: string; startLine: number; endLine: number };
+    // 右键菜单状态。null = 不显示。
+    type CtxMenu = { x: number; y: number; items: MenuItem[] };
+    let ctxMenu = $state<CtxMenu | null>(null);
+
+    type BlockRect = {
+        id: number;
+        y: number;
+        h: number;
+        color: string;
+        startLine: number;
+        endLine: number;
+        folded: boolean;
+        foldCount: number; // 仅 folded=true 有效
+    };
 
     const blockRects = $derived.by((): BlockRect[] => {
         paintTick; // dependency
@@ -191,11 +207,17 @@
         const out: BlockRect[] = [];
         for (const b of blockTracker.blocks) {
             if (b.start.isDisposed) continue;
+            const folded = foldStore?.isFolded(b.id) ?? false;
+            // Folded：竖线只标 prompt 行，body 已不在 buffer。
+            // Unfolded：常规 [start..end] 跨度。
             const startLine = b.start.line;
-            const endLine = b.end && !b.end.isDisposed ? b.end.line : cursorAbs;
+            const endLine = folded
+                ? b.start.line
+                : b.end && !b.end.isDisposed ? b.end.line : cursorAbs;
             const top = Math.max(startLine, viewportY);
             const bot = Math.min(endLine, viewportY + rows - 1);
             if (top > bot) continue;
+            const fold = folded ? foldStore?.folds.find((f) => f.blockId === b.id) : undefined;
             out.push({
                 id: b.id,
                 y: (top - viewportY) * rowHeight,
@@ -203,6 +225,8 @@
                 color: b.color,
                 startLine,
                 endLine,
+                folded,
+                foldCount: fold?.count ?? 0,
             });
         }
         return out;
@@ -224,6 +248,32 @@
             selectionAnchor = { start: r.startLine, end: r.endLine };
             terminal.selectLines(r.startLine, r.endLine);
         }
+    }
+
+    function openBlockMenu(r: BlockRect, e: MouseEvent) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!foldStore || !blockTracker) return;
+        const folded = r.folded;
+        // 折叠仅对"已关闭、有 body"的 block 可用。展开总是可用（能进菜单
+        // 说明 fold 记录还在，对应 block.start 仍存活）。
+        const block = blockTracker.blocks.find((b) => b.id === r.id);
+        const canFold = !!block && !!block.end && !block.end.isDisposed
+                          && block.start.line + 1 <= block.end.line;
+        ctxMenu = {
+            x: e.clientX,
+            y: e.clientY,
+            items: [
+                {
+                    label: folded ? "展开" : "折叠",
+                    disabled: !folded && !canFold,
+                    action: () => {
+                        if (folded) foldStore!.unfold(r.id);
+                        else foldStore!.fold(r.id);
+                    },
+                },
+            ],
+        };
     }
 
     // Listener tracking — disposed on cleanup/reconnect
@@ -600,6 +650,11 @@
         // Command block tracker — marks Enter keypresses in normal buffer.
         blockTracker = createCommandBlockTracker(terminal);
         blockTracker.onChange(() => paintTick++);
+
+        // Fold store — splice-based fold/unfold with auto-cleanup on resize and
+        // scrollback trim. See folds.ts for the invariant analysis.
+        foldStore = createFoldStore(terminal, blockTracker);
+        foldStore.onChange(() => paintTick++);
         terminal.onScroll(() => paintTick++);
         terminal.onRender(() => paintTick++);
         terminal.buffer.onBufferChange((buf) => {
@@ -702,6 +757,7 @@
         hostKeyInputDisposable?.dispose();
         resizeObs?.disconnect();
         mobileKeyboardCleanup?.();
+        foldStore?.dispose();
         blockTracker?.dispose();
         app.unregisterTerminalWriter();
         app.unregisterTerminalArrowSender();
@@ -765,15 +821,39 @@
                     <rect x="5" y="0" width="3" height="100%" rx="1.5" style="fill: var(--text-dim)" opacity="0.5" />
                 {:else}
                     {#each blockRects as r (r.id)}
-                        <rect x="5" y={r.y} width="3" height={r.h} rx="1.5" fill={r.color} />
+                        {#if r.folded}
+                            <!-- 虚线 stroke 表示折叠态；fill 透明让背景透出 -->
+                            <rect x="5" y={r.y} width="3" height={r.h} rx="1.5"
+                                  fill="none" stroke={r.color} stroke-width="1"
+                                  stroke-dasharray="2,2" />
+                        {:else}
+                            <rect x="5" y={r.y} width="3" height={r.h} rx="1.5" fill={r.color} />
+                        {/if}
                         <rect class="block-hit" x="0" y={r.y} width="12" height={r.h}
                               fill="transparent"
-                              onclick={(e) => selectBlock(r, e.shiftKey)} />
+                              onclick={(e) => selectBlock(r, e.shiftKey)}
+                              oncontextmenu={(e) => openBlockMenu(r, e)} />
                     {/each}
                 {/if}
             </svg>
+            <!-- 折叠后的行数角标。pointer-events 关掉，不挡选中。 -->
+            {#each blockRects as r (r.id)}
+                {#if r.folded}
+                    <div class="fold-label" style="top: {r.y}px;">
+                        ⋯ {r.foldCount} {r.foldCount === 1 ? "line" : "lines"}
+                    </div>
+                {/if}
+            {/each}
         {/if}
     </div>
+    {#if ctxMenu}
+        <BlockContextMenu
+            x={ctxMenu.x}
+            y={ctxMenu.y}
+            items={ctxMenu.items}
+            onClose={() => (ctxMenu = null)}
+        />
+    {/if}
     {#if app.isMobile}
         <MobileKeybar />
     {/if}
@@ -820,6 +900,25 @@
         pointer-events: none;
         overflow: visible;
     }
+    /* 折叠角标：行末右侧贴一个灰字 "⋯ N lines"，提示这一行下面有内容被折掉。
+       pointer-events: none 让 xterm 本身的选中、链接、滚动手势全部穿透。 */
+    .fold-label {
+        position: absolute;
+        right: 8px;
+        height: 0; /* 行高靠 line-height 撑出，避免遮住下一行 */
+        line-height: 1;
+        padding: 2px 6px;
+        margin-top: 2px;
+        font-size: 11px;
+        color: var(--text-dim, #888);
+        background: var(--surface, rgba(0, 0, 0, 0.4));
+        border-radius: 3px;
+        pointer-events: none;
+        white-space: nowrap;
+        opacity: 0.85;
+        z-index: 5;
+    }
+
     .block-hit {
         pointer-events: auto;
         cursor: pointer;
