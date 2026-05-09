@@ -21,9 +21,9 @@ use crate::error::{AppError, AppResult};
 use crate::models::{Credential, Forward, Group, Profile};
 use crate::secret::{cred_secret_key, SecretStore};
 
-/// 失败项的结构化记录。当前 `first_failure` 把 Vec 折成单条 AppError 抛给
-/// 前端（前端只渲染首条 + 总数），剩余项不会落日志——保留 Vec 形态是为了
-/// 将来要加结构化日志时不再改公共签名。
+/// 失败项的结构化记录。`aggregate_failure` 把整个 Vec 序列化进 AppError params，
+/// 前端可逐条渲染——避免老 `first_failure` 只暴露首条导致用户反复 retry 才能
+/// 看完所有错的退化体验。
 #[derive(Debug, Clone)]
 pub struct ImportError {
     pub kind: &'static str,
@@ -31,30 +31,21 @@ pub struct ImportError {
     pub code: String,
 }
 
-impl ImportError {
-    fn into_json(self) -> Value {
-        json!({
-            "kind": self.kind,
-            "name": self.name.unwrap_or_default(),
-            "code": self.code,
-        })
-    }
-}
-
-fn first_failure(errs: Vec<ImportError>) -> AppError {
+fn aggregate_failure(errs: Vec<ImportError>) -> AppError {
     let count = errs.len();
-    let first = errs
-        .into_iter()
-        .next()
-        .map(|e| e.into_json())
-        .unwrap_or(json!({}));
+    let details = errs
+        .iter()
+        .map(|e| {
+            let name = e.name.as_deref().unwrap_or("?");
+            format!("• {} '{}' ({})", e.kind, name, e.code)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     AppError::other(
         "import_partial_failed",
         json!({
             "count": count,
-            "first_kind": first.get("kind").cloned().unwrap_or(json!("?")),
-            "first_name": first.get("name").cloned().unwrap_or(json!("?")),
-            "first_code": first.get("code").cloned().unwrap_or(json!("?")),
+            "details": details,
         }),
     )
 }
@@ -190,7 +181,7 @@ pub fn merge_import(db: &Db, ss: &dyn SecretStore, data: &Value) -> AppResult<()
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(first_failure(errors))
+        Err(aggregate_failure(errors))
     }
 }
 
@@ -282,7 +273,7 @@ pub fn replace_import(db: &Db, ss: &dyn SecretStore, data: &Value) -> AppResult<
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(first_failure(errors))
+        Err(aggregate_failure(errors))
     }
 }
 

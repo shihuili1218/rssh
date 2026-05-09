@@ -135,6 +135,7 @@
     .msg {
         font-size: 12px;
         color: var(--accent);
+        white-space: pre-line; /* 让 import_partial_failed 等多行错误的 \n 真正换行 */
     }
 
     .dialog-backdrop {

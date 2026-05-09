@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::models::Snippet;
 
 pub fn load(data_dir: &Path) -> AppResult<Vec<Snippet>> {
@@ -8,9 +8,17 @@ pub fn load(data_dir: &Path) -> AppResult<Vec<Snippet>> {
     if !path.exists() {
         return Ok(vec![]);
     }
-    let data = std::fs::read_to_string(path)?;
-    let snippets: Vec<Snippet> = serde_json::from_str(&data).unwrap_or_default();
-    Ok(snippets)
+    let data = std::fs::read_to_string(&path)?;
+    // 文件存在但解析失败 = 用户数据可能损坏。早 fail 让用户察觉，比 silent 清空更好。
+    serde_json::from_str(&data).map_err(|e| {
+        AppError::other(
+            "snippet_parse_failed",
+            serde_json::json!({
+                "path": path.to_string_lossy(),
+                "err": e.to_string(),
+            }),
+        )
+    })
 }
 
 pub fn save(data_dir: &Path, snippets: &[Snippet]) -> AppResult<()> {
