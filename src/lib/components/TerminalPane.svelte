@@ -901,9 +901,7 @@
         overflow: visible;
     }
     /* 折叠角标：行末右侧贴一个灰字 "⋯ N lines"。
-       pointer-events: none 让 xterm 本身的选中、链接、滚动手势全部穿透。
-       transform: translateZ(0) 让浏览器把它单独 promote 成合成层，
-       避免每次 top 变化都触发 paint 而不只是 transform。 */
+       pointer-events: none 让 xterm 选中、链接、滚动手势全部穿透。 */
     .fold-label {
         position: absolute;
         right: 8px;
@@ -917,8 +915,6 @@
         white-space: nowrap;
         opacity: 0.85;
         z-index: 5;
-        transform: translateZ(0);
-        will-change: top;
     }
 
     .block-hit {

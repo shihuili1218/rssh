@@ -9,11 +9,18 @@
  *   3. 不变量 cursor 内容跟随：splice 在 cursor 上方时 cursor 绝对行
  *      要相应减少（fold）或增加（unfold）
  *
- * fold 流程：splice 抽出 → push 空行补齐 → drain ybase 再 y → 重排 ydisp
+ * fold 流程：splice 抽出 → push 空行补齐（记下引用）→ drain ybase 再 y → 重排 ydisp
  *
- * unfold 流程（不 pop 末尾，避免吃掉用户在折叠期间产生的输出）：
- *   splice 把 saved 塞回 → ybase += count（多出来的"曾是空行"自然进入
- *   scrollback）→ 重新 registerMarker 给 block.end（splice 时被 dispose）
+ * unfold 流程：splice 塞回 → 部分 pop 还原 buffer 长度。
+ *   能 pop 多少 pop 多少（不是全有全无）：
+ *     k_max = min(count, rows - 1 - y)   ← cursor 在屏幕上下移的最大量
+ *     遍历 pop k_max 次；遇到末尾不是我们 push 的 blank（用户/xterm 写过）
+ *     就把它推回，提前停。
+ *   实际 popped 次数 → cursor 下移 popped 行
+ *   未 pop 的 (count - popped) → ybase 增长这么多（多余行进 scrollback）
+ *
+ *   设计核心：cursor-overflow 和 end-not-blank 是物理约束，不是全或无。
+ *   尽力 pop 让 buffer 不必要的膨胀降到最小。
  *
  * Auto-unfold 触发：
  *   - 终端 resize（saved 是按旧列宽抓的，新列宽展开会错位）
@@ -33,6 +40,10 @@ export interface Fold {
   blockId: number;
   /** body 行数 */
   count: number;
+  /** fold 时实际 push 到末尾的空行数 = count - ybaseDrain。
+   *  当 ybase 有足够 scrollback 可以让出空间时，pushCount < count。
+   *  unfold 时必须 pop 这个数（不是 count）才能精确还原长度。 */
+  pushCount: number;
   /** splice 抽出的 BufferLine 实例（对我们透明） */
   savedLines: unknown[];
 }
@@ -58,6 +69,7 @@ interface PrivateBuffer {
     get(i: number): unknown;
     splice(start: number, deleteCount: number, ...items: unknown[]): void;
     push(item: unknown): void;
+    pop(): unknown;
   };
   ybase: number;
   ydisp: number;
@@ -88,6 +100,11 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
   const listeners = new Set<() => void>();
   const disposables: IDisposable[] = [];
   let nextId = 1;
+  // 所有 fold 期间 push 进 buffer 末尾的 blank BufferLine 引用集合。
+  // unfold 用它判断"末尾 count 行是否还是我们 push 的空行"——是 → 安全 pop
+  // 让 buffer 长度恢复（无遗留空行、无 scrollbar 虚胀）；否则用户内容已经
+  // 把空行挤走，pop 会吞数据 → 退到 no-pop 路径。
+  const pushedBlanks = new Set<unknown>();
 
   const emit = () => listeners.forEach((fn) => fn());
 
@@ -108,16 +125,29 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     const saved: unknown[] = [];
     for (let i = 0; i < count; i++) saved.push(buf.lines.get(startLine + i));
 
+    // 抽 ybase 让出 scrollback 空间，剩下的部分用 push 空行补。
+    // 关键：push 数量 = count - ybaseDrain（不是 count！），否则 lines.length
+    // 会比实际需要的多 ybaseDrain 行，造成滚动条与内容不同步。
+    const ybaseDrain = Math.min(buf.ybase, count);
+    const pushCount = count - ybaseDrain;
+
     // splice 抽出 → marker 自动迁移 + 范围内 marker 自动 dispose（含 block.end）
     buf.lines.splice(startLine, count);
 
-    // 不变量 (1)：lines.length === ybase + rows。补回 count 个空行。
-    for (let i = 0; i < count; i++) buf.lines.push(buf.getBlankLine(BLANK_ATTR));
+    // 不变量 (1)：lines.length === ybase + rows
+    //   splice 后 lines.length 减了 count
+    //   ybase 减 ybaseDrain，rows 不变
+    //   缺口 = count - ybaseDrain = pushCount → 末尾补 pushCount 行
+    for (let i = 0; i < pushCount; i++) {
+      const blank = buf.getBlankLine(BLANK_ATTR);
+      buf.lines.push(blank);
+      pushedBlanks.add(blank);
+    }
 
-    // 不变量 (2)：cursor 跟随内容。绝对位置 -= count。先消 ybase，不够再消 y。
-    const ybaseDrain = Math.min(buf.ybase, count);
+    // 不变量 (2)：cursor 跟随内容。绝对位置 -= count。
+    //   ybase 让 ybaseDrain；y 让 pushCount。和 = count。
     buf.ybase -= ybaseDrain;
-    buf.y -= count - ybaseDrain;
+    buf.y -= pushCount;
     if (buf.y < 0) buf.y = 0;
 
     // 视口顶端：在 splice 后则减 count；在区间内塌到 startLine；最后夹到 [0, ybase]
@@ -125,7 +155,7 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     else if (buf.ydisp >= startLine) buf.ydisp = startLine;
     if (buf.ydisp > buf.ybase) buf.ydisp = buf.ybase;
 
-    folds.set(blockId, { id: nextId++, blockId, count, savedLines: saved });
+    folds.set(blockId, { id: nextId++, blockId, count, pushCount, savedLines: saved });
     syncViewport(term);
     term.refresh(0, term.rows - 1);
     emit();
@@ -149,20 +179,31 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     // splice 塞回 → marker 反向迁移
     buf.lines.splice(insertAt, 0, ...f.savedLines);
 
-    // 不变量 (1)：lines.length 长了 count，让 ybase 跟着长（多出来的"曾是空行"
-    // 自然进入 scrollback）。不 pop 末尾 — 避免吞掉用户在折叠期间产生的内容。
-    buf.ybase += f.count;
+    // 目标：pop 掉 fold 时 push 进末尾的 pushCount 行（只有这些是我们的）。
+    // count = pushCount + ybaseDrain；ybaseDrain 那部分通过"还原 ybase"恢复，
+    // pushCount 那部分通过"pop 末尾 + cursor 下移"恢复。
+    const ybaseDrain = f.count - f.pushCount;
+    const kMax = Math.max(0, Math.min(f.pushCount, term.rows - 1 - buf.y));
+    let popped = 0;
+    while (popped < kMax) {
+      const item = buf.lines.pop();
+      if (!pushedBlanks.has(item)) {
+        buf.lines.push(item);
+        break;
+      }
+      pushedBlanks.delete(item);
+      popped++;
+    }
 
-    // 视口：
-    //   live 状态：上滚 count 行 — 让刚展开的内容紧贴 cursor 上方显示。
-    //     若直接用 ybase 做 live（ydisp=ybase'），新增的 count 行会被推入
-    //     scrollback，用户看不到。这对"首块在 buffer 顶端"的场景尤其糟。
-    //     用 ybase' - count 等价于"viewport 维持在原 live 行"，新展开的内容
-    //     立刻进入可见区。后续输出会自动 snap 回 live（xterm 默认行为）。
-    //   非 live 状态：用户手动滚到了某处，按 insertAt 平移保持内容相对位置不变。
-    if (wasLive) buf.ydisp = Math.max(0, buf.ybase - f.count);
+    const remaining = f.pushCount - popped;
+    // 完全 pop（popped == pushCount）：ybase 恢复 ybaseDrain；linesLen 与 fold 前一致
+    // 部分 pop：未 pop 的 remaining 行只能让 ybase 多长，linesLen 暂时膨胀
+    buf.ybase += ybaseDrain + remaining;
+    buf.y += popped;
+
+    if (wasLive) buf.ydisp = buf.ybase;
     else if (buf.ydisp >= insertAt) buf.ydisp += f.count;
-    // y 不变 — cursor 绝对位置 = ybase + y，ybase += count，cursor 自动 +count
+    if (buf.ydisp > buf.ybase) buf.ydisp = buf.ybase;
 
     // 重装 block.end：splice 时它被 dispose，block-bar 渲染依赖它的位置
     try {
@@ -223,6 +264,7 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     dispose() {
       disposables.forEach((d) => d.dispose());
       folds.clear();
+      pushedBlanks.clear();
       listeners.clear();
     },
   };

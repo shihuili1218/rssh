@@ -82,6 +82,9 @@ function fakeTerm(opts: { rows: number; initialLines: number; cursorY: number; y
     push(item: { content: string }) {
       lineArray.push(item);
     },
+    pop() {
+      return lineArray.pop();
+    },
   };
 
   const buffer = {
@@ -290,17 +293,88 @@ describe("FoldStore — fold() effects", () => {
 });
 
 describe("FoldStore — unfold() effects", () => {
-  it("unfold restores lines.length to original + count (no pop)", () => {
+  it("unfold pops pushed blanks → buffer length restored to pre-fold (safe path)", () => {
+    // 折叠期间无 xterm 写末尾、cursor 也没爬过去 → safe pop
     const f = fakeTerm({ rows: 24, initialLines: 24, cursorY: 14 });
     const s = f.makeMarker(0);
     const e = f.makeMarker(12);
     const tracker = fakeTracker([makeBlock(1, s, e)]);
     const store = createFoldStore(f.term, tracker);
+    const before = f.snapshot();
     store.fold(1);
+    store.unfold(1);
+    const after = f.snapshot();
+    expect(after.length).toBe(before.length); // 复原
+  });
+
+  it("unfold with scrollback (ybase>0) restores length precisely (pushCount<count)", () => {
+    // 关键场景：fold 时 ybase 有 scrollback，让 pushCount < count。
+    // unfold 应严格还原长度——这是滚动条与内容同步的根本前提
+    const f = fakeTerm({ rows: 24, initialLines: 38, cursorY: 23, ybase: 14 });
+    const s = f.makeMarker(20);
+    const e = f.makeMarker(30); // body=[21..30] = 10 行
+    const tracker = fakeTracker([makeBlock(1, s, e)]);
+    const store = createFoldStore(f.term, tracker);
+    const before = f.snapshot();
+    store.fold(1);
+    // ybaseDrain = min(14, 10) = 10。pushCount = 0。ybase: 14→4
+    expect(f.snapshot().ybase).toBe(4);
+    store.unfold(1);
+    const after = f.snapshot();
+    // 完全还原：linesLen, ybase, cursor 三个全回到 fold 前
+    expect(after.length).toBe(before.length);
+    expect(after.ybase).toBe(before.ybase);
+    expect(after.cursorAbs).toBe(before.cursorAbs);
+  });
+
+  it("unfold falls back to no-pop when end-of-buffer was overwritten (no scrollback case)", () => {
+    // ybase=0 → pushCount=count。模拟 xterm 在折叠期间往末尾追加了用户内容
+    const f = fakeTerm({ rows: 24, initialLines: 24, cursorY: 14 });
+    const s = f.makeMarker(0);
+    const e = f.makeMarker(12);
+    const tracker = fakeTracker([makeBlock(1, s, e)]);
+    const store = createFoldStore(f.term, tracker);
+    store.fold(1); // pushCount=12
+    f.buffer.lines.push({ content: "<user-output>" } as never);
     const afterFold = f.snapshot();
     store.unfold(1);
     const afterUnfold = f.snapshot();
     expect(afterUnfold.length).toBe(afterFold.length + 12);
+  });
+
+  it("unfold partial-pops when cursor can't drop full pushCount rows", () => {
+    // rows=10, ybase=0 → pushCount=count=8。手动推大 y 模拟用户敲 Enter
+    const f = fakeTerm({ rows: 10, initialLines: 10, cursorY: 9 });
+    const s = f.makeMarker(0);
+    const e = f.makeMarker(8);
+    const tracker = fakeTracker([makeBlock(1, s, e)]);
+    const store = createFoldStore(f.term, tracker);
+    store.fold(1);
+    f.buffer.y = 8;
+    const afterFold = f.snapshot();
+    store.unfold(1);
+    const afterUnfold = f.snapshot();
+    // pushCount=8, kMax=min(8, 10-1-8)=1 → popped=1, remaining=7
+    expect(afterUnfold.length).toBe(afterFold.length + 7);
+  });
+
+  it("unfold partial-pops when end-of-buffer is overwritten partway", () => {
+    // 在 fold push 的 4 个 blank 中替换最后一个为"用户内容"。
+    // pop 应该成功 popped=3（前 3 个 blank），第 4 个失败停止。
+    const f = fakeTerm({ rows: 24, initialLines: 24, cursorY: 14 });
+    const s = f.makeMarker(0);
+    const e = f.makeMarker(4);
+    const tracker = fakeTracker([makeBlock(1, s, e)]);
+    const store = createFoldStore(f.term, tracker);
+    store.fold(1); // count=4, push 4 blanks
+    // 把最末尾的 blank 替换成用户内容（模拟 xterm 在折叠期间往那写了东西）
+    f.buffer.lines.pop();
+    f.buffer.lines.push({ content: "<user-output>" } as never);
+    const afterFold = f.snapshot();
+    store.unfold(1);
+    const afterUnfold = f.snapshot();
+    // pop 第一次就遇到非 blank → popped=0, remaining=4
+    expect(afterUnfold.length).toBe(afterFold.length + 4);
   });
 
   it("unfold preserves cursor content position", () => {
