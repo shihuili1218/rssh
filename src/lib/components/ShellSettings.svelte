@@ -1,18 +1,22 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import * as app from "../stores/app.svelte.ts";
+  import { t } from "../i18n/index.svelte.ts";
 
   let shells = $state<string[]>([]);
   let selectedShell = $state("");
   let verboseLog = $state(true);
   let connectTimeout = $state(10);
+  let commandBlockBar = $state(true);
 
   onMount(async () => {
     try { shells = await invoke<string[]>("list_shells"); } catch { shells = []; }
     selectedShell = await invoke<string | null>("get_setting", { key: "local_shell" }) ?? "";
     verboseLog = (await invoke<string | null>("get_setting", { key: "verbose_log" })) !== "false";
-    const t = await invoke<string | null>("get_setting", { key: "connect_timeout" });
-    if (t) connectTimeout = parseInt(t, 10) || 10;
+    const ts = await invoke<string | null>("get_setting", { key: "connect_timeout" });
+    if (ts) connectTimeout = parseInt(ts, 10) || 10;
+    commandBlockBar = await app.loadCommandBlockBar();
   });
 
   async function saveShell() {
@@ -27,6 +31,10 @@
     const val = Math.max(1, Math.min(300, connectTimeout));
     connectTimeout = val;
     await invoke("set_setting", { key: "connect_timeout", value: String(val) });
+  }
+
+  async function saveCommandBlockBar() {
+    await app.setCommandBlockBar(commandBlockBar);
   }
 </script>
 
@@ -71,6 +79,34 @@
     </label>
   </div>
 
+  <div class="section-label">{t("settings.shell.command_block")}</div>
+  <div class="switch-card">
+    <div class="switch-card-body">
+      <div class="switch-card-title"
+           class:on={commandBlockBar} class:off={!commandBlockBar}>
+        {t("settings.shell.command_block_bar")}
+      </div>
+      <div class="switch-card-desc">{t("settings.shell.command_block_bar_desc")}</div>
+    </div>
+    <label class="switch">
+      <input type="checkbox" bind:checked={commandBlockBar} onchange={saveCommandBlockBar} />
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  {#if commandBlockBar}
+    <div class="tips-card">
+      <div class="tips-title">{t("settings.shell.command_block_tips_title")}</div>
+      <ul class="tips-list">
+        <li>{t("settings.shell.command_block_tip_click")}</li>
+        <li>{t("settings.shell.command_block_tip_shift_click")}</li>
+        <li>{t("settings.shell.command_block_tip_cmd_click")}</li>
+        <li>{t("settings.shell.command_block_tip_right_click")}</li>
+        <li>{t("settings.shell.command_block_tip_clear")}</li>
+      </ul>
+    </div>
+  {/if}
+
 </div>
 
 <style>
@@ -105,5 +141,32 @@
   }
   .timeout-hint {
     font-size: 11px; color: var(--text-dim);
+  }
+
+  /* Tips 卡：开启侧栏后展开，把交互快捷方式列清楚（单击/shift/cmd/右键/Esc）。
+     视觉上比 switch-card 更"轻"——边框替代背景填充，让用户一看就知道是辅助信息。 */
+  .tips-card {
+    border: 1px solid var(--divider);
+    border-radius: 6px;
+    padding: 10px 14px;
+    background: color-mix(in srgb, var(--accent) 4%, transparent);
+  }
+  .tips-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-sub);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+  }
+  .tips-list {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 12px;
+    color: var(--text);
+    line-height: 1.6;
+  }
+  .tips-list li {
+    margin: 2px 0;
   }
 </style>

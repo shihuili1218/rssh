@@ -35,10 +35,6 @@
 
     let current = $derived(app.sidebarPosition());
 
-    let commandBlockBar = $state(true);
-    onMount(async () => { commandBlockBar = await app.loadCommandBlockBar(); });
-    async function saveCommandBlockBar() { await app.setCommandBlockBar(commandBlockBar); }
-
     // ─── AI panel position ────────────────────────────────────────────
     let aiPos = $state<ai.AiPosition>(ai.position());
     function pickAiPos(p: ai.AiPosition) {
@@ -317,17 +313,6 @@
         {/each}
     </div>
 
-    <div class="section-label">{t("settings.appearance.terminal_display")}</div>
-    <div class="switch-card">
-        <div class="switch-card-body">
-            <div class="switch-card-title" class:on={commandBlockBar} class:off={!commandBlockBar}>{t("settings.appearance.command_block_bar")}</div>
-            <div class="switch-card-desc">{t("settings.appearance.command_block_bar_desc")}</div>
-        </div>
-        <label class="switch">
-            <input type="checkbox" bind:checked={commandBlockBar} onchange={saveCommandBlockBar} />
-            <span class="slider"></span>
-        </label>
-    </div>
 </div>
 
 {#if showCustomDialog}

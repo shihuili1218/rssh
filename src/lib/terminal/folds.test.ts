@@ -358,9 +358,10 @@ describe("FoldStore — unfold() effects", () => {
     expect(afterUnfold.length).toBe(afterFold.length + 7);
   });
 
-  it("unfold partial-pops when end-of-buffer is overwritten partway", () => {
-    // 在 fold push 的 4 个 blank 中替换最后一个为"用户内容"。
-    // pop 应该成功 popped=3（前 3 个 blank），第 4 个失败停止。
+  it("unfold bails out when buffer end is overwritten by user output", () => {
+    // pop 是从末尾开始；末尾就是非 blank 时，第一次 pop 就 push-back + break，
+    // 一个都不 pop。这是 unfold 的"安全 pop"契约：宁可让 lines 临时膨胀，
+    // 也不能把用户写过的内容当 blank 给吞了。
     const f = fakeTerm({ rows: 24, initialLines: 24, cursorY: 14 });
     const s = f.makeMarker(0);
     const e = f.makeMarker(4);
@@ -373,7 +374,7 @@ describe("FoldStore — unfold() effects", () => {
     const afterFold = f.snapshot();
     store.unfold(1);
     const afterUnfold = f.snapshot();
-    // pop 第一次就遇到非 blank → popped=0, remaining=4
+    // splice 塞回 4 行 saved；pop 一次失败、popped=0；净 +4
     expect(afterUnfold.length).toBe(afterFold.length + 4);
   });
 

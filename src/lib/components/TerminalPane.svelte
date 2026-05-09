@@ -16,6 +16,7 @@
     import {createFoldStore, type FoldStore} from "../terminal/folds.ts";
     import {extractBlocksText} from "../terminal/block-content.ts";
     import {renderBlocksToBlob} from "../terminal/block-to-image.ts";
+    import {t} from "../i18n/index.svelte.ts";
     import BlockContextMenu, {type MenuItem} from "./BlockContextMenu.svelte";
 
     const RST = "\x1b[0m";
@@ -369,14 +370,18 @@
         // 决定操作对象，后续 selectedBlockIds 变化不影响 onClick 闭包。
         const targets = copyTargetBlocks(r.id);
         const n = targets.length;
-        const textLabel = n > 1 ? `复制 ${n} 块为文本` : "复制文本";
-        const imageLabel = n > 1 ? `复制 ${n} 块为图片` : "复制为图片";
+        const textLabel = n > 1
+            ? t("terminal.block.menu.copy_text_n", { n })
+            : t("terminal.block.menu.copy_text");
+        const imageLabel = n > 1
+            ? t("terminal.block.menu.copy_image_n", { n })
+            : t("terminal.block.menu.copy_image");
         ctxMenu = {
             x: e.clientX,
             y: e.clientY,
             items: [
                 {
-                    label: folded ? "展开" : "折叠",
+                    label: t(folded ? "terminal.block.menu.unfold" : "terminal.block.menu.fold"),
                     disabled: !folded && !canFold,
                     action: () => {
                         if (folded) foldStore!.unfold(r.id);
