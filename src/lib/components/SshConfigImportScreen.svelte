@@ -47,6 +47,12 @@
   let allChecked = $derived(entries.length > 0 && selected.size === entries.length);
   let someChecked = $derived(selected.size > 0 && selected.size < entries.length);
 
+  let headerCheckbox: HTMLInputElement | null = $state(null);
+  // indeterminate 是 DOM property 不是 attribute，必须直接赋值才能触发视觉态。
+  $effect(() => {
+    if (headerCheckbox) headerCheckbox.indeterminate = someChecked;
+  });
+
   function toggle(i: number) {
     const next = new Set(selected);
     if (next.has(i)) next.delete(i); else next.add(i);
@@ -96,13 +102,13 @@
       </button>
     </div>
 
-    <div class="table neu-raised">
+    <div class="table surface-raised">
       <div class="row head">
         <div class="cell-check">
           <input
+            bind:this={headerCheckbox}
             type="checkbox"
             checked={allChecked}
-            indeterminate={someChecked}
             onchange={toggleAll}
           />
         </div>
@@ -125,7 +131,7 @@
     </div>
 
     {#if lastResult && lastResult.errors.length > 0}
-      <div class="error-list neu-raised">
+      <div class="error-list surface-raised">
         <div class="error-title">Errors</div>
         {#each lastResult.errors as err}
           <div class="error-row">

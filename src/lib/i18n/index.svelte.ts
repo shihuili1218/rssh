@@ -15,12 +15,16 @@ export type Locale = "en" | "zh";
 const CATALOGS: Record<Locale, Messages> = { en, zh };
 const STORAGE_KEY = "rssh.locale";
 
+// localStorage / navigator 在 Tauri webview 里一定有，但 Vitest
+// `environment: "node"` 的 vm context 不暴露它们。defensive 访问让测试和
+// 任何无 DOM 的非典型宿主都能跑。
+const hasLocalStorage = typeof localStorage !== "undefined";
+
 function detectLocale(): Locale {
-  const stored = localStorage.getItem(STORAGE_KEY) as Locale | null;
+  const stored = hasLocalStorage
+    ? (localStorage.getItem(STORAGE_KEY) as Locale | null)
+    : null;
   if (stored && stored in CATALOGS) return stored;
-  // navigator 在 Tauri webview 里一定有，但 Vitest `environment: "node"` 的
-  // vm context 不暴露它（即便宿主是 Node 21+）。defensive 访问让测试和
-  // 任何无 navigator 的非典型宿主都能跑。
   const lang =
     typeof navigator !== "undefined" && navigator.language
       ? navigator.language
@@ -36,7 +40,7 @@ export function locale(): Locale {
 
 export function setLocale(next: Locale): void {
   _locale = next;
-  localStorage.setItem(STORAGE_KEY, next);
+  if (hasLocalStorage) localStorage.setItem(STORAGE_KEY, next);
 }
 
 /**

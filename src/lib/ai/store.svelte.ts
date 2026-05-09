@@ -224,9 +224,16 @@ export async function executeCommand(
     },
   };
 
-  // 写命令到 PTY；末尾 \n 触发 shell 执行
+  // 写命令到 PTY；末尾 \n 触发 shell 执行。
+  // 如果 invoke 抛错（session 已关闭等），listener / _runningExecutions 已经登记，
+  // 必须走 finish() 清理一遍，否则会泄漏并让 isCommandRunning() 永远卡 true。
   const data = Array.from(new TextEncoder().encode(proposed.full_cmd + "\n"));
-  await invoke(writeCmd, { sessionId: target_session_id, data });
+  try {
+    await invoke(writeCmd, { sessionId: target_session_id, data });
+  } catch (e) {
+    await finish(`failed to write command: ${e instanceof Error ? e.message : String(e)}`, -1, false);
+    throw e;
+  }
 
   timer = window.setTimeout(() => {
     void finish(stripAnsi(buffer).trim(), -1, true);
