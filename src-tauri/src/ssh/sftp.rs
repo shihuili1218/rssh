@@ -149,8 +149,9 @@ impl SftpHandle {
     }
 
     /// Stream-download a remote file to a local path with a hard size cap.
-    /// 超过 max_bytes 直接 bail（不开始下载）。无前端进度事件——AI 排障流程
-    /// 用，前端不需要进度条。
+    /// 优先用 metadata.size 早期 bail；metadata.size=None 或服务器撒谎时，
+    /// 流式 cap 也会在超限的瞬间中止下载（**此时 local_path 会留下部分内容**）。
+    /// 无前端进度事件——AI 排障流程用，前端不需要进度条。
     pub async fn download_to_path(
         &self,
         remote_path: &str,
@@ -195,6 +196,9 @@ impl SftpHandle {
             // 这是 max_bytes 的唯一权威检查点，预检只是优化。
             let next = transferred + n as u64;
             if next > max_bytes {
+                // 主动关闭 server-side handle，免得让远端 fd 等到 session drop 才回收。
+                // close 自身的错误不重要 —— 我们已经在返回 file_too_large 了。
+                let _ = remote_file.shutdown().await;
                 return Err(AppError::sftp(
                     "sftp_file_too_large",
                     json!({ "path": remote_path, "size": next, "limit": max_bytes }),

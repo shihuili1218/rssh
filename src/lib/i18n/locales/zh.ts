@@ -374,6 +374,7 @@ const zh: Messages = {
   "error.github_empty_content": "GitHub 返回无内容",
   "error.github_utf8_failed": "UTF-8 错误：{err}",
   "error.github_token_missing": "未配置 GitHub Token",
+  "error.github_token_invalid": "GitHub Token 含非法字符：{err}",
   "error.github_repo_missing": "未配置 GitHub Repo",
   "error.bastion_cycle": "堡垒机链存在环：{path}",
   "error.bastion_too_many_hops": "堡垒机链超过 {max} 跳，疑似配置异常",

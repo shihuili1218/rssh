@@ -372,6 +372,7 @@ const en = {
   "error.github_empty_content": "GitHub returned empty content",
   "error.github_utf8_failed": "UTF-8 error: {err}",
   "error.github_token_missing": "GitHub Token not configured",
+  "error.github_token_invalid": "GitHub Token contains invalid characters: {err}",
   "error.github_repo_missing": "GitHub Repo not configured",
   "error.bastion_cycle": "Bastion chain has a cycle: {path}",
   "error.bastion_too_many_hops": "Bastion chain exceeds {max} hops; suspected misconfiguration",
