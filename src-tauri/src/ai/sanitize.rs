@@ -44,7 +44,8 @@ pub fn default_rules() -> Vec<RedactRule> {
             r"eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]+",
             "<REDACTED:jwt>",
         ),
-        (r"\b[0-9a-f]{32,}\b", "<REDACTED:hex>"),
+        // 大写 / 混合大小写 hex 也要脱敏（.NET / 某些 token 生成器输出大写 UUID/hash）。
+        (r"\b[0-9a-fA-F]{32,}\b", "<REDACTED:hex>"),
     ]
     .into_iter()
     .map(|(p, r)| RedactRule::new(p, r).expect("internal redact pattern compile"))
@@ -295,6 +296,9 @@ mod tests {
     fn redact_long_hex() {
         let rules = default_rules();
         assert!(redact("0123456789abcdef0123456789abcdef", &rules).contains("<REDACTED:hex>"));
+        // 大写 / 混合大小写也必须命中（之前只匹配小写 → false negative）
+        assert!(redact("0123456789ABCDEF0123456789ABCDEF", &rules).contains("<REDACTED:hex>"));
+        assert!(redact("DeAdBeEfDeAdBeEfDeAdBeEfDeAdBeEf", &rules).contains("<REDACTED:hex>"));
         assert_eq!(redact("short=abc123", &rules), "short=abc123");
     }
 

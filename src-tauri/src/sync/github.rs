@@ -46,7 +46,7 @@ impl GitHubSync {
         // 获取现有文件 SHA（更新需要）
         let sha = match client
             .get(format!("{url}?ref={}", self.branch))
-            .headers(self.headers())
+            .headers(self.headers()?)
             .send()
             .await
         {
@@ -68,7 +68,7 @@ impl GitHubSync {
 
         let resp = client
             .put(&url)
-            .headers(self.headers())
+            .headers(self.headers()?)
             .json(&body)
             .send()
             .await
@@ -91,7 +91,7 @@ impl GitHubSync {
 
         let resp = client
             .get(&url)
-            .headers(self.headers())
+            .headers(self.headers()?)
             .send()
             .await
             .map_err(|e| AppError::other("github_pull_failed", json!({ "err": e.to_string() })))?;
@@ -118,15 +118,18 @@ impl GitHubSync {
         String::from_utf8(bytes).map_err(|e| AppError::other("github_utf8_failed", json!({ "err": e.to_string() })))
     }
 
-    fn headers(&self) -> reqwest::header::HeaderMap {
+    fn headers(&self) -> AppResult<reqwest::header::HeaderMap> {
+        use reqwest::header::HeaderValue;
+        // token 来自用户输入，含 CR/LF/non-ASCII 时 HeaderValue::from_str 会失败。
+        // 之前的 .parse().unwrap() 会 panic — 这里转成可恢复错误。
+        let bearer = HeaderValue::from_str(&format!("Bearer {}", self.token))
+            .map_err(|e| AppError::config("github_token_invalid", json!({ "err": e.to_string() })))?;
         let mut h = reqwest::header::HeaderMap::new();
-        h.insert(
-            "Authorization",
-            format!("Bearer {}", self.token).parse().unwrap(),
-        );
-        h.insert("Accept", "application/vnd.github+json".parse().unwrap());
-        h.insert("X-GitHub-Api-Version", "2022-11-28".parse().unwrap());
-        h.insert("User-Agent", "RSSH".parse().unwrap());
-        h
+        h.insert("Authorization", bearer);
+        // 这三条全是 ASCII 字面量，from_static 编译期保证合法 — 真没必要 unwrap。
+        h.insert("Accept", HeaderValue::from_static("application/vnd.github+json"));
+        h.insert("X-GitHub-Api-Version", HeaderValue::from_static("2022-11-28"));
+        h.insert("User-Agent", HeaderValue::from_static("RSSH"));
+        Ok(h)
     }
 }
