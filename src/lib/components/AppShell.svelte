@@ -293,6 +293,13 @@
             : ""
     );
 
+    /** 另一侧 panel 的当前渲染宽度（aside 元素的 boundingClientRect）；hidden 状态返回 0。
+     *  resize 时拿来从可用空间里减掉，避免两个 panel 都拖到极端导致主区被压成 0。 */
+    function otherPanelWidth(selector: string): number {
+        const el = document.querySelector(selector);
+        return el ? (el as HTMLElement).getBoundingClientRect().width : 0;
+    }
+
     function startAiResize(e: MouseEvent) {
         e.preventDefault();
         const startX = e.clientX;
@@ -305,7 +312,11 @@
 
         const onMove = (ev: MouseEvent) => {
             const dx = ev.clientX - startX;
-            const maxWidth = window.innerWidth - AI_PANEL_MIN_MAIN;
+            // 减去 SFTP 当前实际占的宽，让两个 panel 互相挤不死主区
+            const maxWidth = Math.max(
+                AI_PANEL_MIN_WIDTH,
+                window.innerWidth - AI_PANEL_MIN_MAIN - otherPanelWidth('.sftp-side'),
+            );
             const next = Math.max(AI_PANEL_MIN_WIDTH, Math.min(maxWidth, startWidth + sign * dx));
             aiPanelWidth = next;
         };
@@ -360,7 +371,11 @@
 
         const onMove = (ev: MouseEvent) => {
             const dx = ev.clientX - startX;
-            const maxWidth = window.innerWidth - SFTP_PANEL_MIN_MAIN;
+            // 减去 AI 当前实际占的宽，让两个 panel 互相挤不死主区
+            const maxWidth = Math.max(
+                SFTP_PANEL_MIN_WIDTH,
+                window.innerWidth - SFTP_PANEL_MIN_MAIN - otherPanelWidth('.ai-side'),
+            );
             const next = Math.max(SFTP_PANEL_MIN_WIDTH, Math.min(maxWidth, startWidth + sign * dx));
             sftpPanelWidth = next;
         };
@@ -1058,9 +1073,7 @@
         overflow: hidden;
         border: none;
     }
-    /* aiPos=left 时 .content 翻 row-reverse → SFTP 视觉在右，
-       该侧的 border 应该贴左边缘。简单起见用 :where 替换两边都没边框，
-       直接靠 ChatPanel 风格——SFTP 不画自己的 border，由 main-area 决定就行。 */
+    /* aiPos=left 时 .content 翻 row-reverse → SFTP 视觉在右，分隔线得贴左边缘 */
     .content.ai-left .sftp-side {
         border-right: none;
         border-left: 1px solid var(--divider);

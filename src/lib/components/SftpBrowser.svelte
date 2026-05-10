@@ -4,7 +4,7 @@
     import * as app from "../stores/app.svelte.ts";
     import * as transfers from "../stores/transfers.svelte.ts";
     import type {RemoteEntry} from "../stores/app.svelte.ts";
-    import { errMsg } from "../i18n/index.svelte.ts";
+    import { errMsg, t } from "../i18n/index.svelte.ts";
 
     let {meta}: { meta: Record<string, string> } = $props();
 
@@ -122,7 +122,7 @@
     <div class="toolbar">
         <span class="title">SFTP</span>
         <span class="grow"></span>
-        <button type="button" class="btn-icon" onclick={() => app.closeSftp()} aria-label="Close SFTP" title="Close">×</button>
+        <button type="button" class="btn-icon" onclick={() => app.closeSftp()} aria-label={t("common.close")} title={t("common.close")}>×</button>
     </div>
     <div class="header">
         <button class="btn btn-sm" onclick={goUp}>← Up</button>

@@ -71,8 +71,9 @@ let _settingsActive = $state(false);
 let _settingsPage = $state<SettingsPage>("menu");
 let _editingId = $state<string | null>(null);
 
-/* SFTP per-tab：每个 ssh/local tab 独立 open/close。SFTP 共用对应 tab 的 SSH 连接，
-   切 tab 不影响其他 tab 已打开的 SFTP；新开 tab 不自动开 SFTP——每个 tab 手动开。
+/* SFTP per-tab：每个 ssh tab 独立 open/close（local PTY 没远端 fs，openSftp gate 掉）。
+   SFTP 共用对应 tab 的 SSH 连接；切 tab 不影响其他 tab 已打开的 SFTP；
+   新开 tab 不自动开 SFTP——每个 tab 手动开。
    (老的全局 _sftpOpen 已废，那是 fullscreen overlay 时代的产物。) */
 let _sftpOpenByTab = $state<Record<string, boolean>>({});
 /* Background transfers screen — sibling of settings, mutually exclusive */

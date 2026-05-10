@@ -21,6 +21,7 @@ const en = {
   "common.copy": "Copy",
   "common.paste": "Paste",
   "common.search": "Search",
+  "common.resize_hint": "Drag to resize · double-click to reset",
 
   // ── Sidebar / Tabs ──
   "tab.home": "Home",
@@ -181,7 +182,6 @@ const en = {
   "forward.active_connections": "Active connections",
 
   // ── AI Diagnose: ChatPanel ──
-  "common.resize_hint": "Drag to resize · double-click to reset",
   "ai.title": "AI Diagnose",
   "ai.toolbar.audit": "✎𓂃Audit",
   "ai.toolbar.back_to_chat": "← Chat",
