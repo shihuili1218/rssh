@@ -84,3 +84,9 @@
 :root[data-shape="flat"] .switch .slider {
     border: var(--flat-border);
 }
+
+/* 选中 tab：accent 整块反白填充。idle/hover 由组件 scoped CSS 接管。 */
+:root[data-shape="flat"] .sb-item.active {
+    background: var(--accent);
+    color: var(--bg);
+}

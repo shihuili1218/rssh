@@ -25,3 +25,9 @@
         4px 4px 12px color-mix(in srgb, var(--accent) 40%, transparent),
         -3px -3px 8px var(--shadow-light);
 }
+
+/* 选中 tab：陷入感（pressed inset）。idle/hover 由组件 scoped CSS 接管，不动。
+   :root 前缀把 specificity 拉到 (0,4,0) 盖过 Svelte 加 hash 后的 .sb-item.active. */
+:root[data-shape="neumorphism"] .sb-item.active {
+    box-shadow: var(--elevation-pressed);
+}

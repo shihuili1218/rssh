@@ -46,3 +46,9 @@
 [data-shape="material"] .switch .slider {
     box-shadow: var(--elevation-low);
 }
+
+/* 选中 tab：3px accent underline（Material Tabs 规范）。idle/hover 由组件 scoped CSS 接管。 */
+:root[data-shape="material"] .sb-item.active {
+    background: transparent;
+    box-shadow: inset 0 -3px 0 0 var(--accent);
+}
