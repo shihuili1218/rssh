@@ -90,8 +90,8 @@ const DARK_NEUMORPHISM: Palette = {
   ui: {
     bg:          "#2B2D3A",
     surface:     "#32343F",
-    shadowDark:  "#1E2028",
-    shadowLight: "#383B4A",
+    shadowDark:  "#14161E",
+    shadowLight: "#454A5E",
     divider:     "#3C3F50",
     text:        "#E0E5EC",
     textSub:     "#A0A8BB",
@@ -115,36 +115,39 @@ const DARK_NEUMORPHISM: Palette = {
   },
 };
 
+// 直接对齐 sshell/lib/theme/neu_theme.dart 的 NeuColors —— 那套色板的
+// "淡紫高级感" 来自：冷调灰蓝 bg + 深海军蓝文字 + 强对比阴影（Δ≈53）。
+// magenta/purple 是 rssh 独有，sshell 没定义，挑温和紫保持调性一致。
 const LIGHT_SOFT: Palette = {
   id: "light-soft",
   label: "Light Soft",
   mode: "light",
   ui: {
-    bg:          "#ECEFF4",
-    surface:     "#E0E4EC",
-    shadowDark:  "#C5CAD3",
+    bg:          "#E0E5EC",
+    surface:     "#D6DCE8",
+    shadowDark:  "#A3B1C6",
     shadowLight: "#FFFFFF",
-    divider:     "#D2D7DF",
-    text:        "#2E3440",
-    textSub:     "#4C566A",
-    textDim:     "#7A8493",
-    accent:      "#5267E0",
-    error:       "#C0392B",
-    success:     "#3CA875",
-    warning:     "#B58900",
+    divider:     "#CDD5E0",
+    text:        "#31355B",
+    textSub:     "#5C6E8C",
+    textDim:     "#9CA8BB",
+    accent:      "#4A6CF7",
+    error:       "#D64444",
+    success:     "#3D9A72",
+    warning:     "#BB8800",
     magenta:     "#7E57C2",
     purple:      "#8E44AD",
   },
   term: {
-    background: "#ECEFF4", foreground: "#2E3440", cursor: "#5267E0",
-    selectionBackground: "rgba(82,103,224,0.25)",
+    background: "#E0E5EC", foreground: "#31355B", cursor: "#4A6CF7",
+    selectionBackground: "rgba(74,108,247,0.25)",
     // Light palette: ANSI white must read as "light" against a light bg,
     // not be aliased to the same dark color as black/foreground.
-    black: "#2E3440", white: "#D2D7DF",
-    red: "#C0392B", green: "#3CA875", yellow: "#B58900",
-    blue: "#5267E0", magenta: "#7E57C2", cyan: "#0590A0",
-    brightBlack: "#7A8493", brightWhite: "#FFFFFF",
-    brightRed: "#D14B3C", brightGreen: "#4FBE8E", brightYellow: "#D4A017",
+    black: "#31355B", white: "#CDD5E0",
+    red: "#D64444", green: "#3D9A72", yellow: "#BB8800",
+    blue: "#4A6CF7", magenta: "#7E57C2", cyan: "#0E8FA8",
+    brightBlack: "#9CA8BB", brightWhite: "#FFFFFF",
+    brightRed: "#E55F5F", brightGreen: "#4FB585", brightYellow: "#D4A017",
     brightBlue: "#6A82F5", brightMagenta: "#9968D6", brightCyan: "#1FA8B8",
   },
 };
@@ -156,7 +159,7 @@ const DRACULA: Palette = {
   ui: {
     bg:          "#282A36",
     surface:     "#343746",
-    shadowDark:  "#1A1B23",
+    shadowDark:  "#11131C",
     shadowLight: "#3D4154",
     divider:     "#44475A",
     text:        "#F8F8F2",
@@ -188,7 +191,7 @@ const SOLARIZED_DARK: Palette = {
   ui: {
     bg:          "#002B36",
     surface:     "#073642",
-    shadowDark:  "#001E26",
+    shadowDark:  "#000A0E",
     shadowLight: "#0E4651",
     divider:     "#0E4651",
     text:        "#EEE8D5",
@@ -252,7 +255,7 @@ const TOMORROW_NIGHT: Palette = {
   ui: {
     bg:          "#1D1F21",
     surface:     "#282A2E",
-    shadowDark:  "#101113",
+    shadowDark:  "#08090C",
     shadowLight: "#373B41",
     divider:     "#373B41",
     text:        "#C5C8C6",

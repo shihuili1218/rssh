@@ -18,8 +18,8 @@
   /* ── Palette: surfaces ──────────────────────────────── */
   --bg:           #2B2D3A;
   --surface:      #32343F;
-  --shadow-dark:  #1E2028;
-  --shadow-light: #383B4A;
+  --shadow-dark:  #14161E;
+  --shadow-light: #454A5E;
   --divider:      #3C3F50;
 
   /* ── Palette: text ──────────────────────────────────── */
@@ -75,9 +75,11 @@
 
   /* ── Elevation (semantic shadow tokens) ─────────────── */
   /* Shape implementations override these for Flat/Material. */
-  --elevation-low:     3px 3px 6px var(--shadow-dark), -3px -3px 6px var(--shadow-light);
-  --elevation-mid:     5px 5px 10px var(--shadow-dark), -5px -5px 10px var(--shadow-light);
-  --elevation-pressed: inset 3px 3px 6px var(--shadow-dark), inset -3px -3px 6px var(--shadow-light);
+  /* offset/blur ratio ≈ 0.33 — 让"光晕"主导而不是 drop-shadow 形态。
+     classic neu 关键是阴影"抱住"元素而非"投在地上"，比例必须 < 0.4。 */
+  --elevation-low:     2px 2px 6px var(--shadow-dark), -2px -2px 6px var(--shadow-light);
+  --elevation-mid:     4px 4px 12px var(--shadow-dark), -4px -4px 12px var(--shadow-light);
+  --elevation-pressed: inset 2px 2px 6px var(--shadow-dark), inset -2px -2px 6px var(--shadow-light);
   /* Back-compat aliases (legacy --raised/--pressed) */
   --raised:    var(--elevation-mid);
   --raised-sm: var(--elevation-low);

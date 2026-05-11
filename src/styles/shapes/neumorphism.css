@@ -9,9 +9,9 @@
    Required because @import places this file before :root in source order,
    so a same-specificity rule would lose. */
 :root[data-shape="neumorphism"] {
-    --elevation-low:     3px 3px 6px var(--shadow-dark), -3px -3px 6px var(--shadow-light);
-    --elevation-mid:     5px 5px 10px var(--shadow-dark), -5px -5px 10px var(--shadow-light);
-    --elevation-pressed: inset 3px 3px 6px var(--shadow-dark), inset -3px -3px 6px var(--shadow-light);
+    --elevation-low:     2px 2px 6px var(--shadow-dark), -2px -2px 6px var(--shadow-light);
+    --elevation-mid:     4px 4px 12px var(--shadow-dark), -4px -4px 12px var(--shadow-light);
+    --elevation-pressed: inset 2px 2px 6px var(--shadow-dark), inset -2px -2px 6px var(--shadow-light);
 }
 
 /* Accent button keeps its glow. */
