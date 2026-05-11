@@ -54,7 +54,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
+          - os: macos-26
             target: aarch64-apple-darwin
             name: macos-aarch64
           - os: macos-14
