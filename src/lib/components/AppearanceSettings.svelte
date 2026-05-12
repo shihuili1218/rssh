@@ -161,17 +161,17 @@
         </button>
 
         <!-- Built-in presets — preview is a mini ls --color session.
-             Background uses var(--bg) (the UI palette) because the runtime
-             term theme always overrides background to UI bg for visual
-             cohesion. Showing the preset's own background here would lie
-             about what users actually see after they pick the preset. -->
+             Preview background mirrors the runtime: when "bg follows theme"
+             is on (default) the terminal uses the UI palette's --bg; when
+             off the terminal keeps the scheme's own background. Anything
+             else would lie about what the user sees after picking. -->
         {#each termPresets as p}
             <button
                 class="layout-card"
                 class:active={isPreset(p.id)}
                 onclick={() => pickPreset(p.id)}
             >
-                <div class="term-preview" style="background: var(--bg);">
+                <div class="term-preview" style="background: {termBgFollow ? 'var(--bg)' : p.term.background};">
                     <div class="term-line">
                         <span style="color: {p.term.green};">~/code</span><span
                               style="color: {p.term.foreground};">$ </span><span
@@ -198,7 +198,7 @@
             onclick={openCustomDialog}
         >
             {#if isCustom() && termRef.kind === "custom"}
-                <div class="term-preview" style="background: var(--bg);">
+                <div class="term-preview" style="background: {termBgFollow ? 'var(--bg)' : termRef.term.background};">
                     <div class="term-line">
                         <span style="color: {termRef.term.green ?? termRef.term.foreground};">~/code</span><span
                               style="color: {termRef.term.foreground};">$ </span><span
