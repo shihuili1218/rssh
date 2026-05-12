@@ -229,6 +229,10 @@ impl SftpHandle {
 
         match result {
             Ok(n) => {
+                // Windows `MoveFileExW` 默认不覆盖已存在目标 —— ai/session.rs
+                // 在同一 session 内反复用同一 local_path，第二次 rename 就会
+                // 失败。Unix 上 rename 本来就覆盖，预先 remove 是 no-op。
+                let _ = tokio::fs::remove_file(local_path).await;
                 tokio::fs::rename(&tmp_path, local_path).await?;
                 Ok(n)
             }
