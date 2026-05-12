@@ -150,8 +150,11 @@ impl SftpHandle {
 
     /// Stream-download a remote file to a local path with a hard size cap.
     /// 优先用 metadata.size 早期 bail；metadata.size=None 或服务器撒谎时，
-    /// 流式 cap 也会在超限的瞬间中止下载（**此时 local_path 会留下部分内容**）。
-    /// 无前端进度事件——AI 排障流程用，前端不需要进度条。
+    /// 流式 cap 也会在超限的瞬间中止下载。
+    ///
+    /// 原子性：下载先写入 `<local_path>.part`，全部成功后 rename 到 local_path。
+    /// 任何失败路径（size cap、IO error、metadata 错误）都会清理 .part，
+    /// **不会污染 local_path**。无前端进度事件——AI 排障流程用。
     pub async fn download_to_path(
         &self,
         remote_path: &str,
@@ -175,45 +178,67 @@ impl SftpHandle {
             }
         }
 
-        let mut remote_file = self
-            .sftp
-            .open(remote_path)
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "open", "err": e.to_string() })))?;
-        let mut local_file = tokio::fs::File::create(local_path).await?;
+        // tmp_path = "<local_path>.part"。用 with_file_name 保留目录前缀。
+        let file_name = local_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| AppError::sftp("sftp_io_failed", json!({ "op": "create", "err": "invalid local path" })))?;
+        let tmp_path = local_path.with_file_name(format!("{file_name}.part"));
 
-        let mut transferred: u64 = 0;
-        let mut buf = vec![0u8; 32768];
-        loop {
-            let n = remote_file
-                .read(&mut buf)
+        let result: AppResult<u64> = async {
+            let mut remote_file = self
+                .sftp
+                .open(remote_path)
                 .await
-                .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "read", "err": e.to_string() })))?;
-            if n == 0 {
-                break;
+                .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "open", "err": e.to_string() })))?;
+            let mut local_file = tokio::fs::File::create(&tmp_path).await?;
+
+            let mut transferred: u64 = 0;
+            let mut buf = vec![0u8; 32768];
+            loop {
+                let n = remote_file
+                    .read(&mut buf)
+                    .await
+                    .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "read", "err": e.to_string() })))?;
+                if n == 0 {
+                    break;
+                }
+                // 运行时 cap：metadata 缺失 / 撒谎 / 下载途中文件增长都靠这里兜底。
+                // 这是 max_bytes 的唯一权威检查点，预检只是优化。
+                let next = transferred + n as u64;
+                if next > max_bytes {
+                    // 主动关闭 server-side handle，免得让远端 fd 等到 session drop 才回收。
+                    let _ = remote_file.shutdown().await;
+                    return Err(AppError::sftp(
+                        "sftp_file_too_large",
+                        json!({ "path": remote_path, "size": next, "limit": max_bytes }),
+                    ));
+                }
+                local_file.write_all(&buf[..n]).await?;
+                transferred = next;
             }
-            // 运行时 cap：metadata 缺失 / 撒谎 / 下载途中文件增长都靠这里兜底。
-            // 这是 max_bytes 的唯一权威检查点，预检只是优化。
-            let next = transferred + n as u64;
-            if next > max_bytes {
-                // 主动关闭 server-side handle，免得让远端 fd 等到 session drop 才回收。
-                // close 自身的错误不重要 —— 我们已经在返回 file_too_large 了。
-                let _ = remote_file.shutdown().await;
-                return Err(AppError::sftp(
-                    "sftp_file_too_large",
-                    json!({ "path": remote_path, "size": next, "limit": max_bytes }),
-                ));
-            }
-            local_file.write_all(&buf[..n]).await?;
-            transferred = next;
+
+            remote_file
+                .shutdown()
+                .await
+                .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "close", "err": e.to_string() })))?;
+            local_file.shutdown().await?;
+            Ok(transferred)
         }
+        .await;
 
-        remote_file
-            .shutdown()
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "close", "err": e.to_string() })))?;
-
-        Ok(transferred)
+        match result {
+            Ok(n) => {
+                tokio::fs::rename(&tmp_path, local_path).await?;
+                Ok(n)
+            }
+            Err(e) => {
+                // best-effort cleanup — 即使 unlink 失败，也只是留一个 .part，
+                // 不会污染 local_path（消费端约定的产出路径）。
+                let _ = tokio::fs::remove_file(&tmp_path).await;
+                Err(e)
+            }
+        }
     }
 
     /// Stream-download a remote file to a local path, emitting progress events.
