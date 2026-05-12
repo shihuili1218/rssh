@@ -1029,6 +1029,16 @@
         position: relative;
     }
 
+    /* xterm.js paints theme.background into the row canvas, but the
+       .xterm-viewport scroll layer keeps its own background. When the
+       user turns off "terminal bg follows theme" and picks a preset
+       whose background differs from --bg, that viewport leaks a
+       frame-coloured ring around the rendered rows. Pin it to --term-bg
+       (kept in sync by themes/store.svelte.ts::writeTermVars). */
+    .term-wrap :global(.xterm-viewport) {
+        background-color: var(--term-bg) !important;
+    }
+
     .xterm-host {
         width: 100%;
         height: 100%;

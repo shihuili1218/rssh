@@ -5,6 +5,8 @@
   "permissions": [
     "core:default",
     "core:window:allow-set-title",
-    "core:window:allow-set-always-on-top"
+    "core:window:allow-set-always-on-top",
+    "opener:default",
+    "opener:allow-open-url"
   ]
 }

@@ -31,10 +31,11 @@ import {
   type TermPaletteRef,
 } from "./term-palettes.ts";
 
-const SETTING_KEY_PALETTE   = "theme.palette";
-const SETTING_KEY_SHAPE     = "theme.shape";
-const SETTING_KEY_DENSITY   = "theme.density";
-const SETTING_KEY_TERM      = "theme.term-palette";
+const SETTING_KEY_PALETTE        = "theme.palette";
+const SETTING_KEY_SHAPE          = "theme.shape";
+const SETTING_KEY_DENSITY        = "theme.density";
+const SETTING_KEY_TERM           = "theme.term-palette";
+const SETTING_KEY_TERM_BG_FOLLOW = "theme.term-bg-follow";
 
 let _paletteId = $state<PaletteId>(DEFAULT_PALETTE_ID);
 
@@ -119,16 +120,18 @@ function isDensityId(v: string | null | undefined): v is DensityId {
    ─────────────────────────────────────────────────────────────── */
 
 let _termRef = $state<TermPaletteRef>(DEFAULT_TERM_REF);
+let _termBgFollowsTheme = $state<boolean>(true);
 
 /**
  * Resolve the current term ref to an actual PaletteTerm — what xterm
  * should actually display. inherit → UI palette term; preset → looked
  * up; custom → embedded.
  *
- * Background is ALWAYS overridden to the UI palette's --bg so the
- * terminal visually merges with the surrounding chrome regardless of
- * which ANSI scheme the user picks. (Without this, a Solarized Light
- * scheme inside a dark UI shell looks like two apps glued together.)
+ * When `termBgFollowsTheme` is on (default), the background is overridden
+ * to the UI palette's --bg so the terminal visually merges with the
+ * surrounding chrome. When off, the preset/custom keeps its own
+ * background — useful when the user wants a Solarized terminal inside
+ * a neutral chrome, even at the cost of a visible seam.
  */
 export function currentTermTheme(): PaletteTerm {
   const ui = paletteById(_paletteId);
@@ -141,11 +144,12 @@ export function currentTermTheme(): PaletteTerm {
   } else {
     term = ui.term;
   }
-  return { ...term, background: ui.ui.bg };
+  return _termBgFollowsTheme ? { ...term, background: ui.ui.bg } : term;
 }
 
 export function termPaletteRef(): TermPaletteRef { return _termRef; }
 export function listTermPresets() { return TERM_PRESETS; }
+export function termBgFollowsTheme(): boolean { return _termBgFollowsTheme; }
 
 export async function setTermPalette(ref: TermPaletteRef): Promise<void> {
   _termRef = ref;
@@ -153,6 +157,17 @@ export async function setTermPalette(ref: TermPaletteRef): Promise<void> {
   notifyXterms();
   try {
     await invoke("set_setting", { key: SETTING_KEY_TERM, value: JSON.stringify(ref) });
+  } catch {
+    // Persistence failure is non-fatal.
+  }
+}
+
+export async function setTermBgFollowsTheme(on: boolean): Promise<void> {
+  _termBgFollowsTheme = on;
+  writeTermVars();
+  notifyXterms();
+  try {
+    await invoke("set_setting", { key: SETTING_KEY_TERM_BG_FOLLOW, value: String(on) });
   } catch {
     // Persistence failure is non-fatal.
   }
@@ -262,11 +277,12 @@ function isShapeId(v: string | null | undefined): v is ShapeId {
  * Loads palette + shape + density in parallel — all are independent.
  */
 export async function init(): Promise<void> {
-  const [palette, shape, density, termRaw] = await Promise.all([
-    invoke<string | null>("get_setting", { key: SETTING_KEY_PALETTE }).catch(() => null),
-    invoke<string | null>("get_setting", { key: SETTING_KEY_SHAPE   }).catch(() => null),
-    invoke<string | null>("get_setting", { key: SETTING_KEY_DENSITY }).catch(() => null),
-    invoke<string | null>("get_setting", { key: SETTING_KEY_TERM    }).catch(() => null),
+  const [palette, shape, density, termRaw, termBgFollow] = await Promise.all([
+    invoke<string | null>("get_setting", { key: SETTING_KEY_PALETTE        }).catch(() => null),
+    invoke<string | null>("get_setting", { key: SETTING_KEY_SHAPE          }).catch(() => null),
+    invoke<string | null>("get_setting", { key: SETTING_KEY_DENSITY        }).catch(() => null),
+    invoke<string | null>("get_setting", { key: SETTING_KEY_TERM           }).catch(() => null),
+    invoke<string | null>("get_setting", { key: SETTING_KEY_TERM_BG_FOLLOW }).catch(() => null),
   ]);
   if (palette && PALETTES.some((p) => p.id === palette)) {
     _paletteId = palette as PaletteId;
@@ -285,6 +301,10 @@ export async function init(): Promise<void> {
       // Corrupted persisted value — keep default inherit.
     }
   }
+  // Default true — keeps the existing "terminal merges with chrome" look
+  // for users who haven't touched the new toggle. Only an explicit "false"
+  // string opts out.
+  if (termBgFollow === "false") _termBgFollowsTheme = false;
   apply(paletteById(_paletteId));
   applyShape(_shapeId);
   applyDensity(_densityId);

@@ -183,4 +183,10 @@
 
   .term-container { flex: 1; min-height: 0; }
   .term-container :global(.xterm) { height: 100%; padding: 4px; }
+  /* Same fix as TerminalPane: xterm-viewport keeps its own inline
+     background, so pin it to --term-bg to kill the frame-coloured ring
+     around the rendered rows when "terminal bg follows theme" is off. */
+  .term-container :global(.xterm-viewport) {
+    background-color: var(--term-bg) !important;
+  }
 </style>

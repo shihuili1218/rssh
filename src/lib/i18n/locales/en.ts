@@ -84,6 +84,8 @@ const en = {
   "settings.appearance.term.import_hint": "Paste theme JSON. Copy any file from the Windows Terminal folder at:",
   "settings.appearance.term.import": "Import",
   "settings.appearance.term.cancel": "Cancel",
+  "settings.appearance.term.bg_follow": "Terminal background follows theme",
+  "settings.appearance.term.bg_follow_desc": "When on, the terminal background uses the app's theme color so the chrome and terminal blend. When off, the selected scheme keeps its own background.",
   "settings.shell.command_block": "Command block",
   "settings.shell.command_block_bar": "Command block bar",
   "settings.shell.command_block_bar_desc": "Show a colored side bar next to each command to visually group its input and output.",

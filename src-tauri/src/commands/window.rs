@@ -1,5 +1,3 @@
-use std::process::Command;
-
 use tauri::{AppHandle, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
 
@@ -29,26 +27,6 @@ pub fn open_tab_in_new_window(app: AppHandle, clone: String) -> AppResult<()> {
         .build()
         .map_err(|e| AppError::other("window_open_failed", serde_json::json!({ "err": e.to_string() })))?;
     Ok(())
-}
-
-/// Open an external http(s) URL in the user's default browser.
-/// Refuses non-http(s) schemes to prevent abuse (file://, javascript:, …).
-#[tauri::command]
-pub fn open_external_url(url: String) -> AppResult<()> {
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err(AppError::config("window_non_https_url", serde_json::json!({ "url": url })));
-    }
-
-    #[cfg(target_os = "macos")]
-    let result = Command::new("open").arg(&url).spawn();
-    #[cfg(target_os = "linux")]
-    let result = Command::new("xdg-open").arg(&url).spawn();
-    #[cfg(target_os = "windows")]
-    let result = Command::new("cmd").args(["/C", "start", "", &url]).spawn();
-
-    result
-        .map(|_| ())
-        .map_err(|e| AppError::other("window_open_url_failed", serde_json::json!({ "err": e.to_string() })))
 }
 
 /// Read the system clipboard as text.

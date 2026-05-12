@@ -69,12 +69,17 @@
     // ─── Theme: terminal palette (xterm colors, independent of UI) ───
     const termPresets = theme.listTermPresets();
     let termRef = $state<TermPaletteRef>(theme.termPaletteRef());
+    let termBgFollow = $state<boolean>(theme.termBgFollowsTheme());
 
     function isInherit(): boolean { return termRef.kind === "inherit"; }
     function isPreset(id: string): boolean {
         return termRef.kind === "preset" && termRef.id === id;
     }
     function isCustom(): boolean { return termRef.kind === "custom"; }
+
+    async function saveTermBgFollow() {
+        await theme.setTermBgFollowsTheme(termBgFollow);
+    }
 
     async function pickInherit() {
         termRef = { kind: "inherit" };
@@ -217,6 +222,20 @@
             {/if}
             <div class="layout-label">{t("settings.appearance.term.custom")}</div>
         </button>
+    </div>
+
+    <div class="switch-card">
+        <div class="switch-card-body">
+            <div class="switch-card-title"
+                 class:on={termBgFollow} class:off={!termBgFollow}>
+                {t("settings.appearance.term.bg_follow")}
+            </div>
+            <div class="switch-card-desc">{t("settings.appearance.term.bg_follow_desc")}</div>
+        </div>
+        <label class="switch">
+            <input type="checkbox" bind:checked={termBgFollow} onchange={saveTermBgFollow} />
+            <span class="slider"></span>
+        </label>
     </div>
 
     <div class="section-label">{t("settings.appearance.surface_style")}</div>

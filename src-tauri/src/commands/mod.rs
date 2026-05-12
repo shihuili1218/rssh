@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod external;
 pub mod forward;
 pub mod group;
 pub mod lifecycle;

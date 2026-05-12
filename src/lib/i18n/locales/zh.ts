@@ -86,6 +86,8 @@ const zh: Messages = {
   "settings.appearance.term.import_hint": "粘贴主题 JSON。可从此处的 Windows Terminal 文件夹复制：",
   "settings.appearance.term.import": "导入",
   "settings.appearance.term.cancel": "取消",
+  "settings.appearance.term.bg_follow": "终端背景跟随主题",
+  "settings.appearance.term.bg_follow_desc": "开启时，终端背景使用主题背景色，与应用外观融为一体；关闭时，保留所选配色方案自身的背景。",
   "settings.shell.command_block": "命令块",
   "settings.shell.command_block_bar": "命令块侧栏",
   "settings.shell.command_block_bar_desc": "在每条命令旁显示彩色侧栏，可视化分组输入和输出。",

@@ -25,6 +25,7 @@ pub fn run() {
         .try_init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 let state = window.state::<AppState>();
@@ -179,9 +180,9 @@ pub fn run() {
             #[cfg(not(target_os = "android"))]
             commands::window::open_tab_in_new_window,
             #[cfg(not(target_os = "android"))]
-            commands::window::open_external_url,
-            #[cfg(not(target_os = "android"))]
             commands::window::clipboard_read,
+            // external URL opener — cross-platform via tauri-plugin-opener
+            commands::external::open_external_url,
             // update check (cross-platform — separate mod from window)
             commands::update::fetch_latest_release_tag,
             // sync
