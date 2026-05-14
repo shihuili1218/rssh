@@ -35,9 +35,10 @@ pub fn all_tools() -> Vec<ToolSchema> {
         ToolSchema {
             name: TOOL_RUN_COMMAND.into(),
             description: "Run a single command on the remote (or local shell). \
-                Every command requires a user-confirmation click before it runs. \
+                The command is inserted into the user's interactive terminal; the user inspects it and runs it themselves (or rejects). \
                 The output is sanitized locally before being returned to you. \
-                Do not propose destructive commands; do not use screen-redrawing commands (top / htop / watch / tail -f); \
+                Do not propose commands that mutate system state (delete/format/signal/firewall/mount/shutdown/recursive chmod/etc.); \
+                do not use screen-redrawing commands (top / htop / watch / tail -f); \
                 repeat sampling must carry an explicit count (vmstat 1 5, not vmstat 1).".into(),
             input_schema: json!({
                 "type": "object",
@@ -66,10 +67,10 @@ pub fn all_tools() -> Vec<ToolSchema> {
         },
         ToolSchema {
             name: TOOL_DOWNLOAD_FILE.into(),
-            description: "SFTP a remote file to the local machine (<app_data>/rssh/diagnose/<session>/) for local analysis. \
+            description: "SFTP a remote file to the local machine (under the app's data dir / diagnose / <session>/) for local analysis. \
                 Typically used for heap dump, core dump, pprof profile, perf.data, etc. \
-                rssh checks the size first via ls -l; >1GB requires user re-confirmation. \
-                The path must be an existing remote absolute path.".into(),
+                **rssh hard-caps this tool at 100 MB.** `max_mb` must be 1..=100; requests above 100 are rejected and the transfer also aborts if the remote file turns out to be larger than 100 MB. \
+                Always `ls -l` the remote file first. If it's >100 MB, **don't call this tool** — ask the user to scp/rsync/sz the file themselves, then call `analyze_locally` on the local path they paste back.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -80,7 +81,8 @@ pub fn all_tools() -> Vec<ToolSchema> {
                     "max_mb": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "Maximum file size you expect (MB). Larger sizes will prompt the user to re-confirm.",
+                        "maximum": 100,
+                        "description": "Maximum file size you expect (MB). Must be between 1 and 100 — rssh caps downloads at 100 MB; larger artifacts must be transferred manually by the user.",
                     }
                 },
                 "required": ["remote_path", "max_mb"],
