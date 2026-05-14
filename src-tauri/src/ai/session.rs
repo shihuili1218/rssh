@@ -25,6 +25,12 @@ use super::sanitize::{self, RedactRule};
 use super::skills::SkillRecord;
 use super::tools::{self, AnalyzeLocallyInput, DownloadFileInput, LoadSkillInput, RunCommandInput};
 
+/// SFTP 下载硬上限。LLM 不可信，rssh 在边界 enforce：超过 100MB 一律不走 SFTP。
+/// 用户要分析更大的 artifact（GB-scale heap dump 等），人工 scp/rsync 拉到本地后
+/// 直接调用 analyze_locally。理由：(1) 单条 SSH 上的 SFTP 不是搬 GB 文件的合适通道；
+/// (2) AI 静默把巨型文件拉过来对用户是 hostile —— 让人显式动手。
+const MAX_DOWNLOAD_MB: u32 = 100;
+
 #[derive(Debug)]
 pub enum UserAction {
     Message(String),
@@ -76,7 +82,10 @@ pub struct SessionConfig {
 }
 
 pub fn start(cfg: SessionConfig, app: AppHandle) -> AppResult<DiagnoseSession> {
-    let system_prompt = cfg.system_prompt.clone();
+    // system_prompt 是静态文本（rules + user-skill catalog + locale + 平台），
+    // 整段不含运行期数据 —— 启动期一次性脱敏并缓存，避免每个 dialogue turn
+    // 重跑一遍 regex。redact_rules 在会话生命周期内不变，所以安全。
+    let system_prompt = sanitize::redact(&cfg.system_prompt, &cfg.redact_rules);
 
     let (action_tx, action_rx) = mpsc::unbounded_channel();
     let audit = Arc::new(Mutex::new(AuditLog::default()));
@@ -154,10 +163,10 @@ impl Actor {
         loop {
             // 脱敏在 LLM 边界统一发生。原文留在 self.history（永不离开本机），
             // 副本送 LLM 也送 audit —— LLM 看到的就是 audit 记录的，一致。
+            // system_prompt 在 start() 已经脱敏过，循环里直接复用。
             // ToolResult 在 push 时已 redact 过一次（handle_run_command），这里
             // 再过一遍是 idempotent，没成本。User/Assistant.content 此前从未脱敏。
             let rules = &self.cfg.redact_rules;
-            let redacted_system = sanitize::redact(&self.system_prompt, rules);
             let redacted_history: Vec<ChatMessage> = self
                 .history
                 .iter()
@@ -165,7 +174,7 @@ impl Actor {
                 .collect();
 
             let req = ChatRequest {
-                system_prompt: redacted_system,
+                system_prompt: self.system_prompt.clone(),
                 messages: redacted_history.clone(),
                 tools: tools::all_tools(),
                 model: self.cfg.model.clone(),
@@ -297,6 +306,21 @@ impl Actor {
             }
         };
 
+        // 100MB 硬上限：拒绝 max_mb 申请就超的请求，免得 SFTP 起头后才 abort
+        if input.max_mb > MAX_DOWNLOAD_MB {
+            self.push_tool_error(
+                &tc.id,
+                &format!(
+                    "rssh caps download_file at {MAX_DOWNLOAD_MB} MB (you requested max_mb={}). \
+                     Don't retry with a smaller max_mb if the actual file is larger — `ls -l` it first. \
+                     For artifacts >{MAX_DOWNLOAD_MB} MB, tell the user to transfer {} via scp / rsync / sz \
+                     to their local machine themselves, then call `analyze_locally` on that local path.",
+                    input.max_mb, input.remote_path
+                ),
+            );
+            return Ok(());
+        }
+
         // 本地 shell target 没必要 SFTP——文件已经在用户本机
         let ssh_handle = match self.cfg.ssh_handle.as_ref() {
             Some(h) => h.clone(),
@@ -376,14 +400,20 @@ impl Actor {
                 self.audit_push(AuditKind::Note {
                     message: format!("download_file failed: {e}"),
                 });
-                self.push_tool_error(
-                    &tc.id,
-                    &format!(
-                        "rssh cannot SFTP directly to the target ({e}). Common cause: the user manually ssh'd through a bastion, so the connection path isn't direct. \
-                         Please tell the user to use scp / rsync / sz to pull {} to their local machine themselves, then paste the key analysis output back into the chat.",
+                let msg = if e.code() == "sftp_file_too_large" {
+                    format!(
+                        "Remote file {} exceeds rssh's {} MB download cap (size was discovered mid-transfer or grew past the requested max_mb). \
+                         Don't retry — ask the user to transfer it via scp / rsync / sz to their local machine, then call `analyze_locally` on the local path they paste back.",
+                        input.remote_path, MAX_DOWNLOAD_MB
+                    )
+                } else {
+                    format!(
+                        "SFTP transfer failed ({e}). Common cause: the user manually ssh'd through a bastion, so rssh's connection terminates at the bastion and can't see the target's filesystem. \
+                         Tell the user to pull {} via scp / rsync / sz to their local machine themselves, then paste the key analysis output back into the chat.",
                         input.remote_path
-                    ),
-                );
+                    )
+                };
+                self.push_tool_error(&tc.id, &msg);
             }
         }
         Ok(())
