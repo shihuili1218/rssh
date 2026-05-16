@@ -124,11 +124,14 @@ pub struct SshImportResult {
 /// 凭证去重：按 `(username, identity_file)` 二元组。同一私钥被不同 user 共享时
 /// 会建多个 Credential（rssh 数据模型里 username 是 Credential 固有字段）。
 ///
-/// 映射规则：
+/// 映射规则（每个 profile 必须引用一个真实 Credential —— 不再有 credential_id 空串占位）：
 /// - `User=X, IdentityFile=Y`  → CredentialType::Key，secret = 读 Y 的 PEM 内容
 /// - `User=X, IdentityFile=∅`  → CredentialType::Agent（让 ssh-agent / 默认私钥处理）
 /// - `User=∅, IdentityFile=Y`  → CredentialType::Key，username = 系统当前用户
-/// - `User=∅, IdentityFile=∅`  → 不建凭证，Profile.credential_id = None
+/// - `User=∅, IdentityFile=∅`  → CredentialType::Agent，username = 系统当前用户
+///
+/// 凭证解析失败（如私钥文件不存在）→ 不建 profile，错误记入 `errors`。
+/// 数据一致性优先于"尽量多建 profile"——避免 DB 里出现引用不到 cred 的脏 profile。
 ///
 /// ProxyJump 暂不自动连接（需要解析跳板别名 → profile_id 的双 pass，留给后续）。
 #[tauri::command]
@@ -151,7 +154,12 @@ pub fn do_import_ssh_entries(
     let mut result = SshImportResult::default();
 
     for entry in entries {
-        let cred_id = resolve_credential_id(db, ss, &entry, &mut cred_cache, &mut result);
+        // 凭证 resolve 失败（私钥读不到等）→ 不建 profile。错误已记到 result.errors，
+        // 用户看 errors 报告决定怎么修——避免在 DB 里留下引用不到 cred 的脏 profile。
+        let cred_id = match resolve_credential_id(db, ss, &entry, &mut cred_cache, &mut result) {
+            Some(id) => id,
+            None => continue,
+        };
 
         let host = if entry.hostname.is_empty() {
             entry.host_alias.clone()
@@ -163,7 +171,7 @@ pub fn do_import_ssh_entries(
             name: entry.host_alias.clone(),
             host,
             port: entry.port,
-            credential_id: cred_id.unwrap_or_default(),
+            credential_id: cred_id,
             bastion_profile_id: None,
             init_command: None,
             group_id: None,
@@ -183,7 +191,8 @@ pub fn do_import_ssh_entries(
 }
 
 /// 推导/创建 entry 对应的 credential id；按 (username, identity_file) 去重。
-/// 失败时记录 errors 并返回 None（profile 仍会建，credential_id=None）。
+/// 失败时记录 errors 并返回 None，调用方据此跳过 profile 创建。
+/// 任何 entry 都至少建一个 cred（最少 Agent + 系统当前用户）—— 不留 credential_id 空串。
 fn resolve_credential_id(
     db: &Db,
     ss: &dyn SecretStore,
@@ -191,11 +200,6 @@ fn resolve_credential_id(
     cache: &mut std::collections::HashMap<(String, String), String>,
     result: &mut SshImportResult,
 ) -> Option<String> {
-    // 没 user 也没 file → 无凭证
-    if entry.user.is_none() && entry.identity_file.is_none() {
-        return None;
-    }
-
     let username = entry
         .user
         .clone()
@@ -295,8 +299,9 @@ mod tests {
     //! - 凭证按 (username, identity_file) 二元组去重，**不**只按 file 去重
     //!   （Linus 拍板：不同 user 同私钥要建两个 cred —— rssh 数据模型里
     //!    username 是 Credential 的固有字段）。
-    //! - 私钥读取失败不阻塞其他 entry，profile 仍创建（credential_id=None）。
-    //! - 没 user 也没 file 的 entry → profile 建，credential_id=None。
+    //! - 每个 profile 必须引用一个真实 Credential（无 credential_id 空串占位）。
+    //! - 私钥读取失败 → 整个 entry 跳过（profile 不建），错误记入 errors。
+    //! - 没 user 也没 file 的 entry → 建 Agent cred（username = 系统当前用户）+ profile。
     use super::*;
     use crate::db::Db;
     use crate::secret::SecretStore;
@@ -420,18 +425,25 @@ mod tests {
     }
 
     #[test]
-    fn no_user_no_file_yields_null_credential() {
+    fn no_user_no_file_creates_agent_credential_with_system_user() {
+        // User=∅, IdentityFile=∅ —— 不再 import 成空 credential_id 的脏 profile，
+        // 而是建 Agent cred（username = 系统当前用户），让 ssh-agent / 默认密钥发挥作用。
         let (db, ss, _dir) = fixture();
         let res = do_import_ssh_entries(&db, &ss, vec![entry("bare", None, None)]).unwrap();
         assert_eq!(res.profiles_created, 1);
-        assert_eq!(res.credentials_created, 0);
+        assert_eq!(res.credentials_created, 1);
         let profiles = crate::db::profile::list(&db).unwrap();
-        // schema 是 NOT NULL DEFAULT ''；"无凭证"以空串表示
-        assert_eq!(profiles[0].credential_id, "");
+        assert!(!profiles[0].credential_id.is_empty());
+        let creds = crate::db::credential::list(&db).unwrap();
+        assert_eq!(creds.len(), 1);
+        assert_eq!(creds[0].credential_type, CredentialType::Agent);
+        assert_eq!(creds[0].username, current_system_user());
     }
 
     #[test]
-    fn missing_key_file_collects_error_but_creates_profile() {
+    fn missing_key_file_collects_error_and_skips_profile() {
+        // 私钥读不到 → 错误前置：profile 不建，errors 报告。
+        // 不再在 DB 里留下引用空 credential_id 的脏 profile。
         let (db, ss, _dir) = fixture();
         let res = do_import_ssh_entries(
             &db,
@@ -443,13 +455,11 @@ mod tests {
             )],
         )
         .unwrap();
-        // 私钥读不到 → cred 没建，profile 仍创建（credential_id=None）
-        assert_eq!(res.profiles_created, 1);
+        assert_eq!(res.profiles_created, 0);
         assert_eq!(res.credentials_created, 0);
         assert_eq!(res.errors.len(), 1);
         assert_eq!(res.errors[0].kind, "read_key");
-        let profiles = crate::db::profile::list(&db).unwrap();
-        assert_eq!(profiles[0].credential_id, "");
+        assert!(crate::db::profile::list(&db).unwrap().is_empty());
     }
 
     #[test]
@@ -470,8 +480,13 @@ mod tests {
 
     #[test]
     fn dedup_holds_across_mixed_user_and_file_combos() {
-        // 6 entries：(alice, k1) ×2, (bob, k1) ×1, (alice, k2) ×1, (alice, ∅) ×1, (∅, ∅) ×1
-        // 期望：4 个 cred（前 4 组）+ 0 个（最后一组）
+        // 6 entries 覆盖 5 种独立 (user, file) 组合：
+        //   (alice, k1) ×2 → 1 Key cred
+        //   (bob,   k1)    → 1 Key cred
+        //   (alice, k2)    → 1 Key cred
+        //   (alice, ∅)     → 1 Agent cred (alice)
+        //   (∅,     ∅)     → 1 Agent cred (system user)
+        // 假设 system user ≠ "alice"（CI 用户名是 runner / 类似），共 5 cred。
         let (db, ss, dir) = fixture();
         let k1 = write_key(&dir, "k1", "PEM-1");
         let k2 = write_key(&dir, "k2", "PEM-2");
@@ -489,6 +504,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(res.profiles_created, 6);
-        assert_eq!(res.credentials_created, 4);
+        // system_user 恰好是 "alice" 时 p5 和 p6 共用一个 cred —— 退化到 4。
+        let expected = if current_system_user() == "alice" { 4 } else { 5 };
+        assert_eq!(res.credentials_created, expected);
     }
 }
