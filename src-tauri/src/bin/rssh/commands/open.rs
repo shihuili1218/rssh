@@ -47,9 +47,13 @@ fn cmd_open_ssh(conn: &CliCtx, name: &str) -> AppResult<()> {
 
     // credential_id 配错（如 DB 不一致 / 引用已删 cred）必须显式报错；旧版的
     // .ok() 会把这种情况降级为"无凭证"，导致 ssh 走默认 key fallback，错的离谱。
-    let cred = match profile.credential_id.as_deref().filter(|id| !id.is_empty()) {
-        Some(id) => Some(load_cred_secrets(conn, rssh_lib::db::credential::get(conn, id)?)?),
-        None => None,
+    let cred = if profile.credential_id.is_empty() {
+        None
+    } else {
+        Some(load_cred_secrets(
+            conn,
+            rssh_lib::db::credential::get(conn, &profile.credential_id)?,
+        )?)
     };
 
     let mut cmd = Command::new("ssh");
@@ -88,9 +92,13 @@ fn cmd_open_fwd(conn: &CliCtx, name: &str) -> AppResult<()> {
         .unwrap_or_else(|| die(format!("Forward '{name}' not found")));
 
     let profile = rssh_lib::db::profile::get(conn, &fwd.profile_id)?;
-    let cred = match profile.credential_id.as_deref().filter(|id| !id.is_empty()) {
-        Some(id) => Some(load_cred_secrets(conn, rssh_lib::db::credential::get(conn, id)?)?),
-        None => None,
+    let cred = if profile.credential_id.is_empty() {
+        None
+    } else {
+        Some(load_cred_secrets(
+            conn,
+            rssh_lib::db::credential::get(conn, &profile.credential_id)?,
+        )?)
     };
 
     let mut cmd = Command::new("ssh");

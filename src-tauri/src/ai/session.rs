@@ -528,6 +528,9 @@ impl Actor {
             explain: input.explain.clone(),
             side_effect: input.side_effect.clone(),
         });
+        // 审计语义：从 AI 提议命令到收到执行结果的端到端耗时（含用户犹豫 + shell 跑命令）。
+        // 不拆分 approve/run 两段——审计要看完整决策时序，单一数即可。
+        let started_at = std::time::Instant::now();
 
         self.emit(
             "command_proposed",
@@ -592,7 +595,7 @@ impl Actor {
                         output_redacted: trunc.text.clone(),
                         original_bytes: trunc.original_bytes,
                         truncated_bytes: trunc.truncated_bytes,
-                        duration_ms: 0,
+                        duration_ms: started_at.elapsed().as_millis() as u64,
                     });
 
                     let tool_payload = format!(

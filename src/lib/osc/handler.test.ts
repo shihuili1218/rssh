@@ -145,7 +145,7 @@ describe("open: handler", () => {
     (invoke as any).mockImplementation(async (cmd: string) => {
       calls.push(cmd);
       if (cmd === "list_profiles")
-        return [{ id: "p1", name: "h", host: "h", port: 22, credential_id: null }];
+        return [{ id: "p1", name: "h", host: "h", port: 22, credential_id: "" }];
       throw new Error(`unexpected ${cmd}`);
     });
 

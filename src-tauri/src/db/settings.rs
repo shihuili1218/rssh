@@ -25,3 +25,38 @@ pub fn set(db: &Db, key: &str, value: &str) -> AppResult<()> {
     )?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_key_returns_none() {
+        let db = Db::open_in_memory().unwrap();
+        assert!(get(&db, "ghost").unwrap().is_none());
+    }
+
+    #[test]
+    fn set_then_get_returns_value() {
+        let db = Db::open_in_memory().unwrap();
+        set(&db, "theme", "dark").unwrap();
+        assert_eq!(get(&db, "theme").unwrap().as_deref(), Some("dark"));
+    }
+
+    #[test]
+    fn set_twice_overwrites() {
+        // UPSERT 必须真覆盖：用户切主题不能留旧值
+        let db = Db::open_in_memory().unwrap();
+        set(&db, "theme", "dark").unwrap();
+        set(&db, "theme", "light").unwrap();
+        assert_eq!(get(&db, "theme").unwrap().as_deref(), Some("light"));
+    }
+
+    #[test]
+    fn empty_string_value_persists() {
+        // 空串 ≠ 缺失：用户主动清空设置时要能拿到 Some("")，不是 None
+        let db = Db::open_in_memory().unwrap();
+        set(&db, "k", "").unwrap();
+        assert_eq!(get(&db, "k").unwrap().as_deref(), Some(""));
+    }
+}

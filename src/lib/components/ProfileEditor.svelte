@@ -9,7 +9,9 @@
   let { id = null }: { id: string | null } = $props();
 
   let name = $state(""); let host = $state(""); let port = $state(22);
-  let credentialId = $state<string | null>(null);
+  // credential_id wire 协议是空串而非 null（schema NOT NULL）。
+  // UI 上 "未选择" 仍用空 option（value=""），不引入 null 二义性。
+  let credentialId = $state("");
   let bastionId = $state<string | null>(null);
   let shellCommand = $state("");
   let credentials = $state<Credential[]>([]);
@@ -25,7 +27,7 @@
     if (id) {
       const p = await invoke<any>("get_profile", { id });
       name = p.name; host = p.host; port = p.port;
-      credentialId = p.credential_id; bastionId = p.bastion_profile_id;
+      credentialId = p.credential_id ?? ""; bastionId = p.bastion_profile_id;
       shellCommand = p.init_command ?? "";
       groupId = p.group_id ?? null;
     }
@@ -37,7 +39,7 @@
       const profile = {
         id: id ?? crypto.randomUUID(),
         name, host, port,
-        credential_id: credentialId || null,
+        credential_id: credentialId,
         bastion_profile_id: bastionId || null,
         init_command: shellCommand || null,
         group_id: groupId || null,
@@ -60,7 +62,7 @@
     <input type="number" bind:value={port} min="1" max="65535" />
     <label>Credential</label>
     <select bind:value={credentialId}>
-      <option value={null}>-- Select Credential --</option>
+      <option value="">-- Select Credential --</option>
       {#each credentials as c (c.id)}
         <option value={c.id}>{c.name} ({c.username})</option>
       {/each}

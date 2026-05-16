@@ -42,8 +42,7 @@ pub async fn forward_start(state: State<'_, AppState>, forward_id: String) -> Ap
         AppError::NotFound(_) => AppError::not_found("fwd_profile_not_found", json!({})),
         other => other,
     })?;
-    let cred_id = p.credential_id.as_deref().unwrap_or("");
-    let mut c = crate::db::credential::get(&state.db, cred_id).map_err(|e| match e {
+    let mut c = crate::db::credential::get(&state.db, &p.credential_id).map_err(|e| match e {
         AppError::NotFound(_) => AppError::not_found("fwd_cred_not_found", json!({})),
         other => other,
     })?;
@@ -60,8 +59,7 @@ pub async fn forward_start(state: State<'_, AppState>, forward_id: String) -> Ap
     let chain_profiles = crate::ssh::bastion::resolve_chain(&state.db, &p)?;
     let mut chain: Vec<(Profile, Credential)> = Vec::with_capacity(chain_profiles.len());
     for hop in chain_profiles {
-        let bcid = hop.credential_id.as_deref().unwrap_or("");
-        let mut bc = crate::db::credential::get(&state.db, bcid).map_err(|e| match e {
+        let mut bc = crate::db::credential::get(&state.db, &hop.credential_id).map_err(|e| match e {
             AppError::NotFound(_) => {
                 AppError::not_found("bastion_cred_not_found", json!({ "name": hop.name.clone() }))
             }

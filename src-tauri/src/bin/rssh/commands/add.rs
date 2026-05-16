@@ -36,7 +36,8 @@ fn add_profile(conn: &CliCtx) -> AppResult<()> {
         "(no credentials, use 'rssh add cred' first)",
         |c| format!("{} ({})", c.name, c.username),
     )
-    .map(|c| c.id.clone());
+    .map(|c| c.id.clone())
+    .unwrap_or_default();
 
     let profiles = rssh_lib::db::profile::list(conn)?;
     let bastion_profile_id = menu_select("Bastion (optional):", "Bastion", &profiles, "", |p| {

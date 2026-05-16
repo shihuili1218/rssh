@@ -90,3 +90,99 @@ pub fn clear_all(db: &Db) -> AppResult<()> {
     let conn = db.lock()?;
     clear_all_tx(&conn)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk(id: &str, name: &str, kind: CredentialType) -> Credential {
+        Credential {
+            id: id.into(),
+            name: name.into(),
+            username: "root".into(),
+            credential_type: kind,
+            secret: None,
+            save_to_remote: false,
+        }
+    }
+
+    #[test]
+    fn insert_then_get_roundtrip_with_type() {
+        // 关键不变量：credential_type 字符串 ↔ enum 必须 roundtrip。
+        // schema v9 之后 DB 里存 lowercase 字符串。
+        let db = Db::open_in_memory().unwrap();
+        for kind in [
+            CredentialType::Password,
+            CredentialType::Key,
+            CredentialType::Interactive,
+            CredentialType::Agent,
+            CredentialType::None,
+        ] {
+            let id = format!("c-{}", kind.as_str());
+            insert(&db, &mk(&id, kind.as_str(), kind)).unwrap();
+            let got = get(&db, &id).unwrap();
+            assert_eq!(got.credential_type, kind);
+            // schema v11 删了 secret 列；row_to_credential 永远返回 None
+            assert!(got.secret.is_none());
+        }
+    }
+
+    #[test]
+    fn get_missing_returns_not_found() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(
+            get(&db, "ghost").unwrap_err().code(),
+            "credential_not_found"
+        );
+    }
+
+    #[test]
+    fn upsert_overwrites_username_and_type() {
+        let db = Db::open_in_memory().unwrap();
+        insert(&db, &mk("c1", "primary", CredentialType::Password)).unwrap();
+        let mut updated = mk("c1", "primary", CredentialType::Key);
+        updated.username = "deploy".into();
+        insert(&db, &updated).unwrap();
+        let got = get(&db, "c1").unwrap();
+        assert_eq!(got.username, "deploy");
+        assert_eq!(got.credential_type, CredentialType::Key);
+    }
+
+    #[test]
+    fn save_to_remote_persists_as_bool() {
+        let db = Db::open_in_memory().unwrap();
+        let mut c = mk("c1", "primary", CredentialType::Password);
+        c.save_to_remote = true;
+        insert(&db, &c).unwrap();
+        assert!(get(&db, "c1").unwrap().save_to_remote);
+    }
+
+    #[test]
+    fn list_returns_all_inserted() {
+        let db = Db::open_in_memory().unwrap();
+        insert(&db, &mk("c1", "one", CredentialType::Password)).unwrap();
+        insert(&db, &mk("c2", "two", CredentialType::Key)).unwrap();
+        assert_eq!(list(&db).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn delete_removes_row() {
+        let db = Db::open_in_memory().unwrap();
+        insert(&db, &mk("c1", "one", CredentialType::Password)).unwrap();
+        delete(&db, "c1").unwrap();
+        assert_eq!(
+            get(&db, "c1").unwrap_err().code(),
+            "credential_not_found"
+        );
+    }
+
+    #[test]
+    fn insert_rejects_name_with_control_char() {
+        let db = Db::open_in_memory().unwrap();
+        let bad = mk("c1", "bad\x1bname", CredentialType::Password);
+        assert_eq!(
+            insert(&db, &bad).unwrap_err().code(),
+            "name_has_control_char"
+        );
+    }
+}

@@ -158,14 +158,12 @@ pub fn do_import_ssh_entries(
         } else {
             entry.hostname.clone()
         };
-        // DB 的 credential_id 列是 NOT NULL DEFAULT ''；model 是 Option<String>。
-        // 无凭证用空串占位（参照 ssh::bastion::tests::make_profile 的现有约定）。
         let profile = Profile {
             id: uuid::Uuid::new_v4().to_string(),
             name: entry.host_alias.clone(),
             host,
             port: entry.port,
-            credential_id: Some(cred_id.unwrap_or_default()),
+            credential_id: cred_id.unwrap_or_default(),
             bastion_profile_id: None,
             init_command: None,
             group_id: None,
@@ -429,7 +427,7 @@ mod tests {
         assert_eq!(res.credentials_created, 0);
         let profiles = crate::db::profile::list(&db).unwrap();
         // schema 是 NOT NULL DEFAULT ''；"无凭证"以空串表示
-        assert_eq!(profiles[0].credential_id.as_deref(), Some(""));
+        assert_eq!(profiles[0].credential_id, "");
     }
 
     #[test]
@@ -451,7 +449,7 @@ mod tests {
         assert_eq!(res.errors.len(), 1);
         assert_eq!(res.errors[0].kind, "read_key");
         let profiles = crate::db::profile::list(&db).unwrap();
-        assert_eq!(profiles[0].credential_id.as_deref(), Some(""));
+        assert_eq!(profiles[0].credential_id, "");
     }
 
     #[test]

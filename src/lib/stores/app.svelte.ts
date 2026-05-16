@@ -46,7 +46,7 @@ export interface Group {
 }
 export interface Profile {
   id: string; name: string; host: string; port: number;
-  credential_id: string | null; bastion_profile_id: string | null; init_command: string | null;
+  credential_id: string; bastion_profile_id: string | null; init_command: string | null;
   group_id: string | null;
 }
 export interface Credential {

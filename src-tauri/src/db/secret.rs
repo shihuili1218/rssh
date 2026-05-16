@@ -34,3 +34,44 @@ pub fn delete(db: &Db, key: &str) -> AppResult<()> {
     conn.execute("DELETE FROM secrets WHERE key = ?1", params![key])?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_key_returns_none() {
+        let db = Db::open_in_memory().unwrap();
+        assert!(get(&db, "ghost").unwrap().is_none());
+    }
+
+    #[test]
+    fn set_then_get_roundtrip() {
+        let db = Db::open_in_memory().unwrap();
+        set(&db, "cred:abc", "s3cret").unwrap();
+        assert_eq!(get(&db, "cred:abc").unwrap().as_deref(), Some("s3cret"));
+    }
+
+    #[test]
+    fn set_twice_overwrites() {
+        let db = Db::open_in_memory().unwrap();
+        set(&db, "k", "v1").unwrap();
+        set(&db, "k", "v2").unwrap();
+        assert_eq!(get(&db, "k").unwrap().as_deref(), Some("v2"));
+    }
+
+    #[test]
+    fn delete_removes_key() {
+        let db = Db::open_in_memory().unwrap();
+        set(&db, "k", "v").unwrap();
+        delete(&db, "k").unwrap();
+        assert!(get(&db, "k").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_missing_key_is_noop() {
+        // 幂等：删一个不存在的 key 不应该报错（rm 语义）
+        let db = Db::open_in_memory().unwrap();
+        delete(&db, "ghost").unwrap();
+    }
+}

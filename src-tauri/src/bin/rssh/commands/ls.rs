@@ -70,10 +70,9 @@ pub fn cmd_ls(conn: &CliCtx, query: Option<&str>) -> AppResult<()> {
             let creds = rssh_lib::db::credential::list(conn)?;
             let groups = rssh_lib::db::group::list(conn)?;
             for p in &filtered {
-                let user = p
-                    .credential_id
-                    .as_deref()
-                    .and_then(|id| creds.iter().find(|c| c.id == id))
+                let user = creds
+                    .iter()
+                    .find(|c| c.id == p.credential_id)
                     .map(|c| c.username.as_str())
                     .unwrap_or("?");
                 let label = format!("{} ({}@{}:{})", p.name, user, p.host, p.port);

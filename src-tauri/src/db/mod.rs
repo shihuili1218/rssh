@@ -39,6 +39,18 @@ impl Db {
         locked(&self.conn)
     }
 
+    /// 测试专用：跳过文件系统，直接开一个 in-memory SQLite 并跑完 schema migrate。
+    /// 单测里每个 case 都用独立实例，互不污染。
+    #[cfg(test)]
+    pub(in crate::db) fn open_in_memory() -> AppResult<Self> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        schema::migrate(&conn)?;
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
+    }
+
     /// 把一组写操作包进单个事务。闭包里调 `*_tx(&Connection, ...)` 系列，
     /// 任何错误自动回滚（tx 不 commit 即 drop = ROLLBACK）。
     /// 成功才 commit。用于"全量替换"语义（github_pull、未来 import-replace）。

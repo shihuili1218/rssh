@@ -37,10 +37,9 @@ fn edit_profile(conn: &CliCtx, name: &str) -> AppResult<()> {
 
     let creds = rssh_lib::db::credential::list(conn)?;
     if !creds.is_empty() {
-        let cur = p
-            .credential_id
-            .as_deref()
-            .and_then(|id| creds.iter().position(|c| c.id == id))
+        let cur = creds
+            .iter()
+            .position(|c| c.id == p.credential_id)
             .map(|i| (i + 1).to_string())
             .unwrap_or("0".into());
         println!("Credentials:");
@@ -53,7 +52,8 @@ fn edit_profile(conn: &CliCtx, name: &str) -> AppResult<()> {
             .parse::<usize>()
             .ok()
             .and_then(|n| creds.get(n.wrapping_sub(1)))
-            .map(|c| c.id.clone());
+            .map(|c| c.id.clone())
+            .unwrap_or_default();
     }
 
     updated.init_command = {

@@ -29,7 +29,9 @@ pub struct Profile {
     pub name: String,
     pub host: String,
     pub port: u16,
-    pub credential_id: Option<String>,
+    /// DB 列声明 `TEXT NOT NULL DEFAULT ''`——schema 不允许 NULL，model 类型对齐。
+    /// "无凭证"用空串表示，不再用 Option 引入冗余的"NULL vs 空串"二义性。
+    pub credential_id: String,
     pub bastion_profile_id: Option<String>,
     pub init_command: Option<String>,
     #[serde(default)]
@@ -136,9 +138,6 @@ pub struct CastHeader {
     pub height: u32,
     pub timestamp: i64,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CastEvent(pub f64, pub String, pub String);
 
 #[cfg(test)]
 mod tests {

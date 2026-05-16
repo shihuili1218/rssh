@@ -192,39 +192,9 @@ impl client::Handler for SshHandler {
         async move {
             match check {
                 Ok(true) => Ok(true),
-                // 未知主机：有 ctx 走 xterm 确认，无 ctx 直接拒绝。
+                // 未知主机：有 ctx 走 xterm 确认，无 ctx（SFTP/Forward 后台连接）直接拒绝。
                 Ok(false) => match ctx {
-                    Some(ctx) => {
-                        let banner = format!(
-                            "\r\nThe authenticity of host '{host}' can't be established.\r\n\
-                             {alg} key fingerprint is {fp}.\r\n\
-                             This key is not known by any other names.\r\n\
-                             Are you sure you want to continue connecting (yes/no/[fingerprint])? "
-                        );
-                        let answer = match prompt_host_key(&ctx, &banner).await {
-                            Ok(a) => a,
-                            Err(_) => {
-                                log(format!(
-                                    "Host key confirmation cancelled for {host}:{port}."
-                                ));
-                                return Ok(false);
-                            }
-                        };
-                        let trimmed = answer.trim();
-                        if trimmed.eq_ignore_ascii_case("yes") || trimmed == fp {
-                            match known_hosts::learn_known_hosts_path(&host, port, &pubkey, &path)
-                            {
-                                Ok(()) => log(format!(
-                                    "Permanently added {host}:{port} to known_hosts."
-                                )),
-                                Err(e) => log(format!("known_hosts write failed: {e}")),
-                            }
-                            Ok(true)
-                        } else {
-                            log(format!("Host key rejected by user for {host}:{port}."));
-                            Ok(false)
-                        }
-                    }
+                    Some(c) => handle_unknown_host(c, host, port, alg, fp, pubkey, path, log).await,
                     None => {
                         log(format!(
                             "Unknown host {host}:{port} ({alg} fingerprint {fp}). \
@@ -234,76 +204,11 @@ impl client::Handler for SshHandler {
                         Ok(false)
                     }
                 },
-                // 已知主机但密钥变更：有 ctx 给一次"replace"机会（移动端没法跑 ssh-keygen -R）；
-                // 无 ctx 直接拒绝。要求字面输入 'replace' 而非 'yes'，加大手滑成本。
+                // 已知主机但密钥变更：有 ctx 给一次"replace"机会；无 ctx 直接拒绝。
                 Err(_) => match ctx {
-                    Some(ctx) => {
-                        let old_fps: Vec<String> =
-                            russh::keys::known_hosts::known_host_keys_path(&host, port, &path)
-                                .ok()
-                                .unwrap_or_default()
-                                .into_iter()
-                                .map(|(_, k)| k.fingerprint(HashAlg::Sha256).to_string())
-                                .collect();
-                        let old_fps_str = if old_fps.is_empty() {
-                            "(unknown)".to_string()
-                        } else {
-                            old_fps.join("\r\n  ")
-                        };
-                        let banner = format!(
-                            "\r\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n\
-                             @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\r\n\
-                             @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n\
-                             IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!\r\n\
-                             Someone could be eavesdropping on you right now (man-in-the-middle attack)!\r\n\
-                             \r\n\
-                             Host: {host}:{port}\r\n\
-                             Old key fingerprint:\r\n  {old_fps_str}\r\n\
-                             New key fingerprint:\r\n  {fp} ({alg})\r\n\
-                             \r\n\
-                             If the server was legitimately reinstalled, type 'replace' to remove\r\n\
-                             the old key and trust the new one. Anything else aborts.\r\n\
-                             > "
-                        );
-                        let answer = match prompt_host_key(&ctx, &banner).await {
-                            Ok(a) => a,
-                            Err(_) => {
-                                if let Ok(mut m) = mismatch.lock() {
-                                    *m = true;
-                                }
-                                log(format!(
-                                    "Host key change confirmation cancelled for {host}:{port}."
-                                ));
-                                return Ok(false);
-                            }
-                        };
-                        if answer.trim() == "replace" {
-                            match crate::ssh::known_hosts::remove_host(&host, port, &path) {
-                                Ok(n) => log(format!(
-                                    "Removed {n} stale entry/entries for {host}:{port}."
-                                )),
-                                Err(e) => {
-                                    log(format!("Failed to remove old known_hosts entry: {e}"));
-                                    if let Ok(mut m) = mismatch.lock() {
-                                        *m = true;
-                                    }
-                                    return Ok(false);
-                                }
-                            }
-                            match known_hosts::learn_known_hosts_path(&host, port, &pubkey, &path) {
-                                Ok(()) => log(format!(
-                                    "New host key for {host}:{port} added to known_hosts."
-                                )),
-                                Err(e) => log(format!("known_hosts write failed: {e}")),
-                            }
-                            Ok(true)
-                        } else {
-                            if let Ok(mut m) = mismatch.lock() {
-                                *m = true;
-                            }
-                            log(format!("Host key change rejected by user for {host}:{port}."));
-                            Ok(false)
-                        }
+                    Some(c) => {
+                        handle_key_mismatch(c, host, port, alg, fp, pubkey, path, log, mismatch)
+                            .await
                     }
                     None => {
                         if let Ok(mut m) = mismatch.lock() {
@@ -337,6 +242,123 @@ impl client::Handler for SshHandler {
             }
         }
     }
+}
+
+/// TOFU 第一次连：弹 banner → 用户输 yes / 指纹 / 其它 → learn 到 known_hosts。
+/// 失败（取消 / 拒绝）一律返回 Ok(false) 让 russh 终止握手，不抛错——是用户主动选的。
+async fn handle_unknown_host(
+    ctx: AuthCtx,
+    host: String,
+    port: u16,
+    alg: String,
+    fp: String,
+    pubkey: russh::keys::ssh_key::PublicKey,
+    path: PathBuf,
+    log: LogFn,
+) -> Result<bool, russh::Error> {
+    use russh::keys::known_hosts;
+
+    let banner = format!(
+        "\r\nThe authenticity of host '{host}' can't be established.\r\n\
+         {alg} key fingerprint is {fp}.\r\n\
+         This key is not known by any other names.\r\n\
+         Are you sure you want to continue connecting (yes/no/[fingerprint])? "
+    );
+    let answer = match prompt_host_key(&ctx, &banner).await {
+        Ok(a) => a,
+        Err(_) => {
+            log(format!("Host key confirmation cancelled for {host}:{port}."));
+            return Ok(false);
+        }
+    };
+    let trimmed = answer.trim();
+    if !(trimmed.eq_ignore_ascii_case("yes") || trimmed == fp) {
+        log(format!("Host key rejected by user for {host}:{port}."));
+        return Ok(false);
+    }
+    match known_hosts::learn_known_hosts_path(&host, port, &pubkey, &path) {
+        Ok(()) => log(format!("Permanently added {host}:{port} to known_hosts.")),
+        Err(e) => log(format!("known_hosts write failed: {e}")),
+    }
+    Ok(true)
+}
+
+/// 已知 host 但密钥变了：MITM 警告 → 用户输 'replace' 才删旧加新。
+/// 字面 'replace'（不是 'yes'）是设计上加大手滑成本——这是潜在中间人攻击场景。
+/// 任何路径下 mismatch flag 都要置位（取消 / 拒绝 / 删除失败），让上层把错误码翻成
+/// `ssh_host_key_changed` 而不是泛泛的 connect 失败。
+async fn handle_key_mismatch(
+    ctx: AuthCtx,
+    host: String,
+    port: u16,
+    alg: String,
+    fp: String,
+    pubkey: russh::keys::ssh_key::PublicKey,
+    path: PathBuf,
+    log: LogFn,
+    mismatch: Arc<StdMutex<bool>>,
+) -> Result<bool, russh::Error> {
+    use russh::keys::known_hosts;
+    use russh::keys::HashAlg;
+
+    let set_mismatch = || {
+        if let Ok(mut m) = mismatch.lock() {
+            *m = true;
+        }
+    };
+
+    let old_fps: Vec<String> = known_hosts::known_host_keys_path(&host, port, &path)
+        .ok()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, k)| k.fingerprint(HashAlg::Sha256).to_string())
+        .collect();
+    let old_fps_str = if old_fps.is_empty() {
+        "(unknown)".to_string()
+    } else {
+        old_fps.join("\r\n  ")
+    };
+    let banner = format!(
+        "\r\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n\
+         @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\r\n\
+         @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n\
+         IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!\r\n\
+         Someone could be eavesdropping on you right now (man-in-the-middle attack)!\r\n\
+         \r\n\
+         Host: {host}:{port}\r\n\
+         Old key fingerprint:\r\n  {old_fps_str}\r\n\
+         New key fingerprint:\r\n  {fp} ({alg})\r\n\
+         \r\n\
+         If the server was legitimately reinstalled, type 'replace' to remove\r\n\
+         the old key and trust the new one. Anything else aborts.\r\n\
+         > "
+    );
+    let answer = match prompt_host_key(&ctx, &banner).await {
+        Ok(a) => a,
+        Err(_) => {
+            set_mismatch();
+            log(format!("Host key change confirmation cancelled for {host}:{port}."));
+            return Ok(false);
+        }
+    };
+    if answer.trim() != "replace" {
+        set_mismatch();
+        log(format!("Host key change rejected by user for {host}:{port}."));
+        return Ok(false);
+    }
+    match crate::ssh::known_hosts::remove_host(&host, port, &path) {
+        Ok(n) => log(format!("Removed {n} stale entry/entries for {host}:{port}.")),
+        Err(e) => {
+            log(format!("Failed to remove old known_hosts entry: {e}"));
+            set_mismatch();
+            return Ok(false);
+        }
+    }
+    match known_hosts::learn_known_hosts_path(&host, port, &pubkey, &path) {
+        Ok(()) => log(format!("New host key for {host}:{port} added to known_hosts.")),
+        Err(e) => log(format!("known_hosts write failed: {e}")),
+    }
+    Ok(true)
 }
 
 /// Shared forwarded-channel sender, settable from outside.

@@ -82,9 +82,7 @@ mod tests {
             name: name.to_string(),
             host: format!("{name}.local"),
             port: 22,
-            // DB 的 credential_id 列声明 NOT NULL DEFAULT ''；model 端是 Option<String>。
-            // 给个空 string 兼容 schema，不动 schema/model 之间这层小不一致。
-            credential_id: Some(String::new()),
+            credential_id: String::new(),
             bastion_profile_id: bastion_id.map(|s| s.to_string()),
             init_command: None,
             group_id: None,
