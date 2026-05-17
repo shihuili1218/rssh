@@ -185,6 +185,8 @@ const en = {
 
   // ── AI Diagnose: ChatPanel ──
   "ai.title": "AI Diagnose",
+  "ai.title.danger_suffix": "DANGER MODE",
+  "ai.title.danger_tip": "Auto-approve is ON — AI commands run without confirmation",
   "ai.toolbar.audit": "✎𓂃Audit",
   "ai.toolbar.back_to_chat": "← Chat",
   "ai.toolbar.close_session": "Close and end session",
@@ -266,6 +268,13 @@ const en = {
   "ai.settings.note.saved": "Saved",
   "ai.settings.note.save_failed": "Save failed: {error}",
   "ai.settings.section.provider": "PROVIDER & MODEL",
+  "ai.settings.danger.section": "DANGER MODE",
+  "ai.settings.danger.label": "Auto-approve AI proposed commands",
+  "ai.settings.danger.desc": "When ON, the AI runs every proposed command immediately without asking you to confirm. Only enable on disposable VMs / sandboxes you're prepared to lose. A bad prompt or hijacked model can rm -rf or exfiltrate data in seconds.",
+  "ai.settings.danger.confirm_title": "⚠️ Enable Danger Mode?",
+  "ai.settings.danger.confirm_body": "The AI will execute every command it proposes IMMEDIATELY, with no confirmation step.\n\nA single bad command can wipe files, leak credentials, or take the host down. Only enable this on disposable VMs / sandboxes you can afford to lose.",
+  "ai.settings.danger.confirm_enable": "Enable anyway",
+  "ai.settings.danger.save_failed": "Failed to save danger mode: {error}",
   "ai.settings.section.skills": "SKILLS",
   "ai.settings.skills.new": "+ New",
   "ai.settings.skills.tag.builtin": "Builtin",

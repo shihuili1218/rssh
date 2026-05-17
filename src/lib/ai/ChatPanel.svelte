@@ -24,6 +24,9 @@
     let items: ChatItem[] = $derived(session ? ai.chatItems(session.session_id) : []);
     // 流式响应进行中 —— send 按钮换成"停止"按钮。依赖 items 变化重算（last item 的 streaming flag）。
     let streaming = $derived(session ? ai.isStreaming(session.session_id) : false);
+    // 危险模式标记 —— 用户在 AI Settings 里切换后，标题旁的红色后缀立刻同步。
+    // 走 ai.settings() 读 store 的 $state，自动响应式（不需要手动 loadSettings 触发）。
+    let dangerMode = $derived(ai.settings()?.danger_mode === true);
 
     onMount(() => {
         if (!ai.settings()) ai.loadSettings().catch(() => {});
@@ -98,6 +101,9 @@
 <div class="ai-panel">
     <div class="toolbar">
         <span class="title">{t("ai.title")}</span>
+        {#if dangerMode}
+            <span class="title-danger" title={t("ai.title.danger_tip")}>{t("ai.title.danger_suffix")}</span>
+        {/if}
         {#if session}
             <button class="btn btn-ghost btn-sm" onclick={() => (auditOpen = !auditOpen)}>
                 {auditOpen ? t("ai.toolbar.back_to_chat") : t("ai.toolbar.audit")}
@@ -190,6 +196,15 @@
         flex-shrink: 0;
     }
     .title { font-weight: 600; font-size: 13px; }
+    .title-danger {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--error);
+        padding: 1px 6px;
+        border: 1px solid var(--error);
+        border-radius: 3px;
+        background: color-mix(in srgb, var(--error) 8%, transparent);
+    }
     .grow { flex: 1; }
     .btn-primary { background: var(--accent); color: var(--white); border-color: var(--accent); }
     .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }

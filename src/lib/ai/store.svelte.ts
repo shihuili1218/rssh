@@ -302,7 +302,7 @@ export async function loadSettings(provider?: LlmProvider): Promise<AiSettings> 
   if (!provider) _settings = snapshot;
   return snapshot;
 }
-export async function saveSettings(s: Partial<{ provider: string; model: string; endpoint: string | null; apiKey: string | null }>) {
+export async function saveSettings(s: Partial<{ provider: string; model: string; endpoint: string | null; apiKey: string | null; dangerMode: boolean }>) {
   await invoke("ai_settings_set", s);
   await loadSettings();
 }

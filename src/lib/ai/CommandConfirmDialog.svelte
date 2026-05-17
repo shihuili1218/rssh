@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { onMount } from "svelte";
     import * as ai from "./store.svelte.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import type { CommandProposed, CommandResult } from "./types.ts";
@@ -18,6 +19,16 @@
     let terminating = $state(false);
 
     let isPending = $derived(!result && !rejected);
+
+    // 危险模式：每次新 command 进 chat 会创建一个新的 CommandConfirmDialog 实例，
+    // onMount 触发一次自动 approve。判断在前端，UI 上"提议→执行"全程仍可见，
+    // 审计 trail 完整；后端 emit 流程不变。挂载时若已有 result/rejected（历史记录回放）
+    // 自然跳过。
+    onMount(() => {
+        if (isPending && !executing && ai.settings()?.danger_mode) {
+            void approve();
+        }
+    });
 
     async function approve() {
         if (executing) return;

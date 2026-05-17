@@ -17,6 +17,8 @@ export interface AiSettings {
   model: string;
   endpoint: string | null;
   has_api_key: boolean;
+  /** 危险模式：跳过 CommandConfirmDialog 确认，AI 提议命令直接执行。默认 false。 */
+  danger_mode: boolean;
 }
 
 export interface ModelInfo {

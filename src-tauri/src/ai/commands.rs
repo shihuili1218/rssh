@@ -30,6 +30,12 @@ fn key_endpoint(provider: &str) -> String {
 fn key_api_key(provider: &str) -> String {
     setting_key(&format!("ai_{provider}_key"))
 }
+/// 危险模式（全局，不分 provider）：开启后前端跳过 CommandConfirmDialog 的人工确认，
+/// AI 提议的命令直接 auto-approve。这是 issue #39 的明确需求——用户在受控环境
+/// （隔离 VM、靶机）里期望像 Claude Code 一样无打扰自主跑。
+fn key_danger_mode() -> String {
+    setting_key("ai_danger_mode")
+}
 
 // ─── 命令 ──────────────────────────────────────────────────────────
 
@@ -357,6 +363,8 @@ pub struct AiSettings {
     pub model: String,
     pub endpoint: Option<String>,
     pub has_api_key: bool,
+    /// 全局（不随 provider 切换）。前端 toggle，开启后跳过命令确认对话框。
+    pub danger_mode: bool,
 }
 
 /// `provider` 入参：传 `Some(p)` → 拉该 provider 的快照（不改 active）；
@@ -383,11 +391,17 @@ pub async fn ai_settings_get(
         .get(&key_api_key(&provider))?
         .filter(|s| !s.is_empty())
         .is_some();
+    let danger_mode = state
+        .secret_store
+        .get(&key_danger_mode())?
+        .map(|v| v == "1")
+        .unwrap_or(false);
     Ok(AiSettings {
         provider,
         model,
         endpoint,
         has_api_key,
+        danger_mode,
     })
 }
 
@@ -427,6 +441,7 @@ pub async fn ai_settings_set(
     model: Option<String>,
     endpoint: Option<String>,
     api_key: Option<String>,
+    danger_mode: Option<bool>,
 ) -> AppResult<()> {
     if let Some(p) = provider.as_ref() {
         state.secret_store.set(&key_provider(), p)?;
@@ -449,6 +464,13 @@ pub async fn ai_settings_set(
         } else {
             state.secret_store.set(&key_api_key(&active_provider), &k)?;
         }
+    }
+    if let Some(on) = danger_mode {
+        // 用 "1"/"0" 而不是 delete on false——显式记录用户的"我关了"，
+        // 与"从未设置过"区分开，后续审计/排错更直接。
+        state
+            .secret_store
+            .set(&key_danger_mode(), if on { "1" } else { "0" })?;
     }
     Ok(())
 }

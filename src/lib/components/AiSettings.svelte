@@ -20,6 +20,38 @@
     let hasKey = $state(false);
     let savingByok = $state(false);
     let byokNote = $state<string | null>(null);
+
+    // ─── Danger mode（全局，跟 provider 无关）────────────────────────
+    let dangerMode = $state(false);
+    let savingDanger = $state(false);
+    let showDangerDialog = $state(false);
+    let dangerNote = $state<string | null>(null);
+
+    /** onclick + preventDefault：Tauri webview 不支持原生 confirm()，且依赖 checkbox
+     *  默认 toggle 会导致 cancel 后 DOM 与 Svelte state 错位。这里手动接管：
+     *  开启时弹自定义模态等用户确认；关闭直接 save（关 = 回到安全默认，不拦）。 */
+    function handleDangerToggle(e: MouseEvent) {
+        e.preventDefault();
+        if (savingDanger) return;
+        if (!dangerMode) {
+            showDangerDialog = true;
+            return;
+        }
+        void applyDangerMode(false);
+    }
+    async function applyDangerMode(wantOn: boolean) {
+        savingDanger = true;
+        showDangerDialog = false;
+        dangerNote = null;
+        try {
+            await ai.saveSettings({ dangerMode: wantOn });
+            dangerMode = wantOn;
+        } catch (err) {
+            dangerNote = t("ai.settings.danger.save_failed", { error: errMsg(err) });
+        } finally {
+            savingDanger = false;
+        }
+    }
     let modelOptions = $state<ModelInfo[]>([]);
     let loadingModels = $state(false);
     /** byokNote 自清 timer 句柄，避免后续动作被旧 timer 误清。 */
@@ -125,6 +157,7 @@
         model = s.model;
         endpoint = s.endpoint ?? "";
         hasKey = s.has_api_key;
+        dangerMode = s.danger_mode;
         if (hasKey) void autoLoadModels();
         await refreshSkills();
     });
@@ -299,6 +332,26 @@
         </div>
     </div>
 
+    <div class="section-label">{t("ai.settings.danger.section")}</div>
+    <div class="switch-card danger" class:on={dangerMode}>
+        <div class="switch-card-body">
+            <div class="switch-card-title"
+                 class:on={dangerMode} class:off={!dangerMode}>
+                {t("ai.settings.danger.label")}
+            </div>
+            <div class="switch-card-desc">{t("ai.settings.danger.desc")}</div>
+            {#if dangerNote}
+                <div class="danger-err">{dangerNote}</div>
+            {/if}
+        </div>
+        <label class="switch">
+            <input type="checkbox" checked={dangerMode}
+                   disabled={savingDanger}
+                   onclick={handleDangerToggle}/>
+            <span class="slider"></span>
+        </label>
+    </div>
+
     <div class="section-label skill-header">
         {t("ai.settings.section.skills")}
         {#if !editing}
@@ -368,6 +421,29 @@
         </div>
     {/if}
 </div>
+
+<!-- Danger mode confirmation dialog —— Tauri webview 不弹原生 confirm，
+     仿 GitHubSyncScreen 用自定义模态。backdrop 点击 = 取消，内容 stopPropagation。 -->
+{#if showDangerDialog}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="dialog-backdrop" onclick={() => (showDangerDialog = false)}>
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()}>
+            <h3 class="danger-dialog-title">{t("ai.settings.danger.confirm_title")}</h3>
+            <div class="danger-dialog-body">{t("ai.settings.danger.confirm_body")}</div>
+            <div class="btn-row">
+                <button class="btn btn-sm" onclick={() => (showDangerDialog = false)}>
+                    {t("common.cancel")}
+                </button>
+                <button class="btn btn-sm btn-danger-solid"
+                        onclick={() => applyDangerMode(true)}
+                        disabled={savingDanger}>
+                    {t("ai.settings.danger.confirm_enable")}
+                </button>
+            </div>
+        </div>
+    </div>
+{/if}
 
 <style>
     .page {
@@ -446,6 +522,61 @@
         justify-content: space-between;
         padding-right: 0;
     }
+
+    /* 复用全局 .switch-card 样式（见 styles/global.css）。Danger 变体在"开启"时
+       把 title 颜色压成 --error——全局 .switch-card-title.on 默认是 --accent（绿），
+       这里特化让"危险态"视觉上无法忽视，防止用户开了忘了又跑命令。 */
+    .switch-card.danger.on .switch-card-title.on { color: var(--error); }
+    .danger-err {
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--error);
+    }
+
+    /* Danger confirm dialog —— 仿 GitHubSyncScreen 的模态结构 */
+    .dialog-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 500;
+        background: var(--overlay-strong);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .dialog {
+        background: var(--bg);
+        box-shadow: var(--raised);
+        border-radius: var(--radius);
+        padding: calc(24px * var(--density));
+        max-width: 460px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+    .danger-dialog-title {
+        font-size: 16px;
+        color: var(--error);
+        font-weight: 700;
+    }
+    .danger-dialog-body {
+        font-size: 13px;
+        color: var(--text);
+        line-height: 1.55;
+        white-space: pre-line;
+    }
+    .btn-row {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        margin-top: 4px;
+    }
+    /* "确认启用"按钮 —— 用 error 配色，让用户知道点下去等于踩雷 */
+    .btn-danger-solid {
+        background: var(--error);
+        color: var(--white);
+        border-color: var(--error);
+    }
+    .btn-danger-solid:disabled { opacity: 0.5; cursor: not-allowed; }
 
     .banner {
         display: flex;
