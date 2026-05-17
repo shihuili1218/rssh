@@ -93,7 +93,7 @@ describe("parseCustomTermJson", () => {
       red: "#f00",
       green: "#0f0",
     });
-    const t = parseCustomTermJson(raw) as Record<string, unknown>;
+    const t = parseCustomTermJson(raw) as unknown as Record<string, unknown>;
     expect(t.cursor).toBe("#aaa");
     expect(t.red).toBe("#f00");
     expect(t.green).toBe("#0f0");
@@ -108,7 +108,7 @@ describe("parseCustomTermJson", () => {
       brightPurple: "#ff00ff",
       selection: "#222",
     });
-    const t = parseCustomTermJson(raw) as Record<string, unknown>;
+    const t = parseCustomTermJson(raw) as unknown as Record<string, unknown>;
     expect(t.cursor).toBe("#cc0000");
     expect(t.magenta).toBe("#aa00aa");
     expect(t.brightMagenta).toBe("#ff00ff");
@@ -128,7 +128,7 @@ describe("parseCustomTermJson", () => {
       cursor: "#good",
       cursorColor: "#bad",
     });
-    const t = parseCustomTermJson(raw) as Record<string, unknown>;
+    const t = parseCustomTermJson(raw) as unknown as Record<string, unknown>;
     expect(t.cursor).toBe("#good");
     expect(t.cursorColor).toBeUndefined();
   });
@@ -141,7 +141,7 @@ describe("parseCustomTermJson", () => {
       flag: true,
       nested: { a: 1 },
     });
-    const t = parseCustomTermJson(raw) as Record<string, unknown>;
+    const t = parseCustomTermJson(raw) as unknown as Record<string, unknown>;
     expect(t.bogus).toBeUndefined();
     expect(t.flag).toBeUndefined();
     expect(t.nested).toBeUndefined();

@@ -228,5 +228,9 @@ export function parseCustomTermJson(raw: string): PaletteTerm {
   for (const k of Object.keys(term)) {
     if (typeof term[k] !== "string") delete term[k];
   }
-  return term as PaletteTerm;
+  // 经过上面两轮清洗（alias 重命名 + 非字符串字段删除）+ 顶部 background/foreground 校验，
+  // `term` 此刻只含 string 字段且 background/foreground 必存。`Record<string, unknown>`
+  // 与 `PaletteTerm` 在 TS 看来没足够 overlap（前者完全开放、后者有具名 optional 字段），
+  // 所以需要先绕一道 `unknown` —— 不是 hack，是显式承认"运行期校验过、类型层无法表达"。
+  return term as unknown as PaletteTerm;
 }

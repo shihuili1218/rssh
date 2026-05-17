@@ -198,6 +198,7 @@ const zh: Messages = {
   "ai.input.starting": "启动会话…",
   "ai.input.placeholder": "说说怎么了…  (Enter 发送，Shift+Enter 换行)",
   "ai.input.send": "发送",
+  "ai.input.stop": "⏹ 停止",
   "ai.input.starting_short": "启动中…",
   "ai.session.ended_note": "会话已结束",
 

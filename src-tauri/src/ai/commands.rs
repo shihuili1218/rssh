@@ -256,6 +256,24 @@ pub async fn ai_session_stop(state: State<'_, AppState>, session_id: String) -> 
     Ok(())
 }
 
+/// 取消当前正在进行的 LLM 流式响应。仅当 actor 阻塞在 chat() 时有效；
+/// 否则 slot 为 None，这是 no-op（不算错——用户也可能恰好在响应完结那一刻按下）。
+/// 会话本身（history / pending command / audit）全部保留。
+#[tauri::command]
+pub async fn ai_cancel_stream(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<()> {
+    let slot = locked(&state.ai_sessions)?
+        .get(&session_id)
+        .map(|s| s.cancel_slot.clone())
+        .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
+    if let Some(notify) = slot.lock().map_err(|_| AppError::Lock)?.as_ref() {
+        notify.notify_one();
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn ai_audit_save(
     state: State<'_, AppState>,

@@ -22,6 +22,8 @@
 
     let session = $derived(ai.sessionForTarget(targetId));
     let items: ChatItem[] = $derived(session ? ai.chatItems(session.session_id) : []);
+    // 流式响应进行中 —— send 按钮换成"停止"按钮。依赖 items 变化重算（last item 的 streaming flag）。
+    let streaming = $derived(session ? ai.isStreaming(session.session_id) : false);
 
     onMount(() => {
         if (!ai.settings()) ai.loadSettings().catch(() => {});
@@ -72,6 +74,13 @@
             try { await ai.stopSession(session.session_id); } catch (e) { console.error("[ai] stop:", e); }
         }
         ai.closePanel();
+    }
+
+    /** 打断当前流式响应；会话上下文保留，用户可立刻发下一条纠正。 */
+    async function stopStreaming() {
+        if (!session) return;
+        try { await ai.cancelStream(session.session_id); }
+        catch (e) { console.error("[ai] cancel stream:", e); }
     }
 
     function onKeyDown(e: KeyboardEvent) {
@@ -149,13 +158,19 @@
             <textarea
                 bind:this={inputEl}
                 bind:value={inputText}
-                placeholder={busy ? (session ? t("ai.input.replying") : t("ai.input.starting")) : t("ai.input.placeholder")}
+                placeholder={busy ? (session ? t("ai.input.replying") : t("ai.input.starting")) : (streaming ? t("ai.input.replying") : t("ai.input.placeholder"))}
                 onkeydown={onKeyDown}
-                disabled={busy}
+                disabled={busy || streaming}
             ></textarea>
-            <button class="btn btn-primary" onclick={send} disabled={!inputText.trim() || busy}>
-                {busy && !session ? t("ai.input.starting_short") : t("ai.input.send")}
-            </button>
+            {#if streaming}
+                <button class="btn btn-stop" onclick={stopStreaming} title={t("ai.input.stop")}>
+                    {t("ai.input.stop")}
+                </button>
+            {:else}
+                <button class="btn btn-primary" onclick={send} disabled={!inputText.trim() || busy}>
+                    {busy && !session ? t("ai.input.starting_short") : t("ai.input.send")}
+                </button>
+            {/if}
         </div>
     {/if}
 </div>
@@ -178,6 +193,13 @@
     .grow { flex: 1; }
     .btn-primary { background: var(--accent); color: var(--white); border-color: var(--accent); }
     .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-stop {
+        background: var(--error);
+        color: var(--white);
+        border-color: var(--error);
+        cursor: pointer;
+    }
+    .btn-stop:hover { opacity: 0.85; }
     .btn-ghost { background: transparent; }
     .btn-icon {
         background: transparent; border: none;

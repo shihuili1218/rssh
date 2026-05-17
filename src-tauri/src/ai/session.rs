@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 
 use crate::error::{AppError, AppResult};
 use crate::ssh::client::SshHandle;
@@ -58,6 +58,10 @@ pub struct DiagnoseSession {
     pub provider: String,
     pub action_tx: mpsc::UnboundedSender<UserAction>,
     pub audit: Arc<Mutex<AuditLog>>,
+    /// 流式响应的取消句柄。actor 在 chat() 前把 Notify 装进 slot，chat 完成/取消后清空。
+    /// commands 层从 slot 取 Notify 调 notify_one() —— 没在 chat 时 slot 为 None，发了也无副作用。
+    /// 这样 cancel 永远只能取消"当前正在进行的 chat"，不会污染后续轮次。
+    pub cancel_slot: Arc<Mutex<Option<Arc<Notify>>>>,
 }
 
 pub struct SessionConfig {
@@ -96,6 +100,8 @@ pub fn start(cfg: SessionConfig, app: AppHandle) -> AppResult<DiagnoseSession> {
         });
     }
 
+    let cancel_slot: Arc<Mutex<Option<Arc<Notify>>>> = Arc::new(Mutex::new(None));
+
     let provider = cfg.client.provider().to_string();
     let session = DiagnoseSession {
         session_id: cfg.session_id.clone(),
@@ -105,6 +111,7 @@ pub fn start(cfg: SessionConfig, app: AppHandle) -> AppResult<DiagnoseSession> {
         provider,
         action_tx,
         audit: audit.clone(),
+        cancel_slot: cancel_slot.clone(),
     };
 
     let actor = Actor {
@@ -114,6 +121,7 @@ pub fn start(cfg: SessionConfig, app: AppHandle) -> AppResult<DiagnoseSession> {
         action_rx,
         audit,
         app,
+        cancel_slot,
     };
     tauri::async_runtime::spawn(actor.run());
 
@@ -127,6 +135,7 @@ struct Actor {
     action_rx: mpsc::UnboundedReceiver<UserAction>,
     audit: Arc<Mutex<AuditLog>>,
     app: AppHandle,
+    cancel_slot: Arc<Mutex<Option<Arc<Notify>>>>,
 }
 
 impl Actor {
@@ -196,8 +205,16 @@ impl Actor {
             let app = self.app.clone();
             let session_id = self.cfg.session_id.clone();
             let sink_msg_id = msg_id.clone();
+            // captured：sink 边 emit 边累积文本副本。取消时 chat() future 被 drop，
+            // 内部的 text_out 跟着没了，但 captured 还在——拿它写一条 partial assistant
+            // 进 history，否则下次发消息时 LLM 看到 [user, user] 序列会报 400（Anthropic 严格）。
+            let captured: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+            let captured_for_sink = captured.clone();
             let sink: DeltaSink = std::sync::Arc::new(move |delta| {
                 if let ChatDelta::Text(t) = delta {
+                    if let Ok(mut g) = captured_for_sink.lock() {
+                        g.push_str(&t);
+                    }
                     let _ = app.emit(
                         &format!("ai:assistant_delta:{session_id}"),
                         json!({ "id": sink_msg_id, "text": t }),
@@ -205,7 +222,55 @@ impl Actor {
                 }
             });
 
-            let resp = self.cfg.client.chat(req, sink).await?;
+            // 装上 cancel notifier：commands 层 ai_cancel_stream 会 notify_one 它。
+            // chat 完成或取消后从 slot 摘下——slot 为 None 时 cancel 是 no-op，
+            // 不会污染下一轮 chat。
+            let cancel = Arc::new(Notify::new());
+            if let Ok(mut g) = self.cancel_slot.lock() {
+                *g = Some(cancel.clone());
+            }
+
+            let chat_future = self.cfg.client.chat(req, sink);
+            let chat_result = tokio::select! {
+                r = chat_future => Some(r),
+                _ = cancel.notified() => None,
+            };
+
+            if let Ok(mut g) = self.cancel_slot.lock() {
+                *g = None;
+            }
+
+            let resp = match chat_result {
+                Some(r) => r?,
+                None => {
+                    // 用户取消：chat future 已 drop，TCP 流随之断开。
+                    // 把已经流出的 partial text 写进 history，告诉 LLM "这一轮被打断"，
+                    // 下次用户发消息它就知道前面那条不完整、不要假定其有效。
+                    let partial = captured.lock().map(|g| g.clone()).unwrap_or_default();
+                    self.emit(
+                        "assistant_message_end",
+                        json!({ "id": msg_id, "text": partial, "cancelled": true }),
+                    );
+                    self.audit_push(AuditKind::Note {
+                        message: format!(
+                            "user cancelled streaming response (partial {} bytes)",
+                            partial.len()
+                        ),
+                    });
+                    // history 的 assistant content 不能空——空字符串某些 provider 会拒。
+                    let content = if partial.is_empty() {
+                        "(response stopped by user)".to_string()
+                    } else {
+                        format!("{partial}\n\n[response stopped by user before completion]")
+                    };
+                    self.history.push(ChatMessage::Assistant {
+                        content,
+                        tool_calls: vec![],
+                        reasoning_content: None,
+                    });
+                    return Ok(());
+                }
+            };
 
             self.emit(
                 "assistant_message_end",

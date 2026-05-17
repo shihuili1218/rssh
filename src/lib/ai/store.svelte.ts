@@ -129,6 +129,20 @@ export async function sendMessage(session_id: string, text: string) {
   await invoke("ai_user_message", { sessionId: session_id, text });
 }
 
+/** 打断 actor 正在跑的 LLM 流式响应。会话上下文（history / pending command / audit）全部保留——
+ *  这跟 stopSession（销毁整个会话）是两个语义。actor 不在 chat 时调用是 no-op。 */
+export async function cancelStream(session_id: string): Promise<void> {
+  await invoke("ai_cancel_stream", { sessionId: session_id });
+}
+
+/** 当前会话的助手消息是否正在流式输出 —— UI 用它把"发送"按钮切成"停止"。 */
+export function isStreaming(session_id: string): boolean {
+  const arr = _chatBySession[session_id];
+  if (!arr || arr.length === 0) return false;
+  const last = arr[arr.length - 1];
+  return last.kind === "assistant" && last.streaming === true;
+}
+
 /** 在途执行的控制句柄；按 tool_call_id 索引。`terminate` 给 UI 上的"提前终止"按钮用。 */
 const _runningExecutions: Record<string, { terminate: () => Promise<void> }> = {};
 
@@ -212,15 +226,17 @@ export async function executeCommand(
     }
   });
 
-  // 注册控制句柄：用户点"提前终止"时打 Ctrl+C 给 PTY，让 shell 走到 sentinel 那一行
-  // 拿到 130 退出码（SIGINT）。userInterrupted 标志会在 finish() 里上报后端，让 LLM
-  // 区分"命令正常失败"和"用户主动打断"。如果 Ctrl+C 后 shell 半天回不来，timer 兜底。
+  // "提前终止"：用户的诉求是"立刻让我走"，不是"帮我等一个漂亮的退出码"。
+  // Ctrl+C fire-and-forget——shell 能响应就跟着停，不能响应（cat 等 stdin、
+  // 密码 prompt 等吞 SIGINT 的场景）也不扣留用户。立刻 finish，上报
+  // early_terminated=true，LLM 据此知道不该自动重试。
   _runningExecutions[proposed.tool_call_id] = {
     terminate: async () => {
       if (resolved) return;
       userInterrupted = true;
       const ctrlC = Array.from(new TextEncoder().encode("\x03"));
-      await invoke(writeCmd, { sessionId: target_session_id, data: ctrlC });
+      void invoke(writeCmd, { sessionId: target_session_id, data: ctrlC }).catch(() => {});
+      await finish(stripAnsi(buffer).trim(), -1, false);
     },
   };
 

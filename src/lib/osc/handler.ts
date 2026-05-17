@@ -62,7 +62,7 @@ async function openForward(name: string, ctx: OscReporter) {
 }
 
 /** xterm.js Terminal.parser shape we depend on. */
-interface OscParser {
+export interface OscParser {
   registerOscHandler(id: number, handler: (data: string) => boolean): void;
 }
 

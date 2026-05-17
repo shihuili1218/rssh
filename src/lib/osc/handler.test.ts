@@ -11,25 +11,25 @@ vi.mock("../stores/app.svelte.ts", () => ({
 
 import { invoke } from "@tauri-apps/api/core";
 import * as app from "../stores/app.svelte.ts";
-import { registerRsshOscHandlers } from "./handler.ts";
+import { registerRsshOscHandlers, type OscParser } from "./handler.ts";
 
-interface FakeParser {
-  registerOscHandler: ReturnType<typeof vi.fn>;
-}
-
-/** 收集 dispatcher。register 之后用 `dispatch.fn(data)` 模拟 xterm 解到 OSC 7337。 */
+/** 收集 dispatcher。register 之后用 `dispatch.fn(data)` 模拟 xterm 解到 OSC 7337。
+ *  vi.fn 必须用泛型绑死 OscParser["registerOscHandler"] 签名，否则推断成
+ *  Mock<Procedure | Constructable>，赋值给 OscParser 时报参数签名不兼容。 */
 function setup() {
   let captured: ((data: string) => boolean) | null = null;
-  const parser: FakeParser = {
-    registerOscHandler: vi.fn((id: number, fn: (data: string) => boolean) => {
-      expect(id).toBe(7337);
-      captured = fn;
-    }),
-  };
+  const registerOscHandler = vi.fn<OscParser["registerOscHandler"]>((id, fn) => {
+    expect(id).toBe(7337);
+    captured = fn;
+  });
+  const parser = { registerOscHandler };
   const reporter = { error: vi.fn() };
   registerRsshOscHandlers(parser, reporter);
   if (!captured) throw new Error("OSC 7337 handler not registered");
-  return { parser, reporter, dispatch: captured };
+  // captured 在 vi.fn callback 内被赋值，TS 流分析不追踪闭包写入——
+  // 这里运行期已通过 null 检查，显式 cast 以让 dispatch 类型可调用。
+  const dispatch: (data: string) => boolean = captured;
+  return { parser, reporter, dispatch };
 }
 
 /** 让 fire-and-forget 的 async handler 跑完一轮 microtask。 */

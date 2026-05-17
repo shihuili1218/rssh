@@ -196,6 +196,7 @@ const en = {
   "ai.input.starting": "Starting session…",
   "ai.input.placeholder": "Tell me what's going on…  (Enter to send, Shift+Enter for newline)",
   "ai.input.send": "Send",
+  "ai.input.stop": "⏹ Stop",
   "ai.input.starting_short": "Starting…",
   "ai.session.ended_note": "Session ended",
 

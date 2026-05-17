@@ -105,7 +105,10 @@ describe("attachShortcuts", () => {
   });
 
   it("leaves the event untouched when a handler explicitly returns false", () => {
-    const handler = vi.fn(() => false);
+    // Shortcut.handler 返回类型是 `void | false`，必须把 false 字面量
+    // 标成 `false`（不是 `boolean`）才能匹配——否则 TS 推断 `() => boolean`
+    // 不兼容 `() => false | void`（boolean 包含 true）。
+    const handler = vi.fn((): false => false);
 
     attachShortcuts([{ display: "pass-through", match: () => true, handler }]);
     const event = fakeEvent();
