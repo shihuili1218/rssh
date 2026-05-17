@@ -274,8 +274,15 @@ pub async fn ai_cancel_stream(
         .get(&session_id)
         .map(|s| s.cancel_slot.clone())
         .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
-    if let Some(notify) = slot.lock().map_err(|_| AppError::Lock)?.as_ref() {
-        notify.notify_one();
+    // 先把 Notify clone 出来再释放锁——slot 用的是 std::sync::Mutex，
+    // 持锁期间调 notify_one 阻塞 actor 端尝试清空 slot 的同一把锁。
+    // 用代码块限定 guard 生命周期，notify_one 在 lock 释放后才执行。
+    let notify = {
+        let g = slot.lock().map_err(|_| AppError::Lock)?;
+        g.as_ref().cloned()
+    };
+    if let Some(n) = notify {
+        n.notify_one();
     }
     Ok(())
 }

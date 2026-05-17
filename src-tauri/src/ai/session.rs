@@ -250,6 +250,16 @@ impl Actor {
                     // 让 UI 干净；error 通过 dialogue_turn 上抛后 run() 会再 emit
                     // "ai:error" 把错误信息独立展示在 banner。
                     self.emit("assistant_message_end", json!({ "id": msg_id, "text": "" }));
+                    // history 也要补一条 assistant 占位，否则下次用户发消息时序列变
+                    // [..., user, user]，Anthropic 严格 provider 会 400。
+                    // 内容用通用 marker（不放 e.to_string()）—— LLM 不需要看到真实
+                    // error 字符串（可能含 endpoint/header/key 等内部细节），banner
+                    // 给用户看的是真实 error。
+                    self.history.push(ChatMessage::Assistant {
+                        content: "[response failed]".to_string(),
+                        tool_calls: vec![],
+                        reasoning_content: None,
+                    });
                     return Err(e);
                 }
                 None => {

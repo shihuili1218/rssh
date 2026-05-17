@@ -190,7 +190,10 @@ export function isTermPaletteRef(v: unknown): v is TermPaletteRef {
  * iTerm2-Color-Schemes/xterm folder exports. Required keys: background,
  * foreground. ANSI 16 are recommended; missing ones fall back to xterm
  * defaults at render time, so we don't reject on those — and PaletteTerm
- * marks them optional, so the cast below is type-safe (no force cast).
+ * marks them optional. We validate background/foreground above and drop
+ * any non-string fields below, so the runtime shape conforms to PaletteTerm;
+ * the `unknown` hop in the final cast is purely a TS overlap-rule workaround
+ * (TS can't see "we've cleaned this Record" without it), not a force cast.
  */
 export function parseCustomTermJson(raw: string): PaletteTerm {
   let parsed: unknown;

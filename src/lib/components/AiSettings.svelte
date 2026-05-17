@@ -427,9 +427,12 @@
      backdrop=presentation（纯装饰可点关闭），内容=dialog+aria-modal=true。 -->
 {#if showDangerDialog}
     <div class="dialog-backdrop" onclick={() => (showDangerDialog = false)} role="presentation">
-        <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-            <h3 class="danger-dialog-title">{t("ai.settings.danger.confirm_title")}</h3>
-            <div class="danger-dialog-body">{t("ai.settings.danger.confirm_body")}</div>
+        <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()}
+             role="dialog" aria-modal="true"
+             aria-labelledby="danger-dialog-title"
+             aria-describedby="danger-dialog-body">
+            <h3 id="danger-dialog-title" class="danger-dialog-title">{t("ai.settings.danger.confirm_title")}</h3>
+            <div id="danger-dialog-body" class="danger-dialog-body">{t("ai.settings.danger.confirm_body")}</div>
             <div class="btn-row">
                 <button class="btn btn-sm" onclick={() => (showDangerDialog = false)}>
                     {t("common.cancel")}

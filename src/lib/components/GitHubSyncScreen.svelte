@@ -95,8 +95,9 @@
 <!-- Password dialog -->
 {#if showPwDialog}
     <div class="dialog-backdrop" onclick={() => showPwDialog = false} role="presentation">
-        <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-            <h3>{pwMode === "push" ? "Set Encryption Password" : "Enter Decryption Password"}</h3>
+        <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()}
+             role="dialog" aria-modal="true" aria-labelledby="gh-pw-title">
+            <h3 id="gh-pw-title">{pwMode === "push" ? "Set Encryption Password" : "Enter Decryption Password"}</h3>
             <input type="password" bind:value={pw1} placeholder="Password"
                    onkeydown={(e) => { if (e.key === "Enter") confirmPassword(); }}/>
             {#if pwMode === "push"}

@@ -33,7 +33,8 @@
 </script>
 
 <div class="picker-backdrop" onclick={() => app.closeSnippetPicker()} role="presentation">
-  <div class="picker surface-raised" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+  <div class="picker surface-raised" onclick={(e) => e.stopPropagation()}
+       role="dialog" aria-modal="true" aria-label="Command snippet picker">
     <input bind:this={inputEl} type="text" bind:value={filter} placeholder="Search snippets..."
       onkeydown={handleKey} />
     <div class="picker-list">
