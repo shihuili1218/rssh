@@ -187,6 +187,20 @@ export async function executeCommand(
      .replace(/\x1b\][^\x07]*\x07/g, "")
      .replace(/\r/g, "");
 
+  /** 从 PTY buffer 抽出真正给 LLM 看的 output：
+   *  1. 截到 endIndex（sentinel 路径传 sentinel 行起点；terminate/timeout 传整段）
+   *  2. strip ANSI / OSC / CR
+   *  3. 去掉首行（PTY echo 的命令本身——shell 一定会把粘过去的命令回显一遍）
+   *  4. trimEnd（不是 trim——保留前导空白，避免吃掉 `  indented output` 的对齐）
+   *  三条 finish 路径共用此函数，保证上报给 LLM 的格式形态完全一致。 */
+  const extractOutput = (rawBuffer: string, endIndex?: number): string => {
+    const end = Math.max(0, endIndex ?? rawBuffer.length);
+    const stripped = stripAnsi(rawBuffer.substring(0, end));
+    const firstNl = stripped.indexOf("\n");
+    const out = firstNl >= 0 ? stripped.substring(firstNl + 1) : stripped;
+    return out.trimEnd();
+  };
+
   const finish = async (output: string, exit_code: number, timed_out: boolean) => {
     if (resolved) return;
     resolved = true;
@@ -215,14 +229,9 @@ export async function executeCommand(
     const m = sentinelRegex.exec(buffer);
     if (m) {
       const exit = parseInt(m[1], 10);
-      const sentinelLineStart = buffer.lastIndexOf("\n", m.index);
       // sentinel 行之前的部分 = echo 行 + 实际输出
-      let raw = buffer.substring(0, sentinelLineStart >= 0 ? sentinelLineStart : 0);
-      raw = stripAnsi(raw);
-      // 去掉第一行（PTY echo 的命令本身）
-      const firstNl = raw.indexOf("\n");
-      const output = firstNl >= 0 ? raw.substring(firstNl + 1) : raw;
-      void finish(output.trimEnd(), exit, false);
+      const sentinelLineStart = buffer.lastIndexOf("\n", m.index);
+      void finish(extractOutput(buffer, sentinelLineStart), exit, false);
     }
   });
 
@@ -236,7 +245,7 @@ export async function executeCommand(
       userInterrupted = true;
       const ctrlC = Array.from(new TextEncoder().encode("\x03"));
       void invoke(writeCmd, { sessionId: target_session_id, data: ctrlC }).catch(() => {});
-      await finish(stripAnsi(buffer).trim(), -1, false);
+      await finish(extractOutput(buffer), -1, false);
     },
   };
 
@@ -252,7 +261,7 @@ export async function executeCommand(
   }
 
   timer = window.setTimeout(() => {
-    void finish(stripAnsi(buffer).trim(), -1, true);
+    void finish(extractOutput(buffer), -1, true);
   }, Math.max(1000, proposed.timeout_s * 1000)) as unknown as number;
 
   return done;

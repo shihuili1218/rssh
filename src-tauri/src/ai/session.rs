@@ -244,12 +244,18 @@ impl Actor {
                 Some(r) => r?,
                 None => {
                     // 用户取消：chat future 已 drop，TCP 流随之断开。
-                    // 把已经流出的 partial text 写进 history，告诉 LLM "这一轮被打断"，
-                    // 下次用户发消息它就知道前面那条不完整、不要假定其有效。
+                    // 算一次 content：partial text + 截断标记，UI 看到的和 LLM history
+                    // 看到的是同一份字符串——数据流不分叉。空 partial 时给最小占位，
+                    // 防止某些 provider 拒收空 assistant content。
                     let partial = captured.lock().map(|g| g.clone()).unwrap_or_default();
+                    let content = if partial.is_empty() {
+                        "[response stopped by user]".to_string()
+                    } else {
+                        format!("{partial}\n\n[response stopped by user]")
+                    };
                     self.emit(
                         "assistant_message_end",
-                        json!({ "id": msg_id, "text": partial, "cancelled": true }),
+                        json!({ "id": msg_id, "text": content, "cancelled": true }),
                     );
                     self.audit_push(AuditKind::Note {
                         message: format!(
@@ -257,12 +263,6 @@ impl Actor {
                             partial.len()
                         ),
                     });
-                    // history 的 assistant content 不能空——空字符串某些 provider 会拒。
-                    let content = if partial.is_empty() {
-                        "(response stopped by user)".to_string()
-                    } else {
-                        format!("{partial}\n\n[response stopped by user before completion]")
-                    };
                     self.history.push(ChatMessage::Assistant {
                         content,
                         tool_calls: vec![],
