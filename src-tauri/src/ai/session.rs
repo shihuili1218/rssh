@@ -241,7 +241,17 @@ impl Actor {
             }
 
             let resp = match chat_result {
-                Some(r) => r?,
+                Some(Ok(r)) => r,
+                Some(Err(e)) => {
+                    // chat 失败也必须把 assistant_message_end 发出去——start/end 是前端
+                    // 那条 streaming 气泡的开/关闸门。漏掉 end，前端 isStreaming() 永远
+                    // 卡 true，"停止"按钮收不回，textarea 一直 disabled。
+                    // text 空 → store 监听器会移除整条气泡（见 store.svelte.ts），
+                    // 让 UI 干净；error 通过 dialogue_turn 上抛后 run() 会再 emit
+                    // "ai:error" 把错误信息独立展示在 banner。
+                    self.emit("assistant_message_end", json!({ "id": msg_id, "text": "" }));
+                    return Err(e);
+                }
                 None => {
                     // 用户取消：chat future 已 drop，TCP 流随之断开。
                     // 算一次 content：partial text + 截断标记，UI 看到的和 LLM history
