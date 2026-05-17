@@ -244,7 +244,10 @@ export async function executeCommand(
       if (resolved) return;
       userInterrupted = true;
       const ctrlC = Array.from(new TextEncoder().encode("\x03"));
-      void invoke(writeCmd, { sessionId: target_session_id, data: ctrlC }).catch(() => {});
+      // fire-and-forget 但不要完全吞错——PTY 已关 / session 失联 时 invoke 会 reject，
+      // 留个 warn 痕迹方便排错"我点了终止但 Ctrl+C 好像没发出去"这类反馈。
+      void invoke(writeCmd, { sessionId: target_session_id, data: ctrlC })
+          .catch((err) => console.warn("[ai] terminate Ctrl+C failed:", err));
       await finish(extractOutput(buffer), -1, false);
     },
   };
@@ -365,9 +368,15 @@ async function attachListeners(info: AiSessionInfo) {
         if (isEmpty && !e.payload.cancelled) {
           _chatBySession[sid] = [...arr.slice(0, i), ...arr.slice(i + 1)];
         } else {
+          // 防御：cancel emit 的 payload.text = 后端 captured（sink 累积）；前端 item.text =
+          // 收到的 delta 累积。两者源头一致，正常情况下相等。但 tauri 事件总线异步——
+          // cancel emit 抵达时若 in-flight delta 尚未处理完，payload 反而可能比 item.text
+          // 短；极端退化时甚至为空（chat 刚 start 就 cancel）。用 item.text 兜底，
+          // 避免"用户看着字一行行出来，按停止后只剩个徽章"。
+          const finalText = e.payload.text || item.text;
           const replaced: ChatItem = {
             ...item,
-            text: e.payload.text,
+            text: finalText,
             streaming: false,
             cancelled: e.payload.cancelled === true,
           };

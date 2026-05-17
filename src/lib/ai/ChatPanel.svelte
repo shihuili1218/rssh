@@ -82,8 +82,14 @@
     /** 打断当前流式响应；会话上下文保留，用户可立刻发下一条纠正。 */
     async function stopStreaming() {
         if (!session) return;
-        try { await ai.cancelStream(session.session_id); }
-        catch (e) { console.error("[ai] cancel stream:", e); }
+        try {
+            await ai.cancelStream(session.session_id);
+        } catch (e) {
+            // 不能只 console.error 就完事——失败的话用户还卡在 streaming/disabled 状态，
+            // 看不到任何错误反馈。复用 banner 让用户知道"停止没生效，再点一次或刷新"。
+            console.error("[ai] cancel stream:", e);
+            banner = errMsg(e);
+        }
     }
 
     function onKeyDown(e: KeyboardEvent) {
