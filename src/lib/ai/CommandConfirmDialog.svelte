@@ -24,8 +24,18 @@
     // onMount 触发一次自动 approve。判断在前端，UI 上"提议→执行"全程仍可见，
     // 审计 trail 完整；后端 emit 流程不变。挂载时若已有 result/rejected（历史记录回放）
     // 自然跳过。
+    //
+    // 重入防御：组件可能被销毁重建（panel close/reopen、chat list 重新 key 等）。
+    // 重建实例的 executing=false，单看 executing 拦不住第二次 approve —— 同一 tool_call_id
+    // 会被粘到 PTY 两次（rm/reboot 双执行级别的灾难）。用全局 _runningExecutions 表
+    // （isCommandRunning）守门：命令还在 in-flight 时拒绝再次自动批准。
     onMount(() => {
-        if (isPending && !executing && ai.settings()?.danger_mode) {
+        if (
+            isPending
+            && !executing
+            && !ai.isCommandRunning(cmd.tool_call_id)
+            && ai.settings()?.danger_mode
+        ) {
             void approve();
         }
     });

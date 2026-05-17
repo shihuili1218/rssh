@@ -27,10 +27,10 @@ async function openProfile(name: string, ctx: OscReporter) {
   const profiles = await invoke<any[]>("list_profiles");
   const p = profiles.find(x => x.name.toLowerCase() === name.toLowerCase());
   if (!p) { ctx.error(`Profile '${name}' not found`); return; }
+  // Profile.credential_id 是必填，直接拉；引用 broken（DB 不一致）走 catch 让后续
+  // ssh_connect 用空字段 fail-fast，而不是在这里假装"无凭证"成功开 tab。
   let cred: any = null;
-  if (p.credential_id) {
-    try { cred = await invoke<any>("get_credential", { id: p.credential_id }); } catch {}
-  }
+  try { cred = await invoke<any>("get_credential", { id: p.credential_id }); } catch {}
   const tid = `ssh:${crypto.randomUUID()}`;
   app.addTab({
     id: tid, type: "ssh", label: p.name,

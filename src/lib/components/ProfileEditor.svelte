@@ -9,8 +9,8 @@
   let { id = null }: { id: string | null } = $props();
 
   let name = $state(""); let host = $state(""); let port = $state(22);
-  // credential_id wire 协议是空串而非 null（schema NOT NULL）。
-  // UI 上 "未选择" 仍用空 option（value=""），不引入 null 二义性。
+  // credential_id 必填：空串 placeholder 仅用于 select 初始值，Save 按钮在
+  // 未选时 disabled。后端 add/edit 入口也校验，前端的禁用只是少一次往返。
   let credentialId = $state("");
   let bastionId = $state<string | null>(null);
   let shellCommand = $state("");
@@ -62,7 +62,7 @@
     <input type="number" bind:value={port} min="1" max="65535" />
     <label>Credential</label>
     <select bind:value={credentialId}>
-      <option value="">-- Select Credential --</option>
+      <option value="" disabled>-- Select Credential --</option>
       {#each credentials as c (c.id)}
         <option value={c.id}>{c.name} ({c.username})</option>
       {/each}
@@ -83,7 +83,7 @@
     </select>
     <label>Init Command (optional)</label>
     <input type="text" bind:value={shellCommand} placeholder="cd /app && ls" />
-    <button class="btn btn-accent" onclick={save} disabled={saving || !name || !host}>
+    <button class="btn btn-accent" onclick={save} disabled={saving || !name || !host || !credentialId}>
       {saving ? "Saving..." : "Save"}
     </button>
   </div>

@@ -45,19 +45,16 @@ fn cmd_open_ssh(conn: &CliCtx, name: &str) -> AppResult<()> {
         .find(|p| p.name.eq_ignore_ascii_case(name))
         .unwrap_or_else(|| die(format!("Profile '{name}' not found")));
 
-    // credential_id 配错（如 DB 不一致 / 引用已删 cred）必须显式报错；旧版的
-    // .ok() 会把这种情况降级为"无凭证"，导致 ssh 走默认 key fallback，错的离谱。
-    let cred = if profile.credential_id.is_empty() {
-        None
-    } else {
-        Some(load_cred_secrets(
-            conn,
-            rssh_lib::db::credential::get(conn, &profile.credential_id)?,
-        )?)
-    };
+    // Profile.credential_id 是必填（schema 在 add/edit 两个入口都强制），
+    // 找不到 cred = DB 数据不一致，要显式报错而不是降级到"无凭证"——
+    // 旧版的 .ok() 会让 ssh 走默认 key fallback，错的离谱。
+    let cred = load_cred_secrets(
+        conn,
+        rssh_lib::db::credential::get(conn, &profile.credential_id)?,
+    )?;
 
     let mut cmd = Command::new("ssh");
-    let key_files = build_ssh_command(&mut cmd, conn, profile, cred.as_ref())?;
+    let key_files = build_ssh_command(&mut cmd, conn, profile, &cred)?;
 
     cmd.arg("-o").arg("StrictHostKeyChecking=accept-new");
 
@@ -92,14 +89,10 @@ fn cmd_open_fwd(conn: &CliCtx, name: &str) -> AppResult<()> {
         .unwrap_or_else(|| die(format!("Forward '{name}' not found")));
 
     let profile = rssh_lib::db::profile::get(conn, &fwd.profile_id)?;
-    let cred = if profile.credential_id.is_empty() {
-        None
-    } else {
-        Some(load_cred_secrets(
-            conn,
-            rssh_lib::db::credential::get(conn, &profile.credential_id)?,
-        )?)
-    };
+    let cred = load_cred_secrets(
+        conn,
+        rssh_lib::db::credential::get(conn, &profile.credential_id)?,
+    )?;
 
     let mut cmd = Command::new("ssh");
     cmd.arg("-N");
@@ -117,7 +110,7 @@ fn cmd_open_fwd(conn: &CliCtx, name: &str) -> AppResult<()> {
     };
     cmd.arg(flag).arg(&fwd_arg);
 
-    let key_files = build_ssh_command(&mut cmd, conn, &profile, cred.as_ref())?;
+    let key_files = build_ssh_command(&mut cmd, conn, &profile, &cred)?;
 
     cmd.arg(&profile.host);
 

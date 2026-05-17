@@ -512,13 +512,12 @@
             });
 
             try {
+                // GUI 路径下 meta.profileId 永远非空（所有 ssh tab 入口——HomeScreen /
+                // osc handler / AppShell.connectPinned 都从 profile 出发）。直连参数
+                // （host/username/auth_type/secret）的后端 stub 早已是 dead code，
+                // 跟前端 invoke 一起收紧。
                 sessionId = await invoke<string>("ssh_connect", {
-                    profileId: meta.profileId || null,
-                    host: meta.profileId ? null : meta.host,
-                    port: meta.profileId ? null : (Number(meta.port) || 22),
-                    username: meta.profileId ? null : meta.username,
-                    authType: meta.profileId ? null : meta.authType,
-                    secret: meta.profileId ? null : (meta.secret || null),
+                    profileId: meta.profileId,
                     logSessionId: tabId,
                     cols: terminal.cols, rows: terminal.rows,
                 });

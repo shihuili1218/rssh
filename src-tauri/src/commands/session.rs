@@ -2,84 +2,49 @@ use serde_json::json;
 use tauri::{AppHandle, State};
 
 use crate::error::{locked, AppError, AppResult};
-use crate::models::{Credential, CredentialType, Profile};
+use crate::models::{Credential, Profile};
 use crate::secret::cred_secret_key;
 use crate::ssh::client;
 use crate::state::AppState;
 
 /// 把 SecretStore 里的 secret 灌到 Credential 上。
 fn load_secrets(state: &State<'_, AppState>, c: &mut Credential) -> AppResult<()> {
-    if c.id.is_empty() {
-        return Ok(()); // 临时直连凭证，secret 已由前端传入
-    }
     c.secret = state.secret_store.get(&cred_secret_key(&c.id))?;
     Ok(())
 }
 
-/// 通用 SSH 连接 — 支持直连和堡垒机。
-/// 前端可传原始参数（host/port/username），也可传 profile_id 从 DB 查。
+/// 经 profile_id 建立 SSH 连接（自动带堡垒机链）。
 #[tauri::command]
 pub async fn ssh_connect(
     app: AppHandle,
     window: tauri::Window,
     state: State<'_, AppState>,
-    // 直连参数
-    host: Option<String>,
-    port: Option<u16>,
-    username: Option<String>,
-    auth_type: Option<String>,
-    secret: Option<String>,
-    // 或 profile_id（从 DB 查，自动带堡垒机）
-    profile_id: Option<String>,
+    profile_id: String,
     // 前端 tab ID，用于发送连接日志
     log_session_id: Option<String>,
     cols: u32,
     rows: u32,
 ) -> AppResult<String> {
-    let (profile, credential, chain) = if let Some(pid) = profile_id {
-        let p = crate::db::profile::get(&state.db, &pid)?;
-        let mut c = crate::db::credential::get(&state.db, &p.credential_id).map_err(|e| match e {
-            AppError::NotFound(_) => AppError::not_found("profile_cred_not_found", json!({})),
+    let profile = crate::db::profile::get(&state.db, &profile_id)?;
+    let mut credential = crate::db::credential::get(&state.db, &profile.credential_id).map_err(|e| match e {
+        AppError::NotFound(_) => AppError::not_found("profile_cred_not_found", json!({})),
+        other => other,
+    })?;
+    load_secrets(&state, &mut credential)?;
+
+    // 解析整条堡垒机链 + 给每一跳加载凭证（含 secret）
+    let chain_profiles = crate::ssh::bastion::resolve_chain(&state.db, &profile)?;
+    let mut chain: Vec<(Profile, Credential)> = Vec::with_capacity(chain_profiles.len());
+    for hop in chain_profiles {
+        let mut bc = crate::db::credential::get(&state.db, &hop.credential_id).map_err(|e| match e {
+            AppError::NotFound(_) => {
+                AppError::not_found("bastion_cred_not_found", json!({ "name": hop.name.clone() }))
+            }
             other => other,
         })?;
-        load_secrets(&state, &mut c)?;
-
-        // 解析整条堡垒机链 + 给每一跳加载凭证（含 secret）
-        let chain_profiles = crate::ssh::bastion::resolve_chain(&state.db, &p)?;
-        let mut chain: Vec<(Profile, Credential)> = Vec::with_capacity(chain_profiles.len());
-        for hop in chain_profiles {
-            let mut bc = crate::db::credential::get(&state.db, &hop.credential_id).map_err(|e| match e {
-                AppError::NotFound(_) => {
-                    AppError::not_found("bastion_cred_not_found", json!({ "name": hop.name.clone() }))
-                }
-                other => other,
-            })?;
-            load_secrets(&state, &mut bc)?;
-            chain.push((hop, bc));
-        }
-        (p, c, chain)
-    } else {
-        // 原始参数直连（无堡垒机）
-        let p = Profile {
-            id: String::new(),
-            name: String::new(),
-            host: host.ok_or_else(|| AppError::config("host_missing", json!({})))?,
-            port: port.unwrap_or(22),
-            credential_id: String::new(),
-            bastion_profile_id: None,
-            init_command: None,
-            group_id: None,
-        };
-        let c = Credential {
-            id: String::new(),
-            name: String::new(),
-            username: username.ok_or_else(|| AppError::config("username_missing", json!({})))?,
-            credential_type: CredentialType::from_str(&auth_type.unwrap_or("password".into())),
-            secret,
-            save_to_remote: false,
-        };
-        (p, c, Vec::new())
-    };
+        load_secrets(&state, &mut bc)?;
+        chain.push((hop, bc));
+    }
 
     // 检查 verbose log + 录制设置 + 连接超时
     let verbose_log = crate::db::settings::get(&state.db, "verbose_log")?

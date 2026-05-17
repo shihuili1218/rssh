@@ -139,21 +139,11 @@ describe("open: handler", () => {
     expect(meta.authType).toBe("password");
   });
 
-  it("skips get_credential when profile has no credential_id", async () => {
-    const { dispatch } = setup();
-    const calls: string[] = [];
-    (invoke as any).mockImplementation(async (cmd: string) => {
-      calls.push(cmd);
-      if (cmd === "list_profiles")
-        return [{ id: "p1", name: "h", host: "h", port: 22, credential_id: "" }];
-      throw new Error(`unexpected ${cmd}`);
-    });
-
-    expect(dispatch("open:h")).toBe(true);
-    await flush();
-    expect(calls).toEqual(["list_profiles"]);
-    expect(app.addTab).toHaveBeenCalledTimes(1);
-  });
+  // 旧测试 "skips get_credential when profile has no credential_id" 已删——
+  // 应用层不变量：DB 中的 Profile.credential_id 永远非空（add/edit/import 强制
+  // 必填），所以"profile 没 credential_id"这个场景不应该存在。上面那条
+  // "opens tab even when get_credential throws (silently)" 已经覆盖了
+  // DB 不一致（cred 引用 broken）时的 fallback 路径。
 });
 
 describe("fwd: handler", () => {

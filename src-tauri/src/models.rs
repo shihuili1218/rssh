@@ -29,8 +29,13 @@ pub struct Profile {
     pub name: String,
     pub host: String,
     pub port: u16,
-    /// DB 列声明 `TEXT NOT NULL DEFAULT ''`——schema 不允许 NULL，model 类型对齐。
-    /// "无凭证"用空串表示，不再用 Option 引入冗余的"NULL vs 空串"二义性。
+    /// DB 列声明 `TEXT NOT NULL DEFAULT ''`，model 类型对齐成 String。
+    /// **应用层不变量**：Profile.credential_id 永远是一个真实 Credential 的 id。
+    /// - 写入入口（`add.rs`/`edit.rs`/`ProfileEditor.svelte`/`do_import_ssh_entries`）
+    ///   强制必填，从源头保证不变量。
+    /// - 读取端（`open.rs`/`ssh_builder.rs`/`forward.rs`/`session.rs`）直接
+    ///   `credential::get(&id)`，引用错就 fail-fast 报 `*_cred_not_found`，
+    ///   不再 `is_empty()` 降级到"无凭证"。
     pub credential_id: String,
     pub bastion_profile_id: Option<String>,
     pub init_command: Option<String>,

@@ -46,11 +46,9 @@ pub async fn forward_start(state: State<'_, AppState>, forward_id: String) -> Ap
         AppError::NotFound(_) => AppError::not_found("fwd_cred_not_found", json!({})),
         other => other,
     })?;
-    if !c.id.is_empty() {
-        c.secret = state
-            .secret_store
-            .get(&crate::secret::cred_secret_key(&c.id))?;
-    }
+    c.secret = state
+        .secret_store
+        .get(&crate::secret::cred_secret_key(&c.id))?;
     let timeout_secs: u64 = crate::db::settings::get(&state.db, "connect_timeout")?
         .and_then(|v| v.parse().ok())
         .unwrap_or(crate::ssh::client::DEFAULT_CONNECT_TIMEOUT);
@@ -65,11 +63,9 @@ pub async fn forward_start(state: State<'_, AppState>, forward_id: String) -> Ap
             }
             other => other,
         })?;
-        if !bc.id.is_empty() {
-            bc.secret = state
-                .secret_store
-                .get(&crate::secret::cred_secret_key(&bc.id))?;
-        }
+        bc.secret = state
+            .secret_store
+            .get(&crate::secret::cred_secret_key(&bc.id))?;
         chain.push((hop, bc));
     }
     let known_hosts_path = crate::ssh::known_hosts::path_for(&state.data_dir);

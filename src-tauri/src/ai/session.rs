@@ -543,8 +543,19 @@ impl Actor {
             "task": input.task,
         })
         .to_string();
-        let json_literal = serde_json::to_string(&handoff)
-            .map_err(|e| AppError::other("ai_handoff_encode_failed", json!({ "err": e.to_string() })))?;
+        // tool_use 必须有对应 tool_result，否则下一轮 LLM 请求 400（Anthropic 严格）。
+        // 失败一律走 push_tool_error，绝不 `?` 让错误冒到 dialogue_turn 的 for 循环——
+        // 那会让本轮其它已 push 的 tool_result 与未 push 的 tool_use 配对错乱。
+        let json_literal = match serde_json::to_string(&handoff) {
+            Ok(s) => s,
+            Err(e) => {
+                self.push_tool_error(
+                    &tc.id,
+                    &format!("Failed to encode handoff payload: {e}"),
+                );
+                return Ok(());
+            }
+        };
         // 直接把 JSON 字符串赋值为 JS string；前端走 JSON.parse(data) 还原。
         // 不要在这里 JSON.parse —— 否则 window.__rssh_ai_handoff 已经是 object，
         // 前端再 JSON.parse 会撞 "[object Object]" 解析失败。
@@ -557,12 +568,21 @@ impl Actor {
         #[cfg(desktop)]
         {
             use tauri::{WebviewUrl, WebviewWindowBuilder};
-            WebviewWindowBuilder::new(&self.app, &label, WebviewUrl::App("index.html".into()))
+            // 同上：窗口创建失败也走 push_tool_error，保持 tool_use/tool_result 配对。
+            if let Err(e) = WebviewWindowBuilder::new(&self.app, &label, WebviewUrl::App("index.html".into()))
                 .title("RSSH — Local Analysis")
                 .inner_size(1200.0, 800.0)
                 .initialization_script(&init_script)
                 .build()
-                .map_err(|e| AppError::other("ai_window_open_failed", json!({ "err": e.to_string() })))?;
+            {
+                self.push_tool_error(
+                    &tc.id,
+                    &format!(
+                        "Failed to open analysis window: {e}. Continue diagnosis in the current session."
+                    ),
+                );
+                return Ok(());
+            }
 
             self.audit_push(AuditKind::Note {
                 message: format!(
@@ -706,6 +726,25 @@ impl Actor {
                     return Ok(());
                 }
                 UserAction::Stop => return Err(AppError::other("session_stopped_user", json!({}))),
+                // 命令审批期间不能接受新消息：tool_use 必须有对应 tool_result 才能再开下一轮 user。
+                // 之前 _ => continue 把 Message 默默吞掉——用户敲完字消息消失，没有任何反馈。
+                // 现在显式 audit + emit ai:error，让用户知道"先决定命令再发消息"。
+                UserAction::Message(text) => {
+                    self.audit_push(AuditKind::Note {
+                        message: format!(
+                            "user message dropped during command approval (pending tool_call {}): {text}",
+                            tc.id
+                        ),
+                    });
+                    self.emit(
+                        "error",
+                        json!({
+                            "message": "Cannot send a new message while a command is pending approval. Approve or reject the command first.",
+                        }),
+                    );
+                    continue;
+                }
+                // 落到这里的只剩 stale RejectCommand/CommandResult（id 不匹配），静默丢即可。
                 _ => continue,
             }
         }

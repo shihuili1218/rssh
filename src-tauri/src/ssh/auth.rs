@@ -137,11 +137,9 @@ pub async fn authenticate(
                 .secret
                 .as_deref()
                 .ok_or_else(|| AppError::ssh("ssh_privkey_missing", json!({})))?;
-            let cache_key = if credential.id.is_empty() {
-                None
-            } else {
-                Some(format!("cred:{}", credential.id))
-            };
+            // credential.id 是 DB UUID，必非空；保留 Some(&cache_key) 因为
+            // decode_key_with_prompt 还有 ssh-agent fallback 路径需要 Option<&str>。
+            let cache_key = format!("cred:{}", credential.id);
             let prompt_label = format!(
                 "Enter passphrase for key '{}': ",
                 if credential.name.is_empty() {
@@ -150,7 +148,7 @@ pub async fn authenticate(
                     credential.name.as_str()
                 }
             );
-            let key = decode_key_with_prompt(pem, cache_key.as_deref(), &prompt_label, ctx).await?;
+            let key = decode_key_with_prompt(pem, Some(&cache_key), &prompt_label, ctx).await?;
             authenticate_private_key(handle, credential.username, key).await
         }
         CredentialType::Agent => {

@@ -25,9 +25,7 @@ pub const MAX_HOPS: usize = 8;
 pub fn resolve_chain(db: &Db, target: &Profile) -> AppResult<Vec<Profile>> {
     let mut chain: Vec<Profile> = Vec::new();
     let mut visited: HashSet<String> = HashSet::new();
-    if !target.id.is_empty() {
-        visited.insert(target.id.clone());
-    }
+    visited.insert(target.id.clone());
 
     let mut next_id = target.bastion_profile_id.clone();
     while let Some(bid) = next_id {

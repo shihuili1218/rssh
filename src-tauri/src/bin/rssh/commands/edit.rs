@@ -36,14 +36,18 @@ fn edit_profile(conn: &CliCtx, name: &str) -> AppResult<()> {
         .unwrap_or(p.port);
 
     let creds = rssh_lib::db::credential::list(conn)?;
+    // credential_id 必填：原 "0 - none" 选项删掉。
+    // creds 为空（legacy 系统状态被破坏）跳过编辑、保留 p.credential_id —— edit 不背"修复
+    // 已 broken 数据"的职责，那是 add cred 后再过来的事。
     if !creds.is_empty() {
         let cur = creds
             .iter()
             .position(|c| c.id == p.credential_id)
             .map(|i| (i + 1).to_string())
-            .unwrap_or("0".into());
+            // 当前 cred_id 指向已删 cred（legacy 脏数据）→ 留空，逼用户重选；
+            // 用 checked_sub(1) 而非 wrapping_sub(1)，n=0 直接 None，不绕成 usize::MAX。
+            .unwrap_or_default();
         println!("Credentials:");
-        println!("  0 - none");
         for (i, c) in creds.iter().enumerate() {
             println!("  {} - {} ({})", i + 1, c.name, c.username);
         }
@@ -51,9 +55,17 @@ fn edit_profile(conn: &CliCtx, name: &str) -> AppResult<()> {
         updated.credential_id = choice
             .parse::<usize>()
             .ok()
-            .and_then(|n| creds.get(n.wrapping_sub(1)))
+            .and_then(|n| n.checked_sub(1))
+            .and_then(|i| creds.get(i))
             .map(|c| c.id.clone())
-            .unwrap_or_default();
+            .ok_or_else(|| {
+                AppError::config(
+                    "cli_credential_required",
+                    serde_json::json!({
+                        "hint": "Profile must reference a credential. Pick a valid number from the list."
+                    }),
+                )
+            })?;
     }
 
     updated.init_command = {

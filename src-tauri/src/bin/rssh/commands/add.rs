@@ -29,15 +29,24 @@ fn add_profile(conn: &CliCtx) -> AppResult<()> {
     let port: u16 = prompt_default("Port", "22").parse().unwrap_or(22);
 
     let creds = rssh_lib::db::credential::list(conn)?;
+    // credential_id 是必填：空 list / 用户选 0 都视为没填完整，直接 Err 退出。
+    // 之前的 .unwrap_or_default() 会写空串入库，让后续 ssh_connect/open 撞 not_found。
     let credential_id = menu_select(
         "Credentials:",
         "Credential",
         &creds,
-        "(no credentials, use 'rssh add cred' first)",
+        "No credentials yet. Run 'rssh add cred' first.",
         |c| format!("{} ({})", c.name, c.username),
     )
     .map(|c| c.id.clone())
-    .unwrap_or_default();
+    .ok_or_else(|| {
+        AppError::config(
+            "cli_credential_required",
+            serde_json::json!({
+                "hint": "Profile must reference a credential. Pick one from the list, or run 'rssh add cred' first."
+            }),
+        )
+    })?;
 
     let profiles = rssh_lib::db::profile::list(conn)?;
     let bastion_profile_id = menu_select("Bastion (optional):", "Bastion", &profiles, "", |p| {
