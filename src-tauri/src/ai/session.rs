@@ -200,7 +200,6 @@ impl Actor {
             // 流式：先 emit start 给前端开一条空 streaming bubble；
             // delta 来了 emit assistant_delta；chat 返回后 emit end 把最终文本给前端结清。
             let msg_id = uuid::Uuid::new_v4().to_string();
-            self.emit("assistant_message_start", json!({ "id": msg_id }));
 
             let app = self.app.clone();
             let session_id = self.cfg.session_id.clone();
@@ -225,10 +224,17 @@ impl Actor {
             // 装上 cancel notifier：commands 层 ai_cancel_stream 会 notify_one 它。
             // chat 完成或取消后从 slot 摘下——slot 为 None 时 cancel 是 no-op，
             // 不会污染下一轮 chat。
+            //
+            // **顺序关键**：先装 slot 再 emit start。否则 UI 一看到 start 就显示 Stop
+            // 按钮，用户立刻点击进 ai_cancel_stream 时 slot 还是 None，cancel 成 no-op，
+            // 第一次按等于没按。装好 slot 后再吹响号 → UI 看到 Stop 按钮时 cancel
+            // handle 必定就位，第一次按就生效。
             let cancel = Arc::new(Notify::new());
             if let Ok(mut g) = self.cancel_slot.lock() {
                 *g = Some(cancel.clone());
             }
+
+            self.emit("assistant_message_start", json!({ "id": msg_id }));
 
             let chat_future = self.cfg.client.chat(req, sink);
             let chat_result = tokio::select! {
