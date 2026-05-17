@@ -352,16 +352,25 @@ async function attachListeners(info: AiSessionInfo) {
     }
   }));
 
-  u.push(await listen<{ id: string; text: string }>(`ai:assistant_message_end:${sid}`, (e) => {
+  u.push(await listen<{ id: string; text: string; cancelled?: boolean }>(`ai:assistant_message_end:${sid}`, (e) => {
     const arr = _chatBySession[sid] ?? [];
     for (let i = arr.length - 1; i >= 0; i--) {
       const item = arr[i];
       if (item.kind === "assistant" && item.id === e.payload.id) {
-        // 用 final text 作为权威值（防 delta 漏）；text 空就移除该气泡（纯 tool_use 轮次）
-        if (!e.payload.text || e.payload.text.length === 0) {
+        const isEmpty = !e.payload.text || e.payload.text.length === 0;
+        // cancelled=true 时即使 text 空也要保留气泡——UI 模板会渲染本地化的
+        // "已停止"徽章，告诉用户这一轮被自己打断了。
+        // 只有"纯 tool_use 轮次"（chat 没产文本只产 tool_calls，cancelled=false）
+        // 或 chat 失败（empty + cancelled=false）才移除气泡。
+        if (isEmpty && !e.payload.cancelled) {
           _chatBySession[sid] = [...arr.slice(0, i), ...arr.slice(i + 1)];
         } else {
-          const replaced: ChatItem = { ...item, text: e.payload.text, streaming: false };
+          const replaced: ChatItem = {
+            ...item,
+            text: e.payload.text,
+            streaming: false,
+            cancelled: e.payload.cancelled === true,
+          };
           _chatBySession[sid] = [...arr.slice(0, i), replaced, ...arr.slice(i + 1)];
         }
         return;

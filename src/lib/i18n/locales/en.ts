@@ -201,6 +201,7 @@ const en = {
   "ai.input.stop": "⏹ Stop",
   "ai.input.starting_short": "Starting…",
   "ai.session.ended_note": "Session ended",
+  "ai.bubble.cancelled": "stopped",
 
   // ── AI Diagnose: AuditPanel ──
   "ai.audit.refresh": "𖦹 Refresh",

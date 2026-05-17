@@ -203,6 +203,7 @@ const zh: Messages = {
   "ai.input.stop": "⏹ 停止",
   "ai.input.starting_short": "启动中…",
   "ai.session.ended_note": "会话已结束",
+  "ai.bubble.cancelled": "已停止",
 
   // ── AI 排障：AuditPanel ──
   "ai.audit.refresh": "𖦹 刷新",

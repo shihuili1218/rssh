@@ -47,23 +47,25 @@
 
 <svelte:window onkeydown={handleKeydown}/>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- backdrop = 纯遮罩，键盘用户走顶层 Escape（handleKeydown）退出，不需要键盘 click 等价物 -->
 <div class="ctx-backdrop"
      onclick={onClose}
-     oncontextmenu={(e) => { e.preventDefault(); onClose(); }}></div>
+     oncontextmenu={(e) => { e.preventDefault(); onClose(); }}
+     role="presentation"></div>
 
 <div class="ctx-menu surface-raised"
      class:ready
      bind:this={menuEl}
-     style="left: {x + dx}px; top: {y + dy}px;">
+     style="left: {x + dx}px; top: {y + dy}px;"
+     role="menu">
     {#each sections as section, si (si)}
-        {#if si > 0}<div class="ctx-sep"></div>{/if}
+        {#if si > 0}<div class="ctx-sep" role="separator"></div>{/if}
         {#each section as item, ii (ii)}
             <button class="ctx-item"
                     class:disabled={item.disabled}
                     disabled={item.disabled}
-                    onclick={() => handleClick(item)}>
+                    onclick={() => handleClick(item)}
+                    role="menuitem">
                 <span class="ctx-label">{item.label}</span>
                 {#if item.shortcut}<span class="ctx-shortcut">{item.shortcut}</span>{/if}
             </button>

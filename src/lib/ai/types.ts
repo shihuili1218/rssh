@@ -37,7 +37,7 @@ export interface AiSessionInfo {
 /** 一条对话消息（前端展示用） */
 export type ChatItem =
   | { kind: "user"; text: string; at: number }
-  | { kind: "assistant"; id: string; text: string; at: number; streaming: boolean }
+  | { kind: "assistant"; id: string; text: string; at: number; streaming: boolean; cancelled?: boolean }
   | { kind: "command"; cmd: CommandProposed; at: number; result?: CommandResult; rejected?: { reason: string } }
   | { kind: "error"; text: string; at: number }
   | { kind: "note"; text: string; at: number };

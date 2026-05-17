@@ -132,8 +132,15 @@
                     {:else if item.kind === "assistant"}
                         <div class="ts">{fmt(item.at)}</div>
                         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-                        <div class="bubble assistant md" class:streaming={item.streaming}>
-                            {@html renderMarkdown(item.text || "…")}
+                        <div class="bubble assistant md" class:streaming={item.streaming} class:cancelled={item.cancelled}>
+                            {#if item.text}
+                                {@html renderMarkdown(item.text)}
+                            {:else if !item.cancelled}
+                                …
+                            {/if}
+                            {#if item.cancelled}
+                                <span class="cancelled-tag">{t("ai.bubble.cancelled")}</span>
+                            {/if}
                         </div>
                     {:else if item.kind === "command" && session}
                         <CommandConfirmDialog
@@ -264,6 +271,19 @@
     }
     .bubble.assistant.streaming {
         position: relative;
+    }
+    /* 用户打断的响应：气泡尾部跟一个本地化小徽章，区别于"AI 自己结束的对话"。
+       徽章本身在 ChatPanel 模板里用 i18n 渲染，避免把英文 marker 硬塞进 LLM 输出文本。 */
+    .cancelled-tag {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 1px 6px;
+        border-radius: 3px;
+        background: color-mix(in srgb, var(--text-dim) 18%, transparent);
+        color: var(--text-dim);
+        font-size: 10.5px;
+        font-weight: 500;
+        vertical-align: middle;
     }
     .bubble.assistant.streaming::after {
         content: "▋";

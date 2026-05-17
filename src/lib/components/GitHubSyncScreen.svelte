@@ -94,10 +94,8 @@
 
 <!-- Password dialog -->
 {#if showPwDialog}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="dialog-backdrop" onclick={() => showPwDialog = false}>
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()}>
+    <div class="dialog-backdrop" onclick={() => showPwDialog = false} role="presentation">
+        <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
             <h3>{pwMode === "push" ? "Set Encryption Password" : "Enter Decryption Password"}</h3>
             <input type="password" bind:value={pw1} placeholder="Password"
                    onkeydown={(e) => { if (e.key === "Enter") confirmPassword(); }}/>

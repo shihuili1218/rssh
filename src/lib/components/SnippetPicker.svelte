@@ -32,10 +32,8 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="picker-backdrop" onclick={() => app.closeSnippetPicker()}>
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="picker surface-raised" onclick={(e) => e.stopPropagation()}>
+<div class="picker-backdrop" onclick={() => app.closeSnippetPicker()} role="presentation">
+  <div class="picker surface-raised" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
     <input bind:this={inputEl} type="text" bind:value={filter} placeholder="Search snippets..."
       onkeydown={handleKey} />
     <div class="picker-list">

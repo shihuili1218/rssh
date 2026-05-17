@@ -736,7 +736,6 @@
     />
 {/if}
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
     class="shell"
     class:sb-left={sbPos === "left"}
@@ -745,11 +744,11 @@
     class:sb-bottom={sbPos === "bottom"}
     ontouchstart={handleTouchStart}
     ontouchend={handleTouchEnd}
+    role="presentation"
 >
 
     {#if drawerOpen}
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="backdrop" onclick={closeDrawer}></div>
+        <div class="backdrop" onclick={closeDrawer} role="presentation"></div>
     {/if}
 
     <!-- Sidebar: 40px collapsed ↔ 260px expanded. Position = left | right. -->

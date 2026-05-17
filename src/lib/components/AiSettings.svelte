@@ -423,12 +423,11 @@
 </div>
 
 <!-- Danger mode confirmation dialog —— Tauri webview 不弹原生 confirm，
-     仿 GitHubSyncScreen 用自定义模态。backdrop 点击 = 取消，内容 stopPropagation。 -->
+     用自定义模态。ARIA 跟 AppearanceSettings 的 Custom theme dialog 一致：
+     backdrop=presentation（纯装饰可点关闭），内容=dialog+aria-modal=true。 -->
 {#if showDangerDialog}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="dialog-backdrop" onclick={() => (showDangerDialog = false)}>
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()}>
+    <div class="dialog-backdrop" onclick={() => (showDangerDialog = false)} role="presentation">
+        <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
             <h3 class="danger-dialog-title">{t("ai.settings.danger.confirm_title")}</h3>
             <div class="danger-dialog-body">{t("ai.settings.danger.confirm_body")}</div>
             <div class="btn-row">

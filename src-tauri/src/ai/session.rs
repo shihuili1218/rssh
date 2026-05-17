@@ -254,18 +254,17 @@ impl Actor {
                 }
                 None => {
                     // 用户取消：chat future 已 drop，TCP 流随之断开。
-                    // 算一次 content：partial text + 截断标记，UI 看到的和 LLM history
-                    // 看到的是同一份字符串——数据流不分叉。空 partial 时给最小占位，
-                    // 防止某些 provider 拒收空 assistant content。
+                    //
+                    // 数据流分叉是刻意的——两个消费者诉求不一样：
+                    // - UI（emit）：拿 partial 原文 + cancelled=true flag，前端用 i18n
+                    //   渲染本地化的"已停止"徽章，避免把英文 marker 硬塞进用户视野。
+                    // - LLM（history）：写带英文 marker 的字符串，提示模型"前面这条
+                    //   被打断"，下轮别假定其有效。LLM 看的是后端 system prompt 风格
+                    //   （英文），marker 跟着英文走更自然。
                     let partial = captured.lock().map(|g| g.clone()).unwrap_or_default();
-                    let content = if partial.is_empty() {
-                        "[response stopped by user]".to_string()
-                    } else {
-                        format!("{partial}\n\n[response stopped by user]")
-                    };
                     self.emit(
                         "assistant_message_end",
-                        json!({ "id": msg_id, "text": content, "cancelled": true }),
+                        json!({ "id": msg_id, "text": partial, "cancelled": true }),
                     );
                     self.audit_push(AuditKind::Note {
                         message: format!(
@@ -273,8 +272,14 @@ impl Actor {
                             partial.len()
                         ),
                     });
+                    // history 的 assistant content 不能空——空字符串某些 provider 会拒。
+                    let history_content = if partial.is_empty() {
+                        "[response stopped by user]".to_string()
+                    } else {
+                        format!("{partial}\n\n[response stopped by user]")
+                    };
                     self.history.push(ChatMessage::Assistant {
-                        content,
+                        content: history_content,
                         tool_calls: vec![],
                         reasoning_content: None,
                     });
