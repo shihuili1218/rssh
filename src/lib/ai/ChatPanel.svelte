@@ -179,7 +179,8 @@
                 bind:value={inputText}
                 placeholder={busy ? (session ? t("ai.input.replying") : t("ai.input.starting")) : (streaming ? t("ai.input.replying") : t("ai.input.placeholder"))}
                 onkeydown={onKeyDown}
-                disabled={busy || streaming}
+                disabled={busy}
+                readonly={streaming}
             ></textarea>
             {#if streaming}
                 <button class="btn btn-stop" onclick={stopStreaming} title={t("ai.input.stop")}>

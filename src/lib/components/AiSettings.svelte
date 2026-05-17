@@ -335,11 +335,11 @@
     <div class="section-label">{t("ai.settings.danger.section")}</div>
     <div class="switch-card danger" class:on={dangerMode}>
         <div class="switch-card-body">
-            <div class="switch-card-title"
+            <div id="danger-mode-title" class="switch-card-title"
                  class:on={dangerMode} class:off={!dangerMode}>
                 {t("ai.settings.danger.label")}
             </div>
-            <div class="switch-card-desc">{t("ai.settings.danger.desc")}</div>
+            <div id="danger-mode-desc" class="switch-card-desc">{t("ai.settings.danger.desc")}</div>
             {#if dangerNote}
                 <div class="danger-err">{dangerNote}</div>
             {/if}
@@ -347,7 +347,9 @@
         <label class="switch">
             <input type="checkbox" checked={dangerMode}
                    disabled={savingDanger}
-                   onclick={handleDangerToggle}/>
+                   onclick={handleDangerToggle}
+                   aria-labelledby="danger-mode-title"
+                   aria-describedby="danger-mode-desc"/>
             <span class="slider"></span>
         </label>
     </div>
