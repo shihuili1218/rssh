@@ -10,6 +10,8 @@
 
     let sftpId = $state<string | null>(null);
     let cwd = $state("/");
+    let home = $state("/");
+    let pathInput = $state("/");
     let entries = $state<RemoteEntry[]>([]);
     let loading = $state(true);
     let error = $state("");
@@ -28,9 +30,11 @@
                 });
             }
             sftpId = id;
-            const home = await invoke<string>("sftp_home", {sftpId: id});
-            cwd = home;
-            await listDir(home);
+            const h = await invoke<string>("sftp_home", {sftpId: id});
+            home = h;
+            cwd = h;
+            pathInput = h;
+            await listDir(h);
         } catch (e: any) {
             error = errMsg(e);
             loading = false;
@@ -47,6 +51,7 @@
         try {
             entries = await invoke<RemoteEntry[]>("sftp_list", {sftpId, path});
             cwd = path;
+            pathInput = path;
         } catch (e: any) {
             error = errMsg(e);
         }
@@ -56,6 +61,30 @@
     function goUp() {
         const parent = cwd.replace(/\/[^/]+\/?$/, "") || "/";
         listDir(parent);
+    }
+
+    function expandHome(p: string): string {
+        if (p !== "~" && !p.startsWith("~/")) return p;
+        return (home + p.slice(1)).replace(/\/{2,}/g, "/");
+    }
+
+    function submitPath() {
+        const target = expandHome(pathInput.trim());
+        if (!target) {
+            pathInput = cwd;
+            return;
+        }
+        listDir(target);
+    }
+
+    function onPathKeyDown(e: KeyboardEvent) {
+        if (e.key === "Enter") {
+            e.preventDefault();
+            submitPath();
+        } else if (e.key === "Escape") {
+            pathInput = cwd;
+            (e.currentTarget as HTMLInputElement).blur();
+        }
     }
 
     function openEntry(e: RemoteEntry) {
@@ -130,7 +159,16 @@
         <button class="btn btn-sm" disabled={!sftpId} onclick={upload}>⬆ Upload</button>
         <button class="btn btn-sm btn-link" onclick={gotoDownloads}>Transfers →</button>
     </div>
-    <div class="breadcrumb surface-pressed">{cwd}</div>
+    <input
+        type="text"
+        class="breadcrumb-input"
+        bind:value={pathInput}
+        onkeydown={onPathKeyDown}
+        spellcheck="false"
+        autocomplete="off"
+        autocapitalize="off"
+        aria-label="Path"
+    />
 
     {#if error}
         <div class="error-banner">{error}</div>
@@ -214,15 +252,22 @@
         flex-wrap: wrap;
     }
 
-    .breadcrumb {
+    .breadcrumb-input {
         font-family: monospace;
         font-size: 12px;
-        color: var(--text-sub);
+        color: var(--text);
         padding: calc(6px * var(--density)) calc(10px * var(--density));
         margin-bottom: calc(8px * var(--density));
         background: var(--bg);
         box-shadow: var(--pressed);
+        border: none;
         border-radius: var(--radius-sm);
+        outline: none;
+        width: 100%;
+        box-sizing: border-box;
+    }
+    .breadcrumb-input:focus {
+        box-shadow: var(--pressed), 0 0 0 1px var(--accent);
     }
 
     .error-banner {
