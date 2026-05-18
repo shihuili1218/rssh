@@ -68,10 +68,15 @@
         return (home + p.slice(1)).replace(/\/{2,}/g, "/");
     }
 
+    function revertInput() {
+        pathInput = cwd;
+        error = "";
+    }
+
     function submitPath() {
         const target = expandHome(pathInput.trim());
         if (!target) {
-            pathInput = cwd;
+            revertInput();
             return;
         }
         listDir(target);
@@ -82,7 +87,7 @@
             e.preventDefault();
             submitPath();
         } else if (e.key === "Escape") {
-            pathInput = cwd;
+            revertInput();
             (e.currentTarget as HTMLInputElement).blur();
         }
     }
@@ -164,6 +169,7 @@
         class="breadcrumb-input"
         bind:value={pathInput}
         onkeydown={onPathKeyDown}
+        disabled={!sftpId}
         spellcheck="false"
         autocomplete="off"
         autocapitalize="off"
