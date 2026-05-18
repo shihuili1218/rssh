@@ -27,18 +27,24 @@ async function openProfile(name: string, ctx: OscReporter) {
   const profiles = await invoke<any[]>("list_profiles");
   const p = profiles.find(x => x.name.toLowerCase() === name.toLowerCase());
   if (!p) { ctx.error(`Profile '${name}' not found`); return; }
-  // Profile.credential_id 是必填，直接拉；引用 broken（DB 不一致）走 catch 让后续
-  // ssh_connect 用空字段 fail-fast，而不是在这里假装"无凭证"成功开 tab。
-  let cred: any = null;
-  try { cred = await invoke<any>("get_credential", { id: p.credential_id }); } catch {}
+  // Profile.credential_id 是必填——拿不到 cred = DB 不一致或 keychain 锁定，
+  // 都属于"无法连通"的硬错。早期 try/catch{} 静默吞错会让用户看到一个
+  // 注定连不上的死 tab，浪费一次往返才报错。这里 fail-fast。
+  let cred: any;
+  try {
+    cred = await invoke<any>("get_credential", { id: p.credential_id });
+  } catch (e: any) {
+    ctx.error(`Profile '${name}': cannot load credential (${e?.message ?? String(e)})`);
+    return;
+  }
   const tid = `ssh:${crypto.randomUUID()}`;
   app.addTab({
     id: tid, type: "ssh", label: p.name,
     meta: {
       profileId: p.id, host: p.host, port: String(p.port),
-      username: cred?.username ?? "",
-      authType: cred?.type ?? "password",
-      secret: cred?.secret ?? "",
+      username: cred.username,
+      authType: cred.type ?? "password",
+      secret: cred.secret ?? "",
     },
   });
 }

@@ -36,37 +36,44 @@ fn edit_profile(conn: &CliCtx, name: &str) -> AppResult<()> {
         .unwrap_or(p.port);
 
     let creds = rssh_lib::db::credential::list(conn)?;
-    // credential_id 必填：原 "0 - none" 选项删掉。
-    // creds 为空（legacy 系统状态被破坏）跳过编辑、保留 p.credential_id —— edit 不背"修复
-    // 已 broken 数据"的职责，那是 add cred 后再过来的事。
-    if !creds.is_empty() {
-        let cur = creds
-            .iter()
-            .position(|c| c.id == p.credential_id)
-            .map(|i| (i + 1).to_string())
-            // 当前 cred_id 指向已删 cred（legacy 脏数据）→ 留空，逼用户重选；
-            // 用 checked_sub(1) 而非 wrapping_sub(1)，n=0 直接 None，不绕成 usize::MAX。
-            .unwrap_or_default();
-        println!("Credentials:");
-        for (i, c) in creds.iter().enumerate() {
-            println!("  {} - {} ({})", i + 1, c.name, c.username);
-        }
-        let choice = prompt_default("Credential #", &cur);
-        updated.credential_id = choice
-            .parse::<usize>()
-            .ok()
-            .and_then(|n| n.checked_sub(1))
-            .and_then(|i| creds.get(i))
-            .map(|c| c.id.clone())
-            .ok_or_else(|| {
-                AppError::config(
-                    "cli_credential_required",
-                    serde_json::json!({
-                        "hint": "Profile must reference a credential. Pick a valid number from the list."
-                    }),
-                )
-            })?;
+    // credential_id 必填：creds 为空时直接 fail closed。
+    // 之前 `if !creds.is_empty() { ... }` 跳过 cred 选择 → p.credential_id 原样写回 DB，
+    // 如果原值指向已删 cred 这次 update 就把脏数据再 commit 一次。edit 不该背"维持
+    // broken 不变量"的责任 —— 让用户先去 `rssh add cred`，整个系统才能回归一致。
+    if creds.is_empty() {
+        return Err(AppError::config(
+            "cli_no_credentials",
+            serde_json::json!({
+                "hint": "Profile must reference a credential, but no credentials exist. Run 'rssh add cred' first."
+            }),
+        ));
     }
+    let cur = creds
+        .iter()
+        .position(|c| c.id == p.credential_id)
+        .map(|i| (i + 1).to_string())
+        // 当前 cred_id 指向已删 cred（legacy 脏数据）→ 留空，逼用户重选；
+        // 用 checked_sub(1) 而非 wrapping_sub(1)，n=0 直接 None，不绕成 usize::MAX。
+        .unwrap_or_default();
+    println!("Credentials:");
+    for (i, c) in creds.iter().enumerate() {
+        println!("  {} - {} ({})", i + 1, c.name, c.username);
+    }
+    let choice = prompt_default("Credential #", &cur);
+    updated.credential_id = choice
+        .parse::<usize>()
+        .ok()
+        .and_then(|n| n.checked_sub(1))
+        .and_then(|i| creds.get(i))
+        .map(|c| c.id.clone())
+        .ok_or_else(|| {
+            AppError::config(
+                "cli_credential_required",
+                serde_json::json!({
+                    "hint": "Profile must reference a credential. Pick a valid number from the list."
+                }),
+            )
+        })?;
 
     updated.init_command = {
         let cur = p.init_command.as_deref().unwrap_or("");

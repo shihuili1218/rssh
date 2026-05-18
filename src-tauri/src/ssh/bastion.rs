@@ -80,7 +80,9 @@ mod tests {
             name: name.to_string(),
             host: format!("{name}.local"),
             port: 22,
-            credential_id: String::new(),
+            // db::profile::insert 现在 enforce credential_id 非空（应用层不变量）；
+            // 测试只关心 chain 解析，cred 是否真存在不重要，给个 placeholder。
+            credential_id: "test-cred".into(),
             bastion_profile_id: bastion_id.map(|s| s.to_string()),
             init_command: None,
             group_id: None,

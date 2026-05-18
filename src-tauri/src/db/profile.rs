@@ -40,8 +40,23 @@ pub fn get(db: &Db, id: &str) -> AppResult<Profile> {
     })
 }
 
-pub fn insert_tx(conn: &rusqlite::Connection, p: &Profile) -> AppResult<()> {
+/// Profile 写入的 single source of truth。`models.rs::Profile.credential_id`
+/// 文档里写的"应用层不变量"在这里 enforce —— UI/CLI 层的校验是 UX 早期提示，
+/// 任何路径（包括 Tauri `create_profile`/`update_profile` 命令、外部脚本 invoke、
+/// 旧前端、未来新增的写入入口）最终都得过这道关。
+fn validate_for_write(p: &Profile) -> AppResult<()> {
     validate_name(&p.name)?;
+    if p.credential_id.is_empty() {
+        return Err(AppError::config(
+            "profile_credential_id_required",
+            serde_json::json!({ "id": p.id, "name": p.name }),
+        ));
+    }
+    Ok(())
+}
+
+pub fn insert_tx(conn: &rusqlite::Connection, p: &Profile) -> AppResult<()> {
+    validate_for_write(p)?;
     conn.execute(
         "INSERT INTO profiles (id, name, host, port, credential_id, bastion_profile_id, init_command, group_id) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
@@ -60,7 +75,7 @@ pub fn insert(db: &Db, p: &Profile) -> AppResult<()> {
 }
 
 pub fn update(db: &Db, p: &Profile) -> AppResult<()> {
-    validate_name(&p.name)?;
+    validate_for_write(p)?;
     let conn = db.lock()?;
     conn.execute(
         "UPDATE profiles SET name=?1, host=?2, port=?3, credential_id=?4, bastion_profile_id=?5, init_command=?6, group_id=?7 WHERE id=?8",
@@ -162,6 +177,32 @@ mod tests {
         assert_eq!(
             insert(&db, &bad).unwrap_err().code(),
             "name_has_control_char"
+        );
+    }
+
+    /// 应用层不变量：Profile.credential_id 永远非空。
+    /// db layer 是 single source of truth —— UI/CLI 表层校验之外，任何路径
+    /// （Tauri create_profile、外部脚本、未来新写入入口）走到这里都必须被拦下。
+    #[test]
+    fn insert_rejects_empty_credential_id() {
+        let db = Db::open_in_memory().unwrap();
+        let mut bad = mk("p1", "alpha");
+        bad.credential_id = String::new();
+        assert_eq!(
+            insert(&db, &bad).unwrap_err().code(),
+            "profile_credential_id_required"
+        );
+    }
+
+    #[test]
+    fn update_rejects_empty_credential_id() {
+        let db = Db::open_in_memory().unwrap();
+        insert(&db, &mk("p1", "alpha")).unwrap();
+        let mut bad = mk("p1", "alpha");
+        bad.credential_id = String::new();
+        assert_eq!(
+            update(&db, &bad).unwrap_err().code(),
+            "profile_credential_id_required"
         );
     }
 

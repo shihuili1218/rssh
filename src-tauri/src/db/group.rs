@@ -105,7 +105,9 @@ mod tests {
             name: name.into(),
             host: "h".into(),
             port: 22,
-            credential_id: String::new(),
+            // db::profile::insert enforce credential_id 非空（应用层不变量）；
+            // group 级联清理测试只关心 group_id 字段，cred 给个 placeholder 即可。
+            credential_id: "test-cred".into(),
             bastion_profile_id: None,
             init_command: None,
             group_id: group_id.map(String::from),

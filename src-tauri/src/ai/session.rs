@@ -730,9 +730,14 @@ impl Actor {
                 // 之前 _ => continue 把 Message 默默吞掉——用户敲完字消息消失，没有任何反馈。
                 // 现在显式 audit + emit ai:error，让用户知道"先决定命令再发消息"。
                 UserAction::Message(text) => {
+                    // 不要把用户原文裸塞进 audit——可能含 secret/PII（用户复制粘贴
+                    // 时随手带的）。audit log 可能离开本机（用户分享给开发者排错），
+                    // 走跟 history/command_output 同一套 redact 规则，至少把已知模式
+                    // 的敏感串脱掉。
+                    let redacted = sanitize::redact(&text, &self.cfg.redact_rules);
                     self.audit_push(AuditKind::Note {
                         message: format!(
-                            "user message dropped during command approval (pending tool_call {}): {text}",
+                            "user message dropped during command approval (pending tool_call {}): {redacted}",
                             tc.id
                         ),
                     });
