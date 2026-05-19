@@ -584,6 +584,9 @@
     function setupMobileSoftKeyboard(helper: HTMLTextAreaElement) {
         const longPressMs = 360;
         const moveSlopPx = 12;
+        const originalHelperStyle = helper.getAttribute("style");
+        let scrollResetRaf = 0;
+        let helperPinRaf = 0;
         let gesture: {
             pointerId: number;
             x: number;
@@ -592,6 +595,68 @@
             moved: boolean;
             timer: number | undefined;
         } | null = null;
+
+        function resetDocumentScroll() {
+            if (scrollResetRaf) return;
+            scrollResetRaf = requestAnimationFrame(() => {
+                scrollResetRaf = 0;
+                if (window.scrollX !== 0 || window.scrollY !== 0) window.scrollTo(0, 0);
+                document.documentElement.scrollTop = 0;
+                document.documentElement.scrollLeft = 0;
+                document.body.scrollTop = 0;
+                document.body.scrollLeft = 0;
+            });
+        }
+
+        function pinKeyboardHelper() {
+            const viewport = window.visualViewport;
+            const minTop = (viewport?.offsetTop ?? 0) + 1;
+            const maxTop = minTop + (viewport?.height ?? window.innerHeight) - 2;
+            const containerTop = containerEl.getBoundingClientRect().top + 8;
+            const top = Math.max(minTop, Math.min(maxTop, containerTop));
+
+            // xterm keeps this textarea far off-screen by default. On mobile
+            // WebView, focusing/typing into that off-screen control can pan the
+            // page while fixed chrome stays put. Keep it invisible but in-view.
+            helper.style.position = "fixed";
+            helper.style.left = "1px";
+            helper.style.top = `${Math.round(top)}px`;
+            helper.style.width = "1px";
+            helper.style.height = "1px";
+            helper.style.opacity = "0";
+            helper.style.zIndex = "-1";
+            helper.style.pointerEvents = "none";
+            helper.style.caretColor = "transparent";
+            helper.style.background = "transparent";
+            helper.style.color = "transparent";
+            helper.style.border = "0";
+            helper.style.padding = "0";
+            helper.style.margin = "0";
+            helper.style.outline = "0";
+            helper.style.resize = "none";
+            helper.style.overflow = "hidden";
+        }
+
+        function onViewportChange() {
+            if (document.activeElement !== helper) return;
+            pinKeyboardHelper();
+            resetDocumentScroll();
+        }
+
+        function onWindowScroll() {
+            if (document.activeElement === helper) resetDocumentScroll();
+        }
+
+        function keepKeyboardHelperInView() {
+            pinKeyboardHelper();
+            resetDocumentScroll();
+            if (helperPinRaf) cancelAnimationFrame(helperPinRaf);
+            helperPinRaf = requestAnimationFrame(() => {
+                helperPinRaf = 0;
+                pinKeyboardHelper();
+                resetDocumentScroll();
+            });
+        }
 
         function lockKeyboard() {
             helper.readOnly = true;
@@ -610,13 +675,16 @@
         }
 
         function showKeyboard() {
+            pinKeyboardHelper();
             unlockKeyboard();
             helper.focus({ preventScroll: true });
+            resetDocumentScroll();
         }
 
         function hideKeyboard() {
             helper.blur();
             lockKeyboard();
+            resetDocumentScroll();
         }
 
         function clearGestureTimer() {
@@ -686,9 +754,17 @@
             lockKeyboard();
         }
 
+        pinKeyboardHelper();
         lockKeyboard();
         helper.blur();
         helper.addEventListener("blur", onBlur);
+        helper.addEventListener("input", keepKeyboardHelperInView);
+        helper.addEventListener("keydown", keepKeyboardHelperInView);
+        helper.addEventListener("compositionstart", keepKeyboardHelperInView);
+        helper.addEventListener("compositionupdate", keepKeyboardHelperInView);
+        window.addEventListener("scroll", onWindowScroll, { passive: true });
+        window.visualViewport?.addEventListener("scroll", onViewportChange, { passive: true });
+        window.visualViewport?.addEventListener("resize", onViewportChange, { passive: true });
         containerEl.addEventListener("pointerdown", onPointerDown, { capture: true, passive: true });
         containerEl.addEventListener("pointermove", onPointerMove, { capture: true, passive: true });
         containerEl.addEventListener("pointerup", onPointerUp, { capture: true, passive: true });
@@ -697,7 +773,18 @@
 
         return () => {
             clearGestureTimer();
+            if (scrollResetRaf) cancelAnimationFrame(scrollResetRaf);
+            if (helperPinRaf) cancelAnimationFrame(helperPinRaf);
+            if (originalHelperStyle === null) helper.removeAttribute("style");
+            else helper.setAttribute("style", originalHelperStyle);
             helper.removeEventListener("blur", onBlur);
+            helper.removeEventListener("input", keepKeyboardHelperInView);
+            helper.removeEventListener("keydown", keepKeyboardHelperInView);
+            helper.removeEventListener("compositionstart", keepKeyboardHelperInView);
+            helper.removeEventListener("compositionupdate", keepKeyboardHelperInView);
+            window.removeEventListener("scroll", onWindowScroll);
+            window.visualViewport?.removeEventListener("scroll", onViewportChange);
+            window.visualViewport?.removeEventListener("resize", onViewportChange);
             containerEl.removeEventListener("pointerdown", onPointerDown, { capture: true });
             containerEl.removeEventListener("pointermove", onPointerMove, { capture: true });
             containerEl.removeEventListener("pointerup", onPointerUp, { capture: true });
