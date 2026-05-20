@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { t } from "../i18n/index.svelte.ts";
+  import * as updates from "../stores/updates.svelte.ts";
   import WelcomeScreen from "./WelcomeScreen.svelte";
 
   const REPO = "shihuili1218/rssh";
@@ -11,17 +12,11 @@
   const LICENSE_URL = `${REPO_URL}/blob/main/LICENSE`;
   const RELEASES_PAGE = `${REPO_URL}/releases/latest`;
 
-  type UpdateStatus =
-    | { kind: "idle" }
-    | { kind: "checking" }
-    | { kind: "latest" }
-    | { kind: "outdated"; latest: string }
-    | { kind: "error" };
-
   let version = $state("—");
   let justCopied = $state(false);
-  let update = $state<UpdateStatus>({ kind: "idle" });
   let showWelcome = $state(false);
+
+  let update = $derived(updates.state());
 
   onMount(async () => {
     try {
@@ -30,37 +25,6 @@
       console.error("getVersion failed:", e);
     }
   });
-
-  function parseVersion(v: string): number[] {
-    return v.replace(/^v/i, "").split(/[.\-+]/).map(s => parseInt(s, 10) || 0);
-  }
-
-  function compareVersion(a: string, b: string): number {
-    const aa = parseVersion(a);
-    const bb = parseVersion(b);
-    const len = Math.max(aa.length, bb.length);
-    for (let i = 0; i < len; i++) {
-      const x = aa[i] ?? 0;
-      const y = bb[i] ?? 0;
-      if (x !== y) return x > y ? 1 : -1;
-    }
-    return 0;
-  }
-
-  async function checkUpdate() {
-    if (update.kind === "checking") return;
-    update = { kind: "checking" };
-    try {
-      const tag = await invoke<string>("fetch_latest_release_tag", { repo: REPO });
-      if (!tag) throw new Error("empty tag");
-      update = compareVersion(tag, version) > 0
-        ? { kind: "outdated", latest: tag.replace(/^v/i, "") }
-        : { kind: "latest" };
-    } catch (e) {
-      console.error("checkUpdate failed:", e);
-      update = { kind: "error" };
-    }
-  }
 
   function openUrl(url: string) {
     invoke("open_external_url", { url }).catch(e =>
@@ -90,11 +54,12 @@
     {#if update.kind === "outdated"}
       <button class="update-btn primary surface-raised-sm" onclick={() => openUrl(RELEASES_PAGE)}>
         {t("about.update.download")} v{update.latest}
+        <span class="btn-dot" aria-hidden="true"></span>
       </button>
     {:else}
       <button class="update-btn surface-raised-sm"
               disabled={update.kind === "checking"}
-              onclick={checkUpdate}>
+              onclick={() => updates.runCheck()}>
         {update.kind === "checking" ? t("about.update.checking") : t("about.update.check")}
       </button>
     {/if}
@@ -238,6 +203,15 @@
   .update-btn:active { box-shadow: var(--pressed); }
   .update-btn:disabled { cursor: default; opacity: 0.6; }
   .update-btn.primary { color: var(--accent); }
+  .btn-dot {
+    display: inline-block;
+    margin-left: 6px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--error);
+    vertical-align: middle;
+  }
   .update-hint { font-size: 12px; }
   .update-hint.ok { color: var(--text-dim); }
   .update-hint.err { color: var(--error); }

@@ -4,6 +4,7 @@
   import ToastStack from "./lib/components/ToastStack.svelte";
   import WelcomeScreen from "./lib/components/WelcomeScreen.svelte";
   import { loadProfiles, loadForwards } from "./lib/stores/app.svelte.ts";
+  import * as updates from "./lib/stores/updates.svelte.ts";
 
   // First-launch auto-show: when there are no profiles and no forwards,
   // surface the cinematic welcome once. After the user dismisses it
@@ -16,6 +17,12 @@
   let showWelcome = $state(false);
 
   onMount(async () => {
+    // Skip background update polling on clone / AI-handoff windows —
+    // they're transient and the main window already owns the timer.
+    if (!window.__rssh_clone && !window.__rssh_ai_handoff) {
+      updates.startBackgroundChecks();
+    }
+
     // localStorage / Tauri may not be available in non-app hosts
     // (e.g. vitest, browser preview) — defensively swallow errors so a
     // missing API never blocks the regular AppShell from rendering.

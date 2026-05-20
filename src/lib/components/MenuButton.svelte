@@ -31,6 +31,7 @@
         showClose?: boolean;
         horizontal?: boolean;
         badge?: string | null;
+        redDot?: boolean;
         onActivate: (e?: MouseEvent) => void;
         onClose?: () => void;
         onDragStart?: (e: DragEvent) => void;
@@ -49,6 +50,7 @@
         showClose = false,
         horizontal = false,
         badge = null,
+        redDot = false,
         onActivate,
         onClose,
         onDragStart,
@@ -118,6 +120,8 @@
         <span class="sb-icon" style={groupColor ? `background: ${groupColor}; color: white` : ''}>{icon}</span>
         {#if badge}
             <span class="sb-badge">{badge}</span>
+        {:else if redDot}
+            <span class="sb-dot" aria-hidden="true"></span>
         {/if}
     </span>
     <span class="sb-label">{label}</span>
@@ -209,6 +213,18 @@
         font-weight: 700;
         line-height: 14px;
         text-align: center;
+        box-shadow: 0 0 0 2px var(--bg);
+        pointer-events: none;
+    }
+
+    .sb-dot {
+        position: absolute;
+        top: -2px;
+        right: -2px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--error);
         box-shadow: 0 0 0 2px var(--bg);
         pointer-events: none;
     }

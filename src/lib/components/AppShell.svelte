@@ -4,6 +4,7 @@
     import {getCurrentWindow} from "@tauri-apps/api/window";
     import type {Profile, Tab, Group} from "../stores/app.svelte.ts";
     import * as app from "../stores/app.svelte.ts";
+    import * as updates from "../stores/updates.svelte.ts";
     import HomeScreen from "./HomeScreen.svelte";
     import TerminalPane from "./TerminalPane.svelte";
     import ForwardPane from "./ForwardPane.svelte";
@@ -796,6 +797,7 @@
                         focused={isFocusedItem(item)}
                         pinnedState={pinned}
                         badge={item.kind === "downloads" ? xferBadge : null}
+                        redDot={item.kind === "settings" && updates.hasUpdate()}
                         onActivate={(e) => activateNavItem(item, e)}
                     />
                 {/each}
@@ -810,6 +812,7 @@
             dragTabId={dragTabId}
             dropTabId={dropTabId}
             xferBadge={xferBadge}
+            settingsRedDot={updates.hasUpdate()}
             isActiveItem={isActiveItem}
             isFocusedItem={isFocusedItem}
             groupColorOf={tabGroupColor}

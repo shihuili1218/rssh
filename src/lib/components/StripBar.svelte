@@ -9,6 +9,7 @@
         dragTabId: string | null;
         dropTabId: string | null;
         xferBadge?: string | null;
+        settingsRedDot?: boolean;
         isActiveItem: (item: NavItem) => boolean;
         isFocusedItem: (item: NavItem) => boolean;
         groupColorOf: (tab: Tab) => string | null;
@@ -23,6 +24,7 @@
     let {
         sections, position, pinned,
         dragTabId, dropTabId, xferBadge = null,
+        settingsRedDot = false,
         isActiveItem, isFocusedItem, groupColorOf,
         onActivate, onClose,
         onDragStart, onDragOver, onDrop, onDragEnd,
@@ -91,6 +93,7 @@
                 focused={isFocusedItem(item)}
                 pinnedState={pinned}
                 badge={item.kind === "downloads" ? xferBadge : null}
+                redDot={item.kind === "settings" && settingsRedDot}
                 dragOver={t !== null && dropTabId === t.id && dragTabId !== t.id}
                 groupColor={itemTab ? groupColorOf(itemTab) : null}
                 showClose={t !== null}

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Component } from "svelte";
   import * as app from "../stores/app.svelte.ts";
+  import * as updates from "../stores/updates.svelte.ts";
   import { t, locale, setLocale, AVAILABLE_LOCALES, type Locale } from "../i18n/index.svelte.ts";
   import ProfileManager from "./ProfileManager.svelte";
   import ProfileEditor from "./ProfileEditor.svelte";
@@ -120,6 +121,9 @@
           onclick={() => app.settingsNavigate(item.id)}
         >
           {item.label}
+          {#if item.id === "about" && updates.hasUpdate()}
+            <span class="menu-dot" aria-hidden="true"></span>
+          {/if}
         </button>
       {/each}
     {/each}
@@ -209,6 +213,15 @@
     box-shadow: var(--pressed);
     color: var(--accent);
     font-weight: 600;
+  }
+  .menu-dot {
+    display: inline-block;
+    margin-left: 6px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--error);
+    vertical-align: middle;
   }
 
   .settings-content {
