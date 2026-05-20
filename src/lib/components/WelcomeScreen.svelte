@@ -147,8 +147,16 @@
           class:active={i === featureIdx}
           class:done={i < featureIdx}
           onclick={() => jumpTo(s)}
+          onkeydown={(e) => {
+            // svelte:window 全局 handler 把 Enter/Space 解释成 advance/replay。
+            // 焦点在 dot 上时按 Enter/Space 应该触发本按钮的 click → jumpTo，
+            // 而不是上层的 advance。让 button 默认行为（Enter→click）继续，
+            // 仅阻止冒泡到 window handler。
+            if (e.key === "Enter" || e.key === " " || e.code === "Space") {
+              e.stopPropagation();
+            }
+          }}
           aria-label={t(`welcome.scene.${s}.chip` as `welcome.scene.${"ai"|"blocks"|"sync"|"cli"}.chip`)}
-          tabindex="-1"
         ></button>
       {/each}
     </div>
