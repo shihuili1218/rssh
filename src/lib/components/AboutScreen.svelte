@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { t } from "../i18n/index.svelte.ts";
+  import WelcomeScreen from "./WelcomeScreen.svelte";
 
   const REPO = "shihuili1218/rssh";
   const REPO_URL = `https://github.com/${REPO}`;
@@ -20,6 +21,7 @@
   let version = $state("—");
   let justCopied = $state(false);
   let update = $state<UpdateStatus>({ kind: "idle" });
+  let showWelcome = $state(false);
 
   onMount(async () => {
     try {
@@ -124,7 +126,18 @@
     </button>
     <span class="diag-hint">{t("about.diagnostics.hint")}</span>
   </div>
+
+  <div class="diag">
+    <button class="diag-btn surface-raised-sm" onclick={() => showWelcome = true}>
+      {t("about.preview_welcome")}
+    </button>
+    <span class="diag-hint">{t("about.preview_welcome.hint")}</span>
+  </div>
 </div>
+
+{#if showWelcome}
+  <WelcomeScreen onDismiss={() => showWelcome = false} />
+{/if}
 
 <style>
   .page {

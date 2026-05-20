@@ -122,6 +122,83 @@ const zh: Messages = {
   "about.update.latest": "已是最新版本",
   "about.update.download": "下载",
   "about.update.error": "检查失败，请稍后重试",
+  "about.preview_welcome": "欢迎页",
+  "about.preview_welcome.hint": "重放首次启动的引导",
+
+  // ── 欢迎页 ──
+  "welcome.aria": "欢迎页",
+  "welcome.skip": "跳过",
+  "welcome.close": "关闭",
+  "welcome.cta": "立即开始",
+
+  // intro
+  "welcome.intro.aria": "rssh 欢迎",
+  "welcome.intro.welcome": "欢迎来到 rssh。",
+  "welcome.intro.sub": "准备好了就点 Start",
+  "welcome.intro.start": "开始演示",
+
+  // scene chips
+  "welcome.scene.ai.chip": "AI 排障",
+  "welcome.scene.blocks.chip": "命令块上色",
+  "welcome.scene.sync.chip": "安全与同步",
+  "welcome.scene.cli.chip": "CLI 优先",
+
+  // scene 1 — AI
+  "welcome.scene.ai.panel_title": "AI 排障",
+  "welcome.scene.ai.asst_intro": "我先列一下近期日志：",
+  "welcome.scene.ai.tool_approved": "已审批",
+  "welcome.scene.ai.caption_kw1": "形状校验",
+  "welcome.scene.ai.caption_kw2": "本地脱敏",
+  "welcome.scene.ai.caption_kw3": "人工审批",
+  "welcome.scene.ai.caption_join": " · ",
+
+  // scene 2 — blocks
+  "welcome.scene.blocks.menu_copy_text": "复制为文本",
+  "welcome.scene.blocks.menu_copy_image": "复制为图片",
+  "welcome.scene.blocks.menu_fold": "折叠",
+  "welcome.scene.blocks.folded_hint": "已折叠 {n} 行",
+  "welcome.scene.blocks.caption_kw1": "点击",
+  "welcome.scene.blocks.caption_kw2": "复制",
+  "welcome.scene.blocks.caption_kw3": "分享",
+  "welcome.scene.blocks.caption_join": " · ",
+
+  // scene 3 — sync
+  "welcome.scene.sync.node_rssh": "RSSH",
+  "welcome.scene.sync.node_rssh_sub": "运行在本机",
+  "welcome.scene.sync.node_keyserver": "系统密钥服务",
+  "welcome.scene.sync.node_keyserver_sub": "钥匙串 · 凭据管理 · Secret Service",
+  "welcome.scene.sync.node_db": "PROFILE DB",
+  "welcome.scene.sync.node_db_sub": "host · user · port",
+  "welcome.scene.sync.node_repo": "GITHUB REPO",
+  "welcome.scene.sync.node_repo_sub": "加密备份",
+  "welcome.scene.sync.label_encrypted": "加密",
+  "welcome.scene.sync.platform_windows": "Windows",
+  "welcome.scene.sync.platform_macos": "macOS",
+  "welcome.scene.sync.platform_linux": "Linux",
+  "welcome.scene.sync.platform_android": "Android",
+  "welcome.scene.sync.caption_kw1": "密钥留在 OS 钥匙串",
+  "welcome.scene.sync.caption_kw2": "profile 加密到 GitHub",
+  "welcome.scene.sync.caption_kw3": "全设备同步",
+  "welcome.scene.sync.caption_join": " · ",
+
+  // scene 4 — CLI
+  "welcome.scene.cli.confirm": "已打开",
+  "welcome.scene.cli.gui_waiting": "等待命令…",
+  "welcome.scene.cli.gui_hint": "任意终端都能驱动我",
+  "welcome.scene.cli.caption_kw1": "一份数据库",
+  "welcome.scene.cli.caption_kw2": "两个界面",
+  "welcome.scene.cli.caption_join": " · ",
+
+  // CTA scene (final)
+  "welcome.cta_ready.line": "准备好了。",
+  "welcome.cta_ready.sub": "来建第一个连接吧",
+
+  // shared controls
+  "welcome.controls.next": "下一步",
+  "welcome.controls.hint_enter": "开始",
+  "welcome.controls.hint_esc": "关闭",
+  "welcome.controls.hint_replay": "重播",
+  "welcome.controls.indicator_aria": "场景导航",
 
   // ── Toast 通用文案 ──
   "toast.error.delete": "删除失败",

@@ -120,6 +120,83 @@ const en = {
   "about.update.latest": "You're on the latest version",
   "about.update.download": "Download",
   "about.update.error": "Check failed, try again later",
+  "about.preview_welcome": "Welcome screen",
+  "about.preview_welcome.hint": "Replay the first-launch intro",
+
+  // ── Welcome screen ──
+  "welcome.aria": "Welcome screen",
+  "welcome.skip": "Skip",
+  "welcome.close": "Close",
+  "welcome.cta": "Get Started",
+
+  // intro
+  "welcome.intro.aria": "rssh welcome",
+  "welcome.intro.welcome": "welcome to rssh.",
+  "welcome.intro.sub": "press start when you're ready",
+  "welcome.intro.start": "Start the demo",
+
+  // scene chips (used as both labels and aria descriptions)
+  "welcome.scene.ai.chip": "AI Diagnostics",
+  "welcome.scene.blocks.chip": "Command Block Colors",
+  "welcome.scene.sync.chip": "Security & Sync",
+  "welcome.scene.cli.chip": "CLI-First",
+
+  // scene 1 — AI
+  "welcome.scene.ai.panel_title": "AI Diagnose",
+  "welcome.scene.ai.asst_intro": "I'll start by listing recent logs:",
+  "welcome.scene.ai.tool_approved": "approved",
+  "welcome.scene.ai.caption_kw1": "validated",
+  "welcome.scene.ai.caption_kw2": "redacted",
+  "welcome.scene.ai.caption_kw3": "approved",
+  "welcome.scene.ai.caption_join": " · ",
+
+  // scene 2 — blocks
+  "welcome.scene.blocks.menu_copy_text": "Copy as text",
+  "welcome.scene.blocks.menu_copy_image": "Copy as image",
+  "welcome.scene.blocks.menu_fold": "Fold",
+  "welcome.scene.blocks.folded_hint": "{n} lines hidden",
+  "welcome.scene.blocks.caption_kw1": "click",
+  "welcome.scene.blocks.caption_kw2": "copy",
+  "welcome.scene.blocks.caption_kw3": "share",
+  "welcome.scene.blocks.caption_join": " · ",
+
+  // scene 3 — sync
+  "welcome.scene.sync.node_rssh": "RSSH",
+  "welcome.scene.sync.node_rssh_sub": "your machine",
+  "welcome.scene.sync.node_keyserver": "OS KEY STORE",
+  "welcome.scene.sync.node_keyserver_sub": "Keychain · Cred Mgr · Secret Service",
+  "welcome.scene.sync.node_db": "PROFILE DB",
+  "welcome.scene.sync.node_db_sub": "host · user · port",
+  "welcome.scene.sync.node_repo": "GITHUB REPO",
+  "welcome.scene.sync.node_repo_sub": "encrypted backup",
+  "welcome.scene.sync.label_encrypted": "ENCRYPTED",
+  "welcome.scene.sync.platform_windows": "Windows",
+  "welcome.scene.sync.platform_macos": "macOS",
+  "welcome.scene.sync.platform_linux": "Linux",
+  "welcome.scene.sync.platform_android": "Android",
+  "welcome.scene.sync.caption_kw1": "keys in OS keychain",
+  "welcome.scene.sync.caption_kw2": "profiles in your repo",
+  "welcome.scene.sync.caption_kw3": "synced everywhere",
+  "welcome.scene.sync.caption_join": " · ",
+
+  // scene 4 — CLI
+  "welcome.scene.cli.confirm": "opened",
+  "welcome.scene.cli.gui_waiting": "waiting for command…",
+  "welcome.scene.cli.gui_hint": "any terminal can drive me",
+  "welcome.scene.cli.caption_kw1": "one database",
+  "welcome.scene.cli.caption_kw2": "two interfaces",
+  "welcome.scene.cli.caption_join": " · ",
+
+  // CTA scene (final)
+  "welcome.cta_ready.line": "ready when you are.",
+  "welcome.cta_ready.sub": "let's set up your first connection",
+
+  // shared controls
+  "welcome.controls.next": "Next",
+  "welcome.controls.hint_enter": "begin",
+  "welcome.controls.hint_esc": "dismiss",
+  "welcome.controls.hint_replay": "replay",
+  "welcome.controls.indicator_aria": "Scene navigator",
 
   // ── Toast shared ──
   "toast.error.delete": "Delete failed",
