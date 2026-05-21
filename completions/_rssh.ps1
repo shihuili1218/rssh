@@ -11,7 +11,7 @@ Register-ArgumentCompleter -Native -CommandName rssh -ScriptBlock {
         return
     }
 
-    switch ($cmd) {
+    $(switch ($cmd) {
         'ls' { @('cred','fwd') | Where-Object { $_ -like "$wordToComplete*" } }
         'open' {
             if ($pos -eq 2 -or ($pos -eq 3 -and $wordToComplete -and $words[2] -ne 'fwd')) {
@@ -33,7 +33,7 @@ Register-ArgumentCompleter -Native -CommandName rssh -ScriptBlock {
         }
         'config' { @('export','import','set','push','pull') | Where-Object { $_ -like "$wordToComplete*" } }
         'completions' { @('zsh','bash','powershell','fish') | Where-Object { $_ -like "$wordToComplete*" } }
-    } | ForEach-Object {
+    }) | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
 }
