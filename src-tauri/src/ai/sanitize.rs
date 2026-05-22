@@ -140,6 +140,10 @@ pub enum ShapeError {
     Interactive(String),
     #[error("Loop sampling must carry an explicit count (interval count): {0}")]
     UnboundedLoop(String),
+    /// 写文件相关：所有 free-form 写命令一律拒绝，文件修改唯一合法路径 = patch_file 工具。
+    /// 错误信息里带上具体形态，方便 LLM 知道为何被拒。
+    #[error("Write command not allowed — use patch_file: {0}")]
+    Write(String),
     #[error("Empty command")]
     Empty,
 }
@@ -169,6 +173,58 @@ pub const INTERACTIVE_BARE: &[&str] = &[
 /// 这些工具没有 `interval count` 两个数字结尾就是无限循环。
 pub const COUNTED_LOOP: &[&str] = &["vmstat", "iostat", "pidstat", "mpstat", "sar", "jstat"];
 
+/// 写文件动词。这些命令的存在本身就在改文件系统状态，统一拒绝，LLM 改文件走 patch_file。
+pub const WRITE_VERBS: &[&str] = &["tee", "cp", "mv", "ln", "install"];
+
+/// 全拒的脚本解释器：python 等可以通过 `open(..., 'w')` 写文件绕过 validator。
+/// 业务上 LLM 也不需要 python——读文件用 cat/grep/awk(read-only)，改文件用 patch_file。
+pub const INTERPRETERS_DENIED: &[&str] = &["python", "python3", "python2"];
+
+/// 重定向白名单：只有目标是 /dev/null 的重定向放行（保留 `cmd > /dev/null 2>&1` 这种丢弃输出用法）。
+/// 标准 fd 复制（2>&1 / 1>&2）也是丢弃/复用 fd，不写文件，放行。
+fn is_safe_redirect_token(t: &str) -> bool {
+    matches!(
+        t,
+        "2>&1" | "1>&2" | ">/dev/null" | ">>/dev/null" | "&>/dev/null" | "&>>/dev/null"
+    )
+}
+
+/// 扫描所有 token 找写文件重定向。返回第一个不安全的形态字符串供错误信息引用。
+///
+/// 识别形态：
+/// - `> path` / `>> path`（带空格分隔，target 是下一个 token）
+/// - `>path` / `>>path`（紧贴写在一起，token 自身含 `>`）
+/// - `2>file` 等带 fd 前缀的写（token 含 `>` 但不是白名单 fd 复制）
+fn find_write_redirect(tokens: &[&str]) -> Option<String> {
+    let mut i = 0;
+    while i < tokens.len() {
+        let t = tokens[i];
+
+        if is_safe_redirect_token(t) {
+            i += 1;
+            continue;
+        }
+
+        // 形态: token 完全等于 ">" 或 ">>"，target 在下一个 token
+        if t == ">" || t == ">>" {
+            let target = tokens.get(i + 1).copied().unwrap_or("");
+            if target != "/dev/null" {
+                return Some(format!("{t} {target}"));
+            }
+            i += 2;
+            continue;
+        }
+
+        // 形态: token 包含 `>`（非白名单），如 ">/tmp/foo" / "2>err.log" / ">>append.log"
+        // 凡含 `>` 一律拒（除非全 token 命中 is_safe_redirect_token，前面已 continue 掉）
+        if t.contains('>') {
+            return Some(t.to_string());
+        }
+        i += 1;
+    }
+    None
+}
+
 fn bare(t: &str) -> &str {
     t.rsplit('/').next().unwrap_or(t)
 }
@@ -193,7 +249,8 @@ pub fn validate(cmd: &str) -> Result<(), ShapeError> {
     // 命令名提取（去路径前缀、扔掉管道/重定向等元字符 token）
     let first = bare(tokens[0]);
 
-    // 1. 破坏性命令名（含管道 / && / ; / | 后第一个 token）
+    // 1. 命令头扫描：DESTRUCTIVE / WRITE_VERBS / INTERPRETERS_DENIED
+    //    任何 |, ||, &&, ;, & 之后的第一个 token 都是新命令头。
     let mut at_command_head = true;
     for t in &tokens {
         if matches!(*t, "|" | "||" | "&&" | ";" | "&") {
@@ -204,6 +261,16 @@ pub fn validate(cmd: &str) -> Result<(), ShapeError> {
             let b = bare(t);
             if DESTRUCTIVE.contains(&b) {
                 return Err(ShapeError::Destructive(b.to_string()));
+            }
+            if WRITE_VERBS.contains(&b) {
+                return Err(ShapeError::Write(format!(
+                    "{b} (file modification must go through patch_file)"
+                )));
+            }
+            if INTERPRETERS_DENIED.contains(&b) {
+                return Err(ShapeError::Write(format!(
+                    "{b} (rssh blocks script interpreters; use patch_file / match_file for file work)"
+                )));
             }
             at_command_head = false;
         }
@@ -240,7 +307,70 @@ pub fn validate(cmd: &str) -> Result<(), ShapeError> {
         }
     }
 
-    // 5. 循环采样必须有 ≥2 个连续数字（interval + count）
+    // 5. in-place 编辑：sed -i / awk -i inplace / perl -i (含组合短选项 -pi/-ni 等)
+    if first == "sed"
+        && tokens.iter().any(|t| {
+            *t == "-i"
+                || t.starts_with("-i")
+                || *t == "--in-place"
+                || t.starts_with("--in-place")
+        })
+    {
+        return Err(ShapeError::Write(
+            "sed -i (in-place edit; use patch_file)".into(),
+        ));
+    }
+    if first == "perl"
+        && tokens.iter().any(|t| {
+            t.starts_with('-') && !t.starts_with("--") && t.len() > 1 && t[1..].contains('i')
+        })
+    {
+        return Err(ShapeError::Write(
+            "perl -i (in-place edit; use patch_file)".into(),
+        ));
+    }
+    if first == "awk" {
+        let mut prev_i = false;
+        for t in tokens.iter().skip(1) {
+            if *t == "-i" {
+                prev_i = true;
+                continue;
+            }
+            if prev_i && *t == "inplace" {
+                return Err(ShapeError::Write(
+                    "awk -i inplace (in-place edit; use patch_file)".into(),
+                ));
+            }
+            prev_i = false;
+        }
+    }
+
+    // 6. touch 时间戳标志：留 touch 本身合法（创建空文件），但拒所有改 mtime 形态
+    if first == "touch" {
+        for t in tokens.iter().skip(1) {
+            let bad = matches!(*t, "-a" | "-m" | "-am" | "-ma")
+                || t.starts_with("-d")
+                || t.starts_with("-t")
+                || t.starts_with("-r")
+                || t.starts_with("--date=")
+                || t.starts_with("--time=")
+                || t.starts_with("--reference=");
+            if bad {
+                return Err(ShapeError::Write(format!(
+                    "touch {t} (timestamp change; touch may only create empty files)"
+                )));
+            }
+        }
+    }
+
+    // 7. 写文件重定向（> / >>，白名单 /dev/null）
+    if let Some(form) = find_write_redirect(&tokens) {
+        return Err(ShapeError::Write(format!(
+            "redirect '{form}' (file modification must go through patch_file; '/dev/null' is the only allowed target)"
+        )));
+    }
+
+    // 8. 循环采样必须有 ≥2 个连续数字（interval + count）
     if COUNTED_LOOP.contains(&first) {
         let mut consecutive: u32 = 0;
         let mut maxc: u32 = 0;
@@ -535,5 +665,203 @@ mod tests {
             validate("/usr/bin/kill 1"),
             Err(ShapeError::Destructive(_))
         ));
+    }
+
+    // ─── 写命令拦截 ─────────────────────────────────────────────────
+
+    #[test]
+    fn shape_write_verbs_blocked() {
+        assert!(matches!(validate("tee /tmp/foo"), Err(ShapeError::Write(_))));
+        assert!(matches!(validate("cp a b"), Err(ShapeError::Write(_))));
+        assert!(matches!(validate("mv a b"), Err(ShapeError::Write(_))));
+        assert!(matches!(
+            validate("ln -s a b"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("install -m 644 a b"),
+            Err(ShapeError::Write(_))
+        ));
+        // 通过路径前缀仍要拒
+        assert!(matches!(validate("/bin/cp a b"), Err(ShapeError::Write(_))));
+        // 管道后第二个命令是写动词也要拒
+        assert!(matches!(
+            validate("cat x | tee /tmp/y"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("ls && cp a b"),
+            Err(ShapeError::Write(_))
+        ));
+    }
+
+    #[test]
+    fn shape_interpreters_blocked() {
+        assert!(matches!(
+            validate("python -c 'open(\"x\",\"w\")'"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("python3 script.py"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("python2 -m foo"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("/usr/bin/python3 -"),
+            Err(ShapeError::Write(_))
+        ));
+        // 管道后位也要拒
+        assert!(matches!(
+            validate("echo x | python3 -"),
+            Err(ShapeError::Write(_))
+        ));
+    }
+
+    #[test]
+    fn shape_inplace_edit_blocked() {
+        // sed -i
+        assert!(matches!(
+            validate("sed -i 's/a/b/' file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("sed -i.bak 's/a/b/' file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("sed --in-place 's/a/b/' file"),
+            Err(ShapeError::Write(_))
+        ));
+        // sed 没有 -i 仍是 read-only 用法
+        assert!(validate("sed 's/a/b/' file").is_ok());
+        assert!(validate("sed -n '1,10p' file").is_ok());
+
+        // awk -i inplace
+        assert!(matches!(
+            validate("awk -i inplace '{print}' file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(validate("awk '{print $1}' file").is_ok());
+
+        // perl -i / -pi / -nie / -i.bak
+        assert!(matches!(
+            validate("perl -i -pe 's/a/b/' file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("perl -pi -e 's/a/b/' file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("perl -i.bak -pe 's/a/b/' file"),
+            Err(ShapeError::Write(_))
+        ));
+        // perl -ne / -e 是 read-only
+        assert!(validate("perl -ne 'print if /foo/' file").is_ok());
+        assert!(validate("perl -e 'print 1'").is_ok());
+    }
+
+    #[test]
+    fn shape_touch_timestamp_blocked() {
+        // -a / -m / -am 改 mtime/atime
+        assert!(matches!(
+            validate("touch -a file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("touch -m file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("touch -am file"),
+            Err(ShapeError::Write(_))
+        ));
+        // -d / -t / -r
+        assert!(matches!(
+            validate("touch -d '2026-01-01' file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("touch -t 202601011200 file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("touch -r refer file"),
+            Err(ShapeError::Write(_))
+        ));
+        // long options
+        assert!(matches!(
+            validate("touch --date=2026-01-01 file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("touch --reference=ref file"),
+            Err(ShapeError::Write(_))
+        ));
+        // 创建空文件放行
+        assert!(validate("touch /tmp/foo").is_ok());
+        assert!(validate("touch a b c").is_ok());
+    }
+
+    #[test]
+    fn shape_write_redirect_blocked() {
+        // 带空格的 > / >>
+        assert!(matches!(
+            validate("echo hi > /tmp/foo"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("echo hi >> /tmp/foo"),
+            Err(ShapeError::Write(_))
+        ));
+        // 紧贴形态
+        assert!(matches!(
+            validate("echo hi >/tmp/foo"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("echo hi >>/tmp/foo"),
+            Err(ShapeError::Write(_))
+        ));
+        // fd 重定向写文件
+        assert!(matches!(
+            validate("cmd 2> err.log"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("cmd 2>err.log"),
+            Err(ShapeError::Write(_))
+        ));
+        // bash &> 写文件
+        assert!(matches!(
+            validate("cmd &> out.log"),
+            Err(ShapeError::Write(_))
+        ));
+    }
+
+    #[test]
+    fn shape_devnull_passes() {
+        // /dev/null 是唯一放行的写目标
+        assert!(validate("cmd > /dev/null").is_ok());
+        assert!(validate("cmd >/dev/null").is_ok());
+        assert!(validate("cmd >> /dev/null").is_ok());
+        assert!(validate("cmd >>/dev/null").is_ok());
+        assert!(validate("cmd > /dev/null 2>&1").is_ok());
+        assert!(validate("cmd >/dev/null 2>&1").is_ok());
+        assert!(validate("cmd 2>&1 | grep foo").is_ok());
+        assert!(validate("cmd &>/dev/null").is_ok());
+        // 1>&2 fd 复制（不写文件）
+        assert!(validate("echo err 1>&2").is_ok());
+    }
+
+    #[test]
+    fn shape_pipe_preserves_read_only() {
+        // 写动词在管道头/尾都要拒，但纯读管道要放行
+        assert!(validate("ps -ef | grep java | head -10").is_ok());
+        assert!(validate("cat /etc/hosts | wc -l").is_ok());
+        assert!(validate("ls -la | sort").is_ok());
     }
 }

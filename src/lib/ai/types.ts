@@ -53,6 +53,18 @@ export interface CommandProposed {
   explain: string;
   side_effect: string;
   timeout_s: number;
+  /**
+   * 工具来源标记：
+   * - undefined  普通 run_command（默认形态，纯命令字符串审批）
+   * - "patch_file"  来自 patch_file 工具的 Stage B 写操作，UI 显示 path + diff 而非命令字符串
+   */
+  kind?: "patch_file";
+  /** patch_file 才有：被修改的文件路径 */
+  path?: string;
+  /** patch_file 才有：unified diff，审批 UI 展示给用户 */
+  diff?: string;
+  /** patch_file 才有：本次替换的匹配次数 */
+  changed?: number;
 }
 
 export interface CommandResult {

@@ -12,6 +12,12 @@ pub const TOOL_RUN_COMMAND: &str = "run_command";
 pub const TOOL_LOAD_SKILL: &str = "load_skill";
 pub const TOOL_DOWNLOAD_FILE: &str = "download_file";
 pub const TOOL_ANALYZE_LOCALLY: &str = "analyze_locally";
+pub const TOOL_MATCH_FILE: &str = "match_file";
+pub const TOOL_PATCH_FILE: &str = "patch_file";
+
+/// match_file / patch_file 上下文字符数上限。够 LLM 判断位置又不浪费 token。
+pub const MATCH_CONTEXT_DEFAULT: u32 = 80;
+pub const MATCH_CONTEXT_MAX: u32 = 400;
 
 pub fn all_tools() -> Vec<ToolSchema> {
     vec![
@@ -89,6 +95,73 @@ pub fn all_tools() -> Vec<ToolSchema> {
             }),
         },
         ToolSchema {
+            name: TOOL_MATCH_FILE.into(),
+            description: "Locate every occurrence of a literal text inside a remote file (read-only, no user approval). \
+                Always call this **before** `patch_file` to: (1) confirm the find string actually exists and how many times; \
+                (2) verify the surrounding context matches the locations you want to change; \
+                (3) obtain `expected_count` for the follow-up `patch_file` call. \
+                The find string is matched literally (no regex). Multi-line `find` is supported — embed real newlines. \
+                Returns JSON: { count, matches: [{ line, context }] }. `context` is `before` chars + find + `after` chars (clamped to file boundaries).".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Remote file path (absolute, or ~-prefixed — rssh forwards it verbatim to the shell which expands ~).",
+                    },
+                    "find": {
+                        "type": "string",
+                        "description": "Literal text to search for. Newlines are honored verbatim. Empty string is rejected.",
+                    },
+                    "before": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": MATCH_CONTEXT_MAX,
+                        "description": "Chars of context before each match (default 80, max 400).",
+                    },
+                    "after": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": MATCH_CONTEXT_MAX,
+                        "description": "Chars of context after each match (default 80, max 400).",
+                    },
+                },
+                "required": ["path", "find"],
+            }),
+        },
+        ToolSchema {
+            name: TOOL_PATCH_FILE.into(),
+            description: "Modify a remote file by replacing every occurrence of `find` with `replace`. \
+                This is the **only allowed way** to change file contents — direct shell writes (>, tee, cp, mv, sed -i, awk -i, perl -i, python, etc.) are blocked. \
+                You MUST call `match_file` first to verify the find string exists and to obtain `expected_count`. \
+                rssh re-reads the file just before patching and refuses the change if the count differs (race-condition / staleness guard). \
+                The new file content is written atomically (tmp + mv). Returns a unified diff for your final review. \
+                User confirms the diff in a UI dialog before the write is executed.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Remote file path.",
+                    },
+                    "find": {
+                        "type": "string",
+                        "description": "Literal text to replace. Must match exactly `expected_count` times in the current file.",
+                    },
+                    "replace": {
+                        "type": "string",
+                        "description": "Replacement text. Set to empty string to delete the matched section(s).",
+                    },
+                    "expected_count": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Number of occurrences you expect to replace, obtained from a prior `match_file` call. If the actual count differs (e.g. file changed between calls), the patch is refused — re-run match_file and retry.",
+                    },
+                },
+                "required": ["path", "find", "replace", "expected_count"],
+            }),
+        },
+        ToolSchema {
             name: TOOL_ANALYZE_LOCALLY.into(),
             description: "Analyze a previously downloaded file (heap dump / pprof / perf.data, etc.) on the user's machine. \
                 rssh will **open a new window** containing a local shell + a separate AI session, and auto-send the task description as the first message to that AI, which then drives the analysis with the user. \
@@ -137,4 +210,20 @@ pub struct AnalyzeLocallyInput {
 #[derive(Debug, Deserialize)]
 pub struct LoadSkillInput {
     pub id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MatchFileInput {
+    pub path: String,
+    pub find: String,
+    pub before: Option<u32>,
+    pub after: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PatchFileInput {
+    pub path: String,
+    pub find: String,
+    pub replace: String,
+    pub expected_count: u32,
 }

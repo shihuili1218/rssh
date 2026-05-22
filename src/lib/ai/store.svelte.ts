@@ -42,6 +42,12 @@ let _chatBySession = $state<Record<string, ChatItem[]>>({});
 let _pendingByTarget = $state<Record<string, CommandProposed | null>>({});
 let _keyboardLockedByTarget = $state<Record<string, boolean>>({});
 let _settings = $state<AiSettings | null>(null);
+/**
+ * target_id → 终端类型映射。internal_command 自动执行时需要知道走 ssh_write
+ * 还是 pty_write —— ChatPanel 把 targetKind 作为 prop 传给 dialog，但 store
+ * 在 attachListeners 里要独立处理 internal_command 事件，所以单独缓存。
+ */
+const _targetKindByTarget: Record<string, "ssh" | "local"> = {};
 
 const _unlisteners: Record<string, UnlistenFn[]> = {};
 
@@ -105,6 +111,7 @@ export async function startSession(args: {
     locale: currentLocale(),
   });
   _sessionByTarget[args.targetId] = info;
+  _targetKindByTarget[args.targetId] = args.targetKind;
   _chatBySession[info.session_id] = [];
   _activeSessionId = info.session_id;
   await attachListeners(info);
@@ -120,6 +127,7 @@ export async function stopSession(session_id: string) {
       delete _sessionByTarget[tid];
       delete _pendingByTarget[tid];
       delete _keyboardLockedByTarget[tid];
+      delete _targetKindByTarget[tid];
     }
   }
   delete _chatBySession[session_id];
@@ -363,6 +371,38 @@ async function attachListeners(info: AiSessionInfo) {
   u.push(await listen<CommandProposed>(`ai:command_proposed:${sid}`, (e) => {
     _pendingByTarget[tid] = e.payload;
     pushChat(sid, { kind: "command", cmd: e.payload, at: Date.now() });
+  }));
+
+  // internal_command：后端的 match_file / patch_file Stage A 用来跑 read-only cat。
+  // 不弹审批、不入 chat 时间线，直接粘到 PTY 跑——用户在终端历史里看到 cat 滚过，
+  // 透明但不打断流程。
+  u.push(await listen<{
+    id: string;
+    tool_call_id: string;
+    cmd: string;
+    full_cmd: string;
+    sentinel: string;
+  }>(`ai:internal_command:${sid}`, async (e) => {
+    const kind = _targetKindByTarget[tid];
+    if (!kind) {
+      console.error("[ai] internal_command without target_kind for", tid);
+      return;
+    }
+    const proposed: CommandProposed = {
+      id: e.payload.id,
+      tool_call_id: e.payload.tool_call_id,
+      cmd: e.payload.cmd,
+      full_cmd: e.payload.full_cmd,
+      sentinel: e.payload.sentinel,
+      explain: "",
+      side_effect: "",
+      timeout_s: 60,
+    };
+    try {
+      await executeCommand(sid, proposed, kind, tid);
+    } catch (err) {
+      console.error("[ai] internal_command exec failed:", err);
+    }
   }));
 
   u.push(await listen<{ id: string; lock_keyboard: boolean }>(`ai:command_executing:${sid}`, (e) => {
