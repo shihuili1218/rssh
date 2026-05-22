@@ -175,7 +175,12 @@ const POWERSHELL_COMPLETIONS: &str = r#"Register-ArgumentCompleter -Native -Comm
         return
     }
 
-    switch ($cmd) {
+    if ($cmd -eq 'config' -and ($words[2] -eq 'export' -or $words[2] -eq 'import') -and ($words.Length -ge 4 -or -not $wordToComplete)) {
+        [System.Management.Automation.CompletionCompleters]::CompleteFilename($wordToComplete)
+        return
+    }
+
+    $(switch ($cmd) {
         'ls' { @('cred','fwd') | Where-Object { $_ -like "$wordToComplete*" } }
         'open' {
             if ($pos -eq 2 -or ($pos -eq 3 -and $wordToComplete -and $words[2] -ne 'fwd')) {
@@ -197,7 +202,7 @@ const POWERSHELL_COMPLETIONS: &str = r#"Register-ArgumentCompleter -Native -Comm
         }
         'config' { @('export','import','set','push','pull') | Where-Object { $_ -like "$wordToComplete*" } }
         'completions' { @('zsh','bash','powershell','fish') | Where-Object { $_ -like "$wordToComplete*" } }
-    } | ForEach-Object {
+    }) | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
 }
@@ -208,6 +213,24 @@ const POWERSHELL_COMPLETIONS: &str = r#"Register-ArgumentCompleter -Native -Comm
 // `(rssh _names profiles)` 输出 "my profile\nother" 已经正确拆成两条候选。
 // 现状无需改动。
 const FISH_COMPLETIONS: &str = r#"# rssh fish completions
+
+function __rssh_arg
+    # __rssh_arg N <value>...: true if the Nth word after `rssh` matches any value
+    set -l tokens (commandline -opc)
+    set -l idx (math 1 + $argv[1])
+    test (count $tokens) -ge $idx; or return 1
+    contains -- $tokens[$idx] $argv[2..-1]
+end
+
+function __rssh_pos
+    # __rssh_pos N: true if currently completing the Nth word after `rssh`
+    test (count (commandline -opc)) -eq $argv[1]
+end
+
+# Disable default file completion; the `config export/import <path>` rule below re-enables it via -F.
+complete -c rssh -f
+
+# Subcommands
 complete -c rssh -n '__fish_use_subcommand' -a 'ls' -d 'List profiles/credentials/forwards'
 complete -c rssh -n '__fish_use_subcommand' -a 'open' -d 'Connect via SSH'
 complete -c rssh -n '__fish_use_subcommand' -a 'add' -d 'Add profile/credential/forward'
@@ -216,11 +239,18 @@ complete -c rssh -n '__fish_use_subcommand' -a 'rm' -d 'Delete profile/credentia
 complete -c rssh -n '__fish_use_subcommand' -a 'config' -d 'Configuration management'
 complete -c rssh -n '__fish_use_subcommand' -a 'completions' -d 'Generate shell completions'
 
-complete -c rssh -n '__fish_seen_subcommand_from ls' -a 'cred fwd'
-complete -c rssh -n '__fish_seen_subcommand_from open' -a '(rssh _names profiles 2>/dev/null)' -a 'fwd'
-complete -c rssh -n '__fish_seen_subcommand_from add' -a 'profile cred fwd'
-complete -c rssh -n '__fish_seen_subcommand_from edit' -a 'profile cred fwd'
-complete -c rssh -n '__fish_seen_subcommand_from rm' -a 'profile cred fwd'
-complete -c rssh -n '__fish_seen_subcommand_from config' -a 'export import set push pull'
-complete -c rssh -n '__fish_seen_subcommand_from completions' -a 'zsh bash powershell fish'
+# Second-level args
+complete -c rssh -n '__rssh_arg 1 ls; and __rssh_pos 2' -a 'cred fwd'
+complete -c rssh -n '__rssh_arg 1 open; and __rssh_pos 2' -a '(rssh _names profiles 2>/dev/null) fwd'
+complete -c rssh -n '__rssh_arg 1 add; and __rssh_pos 2' -a 'profile cred fwd'
+complete -c rssh -n '__rssh_arg 1 edit rm; and __rssh_pos 2' -a 'profile cred fwd'
+complete -c rssh -n '__rssh_arg 1 config; and __rssh_pos 2' -a 'export import set push pull'
+complete -c rssh -n '__rssh_arg 1 completions; and __rssh_pos 2' -a 'zsh bash powershell fish'
+
+# Third-level args
+complete -c rssh -n '__rssh_arg 1 open; and __rssh_arg 2 fwd; and __rssh_pos 3' -a '(rssh _names fwd 2>/dev/null)'
+complete -c rssh -n '__rssh_arg 1 edit rm; and __rssh_arg 2 profile; and __rssh_pos 3' -a '(rssh _names profiles 2>/dev/null)'
+complete -c rssh -n '__rssh_arg 1 edit rm; and __rssh_arg 2 cred; and __rssh_pos 3' -a '(rssh _names creds 2>/dev/null)'
+complete -c rssh -n '__rssh_arg 1 edit rm; and __rssh_arg 2 fwd; and __rssh_pos 3' -a '(rssh _names fwd 2>/dev/null)'
+complete -c rssh -n '__rssh_arg 1 config; and __rssh_arg 2 export import; and __rssh_pos 3' -F
 "#;
