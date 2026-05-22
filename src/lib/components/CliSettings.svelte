@@ -62,7 +62,7 @@
     <pre class="code-block">rssh completions zsh &gt; ~/.zsh/completions/_rssh
 rssh completions bash &gt;&gt; ~/.bashrc
 rssh completions fish &gt; ~/.config/fish/completions/rssh.fish
-rssh completions powershell  # paste into $PROFILE, e.g. rssh completions powershell | Out-String | Invoke-Expression</pre>
+rssh completions powershell  # paste into $PROFILE</pre>
 
     <h3>Commands</h3>
     <table class="cmd-table">
