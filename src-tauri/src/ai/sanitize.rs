@@ -243,13 +243,19 @@ fn find_write_redirect(tokens: &[&str]) -> Option<String> {
             continue;
         }
 
-        // 形态: token 是 "N>" 或 "N>>"（fd 数字 + 带空格的写运算符），target 在下一个 token。
-        // `cmd 2> /dev/null` / `cmd 2>> /dev/null` —— split_whitespace 切成 [..., "2>", "/dev/null"]。
-        // is_safe_redirect_token 只识别 `2>/dev/null`（无空格）紧贴形态，不识别带空格的；
-        // 这里补齐 spaced fd-redirect 的 /dev/null 白名单。
+        // 形态: token 是 "N>" / "N>>" / "&>" / "&>>"（fd 前缀 + 带空格的写运算符），
+        // target 在下一个 token。`cmd 2> /dev/null` / `cmd &> /dev/null` 等 ——
+        // split_whitespace 切成 [..., "2>" or "&>", "/dev/null"]。
+        // is_safe_redirect_token 只识别紧贴形态（如 `2>/dev/null` / `&>/dev/null`），
+        // 不识别带空格的；这里补齐 spaced fd-redirect 的 /dev/null 白名单。
         if (t.ends_with(">>") || t.ends_with('>')) && t.len() <= 4 {
             let fd_prefix = t.trim_end_matches('>');
-            if !fd_prefix.is_empty() && fd_prefix.chars().all(|c| c.is_ascii_digit()) {
+            // fd_prefix 合法形态：
+            // - 纯数字 fd（"2", "1", "0"）→ `2> /dev/null`
+            // - `&` → `&> /dev/null` / `&>> /dev/null`（bash 风格 stdout+stderr 重定向）
+            let is_valid_prefix = !fd_prefix.is_empty()
+                && (fd_prefix == "&" || fd_prefix.chars().all(|c| c.is_ascii_digit()));
+            if is_valid_prefix {
                 let target = tokens.get(i + 1).copied().unwrap_or("");
                 if target == "/dev/null" {
                     i += 2;
@@ -1115,6 +1121,25 @@ mod tests {
         ));
         assert!(matches!(
             validate("cmd 1>> append.log"),
+            Err(ShapeError::Write(_))
+        ));
+    }
+
+    #[test]
+    fn shape_spaced_ampersand_redirect_to_devnull_passes() {
+        // bash 风格 `&>` / `&>>`（stdout+stderr 都重定向）带空格形态也必须放行。
+        // is_safe_redirect_token 只覆盖紧贴 `&>/dev/null`；split_whitespace 把
+        // `cmd &> /dev/null` 切成 `["cmd", "&>", "/dev/null"]`，`&>` 单 token 之前落到
+        // 通用 `>` 检查被拒。fd_prefix 校验放宽到接受 `&`，与 `N>` 同样处理。
+        assert!(validate("cmd &> /dev/null").is_ok());
+        assert!(validate("cmd &>> /dev/null").is_ok());
+        // 写到真实文件仍要拒
+        assert!(matches!(
+            validate("cmd &> out.log"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("cmd &>> out.log"),
             Err(ShapeError::Write(_))
         ));
     }
