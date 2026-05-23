@@ -2038,6 +2038,27 @@ __RSSH_JSON__\n{\"call\":\"second\"}\n__RSSH_JSON__\n";
         assert!(quoted.ends_with('\''));
     }
 
+    #[test]
+    fn ansi_c_quote_preserves_leading_spaces() {
+        // 回归保护：patch_file 的 replace 经常是 YAML / config 块，缩进 2/4/6 空格混合。
+        // ansi_c_quote 透传空格 byte，不能压缩 / 折叠，否则 shell 解析回来给 Python argv
+        // 的字符串缩进塌掉，patch 写出来的文件就乱了。
+        //
+        // 历史误诊场景：发现 prometheus.yml 改完缩进塌成 2 空格，第一反应怀疑这里。
+        // 实际是 LLM 在 tool input 里就给了塌的缩进 —— rssh 链路本身无损。本测试钉死
+        // 这个不变量，下次遇到类似怀疑直接看这测试是否还过。
+        let yaml = "  - job_name: \"x\"\n    scrape_interval: 1s\n      - targets: [\"h:80\"]";
+        let q = ansi_c_quote(yaml);
+        // 空格 byte 个数：ansi_c_quote 只改 \n/\r/\t/'/\\，空格透传 —— 出入必须相等
+        let orig = yaml.bytes().filter(|&b| b == b' ').count();
+        let got = q.bytes().filter(|&b| b == b' ').count();
+        assert_eq!(orig, got, "spaces lost: {orig} → {got}, quoted={q}");
+        // 行首空格也得在原位（每行的字面前缀应原样保留，不与 \n 混淆）
+        assert!(q.contains("$'  - job_name:"), "L1 leading 2 spaces dropped: {q}");
+        assert!(q.contains("\\n    scrape_interval"), "L2 leading 4 spaces dropped: {q}");
+        assert!(q.contains("\\n      - targets"), "L3 leading 6 spaces dropped: {q}");
+    }
+
     // ─── build_match_cmd / build_modify_cmd / build_cp_cmd / build_diff_cmd / build_mv_cmd ───
 
     #[test]
