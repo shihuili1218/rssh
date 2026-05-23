@@ -182,11 +182,25 @@ pub const INTERPRETERS_DENIED: &[&str] = &["python", "python3", "python2"];
 
 /// 重定向白名单：只有目标是 /dev/null 的重定向放行（保留 `cmd > /dev/null 2>&1` 这种丢弃输出用法）。
 /// 标准 fd 复制（2>&1 / 1>&2）也是丢弃/复用 fd，不写文件，放行。
+/// 带 fd 前缀的 /dev/null 重定向（`2>/dev/null` / `1>/dev/null` / `2>>/dev/null` 等）也放行 ——
+/// 这是丢 stderr 的常见 idiom。
 fn is_safe_redirect_token(t: &str) -> bool {
-    matches!(
+    if matches!(
         t,
         "2>&1" | "1>&2" | ">/dev/null" | ">>/dev/null" | "&>/dev/null" | "&>>/dev/null"
-    )
+    ) {
+        return true;
+    }
+    // 形如 N>/dev/null / N>>/dev/null，N 是单个数字 fd（实际只见过 0-9）
+    if let Some(first_char) = t.chars().next() {
+        if first_char.is_ascii_digit() {
+            let rest = &t[1..];
+            if rest == ">/dev/null" || rest == ">>/dev/null" {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// 扫描所有 token 找写文件重定向。返回第一个不安全的形态字符串供错误信息引用。
@@ -345,11 +359,14 @@ pub fn validate(cmd: &str) -> Result<(), ShapeError> {
         }
     }
 
-    // 6. touch 时间戳标志：留 touch 本身合法（创建空文件），但拒所有改 mtime 形态
+    // 6. touch 时间戳标志：留 touch 本身合法（创建空文件），但拒所有改 mtime 形态。
+    //    含空格分隔的长选项（`touch --date 2026-01-01 file`）和紧贴 `=` 形态（`--date=...`）都拦。
     if first == "touch" {
         for t in tokens.iter().skip(1) {
-            let bad = matches!(*t, "-a" | "-m" | "-am" | "-ma")
-                || t.starts_with("-d")
+            let bad = matches!(
+                *t,
+                "-a" | "-m" | "-am" | "-ma" | "--date" | "--time" | "--reference"
+            ) || t.starts_with("-d")
                 || t.starts_with("-t")
                 || t.starts_with("-r")
                 || t.starts_with("--date=")
@@ -792,13 +809,26 @@ mod tests {
             validate("touch -r refer file"),
             Err(ShapeError::Write(_))
         ));
-        // long options
+        // long options（带 =）
         assert!(matches!(
             validate("touch --date=2026-01-01 file"),
             Err(ShapeError::Write(_))
         ));
         assert!(matches!(
             validate("touch --reference=ref file"),
+            Err(ShapeError::Write(_))
+        ));
+        // long options（空格分隔，跟在下个 token —— 这是真实使用形态）
+        assert!(matches!(
+            validate("touch --date 2026-01-01 file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("touch --time 2026-01-01 file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("touch --reference ref file"),
             Err(ShapeError::Write(_))
         ));
         // 创建空文件放行
@@ -855,6 +885,23 @@ mod tests {
         assert!(validate("cmd &>/dev/null").is_ok());
         // 1>&2 fd 复制（不写文件）
         assert!(validate("echo err 1>&2").is_ok());
+    }
+
+    #[test]
+    fn shape_devnull_with_fd_prefix_passes() {
+        // N>/dev/null / N>>/dev/null 是常见的丢 stderr 形态，必须放行
+        assert!(validate("cmd 2>/dev/null").is_ok());
+        assert!(validate("cmd 1>/dev/null").is_ok());
+        assert!(validate("cmd 2>>/dev/null").is_ok());
+        assert!(validate("cmd 1>>/dev/null").is_ok());
+        assert!(validate("cmd 0>/dev/null").is_ok());
+        // 组合使用：stdout 丢到 /dev/null，stderr 复制到 stdout
+        assert!(validate("cmd 1>/dev/null 2>&1").is_ok());
+        // 其他 fd 写到真实文件仍要拒
+        assert!(matches!(
+            validate("cmd 2>/tmp/err.log"),
+            Err(ShapeError::Write(_))
+        ));
     }
 
     #[test]

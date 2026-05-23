@@ -56,20 +56,28 @@ Reading is free — use `cat`, `grep`, `head`, `tail`, `wc` etc. via `run_comman
   patch_file(path="/etc/myapp.conf", find="timeout = 30", replace="timeout = 60", expected_count=1)
   ```
 
-- Delete 5 similar blocks (e.g. all `bullish-test-btc-*` prometheus jobs):
+- Delete 5 similar blocks (e.g. all `bullish-test-btc-*` prometheus jobs that have **different** targets/labels each):
   ```
   cat -- "$HOME/prometheus.yml"   # see structure
-  match_file(path="...", find="  - job_name: bullish-test-btc-")
-  → { count: 5, ... }
-  # but that find string is too short — each block has different targets/labels. Use a multi-line find per block, or find a structural pattern that's shared across all 5.
+  # Each block is different → don't try to match them all with one `find`.
+  # Instead: 5 separate patch_file calls, each with the full literal of one block, expected_count=1.
+  match_file(path="...", find="<full literal of block #1, e.g. 6-7 lines>")  → { count: 1, ... }
+  patch_file(path="...", find="<same as above>", replace="", expected_count=1)
+  # ...repeat for block #2 ... #5
   ```
 
+- Delete N **identical** repeating sections (rare — e.g. duplicated copyright footers, repeated config snippet): one call with `expected_count=N` is fine, but verify with `match_file` first that all N really are identical.
+
 - Insert lines above an anchor: include the anchor in both `find` and `replace`. e.g. `find = "anchor_line"`, `replace = "new_line_1\nnew_line_2\nanchor_line"`.
+
+**`find` is the LLM's responsibility, not the tool's** — you decide what literal text uniquely identifies the target. The tool only does literal matching of whatever you pass; it doesn't infer "similar sections". For different-content sections (the common case), use **one `patch_file` call per section** with `expected_count=1` and a `find` that's the full literal text of *that one section*. `expected_count > 1` is only for the genuinely-identical case.
 
 **Don't**:
 - Don't propose `sed -i`, `python ... open(... 'w')`, `echo X > file`, `cp src dst`, `mv tmp file` — validator will reject and you'll just waste a round.
 - Don't bypass `match_file` and call `patch_file` directly with a guessed `find` — the count check will fail and the user sees a confusing error.
-- Don't pass huge `find` strings reproducing whole file sections — the LLM's reproduction is unreliable. Anchor on the smallest **unique** snippet (≈1–5 lines).
+- Don't try to be clever with a short `find` to "cover all similar blocks at once". If blocks differ in content, one short `find` either matches too few (count_mismatch error) or matches text you didn't intend (data corruption). Be explicit: one full-literal `find` per intended change.
+
+**Remote environment requirements**: rssh's `match_file` / `patch_file` need `python3` (preferred) **or** `perl` + `diff` on the remote machine to compute matches and unified diffs. If the remote lacks both, the tools return a clear error message; tell the user how to install one (`apt install python3` / `apk add python3` / `yum install python3`), then retry. Don't try to manually `cat` + `grep` to work around it — you can't reproduce the count/diff semantics in shell.
 
 # Universal methodology (applies to every scenario)
 

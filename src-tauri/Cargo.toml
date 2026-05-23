@@ -56,8 +56,6 @@ getrandom = "0.2"
 zeroize = { version = "1", features = ["derive"] }
 regex = "1"
 futures-util = "0.3"
-# unified diff 生成（patch_file 工具：把改动以 git-style diff 形式呈现给用户和 LLM）
-similar = { version = "2", default-features = false, features = ["text"] }
 
 # CLI（optional，靠 --features cli 启用）
 clap = { version = "4", features = ["derive"], optional = true }
