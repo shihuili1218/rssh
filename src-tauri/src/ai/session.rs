@@ -223,10 +223,17 @@ impl Interpreter {
     }
 }
 
-/// ANSI-C quoting (`$'...'`)：shell 把 `\n` `\t` `\\` `\'` 等转义序列展开为真字符，
+/// ANSI-C quoting (`$'...'`)：shell 把 `\n` `\t` `\\` 等转义序列展开为真字符，
 /// 但**整段字面量在 shell 视角是单行 ASCII** —— 因此长多行脚本能塞进一条单行命令，
 /// 不触发 zsh ZLE 的 multi-line quote race（粘贴长命令进 PTY 时 p10k 会渲染连续
 /// quote> prompt、ZLE buffer 错乱、命令永不执行）。
+///
+/// **单引号编码为 `\x27`，不是 `\'`** —— 实测含多个 `\'` 的长命令在 zsh + p10k
+/// 下偶发卡死（同一命令含 0 个 `\'` 时稳定通过）。怀疑 ZLE 在 `$'...'` 状态机内
+/// 对 `\'` 的转义切换有 race —— `\'` 看起来像"backslash + close-quote"，与正常
+/// close 路径共用部分 transition。`\xHH` 是纯 hex byte 解码，状态机走独立路径，
+/// 没有 close-quote 误识别可能。两者语义等价，但 transition 路径分离 —— 这就是
+/// 这次 hardening 的目的。
 ///
 /// 适用 bash / zsh（远端常见 shell）；POSIX 纯 sh / busybox sh / dash 不支持。
 /// file_ops 已经硬依赖 python3 / perl，那些极简环境一般连解释器都没有，能力探测
@@ -240,7 +247,7 @@ fn ansi_c_quote(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            '\'' => out.push_str("\\'"),
+            '\'' => out.push_str("\\x27"),
             '\\' => out.push_str("\\\\"),
             c => out.push(c),
         }
@@ -1995,9 +2002,17 @@ __RSSH_JSON__\n{\"call\":\"second\"}\n__RSSH_JSON__\n";
     }
 
     #[test]
-    fn ansi_c_quote_single_quote_escapes() {
-        // 单引号转义为 `\'`（ANSI-C 风格，跟 POSIX `'\''` 不一样）
-        assert_eq!(ansi_c_quote("it's"), r"$'it\'s'");
+    fn ansi_c_quote_single_quote_uses_hex_escape() {
+        // 单引号走 `\x27` 而非 `\'`。
+        // 历史教训：含多个 `\'` 的长命令在 zsh + p10k 下偶发卡死（同样命令
+        // 不含 `\'` 时稳定过）。改 hex 后 ZLE 状态机不再有"backslash + 字面
+        // 单引号"和"close-quote"共用 transition 的风险。两者经 shell 解码后
+        // 等价（都是 byte 0x27）。
+        assert_eq!(ansi_c_quote("it's"), r"$'it\x27s'");
+        assert_eq!(ansi_c_quote("'"), r"$'\x27'");
+        // 关键不变量：输出绝不能含 `\'` 序列
+        let q = ansi_c_quote("a'b'c'd");
+        assert!(!q.contains(r"\'"), "must not produce \\' (hardening): {q}");
     }
 
     #[test]
