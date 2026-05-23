@@ -285,6 +285,41 @@ fn bare(t: &str) -> &str {
     t.rsplit('/').next().unwrap_or(t)
 }
 
+/// 从 tokens 里找出"真正的命令头"——跳过透明 wrapper (sudo/env/...) 和它们的 flag / 带参 value。
+/// 用于 per-command 检查（`sed -i` / `chmod -R` / `tail -f` / `touch -d`），这些规则之前用
+/// `tokens[0]` 当命令头，wrapper 一包就全废。
+///
+/// 同上面 wrapper-aware 命令头扫描的逻辑（吞 `-X` flag、`sudo -u user` 的 user、`env KEY=VAL`），
+/// 但只返回第一个真正命令名，不做黑名单判定。
+fn real_command_head<'a>(tokens: &'a [&'a str]) -> &'a str {
+    let mut iter = tokens.iter().peekable();
+    while let Some(&t) = iter.next() {
+        let b = bare(t);
+        if !WRAPPERS.contains(&b) {
+            return b;
+        }
+        let wrapper = b;
+        while let Some(&&next) = iter.peek() {
+            if next.starts_with('-') {
+                iter.next();
+                if (wrapper == "sudo" || wrapper == "doas")
+                    && SUDO_FLAGS_WITH_ARG.contains(&next)
+                {
+                    iter.next();
+                }
+                continue;
+            }
+            if wrapper == "env" && next.contains('=') {
+                iter.next();
+                continue;
+            }
+            break;
+        }
+    }
+    // 全是 wrapper 没有真命令 —— 返回最后看到的 token（兜底，不应发生）
+    bare(tokens.last().copied().unwrap_or(""))
+}
+
 pub fn validate(cmd: &str) -> Result<(), ShapeError> {
     let trimmed = cmd.trim();
     if trimmed.is_empty() {
@@ -302,8 +337,10 @@ pub fn validate(cmd: &str) -> Result<(), ShapeError> {
         return Err(ShapeError::Empty);
     }
 
-    // 命令名提取（去路径前缀、扔掉管道/重定向等元字符 token）
-    let first = bare(tokens[0]);
+    // 命令名提取（跳过 wrapper 找真正命令头）。第一个 pipeline segment 之后的 per-command
+    // 检查（sed -i / chmod -R / tail -f / touch -d 等）全部用 `first`，必须穿透 wrapper —
+    // 否则 `sudo sed -i ...` 这种写法绕过所有 per-command 规则。
+    let first = real_command_head(&tokens);
 
     // 1. 命令头扫描：DESTRUCTIVE / WRITE_VERBS / INTERPRETERS_DENIED
     //    任何 |, ||, &&, ;, & 之后的第一个 token 都是新命令头。
@@ -1003,6 +1040,52 @@ mod tests {
         assert!(matches!(
             validate("sudo python3 -c 'open(\"x\",\"w\")'"),
             Err(ShapeError::Write(_))
+        ));
+    }
+
+    #[test]
+    fn shape_wrapper_bypass_per_command_checks_blocked() {
+        // Regression：之前 `first = tokens[0]` 取 wrapper 名，per-command 规则
+        // （sed -i / chmod -R / tail -f / touch -d / top / awk -i / perl -i）都失效。
+        // 修复后 real_command_head 穿透 wrapper 找真正命令头。
+        assert!(matches!(
+            validate("sudo sed -i 's/a/b/' file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("sudo chmod -R 755 /tmp"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("sudo tail -f /var/log/syslog"),
+            Err(ShapeError::Interactive(_))
+        ));
+        assert!(matches!(
+            validate("sudo touch -d '2025-01-01' file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("sudo perl -pi -e 's/a/b/' file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("sudo awk -i inplace 'BEGIN{}' file"),
+            Err(ShapeError::Write(_))
+        ));
+        // sudo -u user 形态也要穿透
+        assert!(matches!(
+            validate("sudo -u root sed -i 's/a/b/' file"),
+            Err(ShapeError::Write(_))
+        ));
+        // env KEY=VAL 形态也要穿透
+        assert!(matches!(
+            validate("env FOO=bar sed -i 's/a/b/' file"),
+            Err(ShapeError::Write(_))
+        ));
+        // top 无 batch flag 走交互式拦截
+        assert!(matches!(
+            validate("sudo top"),
+            Err(ShapeError::Interactive(_))
         ));
     }
 

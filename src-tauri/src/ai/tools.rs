@@ -107,7 +107,7 @@ pub fn all_tools() -> Vec<ToolSchema> {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Remote file path (absolute, or ~-prefixed — rssh forwards it verbatim to the shell which expands ~).",
+                        "description": "Remote file path. Absolute (`/etc/foo`) or home-relative (`~` / `~/foo`) — rssh expands `~` and `~/` via `$HOME` before sending. `~user/...` (other users' home) is **not** supported.",
                     },
                     "find": {
                         "type": "string",
@@ -142,7 +142,7 @@ pub fn all_tools() -> Vec<ToolSchema> {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Remote file path.",
+                        "description": "Remote file path. Absolute (`/etc/foo`) or home-relative (`~` / `~/foo`) — rssh expands `~` and `~/` via `$HOME` before sending. `~user/...` (other users' home) is **not** supported.",
                     },
                     "find": {
                         "type": "string",

@@ -722,42 +722,32 @@ impl Actor {
             return Ok(());
         }
         let count = parsed.get("count").and_then(|c| c.as_u64());
-
-        // 软上限：远端脚本无 cap，短 find（如 "a"）配大文件可产数千上万 matches，
-        // 撑爆 LLM context。后端截断 matches 数组，保留 count（真实数量）+ 前 N 个 matches +
-        // truncated 标识。LLM 能从 count > matches.len() 推断"还有更多"。
-        const MAX_MATCHES: usize = 50;
-        let mut parsed_out = parsed;
-        let total_matches = parsed_out
+        let matches_shown = parsed
             .get("matches")
             .and_then(|m| m.as_array())
             .map(|a| a.len())
             .unwrap_or(0);
-        let truncated = total_matches > MAX_MATCHES;
-        if truncated {
-            if let Some(arr) = parsed_out
-                .get_mut("matches")
-                .and_then(|m| m.as_array_mut())
-            {
-                arr.truncate(MAX_MATCHES);
-            }
-            parsed_out["truncated"] = json!(true);
-            parsed_out["matches_shown"] = json!(MAX_MATCHES);
-        }
-        let final_payload = serde_json::to_string(&parsed_out).unwrap_or(payload);
+        let remote_truncated = parsed
+            .get("truncated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
+        // matches 截断在**远端脚本**里做（K=50 cap，count 仍记总数，加 truncated: true 字段）——
+        // 见 PYTHON_MATCH_SCRIPT / PERL_MATCH_SCRIPT。这里只把远端结果原样转发，audit 反映是否
+        // 被截断。后端不再二次截断：远端已经 cap 死，再做一遍是死代码。
         self.audit_push(AuditKind::Note {
             message: format!(
-                "match_file: {} interp={} count={} matches_shown={}",
+                "match_file: {} interp={} count={} matches_shown={}{}",
                 input.path,
                 interp.binary(),
                 count.map(|c| c.to_string()).unwrap_or_else(|| "?".into()),
-                if truncated { MAX_MATCHES } else { total_matches }
+                matches_shown,
+                if remote_truncated { " (remote-truncated)" } else { "" }
             ),
         });
         self.history.push(ChatMessage::ToolResult {
             tool_call_id: tc.id,
-            content: final_payload,
+            content: payload,
             is_error: false,
         });
         Ok(())

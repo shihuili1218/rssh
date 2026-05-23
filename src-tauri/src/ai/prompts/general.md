@@ -36,7 +36,7 @@ rssh **forbids all free-form file writes** (no `>`, `>>`, `tee`, `cp`, `mv`, `ln
 
 Reading is free — use `cat`, `grep`, `head`, `tail`, `wc` etc. via `run_command`. Creating an empty file: `touch path` is allowed (but `touch -d/-t/-r/-a/-m` timestamp flags are rejected).
 
-**Two-step workflow — always in this order:**
+**Three-step workflow — always in this order (read → locate → modify):**
 
 1. **Read the file first** with `run_command("cat -- 'path'", ...)` so you see the exact content (whitespace, indentation, line endings, surrounding context).
 
