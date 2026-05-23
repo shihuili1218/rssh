@@ -180,6 +180,20 @@ pub const WRITE_VERBS: &[&str] = &["tee", "cp", "mv", "ln", "install"];
 /// 业务上 LLM 也不需要 python——读文件用 cat/grep/awk(read-only)，改文件用 patch_file。
 pub const INTERPRETERS_DENIED: &[&str] = &["python", "python3", "python2"];
 
+/// 透明 wrapper：自身不是危险命令，但会把真正的命令名推到后面。
+/// `sudo cp ...` 不能因为 `sudo` 不在黑名单就放过 `cp`。validator 识别这些 wrapper
+/// 后继续扫描下一个非 flag token 作为真正命令头。
+///
+/// **故意不含**：
+/// - `exec`：在 DESTRUCTIVE 里（替换 shell 进程），优先按危险命令拦截，不当 wrapper 透明
+/// - `time` / `nice`：罕见 LLM 用法，且 `time` 还是 zsh builtin，语义模糊
+pub const WRAPPERS: &[&str] = &["sudo", "env", "command", "busybox", "doas"];
+
+/// `sudo` / `doas` 的带参 flag：`-u user` / `-g group` 等。validator 跳过 wrapper 时
+/// 必须把 flag 和它的 value 都吞掉，否则 `sudo -u root rm a` 会把 `root` 当真正命令头。
+const SUDO_FLAGS_WITH_ARG: &[&str] =
+    &["-u", "-g", "-U", "-C", "-h", "-T", "-D", "-p", "-r", "-t"];
+
 /// 重定向白名单：只有目标是 /dev/null 的重定向放行（保留 `cmd > /dev/null 2>&1` 这种丢弃输出用法）。
 /// 标准 fd 复制（2>&1 / 1>&2）也是丢弃/复用 fd，不写文件，放行。
 /// 带 fd 前缀的 /dev/null 重定向（`2>/dev/null` / `1>/dev/null` / `2>>/dev/null` 等）也放行 ——
@@ -227,6 +241,22 @@ fn find_write_redirect(tokens: &[&str]) -> Option<String> {
             }
             i += 2;
             continue;
+        }
+
+        // 形态: token 是 "N>" 或 "N>>"（fd 数字 + 带空格的写运算符），target 在下一个 token。
+        // `cmd 2> /dev/null` / `cmd 2>> /dev/null` —— split_whitespace 切成 [..., "2>", "/dev/null"]。
+        // is_safe_redirect_token 只识别 `2>/dev/null`（无空格）紧贴形态，不识别带空格的；
+        // 这里补齐 spaced fd-redirect 的 /dev/null 白名单。
+        if (t.ends_with(">>") || t.ends_with('>')) && t.len() <= 4 {
+            let fd_prefix = t.trim_end_matches('>');
+            if !fd_prefix.is_empty() && fd_prefix.chars().all(|c| c.is_ascii_digit()) {
+                let target = tokens.get(i + 1).copied().unwrap_or("");
+                if target == "/dev/null" {
+                    i += 2;
+                    continue;
+                }
+                return Some(format!("{t} {target}"));
+            }
         }
 
         // 形态: token 包含 `>` 但不是独立的 redirect token —— 命令与重定向粘在一起的紧凑写法。
@@ -277,14 +307,49 @@ pub fn validate(cmd: &str) -> Result<(), ShapeError> {
 
     // 1. 命令头扫描：DESTRUCTIVE / WRITE_VERBS / INTERPRETERS_DENIED
     //    任何 |, ||, &&, ;, & 之后的第一个 token 都是新命令头。
+    //
+    // **透明 wrapper 跳过**：`sudo cp a b` / `env rm -rf /` / `command rm` / `busybox ls` 这种
+    //    wrapper 把真正的命令名推后一位。原先只看第一个 token → wrapper 名（如 "sudo"）不在
+    //    黑名单 → 检查被绕过，写文件 / destructive 命令直接放行。这是安全 bug。
+    //    修复：识别透明 wrapper 后保持 `at_command_head = true`，**继续**扫描下一个非 flag token
+    //    作为真正命令头。`sudo -u user cp ...` 也覆盖（跳过 sudo + 跳过 `-u user`，命中 cp）。
     let mut at_command_head = true;
-    for t in &tokens {
-        if matches!(*t, "|" | "||" | "&&" | ";" | "&") {
+    let mut iter = tokens.iter().peekable();
+    while let Some(&t) = iter.next() {
+        if matches!(t, "|" | "||" | "&&" | ";" | "&") {
             at_command_head = true;
             continue;
         }
         if at_command_head {
             let b = bare(t);
+            // wrapper 透明跳过：自身放行，下个非 flag token 继续按命令头扫描。
+            // - sudo / doas：吞 `-X` 类 flag；遇到 SUDO_FLAGS_WITH_ARG 还要再吞一个 value token
+            // - env：吞 KEY=VAL 形态的 env 赋值 + `-X` flag
+            // - command / busybox：吞 `-X` flag（罕见）
+            if WRAPPERS.contains(&b) {
+                let wrapper = b;
+                while let Some(&&next) = iter.peek() {
+                    if next.starts_with('-') {
+                        // 吞这个 flag
+                        iter.next();
+                        // sudo/doas 的带参 flag 还要再吞 value
+                        if (wrapper == "sudo" || wrapper == "doas")
+                            && SUDO_FLAGS_WITH_ARG.contains(&next)
+                        {
+                            iter.next();
+                        }
+                        continue;
+                    }
+                    if wrapper == "env" && next.contains('=') {
+                        // env KEY=VAL ...
+                        iter.next();
+                        continue;
+                    }
+                    break;
+                }
+                // at_command_head 保持 true，循环下一轮继续按命令头扫描真正命令名
+                continue;
+            }
             if DESTRUCTIVE.contains(&b) {
                 return Err(ShapeError::Destructive(b.to_string()));
             }
@@ -912,6 +977,61 @@ mod tests {
         // 其他 fd 写到真实文件仍要拒
         assert!(matches!(
             validate("cmd 2>/tmp/err.log"),
+            Err(ShapeError::Write(_))
+        ));
+    }
+
+    #[test]
+    fn shape_wrapper_bypass_blocked() {
+        // 透明 wrapper 不能让真正命令名逃过审查。
+        // Regression: 之前 validate 只看 pipeline 头 token，wrapper "sudo" / "env" 不在黑名单
+        // → 后面的 rm/cp 等被放行，安全漏洞。
+        assert!(matches!(validate("sudo rm /tmp/x"), Err(ShapeError::Destructive(_))));
+        assert!(matches!(validate("sudo cp a b"), Err(ShapeError::Write(_))));
+        assert!(matches!(validate("env rm -rf /tmp/x"), Err(ShapeError::Destructive(_))));
+        assert!(matches!(validate("command rm a"), Err(ShapeError::Destructive(_))));
+        assert!(matches!(validate("busybox rm a"), Err(ShapeError::Destructive(_))));
+        assert!(matches!(validate("exec rm a"), Err(ShapeError::Destructive(_))));
+        assert!(matches!(validate("doas rm a"), Err(ShapeError::Destructive(_))));
+        // sudo -u user 形态：-u 是 sudo 的 flag，跟着的 user 名也算前缀；后面 rm 仍要拦
+        assert!(matches!(validate("sudo -u root rm a"), Err(ShapeError::Destructive(_))));
+        // sudo -E 单 flag 形态
+        assert!(matches!(validate("sudo -E cp a b"), Err(ShapeError::Write(_))));
+        // env VAR=val 形态：env 后是 KEY=VAL，后面 cp 仍要拦
+        assert!(matches!(validate("env FOO=bar cp a b"), Err(ShapeError::Write(_))));
+        // python wrapper 也覆盖
+        assert!(matches!(
+            validate("sudo python3 -c 'open(\"x\",\"w\")'"),
+            Err(ShapeError::Write(_))
+        ));
+    }
+
+    #[test]
+    fn shape_wrapper_with_safe_cmd_passes() {
+        // wrapper 后跟安全命令仍要放行
+        assert!(validate("sudo ls -la").is_ok());
+        assert!(validate("sudo -u root cat /etc/hosts").is_ok());
+        assert!(validate("env FOO=bar grep pattern file").is_ok());
+        assert!(validate("command ps -ef").is_ok());
+    }
+
+    #[test]
+    fn shape_spaced_fd_redirect_to_devnull_passes() {
+        // 带空格的 fd 重定向：`N> /dev/null` / `N>> /dev/null` 是常见 idiom，必须放行。
+        // Regression: split_whitespace 切成 `["N>", "/dev/null"]`，`N>` 单 token 之前落到通用
+        // `>` 检查里被一律拒。
+        assert!(validate("cmd 2> /dev/null").is_ok());
+        assert!(validate("cmd 1> /dev/null").is_ok());
+        assert!(validate("cmd 2>> /dev/null").is_ok());
+        assert!(validate("cmd 0> /dev/null").is_ok());
+        assert!(validate("cmd 1> /dev/null 2>&1").is_ok());
+        // 写到真实文件仍要拒
+        assert!(matches!(
+            validate("cmd 2> err.log"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("cmd 1>> append.log"),
             Err(ShapeError::Write(_))
         ));
     }

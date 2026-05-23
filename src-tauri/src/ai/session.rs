@@ -426,7 +426,7 @@ impl Actor {
                     self.emit(
                         "error",
                         json!({
-                            "message": "工具执行中无法发送新消息。请等待结果，或先批准/拒绝当前待处理命令。",
+                            "message": "Cannot send a new message while a tool is running. Wait for the result, or approve/reject the pending command.",
                         }),
                     );
                     continue;
@@ -837,7 +837,7 @@ impl Actor {
                     self.emit(
                         "error",
                         json!({
-                            "message": "命令审批中无法发送新消息。请先批准或拒绝当前命令。",
+                            "message": "Cannot send a new message while a command is pending approval. Approve or reject the command first.",
                         }),
                     );
                     continue;

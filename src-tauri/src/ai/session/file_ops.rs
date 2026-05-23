@@ -128,6 +128,11 @@ fn extract_json_payload(pty_output: &str) -> Option<&str> {
 /// 不走 base64：find 直接作为 argv 字符串透传。shell 端 `ansi_c_quote(find)` 保证
 /// 引号 / 空格 / 换行等都安全（`$'...'` 把真换行编为 `\n` 字面 escape，命令仍单行）。
 /// Python 拿到的 sys.argv[2] 就是原始 UTF-8 字符串。
+///
+/// **远端 cap = 50 matches**：count 仍记真实总命中数，但 matches 数组只装前 50 个 +
+/// `truncated` 标识。理由：后端只在解析后才截断，但前端 PTY 流要在 sentinel 出现前
+/// 把全部 output buffer 住 —— 短 find（如 "a"）配大文件 (`/var/log/*`) 可产 MB 级 JSON，
+/// 在 backend 拿到 payload 前先把前端 UI OOM。在远端就 cap 才彻底安全。
 const PYTHON_MATCH_SCRIPT: &str = r#"import sys,json
 M="__RSSH_JSON__"
 def o(x):sys.stdout.write(M+"\n"+json.dumps(x,ensure_ascii=False)+"\n"+M+"\n")
@@ -135,13 +140,17 @@ p=sys.argv[1];f=sys.argv[2];b=int(sys.argv[3]);a=int(sys.argv[4])
 try:t=open(p,"rb").read().decode("utf-8")
 except FileNotFoundError:o({"error":"file_not_found"});sys.exit(0)
 except Exception as e:o({"error":"io_error","message":str(e)});sys.exit(0)
-m=[];i=0;n=len(f);L=len(t)
+m=[];c=0;i=0;n=len(f);L=len(t);K=50
 while True:
  j=t.find(f,i)
  if j<0:break
- m.append({"line":t.count("\n",0,j)+1,"context":t[max(0,j-b):min(L,j+n+a)]})
+ c+=1
+ if len(m)<K:
+  m.append({"line":t.count("\n",0,j)+1,"context":t[max(0,j-b):min(L,j+n+a)]})
  i=j+n
-o({"count":len(m),"matches":m})
+r={"count":c,"matches":m}
+if c>K:r["truncated"]=True;r["matches_shown"]=K
+o(r)
 "#;
 
 /// patch_file Stage 2 的 python3 脚本（in-place 改 tmp）。位置参数：tmp_path find replace expected
@@ -165,19 +174,26 @@ o({"count":c})
 
 /// match_file 的 perl 脚本（降级路径）。位置参数：path find before after
 /// `\Q...\E` 把 find 当字面量匹配，跳过 regex 元字符。utf8::decode 让长度按字符算。
+/// 同 PYTHON_MATCH_SCRIPT：远端 cap = 50 matches，count 仍记真实总数。
 const PERL_MATCH_SCRIPT: &str = r#"use strict;use warnings;use JSON::PP;
 my $M="__RSSH_JSON__";
 sub o{print $M,"\n",encode_json($_[0]),"\n",$M,"\n"}
 my($p,$f,$b,$a)=@ARGV;utf8::decode($f);
 open(my $h,'<:raw',$p)or do{o({error=>"file_not_found"});exit 0};
 local $/;my $t=<$h>;close $h;utf8::decode($t);
-my @m;my $i=0;my $n=length($f);my $L=length($t);
+my @m;my $c=0;my $i=0;my $n=length($f);my $L=length($t);my $K=50;
 while((my $j=index($t,$f,$i))>=0){
- my $line=1+(()=substr($t,0,$j)=~/\n/g);
- my $pre=$j-$b;$pre=0 if $pre<0;my $post=$j+$n+$a;$post=$L if $post>$L;
- push @m,{line=>$line,context=>substr($t,$pre,$post-$pre)};$i=$j+$n;
+ $c++;
+ if(scalar(@m)<$K){
+  my $line=1+(()=substr($t,0,$j)=~/\n/g);
+  my $pre=$j-$b;$pre=0 if $pre<0;my $post=$j+$n+$a;$post=$L if $post>$L;
+  push @m,{line=>$line,context=>substr($t,$pre,$post-$pre)};
+ }
+ $i=$j+$n;
 }
-o({count=>scalar(@m),matches=>\@m});
+my %r=(count=>$c,matches=>\@m);
+if($c>$K){$r{truncated}=JSON::PP::true;$r{matches_shown}=$K}
+o(\%r);
 "#;
 
 /// patch_file Stage 2 的 perl 脚本（降级路径）。位置参数：tmp_path find replace expected
@@ -265,10 +281,13 @@ fn select_interpreter(caps: RemoteCapabilities) -> Option<Interpreter> {
 ///
 /// **单引号编码为 `\x27`，不是 `\'`** —— 实测含多个 `\'` 的长命令在 zsh + p10k
 /// 下偶发卡死（同一命令含 0 个 `\'` 时稳定通过）。怀疑 ZLE 在 `$'...'` 状态机内
-/// 对 `\'` 的转义切换有 race —— `\'` 看起来像"backslash + close-quote"，与正常
-/// close 路径共用部分 transition。`\xHH` 是纯 hex byte 解码，状态机走独立路径，
-/// 没有 close-quote 误识别可能。两者语义等价，但 transition 路径分离 —— 这就是
-/// 这次 hardening 的目的。
+/// 对 `\'` 的转义切换有 race。两者语义等价，但 transition 路径分离 —— hardening。
+///
+/// **其他 C0 控制字符（0x00-0x1F 中除 `\n`/`\r`/`\t` 外的）和 DEL (0x7F) 也 hex 化** ——
+/// 安全：LLM 可控的 `find` / `replace` 含 ESC (`\x1b`) / BEL (`\x07`) / CSI 序列等会通过
+/// PTY echo 触发 terminal escape injection（隐藏文本、伪造 prompt、改终端 title 等）。
+/// 让 on-wire 命令保持 printable ASCII，回程的 PTY echo 也就不会被解释为 escape sequence。
+/// 程序拿到的 argv 仍是原字节（shell 把 `\xHH` 解码回原 byte）。
 ///
 /// 适用 bash / zsh（远端常见 shell）；POSIX 纯 sh / busybox sh / dash 不支持。
 /// file_ops 已经硬依赖 python3 / perl，那些极简环境一般连解释器都没有，能力探测
@@ -284,6 +303,10 @@ fn ansi_c_quote(s: &str) -> String {
             '\t' => out.push_str("\\t"),
             '\'' => out.push_str("\\x27"),
             '\\' => out.push_str("\\\\"),
+            // 其他 C0 controls (0x00-0x1F 中未在上面特处理的) + DEL (0x7F) → \xHH
+            c if (c as u32) < 0x20 || (c as u32) == 0x7F => {
+                out.push_str(&format!("\\x{:02x}", c as u32));
+            }
             c => out.push(c),
         }
     }
@@ -300,6 +323,31 @@ fn ansi_c_quote(s: &str) -> String {
 /// （$ ` * ? & | ; < > 等单引号内都按字面）。
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// 校验 path 不含会破坏单行命令的字符。
+///
+/// 必须拒：
+/// - `\n` / `\r`：shell_quote 用 POSIX 单引号包，单引号内换行**字面保留**，命令字节流就有
+///   真 `\n` byte，重新触发 zsh ZLE multi-line quote race —— 这正是本 PR 拿 ansi_c_quote 把
+///   脚本/find/replace 全单行化要规避的问题。path 走的是 shell_quote 不经 ansi_c_quote，必须
+///   在入口直接拒。
+/// - 其他 C0 控制字符 (0x00-0x1F) 和 DEL (0x7F)：terminal escape injection 防御（同 ansi_c_quote
+///   注释里 ESC/BEL 的理由）。Unix 文件名理论上允许这些字符，但 rssh 用户场景里它们没合理用法。
+fn validate_path(path: &str) -> Result<(), &'static str> {
+    if path.is_empty() {
+        return Err("empty path");
+    }
+    for c in path.chars() {
+        let code = c as u32;
+        if c == '\n' || c == '\r' {
+            return Err("path contains newline (\\n or \\r) — would break the single-line command");
+        }
+        if code < 0x20 || code == 0x7F {
+            return Err("path contains control character");
+        }
+    }
+    Ok(())
 }
 
 /// 远端文件路径准备：处理 `~` / `~/...` 前缀展开，其余走 shell_quote。
@@ -574,6 +622,10 @@ impl Actor {
                 return Ok(());
             }
         };
+        if let Err(e) = validate_path(&input.path) {
+            self.push_tool_error(&tc.id, &format!("match_file: invalid path — {e}"));
+            return Ok(());
+        }
         if input.find.is_empty() {
             self.push_tool_error(
                 &tc.id,
@@ -719,6 +771,10 @@ impl Actor {
                 return Ok(());
             }
         };
+        if let Err(e) = validate_path(&input.path) {
+            self.push_tool_error(&tc.id, &format!("patch_file: invalid path — {e}"));
+            return Ok(());
+        }
         if input.find.is_empty() {
             self.push_tool_error(
                 &tc.id,
@@ -1078,6 +1134,41 @@ mod tests {
         assert!(twice.contains("\\'"));
     }
 
+    // ─── validate_path ──────────────────────────────────────────────
+
+    #[test]
+    fn validate_path_rejects_newline_and_cr() {
+        // 防御 ZLE race：path 含真 \n / \r 会让 shell_quote 输出含真换行 byte，破坏单行命令前提。
+        assert!(validate_path("foo\nbar").is_err());
+        assert!(validate_path("foo\rbar").is_err());
+        assert!(validate_path("a\r\nb").is_err());
+    }
+
+    #[test]
+    fn validate_path_rejects_other_c0_and_del() {
+        // terminal injection 防御：path 含 ESC/BEL 等 C0 / DEL 也拒
+        assert!(validate_path("foo\x1bbar").is_err());
+        assert!(validate_path("foo\x07bar").is_err());
+        assert!(validate_path("foo\x00bar").is_err());
+        assert!(validate_path("foo\x7fbar").is_err());
+    }
+
+    #[test]
+    fn validate_path_rejects_empty() {
+        assert!(validate_path("").is_err());
+    }
+
+    #[test]
+    fn validate_path_passes_normal_paths() {
+        // 常规路径：绝对路径、~ 路径、含空格、中文、glob 字符（shell_quote 处理），都允许
+        assert!(validate_path("/etc/hosts").is_ok());
+        assert!(validate_path("~/foo.yml").is_ok());
+        assert!(validate_path("/tmp/has space/file").is_ok());
+        assert!(validate_path("文件名.txt").is_ok());
+        assert!(validate_path("a'b").is_ok());
+        assert!(validate_path("*.log").is_ok());
+    }
+
     // ─── prepare_remote_path（~ 路径展开） ──────────────────────────
 
     #[test]
@@ -1327,6 +1418,23 @@ __RSSH_JSON__\n{\"call\":\"second\"}\n__RSSH_JSON__\n";
     fn ansi_c_quote_tab_and_cr() {
         assert_eq!(ansi_c_quote("a\tb"), "$'a\\tb'");
         assert_eq!(ansi_c_quote("a\rb"), "$'a\\rb'");
+    }
+
+    #[test]
+    fn ansi_c_quote_hex_escapes_c0_controls() {
+        // 安全 hardening：ESC (0x1B) / BEL (0x07) / 其他 C0 控制字符 + DEL 必须 hex 化，
+        // 防止 LLM 提供含 ESC sequence 的 find/replace 通过 PTY echo 触发 terminal injection。
+        assert_eq!(ansi_c_quote("\x1b[31mRED"), "$'\\x1b[31mRED'");
+        assert_eq!(ansi_c_quote("\x07bell"), "$'\\x07bell'");
+        assert_eq!(ansi_c_quote("\x00NUL"), "$'\\x00NUL'");
+        assert_eq!(ansi_c_quote("\x7fDEL"), "$'\\x7fDEL'");
+        // 已经特殊处理的 \n / \r / \t 不被这条规则覆盖（保持原有 \n / \r / \t）
+        assert_eq!(ansi_c_quote("a\nb"), "$'a\\nb'");
+        // 综合：CSI 序列里夹换行
+        assert_eq!(
+            ansi_c_quote("\x1b]0;evil title\x07\nok"),
+            "$'\\x1b]0;evil title\\x07\\nok'"
+        );
     }
 
     #[test]
