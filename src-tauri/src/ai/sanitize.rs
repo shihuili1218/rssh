@@ -176,9 +176,26 @@ pub const COUNTED_LOOP: &[&str] = &["vmstat", "iostat", "pidstat", "mpstat", "sa
 /// 写文件动词。这些命令的存在本身就在改文件系统状态，统一拒绝，LLM 改文件走 patch_file。
 pub const WRITE_VERBS: &[&str] = &["tee", "cp", "mv", "ln", "install"];
 
-/// 全拒的脚本解释器：python 等可以通过 `open(..., 'w')` 写文件绕过 validator。
-/// 业务上 LLM 也不需要 python——读文件用 cat/grep/awk(read-only)，改文件用 patch_file。
-pub const INTERPRETERS_DENIED: &[&str] = &["python", "python3", "python2"];
+/// 全拒的脚本解释器：任意一个都可以通过 `open()` 类 API 写文件，绕过 patch_file 守护。
+/// 业务上 LLM 也不需要它们——读文件用 cat/grep/awk(read-only)，改文件用 patch_file。
+///
+/// 名单原则：通用脚本语言，能 in-process 读写文件 / 起子进程。**故意不含 bash / sh / zsh**
+/// —— LLM 用 shell 编排管道是合法用例，再走 sanitize 拦写动词即可。
+///
+/// rssh 自己的 file_ops 走 `run_file_op` 不经 sanitize::validate（详见 file_ops.rs 注释），
+/// 所以这里禁 perl 不影响 file_ops 的 perl 降级路径。
+pub const INTERPRETERS_DENIED: &[&str] = &[
+    "python",
+    "python3",
+    "python2",
+    "perl",
+    "ruby",
+    "node",
+    "nodejs",
+    "lua",
+    "luajit",
+    "php",
+];
 
 /// 透明 wrapper：自身不是危险命令，但会把真正的命令名推到后面。
 /// `sudo cp ...` 不能因为 `sudo` 不在黑名单就放过 `cp`。validator 识别这些 wrapper
@@ -834,6 +851,7 @@ mod tests {
 
     #[test]
     fn shape_interpreters_blocked() {
+        // python 全系列
         assert!(matches!(
             validate("python -c 'open(\"x\",\"w\")'"),
             Err(ShapeError::Write(_))
@@ -853,6 +871,37 @@ mod tests {
         // 管道后位也要拒
         assert!(matches!(
             validate("echo x | python3 -"),
+            Err(ShapeError::Write(_))
+        ));
+        // perl —— 可以 `open(..., ">file")` 直接绕过 patch_file 守护，必须拦
+        assert!(matches!(
+            validate("perl -e 'open(F, \">x\"); print F \"y\"'"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("/usr/bin/perl script.pl"),
+            Err(ShapeError::Write(_))
+        ));
+        // ruby / node / nodejs / lua / luajit / php —— 同类脚本解释器
+        assert!(matches!(
+            validate("ruby -e 'File.write(\"x\",\"y\")'"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(validate("node app.js"), Err(ShapeError::Write(_))));
+        assert!(matches!(
+            validate("nodejs app.js"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(validate("lua s.lua"), Err(ShapeError::Write(_))));
+        assert!(matches!(validate("luajit s.lua"), Err(ShapeError::Write(_))));
+        assert!(matches!(validate("php -r 'echo 1;'"), Err(ShapeError::Write(_))));
+        // wrapper 套也要穿透（sudo / env 等）
+        assert!(matches!(
+            validate("sudo perl -e 'open(F,\">x\")'"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("env FOO=bar ruby -e ''"),
             Err(ShapeError::Write(_))
         ));
     }
@@ -896,9 +945,17 @@ mod tests {
             validate("perl -i.bak -pe 's/a/b/' file"),
             Err(ShapeError::Write(_))
         ));
-        // perl -ne / -e 是 read-only
-        assert!(validate("perl -ne 'print if /foo/' file").is_ok());
-        assert!(validate("perl -e 'print 1'").is_ok());
+        // perl 全系列被 INTERPRETERS_DENIED 拦截（即便 read-only 用法），与 python 同 policy。
+        // 原因：`perl -e 'open(F,">x")'` 等可绕过 patch_file 写文件守护；read-only 用法应当
+        // 走 cat/grep 而不是 perl。
+        assert!(matches!(
+            validate("perl -ne 'print if /foo/' file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("perl -e 'print 1'"),
+            Err(ShapeError::Write(_))
+        ));
     }
 
     #[test]
