@@ -61,6 +61,12 @@ export interface CommandProposed {
    *   "接受任意文件改动"，必须每张卡片亲手 approve。
    */
   kind?: "patch_file";
+  /**
+   * patch_file 第 4 张 mv 卡片携带的 diff 文本（来自第 3 张 diff 命令的输出）——
+   * 让用户审批 mv 时直接在卡片上看到 diff，不用回滚翻第 3 张的 result 区域。
+   * 其他卡片不带（undefined）。
+   */
+  diff?: string;
 }
 
 export interface CommandResult {

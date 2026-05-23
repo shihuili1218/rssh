@@ -97,6 +97,11 @@
         <div><span class="label">{t("ai.cmd.label.timeout")}</span><span>{cmd.timeout_s}s</span></div>
     </div>
 
+    {#if isPatch && cmd.diff}
+        <pre class="diff">{#each cmd.diff.split("\n") as line, i (i)}<span class="diff-line {line.startsWith('+') && !line.startsWith('+++') ? 'add' : line.startsWith('-') && !line.startsWith('---') ? 'del' : line.startsWith('@@') ? 'hunk' : line.startsWith('+++') || line.startsWith('---') ? 'file' : 'ctx'}">{line}
+</span>{/each}</pre>
+    {/if}
+
     {#if isPending}
         {#if !askingReason}
             <div class="actions">
@@ -164,6 +169,24 @@
         background: var(--accent);
         color: var(--white);
     }
+    .diff {
+        margin-top: 6px;
+        padding: 6px 8px;
+        background: color-mix(in srgb, var(--text) 5%, var(--bg));
+        border-radius: 4px;
+        font-family: monospace;
+        font-size: 11.5px;
+        max-height: 360px;
+        overflow: auto;
+        white-space: pre;
+        line-height: 1.35;
+    }
+    .diff-line { display: block; }
+    .diff-line.add { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
+    .diff-line.del { background: color-mix(in srgb, var(--error) 18%, transparent); color: var(--error); }
+    .diff-line.hunk { color: var(--text-dim); font-weight: 600; }
+    .diff-line.file { color: var(--text-dim); }
+    .diff-line.ctx { color: var(--text); }
 
     .head { display: flex; gap: 8px; align-items: baseline; }
     .tag {

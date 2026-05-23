@@ -454,6 +454,9 @@ impl Actor {
     /// 写文件比 read-only 命令风险高，"接受命令风险"不等于"接受任意文件改动" —— 强制
     /// 用户每张卡片亲手点 approve 是 patch_file 的契约。match_file（read-only）不打 kind，
     /// danger_mode 可以无声跑过。
+    ///
+    /// `diff` 透传给前端：patch_file 第 4 张 mv 卡片把第 3 张 diff 命令的输出当作审批
+    /// 材料展示在卡片上 —— 用户审批 mv 时不用回滚翻第 3 张结果区域。其他卡片传 None。
     async fn run_file_op(
         &mut self,
         tool_call_id: &str,
@@ -462,6 +465,7 @@ impl Actor {
         side_effect: String,
         timeout_s: u32,
         kind: Option<&str>,
+        diff: Option<&str>,
     ) -> AppResult<CommandOutcome> {
         let cmd_id = uuid::Uuid::new_v4().to_string();
         let sentinel = format!("__rssh_done_{}", uuid::Uuid::new_v4().simple());
@@ -487,6 +491,9 @@ impl Actor {
         });
         if let Some(k) = kind {
             payload["kind"] = json!(k);
+        }
+        if let Some(d) = diff {
+            payload["diff"] = json!(d);
         }
         self.emit("command_proposed", payload);
 
@@ -585,6 +592,7 @@ impl Actor {
                 format!("match_file: search `{}` (read-only)", input.path),
                 "read-only".into(),
                 60,
+                None,
                 None,
             )
             .await?;
@@ -696,6 +704,7 @@ impl Actor {
                 format!("Create {}", tmp_path),
                 30,
                 Some("patch_file"),
+                None,
             )
             .await?;
         match outcome {
@@ -733,6 +742,7 @@ impl Actor {
                 format!("Modify {} in place", tmp_path),
                 60,
                 Some("patch_file"),
+                None,
             )
             .await?;
         let (modify_exit, modify_output) = match outcome {
@@ -814,6 +824,7 @@ impl Actor {
                 "read-only (display diff for review)".into(),
                 30,
                 Some("patch_file"),
+                None,
             )
             .await?;
         let diff = match outcome {
@@ -852,6 +863,7 @@ impl Actor {
                 format!("Atomic rename {} -> {}", tmp_path, input.path),
                 30,
                 Some("patch_file"),
+                Some(&diff),
             )
             .await?;
         match outcome {
