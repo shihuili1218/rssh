@@ -27,20 +27,20 @@ use super::tools::{
     self, AnalyzeLocallyInput, DownloadFileInput, LoadSkillInput, MatchFileInput, PatchFileInput,
     RunCommandInput, MATCH_CONTEXT_DEFAULT, MATCH_CONTEXT_MAX,
 };
-use base64::engine::general_purpose::STANDARD as B64;
-use base64::Engine;
+
 /// 远端 file_ops 工具能力。lazy 探测一次后缓存到 session 生命周期。
 ///
 /// 设计原则：rssh 后端不再 cat 整文件回 PTY（避免 ANSI/scrollback/buffer 丢内容），
-/// 改为让远端预制脚本读文件 + 算 count/diff/context + 写 tmp，只回小 JSON。
-/// 因此 file_ops 整体硬依赖 python3 或 perl。
+/// 改为让远端预制脚本读文件 + 算 count/context + 写 tmp，只回小 JSON。
+/// patch_file 的 unified diff 走独立的 `diff -u` 命令算。
+/// 因此 file_ops 整体硬依赖 python3 或 (perl + diff)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RemoteCapabilities {
-    /// `python3`（首选）—— difflib 内置算 diff
+    /// `python3`（首选）
     python3: bool,
     /// `perl`（降级）—— `\Q...\E` 字面匹配
     perl: bool,
-    /// `diff -u`（perl 路径必备）—— perl 调外部 diff 命令算 unified diff
+    /// `diff -u`（perl 路径必备，python3 路径也用它出审批 diff）
     diff: bool,
 }
 
@@ -62,121 +62,75 @@ const PROBE_CMD: &str = r#"echo "py3=$(command -v python3 >/dev/null 2>&1 && ech
 /// ANSI 序列 / 命令回显的干扰。
 const JSON_MARKER: &str = "__RSSH_JSON__";
 
-/// match_file 的 python3 脚本。参数：path b64_find before_chars after_chars
-const PYTHON_MATCH_SCRIPT: &str = r#"
-import sys, base64, json
-M = "__RSSH_JSON__"
-def out(obj):
-    sys.stdout.write(M + "\n" + json.dumps(obj, ensure_ascii=False) + "\n" + M + "\n")
-try:
-    p, bf, b, a = sys.argv[1:5]
-    find = base64.b64decode(bf).decode("utf-8")
-    before = int(b); after = int(a)
-    with open(p, "rb") as fh: text = fh.read().decode("utf-8")
-except FileNotFoundError:
-    out({"error": "file_not_found"}); sys.exit(0)
-except Exception as e:
-    out({"error": "io_error", "message": str(e)}); sys.exit(0)
-matches = []
-pos = 0; flen = len(find)
-while True:
-    idx = text.find(find, pos)
-    if idx < 0: break
-    end = idx + flen
-    line = text.count("\n", 0, idx) + 1
-    pre = max(0, idx - before)
-    post = min(len(text), end + after)
-    matches.append({"line": line, "context": text[pre:post]})
-    pos = end
-out({"count": len(matches), "matches": matches})
-"#;
-
-/// patch_file Stage 1 的 python3 脚本。参数：path b64_find b64_replace expected_count tmp_path
-/// 行为：读 → 校验 count → 算 new + 写 tmp（不 mv） → 读回 tmp 算 difflib unified diff → JSON
+/// match_file 的 python3 脚本。位置参数：path find before after
 ///
-/// diff 基于"磁盘真相"：写 tmp 后再读回来跟 path 对比，保证 diff = 用户审批后 mv
-/// 实际产生的内容变化。与 perl 路径 `diff -u path tmp` 语义对齐，不依赖
-/// "UTF-8 encode/decode round-trip lossless"这种隐式假设。
-const PYTHON_PATCH_STAGE1_SCRIPT: &str = r#"
-import sys, base64, json, difflib
-M = "__RSSH_JSON__"
-def out(obj):
-    sys.stdout.write(M + "\n" + json.dumps(obj, ensure_ascii=False) + "\n" + M + "\n")
-try:
-    p, bf, br, e, tmp = sys.argv[1:6]
-    find = base64.b64decode(bf).decode("utf-8")
-    rep = base64.b64decode(br).decode("utf-8")
-    expected = int(e)
-    with open(p, "rb") as fh: text = fh.read().decode("utf-8")
-except FileNotFoundError:
-    out({"error": "file_not_found"}); sys.exit(0)
-except Exception as ex:
-    out({"error": "io_error", "message": str(ex)}); sys.exit(0)
-count = text.count(find)
-if count != expected:
-    out({"error": "count_mismatch", "actual": count, "expected": expected}); sys.exit(0)
-new = text.replace(find, rep)
-try:
-    with open(tmp, "wb") as fh: fh.write(new.encode("utf-8"))
-except Exception as ex:
-    out({"error": "tmp_write_failed", "message": str(ex)}); sys.exit(0)
-try:
-    with open(tmp, "rb") as fh: tmp_text = fh.read().decode("utf-8")
-except Exception as ex:
-    out({"error": "tmp_read_failed", "message": str(ex)}); sys.exit(0)
-diff = "".join(difflib.unified_diff(
-    text.splitlines(keepends=True),
-    tmp_text.splitlines(keepends=True),
-    fromfile="a/" + p, tofile="b/" + p,
-))
-out({"count": count, "diff": diff})
+/// 不走 base64：find 直接作为 argv 字符串透传。shell 端 `shell_quote(find)` 保证
+/// 引号 / 空格 / 换行等都安全（POSIX 单引号字面）。Python 拿到的 sys.argv[2] 就是
+/// 原始 UTF-8 字符串。
+const PYTHON_MATCH_SCRIPT: &str = r#"import sys,json
+M="__RSSH_JSON__"
+def o(x):sys.stdout.write(M+"\n"+json.dumps(x,ensure_ascii=False)+"\n"+M+"\n")
+p=sys.argv[1];f=sys.argv[2];b=int(sys.argv[3]);a=int(sys.argv[4])
+try:t=open(p,"rb").read().decode("utf-8")
+except FileNotFoundError:o({"error":"file_not_found"});sys.exit(0)
+except Exception as e:o({"error":"io_error","message":str(e)});sys.exit(0)
+m=[];i=0;n=len(f);L=len(t)
+while True:
+ j=t.find(f,i)
+ if j<0:break
+ m.append({"line":t.count("\n",0,j)+1,"context":t[max(0,j-b):min(L,j+n+a)]})
+ i=j+n
+o({"count":len(m),"matches":m})
 "#;
 
-/// match_file 的 perl 脚本（降级路径）。UTF-8 由 utf8::decode 启用，长度按字符算。
-const PERL_MATCH_SCRIPT: &str = r#"
-use strict; use warnings; use MIME::Base64; use JSON::PP;
-my $M = "__RSSH_JSON__";
-sub out { print $M, "\n", encode_json($_[0]), "\n", $M, "\n"; }
-my ($p, $bf, $b, $a) = @ARGV;
-my $find = decode_base64($bf); utf8::decode($find);
-my $before = int($b); my $after = int($a);
-open(my $fh, '<:raw', $p) or do { out({error=>"file_not_found"}); exit 0; };
-local $/; my $text = <$fh>; close $fh; utf8::decode($text);
-my @matches; my $pos = 0; my $flen = length($find); my $tlen = length($text);
-while ((my $idx = index($text, $find, $pos)) >= 0) {
-    my $end = $idx + $flen;
-    my $line = 1 + (() = substr($text, 0, $idx) =~ /\n/g);
-    my $pre = $idx - $before; $pre = 0 if $pre < 0;
-    my $post = $end + $after; $post = $tlen if $post > $tlen;
-    push @matches, { line => $line, context => substr($text, $pre, $post - $pre) };
-    $pos = $end;
+/// patch_file Stage 2 的 python3 脚本（in-place 改 tmp）。位置参数：tmp_path find replace expected
+/// 前置：shell 已 `cp path tmp`。脚本读 tmp → 校验 count → in-place 替换 → JSON {count}。
+/// count 不匹配时删除 tmp，避免半成品残留。
+const PYTHON_PATCH_SCRIPT: &str = r#"import sys,json,os
+M="__RSSH_JSON__"
+def o(x):sys.stdout.write(M+"\n"+json.dumps(x,ensure_ascii=False)+"\n"+M+"\n")
+p=sys.argv[1];f=sys.argv[2];r=sys.argv[3];e=int(sys.argv[4])
+try:t=open(p,"rb").read().decode("utf-8")
+except Exception as ex:o({"error":"io_error","message":str(ex)});sys.exit(0)
+c=t.count(f)
+if c!=e:
+ try:os.unlink(p)
+ except Exception:pass
+ o({"error":"count_mismatch","actual":c,"expected":e});sys.exit(0)
+try:open(p,"wb").write(t.replace(f,r).encode("utf-8"))
+except Exception as ex:o({"error":"tmp_write_failed","message":str(ex)});sys.exit(0)
+o({"count":c})
+"#;
+
+/// match_file 的 perl 脚本（降级路径）。位置参数：path find before after
+/// `\Q...\E` 把 find 当字面量匹配，跳过 regex 元字符。utf8::decode 让长度按字符算。
+const PERL_MATCH_SCRIPT: &str = r#"use strict;use warnings;use JSON::PP;
+my $M="__RSSH_JSON__";
+sub o{print $M,"\n",encode_json($_[0]),"\n",$M,"\n"}
+my($p,$f,$b,$a)=@ARGV;utf8::decode($f);
+open(my $h,'<:raw',$p)or do{o({error=>"file_not_found"});exit 0};
+local $/;my $t=<$h>;close $h;utf8::decode($t);
+my @m;my $i=0;my $n=length($f);my $L=length($t);
+while((my $j=index($t,$f,$i))>=0){
+ my $line=1+(()=substr($t,0,$j)=~/\n/g);
+ my $pre=$j-$b;$pre=0 if $pre<0;my $post=$j+$n+$a;$post=$L if $post>$L;
+ push @m,{line=>$line,context=>substr($t,$pre,$post-$pre)};$i=$j+$n;
 }
-out({ count => scalar(@matches), matches => \@matches });
+o({count=>scalar(@m),matches=>\@m});
 "#;
 
-/// patch_file Stage 1 的 perl 脚本（降级路径）。diff 走外部 `diff -u`（perl 无标准 diff 模块）。
-/// open 用 list-form 避免 shell 解析，安全。
-const PERL_PATCH_STAGE1_SCRIPT: &str = r#"
-use strict; use warnings; use MIME::Base64; use JSON::PP;
-my $M = "__RSSH_JSON__";
-sub out { print $M, "\n", encode_json($_[0]), "\n", $M, "\n"; }
-my ($p, $bf, $br, $e, $tmp) = @ARGV;
-my $find = decode_base64($bf); utf8::decode($find);
-my $rep = decode_base64($br); utf8::decode($rep);
-my $expected = int($e);
-open(my $fh, '<:raw', $p) or do { out({error=>"file_not_found"}); exit 0; };
-local $/; my $text = <$fh>; close $fh; utf8::decode($text);
-my $count = () = $text =~ /\Q$find\E/g;
-if ($count != $expected) { out({error=>"count_mismatch", actual=>$count, expected=>$expected}); exit 0; }
-my $new = $text; $new =~ s/\Q$find\E/$rep/g;
-my $bytes = $new; utf8::encode($bytes);
-open(my $wh, '>:raw', $tmp) or do { out({error=>"tmp_write_failed", message=>"$!"}); exit 0; };
-print $wh $bytes; close $wh;
-my $diff = "";
-if (open(my $df, '-|', 'diff', '-u', $p, $tmp)) {
-    local $/; $diff = <$df>; close $df; $diff = "" unless defined $diff;
-} else { out({error=>"diff_command_failed", message=>"$!"}); exit 0; }
-out({ count => $count, diff => $diff });
+/// patch_file Stage 2 的 perl 脚本（降级路径）。位置参数：tmp_path find replace expected
+const PERL_PATCH_SCRIPT: &str = r#"use strict;use warnings;use JSON::PP;
+my $M="__RSSH_JSON__";
+sub o{print $M,"\n",encode_json($_[0]),"\n",$M,"\n"}
+my($p,$f,$r,$e)=@ARGV;utf8::decode($f);utf8::decode($r);
+open(my $h,'<:raw',$p)or do{o({error=>"io_error",message=>"$!"});exit 0};
+local $/;my $t=<$h>;close $h;utf8::decode($t);
+my $c=()=$t=~/\Q$f\E/g;
+if($c!=$e){unlink($p);o({error=>"count_mismatch",actual=>$c,expected=>$e});exit 0}
+my $new=$t;$new=~s/\Q$f\E/$r/g;utf8::encode($new);
+open(my $w,'>:raw',$p)or do{o({error=>"tmp_write_failed",message=>"$!"});exit 0};
+print $w $new;close $w;o({count=>$c});
 "#;
 
 /// 解析探测命令输出 —— 找含 `py3=` `perl=` `diff=` 的那一行。
@@ -203,14 +157,25 @@ fn parse_capabilities(output: &str) -> RemoteCapabilities {
 
 /// 从 PTY 原始输出里抽出由 `JSON_MARKER` 包裹的内容。
 /// 找不到一对 marker 返回 None。
+///
+/// 取**最后一对** marker —— 而不是最早一对。原因：脚本里 `M = "__RSSH_JSON__"`
+/// 这行常量定义会被 PTY ECHO 原样回显，因此 buffer 里实际含 3 个 marker：
+///
+///   1. echo 区里的字面量（脚本源码 `M = "..."` 这行）
+///   2. 脚本输出的开头 marker
+///   3. 脚本输出的结尾 marker
+///
+/// 用"前两个"会抽到 echo 残片当 JSON（LLM 看到的"输出被截断"就是这种污染）。
+/// 用"后两个" → 永远是脚本运行时输出的那对，echo 中的字面量被自然忽略。
+/// 该协议下脚本源码只有 1 处 marker 字面量，所以"后两个"永远对应脚本输出。
 fn extract_json_payload(pty_output: &str) -> Option<&str> {
-    let start = pty_output.find(JSON_MARKER)?;
-    let after = start + JSON_MARKER.len();
-    let end_rel = pty_output[after..].find(JSON_MARKER)?;
-    Some(pty_output[after..after + end_rel].trim())
+    let last = pty_output.rfind(JSON_MARKER)?;
+    let before_last = pty_output[..last].rfind(JSON_MARKER)?;
+    let after = before_last + JSON_MARKER.len();
+    Some(pty_output[after..last].trim())
 }
 
-/// 哪个解释器策略要用 —— `python3` 走 difflib 一站式，`perl` 调外部 diff 命令。
+/// file_ops 解释器：python3 优先，perl 降级。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Interpreter {
     Python3,
@@ -224,12 +189,24 @@ impl Interpreter {
             Self::Perl => "perl",
         }
     }
-    /// 把脚本字符串当 program 跑的 flag —— python 是 `-c`，perl 是 `-e`，
-    /// 写错了 python 会立刻报 "unknown option" 退出且 PTY 卡在 ps2 等单引号闭合。
+    /// `-c`（python3 inline script）或 `-e`（perl inline script）。
     fn script_flag(self) -> &'static str {
         match self {
             Self::Python3 => "-c",
             Self::Perl => "-e",
+        }
+    }
+    /// 脚本字面量和位置参数之间的分隔符。
+    ///
+    /// Perl `-e` 之后 `@ARGV` 首元素若以 `-` 开头会被当未知 switch（"Unrecognized switch"），
+    /// 必须 `--` 强制结束 switch 解析。
+    ///
+    /// Python `-c` 不消耗 `--` —— 加了反而让 `sys.argv[1]` 是字面 `--`，整个 argv 错位 1，
+    /// 路径变成 `'--'` 让脚本读不到文件。
+    fn args_prefix(self) -> &'static str {
+        match self {
+            Self::Python3 => "",
+            Self::Perl => "-- ",
         }
     }
     fn match_script(self) -> &'static str {
@@ -238,54 +215,120 @@ impl Interpreter {
             Self::Perl => PERL_MATCH_SCRIPT,
         }
     }
-    fn patch_stage1_script(self) -> &'static str {
+    fn patch_script(self) -> &'static str {
         match self {
-            Self::Python3 => PYTHON_PATCH_STAGE1_SCRIPT,
-            Self::Perl => PERL_PATCH_STAGE1_SCRIPT,
+            Self::Python3 => PYTHON_PATCH_SCRIPT,
+            Self::Perl => PERL_PATCH_SCRIPT,
         }
     }
 }
 
-/// 拼装 match_file 命令。find 走 base64 避免 shell + 解释器 source 双层转义。
-fn build_match_cmd(interp: Interpreter, path: &str, find: &str, before: u32, after: u32) -> String {
-    let b64f = B64.encode(find.as_bytes());
+/// ANSI-C quoting (`$'...'`)：shell 把 `\n` `\t` `\\` `\'` 等转义序列展开为真字符，
+/// 但**整段字面量在 shell 视角是单行 ASCII** —— 因此长多行脚本能塞进一条单行命令，
+/// 不触发 zsh ZLE 的 multi-line quote race（粘贴长命令进 PTY 时 p10k 会渲染连续
+/// quote> prompt、ZLE buffer 错乱、命令永不执行）。
+///
+/// 适用 bash / zsh（远端常见 shell）；POSIX 纯 sh / busybox sh / dash 不支持。
+/// file_ops 已经硬依赖 python3 / perl，那些极简环境一般连解释器都没有，能力探测
+/// 阶段就被拒。
+fn ansi_c_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    out.push('$');
+    out.push('\'');
+    for ch in s.chars() {
+        match ch {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\'' => out.push_str("\\'"),
+            '\\' => out.push_str("\\\\"),
+            c => out.push(c),
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// 拼一条 `<interp> -c|-e $'...' [-- ] arg1 arg2 ...` 形态的解释器命令。
+/// 单行 ASCII（脚本里的换行靠 `$'...'` 的 `\n` 编码），避免 PTY ZLE quote race。
+fn build_script_cmd(interp: Interpreter, script: &str, args: &[String]) -> String {
+    let args_part = if args.is_empty() {
+        String::new()
+    } else {
+        format!(" {}{}", interp.args_prefix(), args.join(" "))
+    };
     format!(
-        "{} {} {} -- {} {} {} {}",
+        "{} {} {}{}",
         interp.binary(),
         interp.script_flag(),
-        shell_quote(interp.match_script()),
-        prepare_remote_path(path),
-        shell_quote(&b64f),
-        shell_quote(&before.to_string()),
-        shell_quote(&after.to_string()),
+        ansi_c_quote(script),
+        args_part,
     )
 }
 
-/// 拼装 patch_file Stage 1 命令。tmp_path 由 rssh 后端构造（同 target 同目录）。
-fn build_patch_stage1_cmd(
+/// match_file 命令：搜索 path 中 find 出现的位置，回 JSON。
+///
+/// `find` 走 `ansi_c_quote` —— LLM 提供的 find 文本可能含真换行（如多行 YAML 块），
+/// shell_quote 包后字面 `\n` byte 仍会出现在 shell 输入流里，触发 zsh ZLE 的
+/// multi-line quote race。`$'...'` 把所有换行编码为 `\n` 转义序列，让命令在
+/// shell 视角下保持单行 ASCII。
+fn build_match_cmd(interp: Interpreter, path: &str, find: &str, before: u32, after: u32) -> String {
+    build_script_cmd(
+        interp,
+        interp.match_script(),
+        &[
+            prepare_remote_path(path),
+            ansi_c_quote(find),
+            shell_quote(&before.to_string()),
+            shell_quote(&after.to_string()),
+        ],
+    )
+}
+
+/// patch_file modify 命令：脚本在 tmp 上 in-place 替换，校验 count，回 JSON。
+/// 前置：调用方已经独立跑过 `cp_cmd` 把原文复制到 tmp。
+///
+/// `find` / `replace` 都走 `ansi_c_quote`（理由同 `build_match_cmd`）。
+fn build_modify_cmd(
     interp: Interpreter,
-    path: &str,
+    tmp: &str,
     find: &str,
     replace: &str,
     expected: u32,
-    tmp: &str,
 ) -> String {
-    let b64f = B64.encode(find.as_bytes());
-    let b64r = B64.encode(replace.as_bytes());
+    build_script_cmd(
+        interp,
+        interp.patch_script(),
+        &[
+            prepare_remote_path(tmp),
+            ansi_c_quote(find),
+            ansi_c_quote(replace),
+            shell_quote(&expected.to_string()),
+        ],
+    )
+}
+
+/// `cp -- path tmp`：patch_file 第一步，把原文复制到同目录 tmp（保证后续 mv 单 rename(2)）。
+fn build_cp_cmd(path: &str, tmp: &str) -> String {
     format!(
-        "{} {} {} -- {} {} {} {} {}",
-        interp.binary(),
-        interp.script_flag(),
-        shell_quote(interp.patch_stage1_script()),
+        "cp -- {} {}",
         prepare_remote_path(path),
-        shell_quote(&b64f),
-        shell_quote(&b64r),
-        shell_quote(&expected.to_string()),
         prepare_remote_path(tmp),
     )
 }
 
-/// patch_file Stage 2 写命令：审批通过后就一行 atomic mv。
+/// `diff -u path tmp`：patch_file 第三步，给用户审批用的 unified diff。
+/// exit 0=无差异 / 1=有差异（**正常**）/ ≥2=工具失败 —— 调用方必须按此判，不能套
+/// "exit != 0 ⇒ 错误"的通用规则。
+fn build_diff_cmd(path: &str, tmp: &str) -> String {
+    format!(
+        "diff -u -- {} {}",
+        prepare_remote_path(path),
+        prepare_remote_path(tmp),
+    )
+}
+
+/// `mv -- tmp path`：patch_file 最后一步，原子覆盖。
 fn build_mv_cmd(tmp: &str, path: &str) -> String {
     format!(
         "mv -- {} {}",
@@ -664,8 +707,11 @@ impl Actor {
     }
 
 
-    /// 第一次 patch_file 时探测远端写能力（python3 / base64），结果缓存到 session 结束。
-    /// 后续 patch_file 直接读缓存，无网络往返。
+    /// 第一次 file_ops 时探测远端能力（python3 / perl / diff），结果缓存到 session 结束。
+    /// 后续 file_ops 直接读缓存。
+    ///
+    /// probe 走 `internal_command`（不弹卡片）—— 一行只读 echo，对用户透明，
+    /// 没必要让用户为它单独点一次同意。实际的 cp/python/diff/mv 都走 `command_proposed` 弹卡片。
     async fn ensure_remote_caps(&mut self) -> AppResult<RemoteCapabilities> {
         if let Some(c) = self.remote_caps {
             return Ok(c);
@@ -676,7 +722,7 @@ impl Actor {
         let full_cmd = format!("{}; echo \"{}:$?\"", PROBE_CMD, sentinel);
 
         self.audit_push(AuditKind::Note {
-            message: "patch_file: probing remote capabilities (python3 / base64)".into(),
+            message: "file_ops: probing remote capabilities (python3 / perl / diff)".into(),
         });
         self.emit(
             "internal_command",
@@ -764,55 +810,114 @@ impl Actor {
         }
     }
 
-    /// 选 file_ops 解释器策略：python3 优先，perl + diff 降级，都没就 None。
+    /// 选 file_ops 解释器：python3 优先，perl 降级。都没就 None。
+    /// （diff 只有 patch_file 需要，单独在 handle_patch_file 校验。）
     fn select_interpreter(caps: RemoteCapabilities) -> Option<Interpreter> {
         if caps.python3 {
             Some(Interpreter::Python3)
-        } else if caps.perl && caps.diff {
+        } else if caps.perl {
             Some(Interpreter::Perl)
         } else {
             None
         }
     }
 
-    /// 跑一条 internal_command（不弹审批），用 JSON_MARKER 切出 JSON 负载。
-    /// 返回 (exit_code, json_payload_or_raw_output) —— exit 非 0 / 找不到 marker 时，
-    /// 第二项是原始 PTY 输出便于错误信息展示。
-    async fn run_internal_json(
+    /// 跑一条 file_ops 命令：弹 `command_proposed` 卡片 → 等用户审批 / 执行 → 审计 + 返回结果。
+    ///
+    /// 跟 `handle_run_command` 的区别：
+    /// 1. **不走 `sanitize::validate`**。cp / mv / python3 等会被 DESTRUCTIVE / INTERPRETERS_DENIED
+    ///    拒掉，但 file_ops 的命令是 rssh 后端构造的固定模板（不是 LLM 直传），由 rssh 自己负责安全。
+    /// 2. `explain` / `side_effect` 由调用方硬编码传入，不来自 LLM。
+    /// 3. 返回原始 `CommandOutcome` 给上层做错误分支（多步流程要根据 exit / JSON marker
+    ///    决定是否中断、是否提示 tmp 残留等）。
+    ///
+    /// `kind` 透传给前端 dialog；patch_file 走 `"patch_file"` 标记后，danger_mode 不自动批准。
+    /// 写文件比 read-only 命令风险高，"接受命令风险"不等于"接受任意文件改动" —— 强制
+    /// 用户每张卡片亲手点 approve 是 patch_file 的契约。match_file（read-only）不打 kind，
+    /// danger_mode 可以无声跑过。
+    async fn run_file_op(
         &mut self,
         tool_call_id: &str,
-        cmd_label: &str,
         cmd: String,
-    ) -> AppResult<(i32, String, Option<String>)> {
+        explain: String,
+        side_effect: String,
+        timeout_s: u32,
+        kind: Option<&str>,
+    ) -> AppResult<CommandOutcome> {
         let cmd_id = uuid::Uuid::new_v4().to_string();
         let sentinel = format!("__rssh_done_{}", uuid::Uuid::new_v4().simple());
         let full_cmd = format!("{}; echo \"{}:$?\"", cmd, sentinel);
-        self.audit_push(AuditKind::Note {
-            message: format!("{cmd_label}: emit internal_command"),
+
+        self.audit_push(AuditKind::CommandProposed {
+            id: cmd_id.clone(),
+            cmd: cmd.clone(),
+            explain: explain.clone(),
+            side_effect: side_effect.clone(),
         });
-        self.emit(
-            "internal_command",
-            json!({
-                "id": cmd_id,
-                "tool_call_id": tool_call_id,
-                "cmd": cmd,
-                "full_cmd": full_cmd,
-                "sentinel": sentinel,
-            }),
-        );
-        let (exit_code, output) = match self.wait_command_outcome(tool_call_id).await? {
-            CommandOutcome::Result {
-                exit_code, output, ..
-            } => (exit_code, output),
+        let started_at = std::time::Instant::now();
+
+        let mut payload = json!({
+            "id": cmd_id,
+            "tool_call_id": tool_call_id,
+            "cmd": cmd,
+            "full_cmd": full_cmd,
+            "sentinel": sentinel,
+            "explain": explain,
+            "side_effect": side_effect,
+            "timeout_s": timeout_s,
+        });
+        if let Some(k) = kind {
+            payload["kind"] = json!(k);
+        }
+        self.emit("command_proposed", payload);
+
+        match self.wait_command_outcome(tool_call_id).await? {
             CommandOutcome::Rejected { reason } => {
-                return Err(AppError::other(
-                    "internal_cmd_rejected",
-                    json!({ "tool": cmd_label, "reason": reason }),
-                ));
+                self.audit_push(AuditKind::CommandRejected {
+                    id: cmd_id,
+                    reason: reason.clone(),
+                });
+                Ok(CommandOutcome::Rejected { reason })
             }
-        };
-        let json_payload = extract_json_payload(&output).map(|s| s.to_string());
-        Ok((exit_code, output, json_payload))
+            CommandOutcome::Result {
+                exit_code,
+                output,
+                timed_out,
+                early_terminated,
+            } => {
+                let redacted = sanitize::redact(&output, &self.cfg.redact_rules);
+                let trunc = sanitize::truncate(&redacted, self.cfg.max_output_bytes);
+                self.emit(
+                    "command_completed",
+                    json!({
+                        "id": cmd_id,
+                        "exit_code": exit_code,
+                        "timed_out": timed_out,
+                        "early_terminated": early_terminated,
+                        "output": trunc.text,
+                        "original_bytes": trunc.original_bytes,
+                        "truncated_bytes": trunc.truncated_bytes,
+                    }),
+                );
+                self.audit_push(AuditKind::CommandExecuted {
+                    id: cmd_id,
+                    exit_code,
+                    output_redacted: trunc.text.clone(),
+                    original_bytes: trunc.original_bytes,
+                    truncated_bytes: trunc.truncated_bytes,
+                    duration_ms: started_at.elapsed().as_millis() as u64,
+                });
+                // 返回 redact 前的 raw output —— 上层要从中 extract_json_payload，
+                // 脱敏后的版本里 marker 可能被改写。脱敏只作用于 audit / UI 显示，
+                // 不影响 rssh 内部解析。
+                Ok(CommandOutcome::Result {
+                    exit_code,
+                    output,
+                    timed_out,
+                    early_terminated,
+                })
+            }
+        }
     }
 
     async fn handle_match_file(&mut self, tc: ToolCall) -> AppResult<()> {
@@ -845,28 +950,52 @@ impl Actor {
             None => {
                 self.push_tool_error(
                     &tc.id,
-                    "match_file: remote system lacks python3 / (perl + diff) — rssh cannot inspect the file. \
-                     Tell the user to install python3 (preferred) or perl + diffutils.",
+                    "match_file: remote system lacks python3 / perl — rssh cannot inspect the file. \
+                     Tell the user to install python3 (preferred) or perl.",
                 );
                 return Ok(());
             }
         };
 
+        // 单卡片：搜索 path，read-only，回 JSON 给 LLM。kind=None 让 danger_mode 自动批。
         let cmd = build_match_cmd(interp, &input.path, &input.find, before, after);
-        let (exit_code, raw, json_payload) =
-            self.run_internal_json(&tc.id, "match_file", cmd).await?;
-        if exit_code != 0 || json_payload.is_none() {
-            self.push_tool_error(
+        let outcome = self
+            .run_file_op(
                 &tc.id,
-                &format!(
-                    "match_file: remote script failed (exit {exit_code}). Output: {}",
-                    raw.chars().take(400).collect::<String>()
-                ),
-            );
-            return Ok(());
-        }
-        let payload = json_payload.unwrap();
-        // 直接把远端 JSON 回给 LLM；同时 audit 记录 count（解析失败就只记 raw）
+                cmd,
+                format!("match_file: search `{}` (read-only)", input.path),
+                "read-only".into(),
+                60,
+                None,
+            )
+            .await?;
+
+        let (exit_code, output) = match outcome {
+            CommandOutcome::Rejected { reason } => {
+                self.push_tool_error(
+                    &tc.id,
+                    &format!("User rejected match_file. Reason: {reason}."),
+                );
+                return Ok(());
+            }
+            CommandOutcome::Result {
+                exit_code, output, ..
+            } => (exit_code, output),
+        };
+
+        let payload = match (exit_code, extract_json_payload(&output)) {
+            (0, Some(p)) => p.to_string(),
+            _ => {
+                self.push_tool_error(
+                    &tc.id,
+                    &format!(
+                        "match_file: remote script failed (exit {exit_code}). Output: {}",
+                        output.chars().take(400).collect::<String>()
+                    ),
+                );
+                return Ok(());
+            }
+        };
         let count = serde_json::from_str::<serde_json::Value>(&payload)
             .ok()
             .and_then(|v| v.get("count").and_then(|c| c.as_u64()));
@@ -915,14 +1044,22 @@ impl Actor {
             None => {
                 self.push_tool_error(
                     &tc.id,
-                    "patch_file: remote system lacks python3 / (perl + diff) — rssh cannot patch the file. \
-                     Tell the user to install python3 (preferred) or perl + diffutils.",
+                    "patch_file: remote system lacks python3 / perl — rssh cannot patch the file. \
+                     Tell the user to install python3 (preferred) or perl.",
                 );
                 return Ok(());
             }
         };
+        if !caps.diff {
+            self.push_tool_error(
+                &tc.id,
+                "patch_file: remote system lacks `diff` — rssh cannot show the diff for approval. \
+                 Tell the user to install diffutils.",
+            );
+            return Ok(());
+        }
 
-        // tmp 在 target 同目录，保证 mv 是单 rename(2) 原子
+        // tmp 与 path 同目录，保证后续 mv 走单 rename(2)（同 filesystem，原子）。
         let tmp_suffix: String = uuid::Uuid::new_v4()
             .simple()
             .to_string()
@@ -931,35 +1068,97 @@ impl Actor {
             .collect();
         let tmp_path = format!("{}.rssh-{}", input.path, tmp_suffix);
 
-        // Stage 1: 远端脚本读 + 校验 + 算 new + 写 tmp + 算 diff → 回 JSON
-        let stage1_cmd = build_patch_stage1_cmd(
-            interp,
-            &input.path,
-            &input.find,
-            &input.replace,
-            input.expected_count,
-            &tmp_path,
-        );
-        let (exit_code, raw, json_payload) = self
-            .run_internal_json(&tc.id, "patch_file/stage1", stage1_cmd)
+        // ── Card 1/4: cp 原文到 tmp ──────────────────────────────
+        let outcome = self
+            .run_file_op(
+                &tc.id,
+                build_cp_cmd(&input.path, &tmp_path),
+                format!("patch_file 1/4: copy `{}` to staging `{}`", input.path, tmp_path),
+                format!("Create {}", tmp_path),
+                30,
+                Some("patch_file"),
+            )
             .await?;
-        if exit_code != 0 || json_payload.is_none() {
+        match outcome {
+            CommandOutcome::Rejected { reason } => {
+                self.push_tool_error(
+                    &tc.id,
+                    &format!("User rejected step 1/4 (cp). Reason: {reason}."),
+                );
+                return Ok(());
+            }
+            CommandOutcome::Result {
+                exit_code, output, ..
+            } if exit_code != 0 => {
+                self.push_tool_error(
+                    &tc.id,
+                    &format!(
+                        "patch_file 1/4 (cp) failed (exit {exit_code}). Output: {}",
+                        output.chars().take(400).collect::<String>()
+                    ),
+                );
+                return Ok(());
+            }
+            _ => {}
+        }
+
+        // ── Card 2/4: 解释器 in-place 改 tmp（校验 count → 替换 → 回 {count}） ──
+        let outcome = self
+            .run_file_op(
+                &tc.id,
+                build_modify_cmd(interp, &tmp_path, &input.find, &input.replace, input.expected_count),
+                format!(
+                    "patch_file 2/4: replace {} occurrence(s) in `{}` (via {})",
+                    input.expected_count, tmp_path, interp.binary()
+                ),
+                format!("Modify {} in place", tmp_path),
+                60,
+                Some("patch_file"),
+            )
+            .await?;
+        let (modify_exit, modify_output) = match outcome {
+            CommandOutcome::Rejected { reason } => {
+                self.push_tool_error(
+                    &tc.id,
+                    &format!(
+                        "User rejected step 2/4 (modify). Reason: {reason}. Tmp at {tmp_path} (user can inspect / rm)."
+                    ),
+                );
+                return Ok(());
+            }
+            CommandOutcome::Result {
+                exit_code, output, ..
+            } => (exit_code, output),
+        };
+        if modify_exit != 0 {
             self.push_tool_error(
                 &tc.id,
                 &format!(
-                    "patch_file stage 1 failed (exit {exit_code}). Output: {}",
-                    raw.chars().take(400).collect::<String>()
+                    "patch_file 2/4 (modify) failed (exit {modify_exit}). Tmp at {tmp_path}. Output: {}",
+                    modify_output.chars().take(400).collect::<String>()
                 ),
             );
             return Ok(());
         }
-        let payload = json_payload.unwrap();
+        let payload = match extract_json_payload(&modify_output) {
+            Some(p) => p.to_string(),
+            None => {
+                self.push_tool_error(
+                    &tc.id,
+                    &format!(
+                        "patch_file 2/4 (modify): no JSON marker in output. Tmp at {tmp_path}. Output: {}",
+                        modify_output.chars().take(400).collect::<String>()
+                    ),
+                );
+                return Ok(());
+            }
+        };
         let parsed: serde_json::Value = match serde_json::from_str(&payload) {
             Ok(v) => v,
             Err(e) => {
                 self.push_tool_error(
                     &tc.id,
-                    &format!("patch_file stage 1: malformed JSON ({e}). Raw: {payload}"),
+                    &format!("patch_file 2/4 (modify): malformed JSON ({e}). Tmp at {tmp_path}. Raw: {payload}"),
                 );
                 return Ok(());
             }
@@ -971,9 +1170,8 @@ impl Actor {
                     parsed.get("actual").and_then(|a| a.as_u64()).unwrap_or(0),
                     parsed.get("expected").and_then(|a| a.as_u64()).unwrap_or(0),
                 ),
-                "file_not_found" => format!("patch_file: file not found at {}", input.path),
-                "io_error" | "tmp_write_failed" | "diff_command_failed" => format!(
-                    "patch_file: remote {} ({})",
+                "io_error" | "tmp_write_failed" => format!(
+                    "patch_file: remote {} ({}). Tmp may exist at {tmp_path}.",
                     err,
                     parsed.get("message").and_then(|m| m.as_str()).unwrap_or("")
                 ),
@@ -982,114 +1180,96 @@ impl Actor {
             self.push_tool_error(&tc.id, &msg);
             return Ok(());
         }
-        let diff = parsed
-            .get("diff")
-            .and_then(|d| d.as_str())
-            .unwrap_or("")
-            .to_string();
         let count = parsed
             .get("count")
             .and_then(|c| c.as_u64())
             .unwrap_or(input.expected_count as u64) as u32;
 
-        // Stage 2: 把 mv 命令丢给用户审批
-        let write_cmd_id = uuid::Uuid::new_v4().to_string();
-        let write_sentinel = format!("__rssh_done_{}", uuid::Uuid::new_v4().simple());
-        let mv_cmd = build_mv_cmd(&tmp_path, &input.path);
-        let full_write = format!("{}; echo \"{}:$?\"", mv_cmd, write_sentinel);
-
-        self.audit_push(AuditKind::CommandProposed {
-            id: write_cmd_id.clone(),
-            cmd: mv_cmd.clone(),
-            explain: format!(
-                "patch_file: replace {} occurrence(s) in {} (interp: {})",
-                count,
-                input.path,
-                interp.binary()
-            ),
-            side_effect: format!("Atomic rename: {} -> {}", tmp_path, input.path),
-        });
-        let started_at = std::time::Instant::now();
-
-        self.emit(
-            "command_proposed",
-            json!({
-                "id": write_cmd_id,
-                "tool_call_id": tc.id,
-                "kind": "patch_file",
-                "path": input.path,
-                "diff": diff,
-                "changed": count,
-                "cmd": mv_cmd,
-                "full_cmd": full_write,
-                "sentinel": write_sentinel,
-                "explain": format!("Patch {} ({} occurrence(s))", input.path, count),
-                "side_effect": format!("Atomic mv: {} -> {}", tmp_path, input.path),
-                "timeout_s": 30,
-            }),
-        );
-
-        match self.wait_command_outcome(&tc.id).await? {
+        // ── Card 3/4: diff -u path tmp（输出展示给用户）─────────
+        // exit 0=无差异 / 1=有差异（正常）/ >=2=工具失败
+        let outcome = self
+            .run_file_op(
+                &tc.id,
+                build_diff_cmd(&input.path, &tmp_path),
+                format!("patch_file 3/4: review diff of `{}` vs staged tmp", input.path),
+                "read-only (display diff for review)".into(),
+                30,
+                Some("patch_file"),
+            )
+            .await?;
+        let diff = match outcome {
             CommandOutcome::Rejected { reason } => {
-                self.audit_push(AuditKind::CommandRejected {
-                    id: write_cmd_id,
-                    reason: reason.clone(),
-                });
-                // tmp 文件留在远端 — 用户能 `ls <path>.rssh-*` 自己清理
                 self.push_tool_error(
                     &tc.id,
                     &format!(
-                        "User rejected the patch. Reason: {reason}. The staged tmp file is at {tmp_path} (user can inspect / rm)."
+                        "User rejected step 3/4 (diff). Reason: {reason}. Tmp at {tmp_path} (user can inspect / rm)."
+                    ),
+                );
+                return Ok(());
+            }
+            CommandOutcome::Result {
+                exit_code, output, ..
+            } => {
+                if exit_code >= 2 {
+                    self.push_tool_error(
+                        &tc.id,
+                        &format!(
+                            "patch_file 3/4 (diff) failed (exit {exit_code}). Tmp at {tmp_path}. Output: {}",
+                            output.chars().take(400).collect::<String>()
+                        ),
+                    );
+                    return Ok(());
+                }
+                output
+            }
+        };
+
+        // ── Card 4/4: mv tmp → path（原子覆盖） ─────────────────
+        let outcome = self
+            .run_file_op(
+                &tc.id,
+                build_mv_cmd(&tmp_path, &input.path),
+                format!("patch_file 4/4: apply via `mv {} -> {}`", tmp_path, input.path),
+                format!("Atomic rename {} -> {}", tmp_path, input.path),
+                30,
+                Some("patch_file"),
+            )
+            .await?;
+        match outcome {
+            CommandOutcome::Rejected { reason } => {
+                self.push_tool_error(
+                    &tc.id,
+                    &format!(
+                        "User rejected step 4/4 (mv). Reason: {reason}. Tmp at {tmp_path} (still staged, user can inspect / rm)."
                     ),
                 );
                 Ok(())
             }
             CommandOutcome::Result {
-                exit_code,
-                output,
-                timed_out,
-                early_terminated,
-            } => {
-                let redacted = sanitize::redact(&output, &self.cfg.redact_rules);
-                let trunc = sanitize::truncate(&redacted, self.cfg.max_output_bytes);
-                self.emit(
-                    "command_completed",
-                    json!({
-                        "id": write_cmd_id,
-                        "exit_code": exit_code,
-                        "timed_out": timed_out,
-                        "early_terminated": early_terminated,
-                        "output": trunc.text,
-                        "original_bytes": trunc.original_bytes,
-                        "truncated_bytes": trunc.truncated_bytes,
-                    }),
+                exit_code, output, ..
+            } if exit_code != 0 => {
+                self.push_tool_error(
+                    &tc.id,
+                    &format!(
+                        "patch_file 4/4 (mv) failed (exit {exit_code}). Tmp at {tmp_path}. Output: {}",
+                        output.chars().take(400).collect::<String>()
+                    ),
                 );
-                self.audit_push(AuditKind::CommandExecuted {
-                    id: write_cmd_id,
-                    exit_code,
-                    output_redacted: trunc.text.clone(),
-                    original_bytes: trunc.original_bytes,
-                    truncated_bytes: trunc.truncated_bytes,
-                    duration_ms: started_at.elapsed().as_millis() as u64,
+                Ok(())
+            }
+            CommandOutcome::Result { .. } => {
+                self.audit_push(AuditKind::Note {
+                    message: format!(
+                        "patch_file: {} interp={} changed={}",
+                        input.path,
+                        interp.binary(),
+                        count
+                    ),
                 });
-                if exit_code != 0 {
-                    self.push_tool_error(
-                        &tc.id,
-                        &format!(
-                            "patch_file mv failed (exit {exit_code}). Tmp at {tmp_path}. Output: {}",
-                            trunc.text
-                        ),
-                    );
-                    return Ok(());
-                }
-                let payload = json!({
-                    "diff": diff,
-                    "changed": count,
-                })
-                .to_string();
+                let result = json!({ "diff": diff, "changed": count }).to_string();
                 self.history.push(ChatMessage::ToolResult {
                     tool_call_id: tc.id,
-                    content: payload,
+                    content: result,
                     is_error: false,
                 });
                 Ok(())
@@ -1671,14 +1851,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_caps_perl_path_needs_diff() {
-        // 单独 perl 不够 —— select_interpreter 会拒绝
+    fn parse_caps_only_perl() {
+        // 只有 perl —— match_file 能跑（不需要 diff），patch_file 在 handle 层另外校验 caps.diff
         let r = parse_capabilities("py3=0 perl=1 diff=0\n");
         assert!(!r.python3 && r.perl && !r.diff);
-        assert_eq!(Actor::select_interpreter(r), None);
-        // perl + diff 才能走 perl 路径
-        let r2 = parse_capabilities("py3=0 perl=1 diff=1\n");
-        assert_eq!(Actor::select_interpreter(r2), Some(Interpreter::Perl));
+        assert_eq!(Actor::select_interpreter(r), Some(Interpreter::Perl));
     }
 
     #[test]
@@ -1718,19 +1895,27 @@ mod tests {
 
     #[test]
     fn select_interp_python3_wins() {
+        // python3 优先于 perl
         let caps = RemoteCapabilities { python3: true, perl: true, diff: true };
         assert_eq!(Actor::select_interpreter(caps), Some(Interpreter::Python3));
     }
 
     #[test]
-    fn select_interp_perl_needs_both() {
-        // perl 单独不行：必须搭配 diff 才能算 unified diff
-        let caps = RemoteCapabilities { python3: false, perl: true, diff: false };
-        assert_eq!(Actor::select_interpreter(caps), None);
+    fn select_interp_python3_alone() {
+        let caps = RemoteCapabilities { python3: true, perl: false, diff: false };
+        assert_eq!(Actor::select_interpreter(caps), Some(Interpreter::Python3));
     }
 
     #[test]
-    fn select_interp_diff_without_perl_useless() {
+    fn select_interp_perl_alone_ok_for_match() {
+        // 没有 python3，perl 单独足够给 match_file。patch_file 在 handle 层另查 caps.diff。
+        let caps = RemoteCapabilities { python3: false, perl: true, diff: false };
+        assert_eq!(Actor::select_interpreter(caps), Some(Interpreter::Perl));
+    }
+
+    #[test]
+    fn select_interp_none_without_interp() {
+        // 有 diff 但没 python3 / perl —— file_ops 整体不可用
         let caps = RemoteCapabilities { python3: false, perl: false, diff: true };
         assert_eq!(Actor::select_interpreter(caps), None);
     }
@@ -1758,24 +1943,145 @@ mod tests {
         assert_eq!(extract_json_payload("__RSSH_JSON__\nonly one marker\n"), None);
     }
 
-    // ─── build_match_cmd / build_patch_stage1_cmd / build_mv_cmd ────
+    #[test]
+    fn extract_json_ignores_marker_literal_in_echoed_script() {
+        // Regression: shell ECHO 会把脚本源码一并回显，脚本里 `M = "__RSSH_JSON__"`
+        // 那行会作为 echo 的一部分进入 buffer。此时 buffer 含 3 个 marker：
+        // 1 个 echo 字面量 + 2 个脚本真正输出。必须抽脚本输出的那对。
+        let pty = "\
+python3 -c 'import sys\n\
+M = \"__RSSH_JSON__\"\n\
+print(M); print(\"payload\"); print(M)'\n\
+__RSSH_JSON__\n\
+{\"count\":5,\"matches\":[{\"line\":84}]}\n\
+__RSSH_JSON__\n\
+__rssh_done_abc:0\n";
+        assert_eq!(
+            extract_json_payload(pty),
+            Some("{\"count\":5,\"matches\":[{\"line\":84}]}")
+        );
+    }
+
+    #[test]
+    fn extract_json_takes_last_pair_when_buffer_contains_multiple_runs() {
+        // 防御性：PTY buffer 累积多次工具调用的输出时（实际不会，每次 finish 都清，
+        // 但万一上游误传整段 session log），取最后一对仍然给出最新的 JSON。
+        let pty = "\
+__RSSH_JSON__\n{\"call\":\"first\"}\n__RSSH_JSON__\n\
+some interleaved noise\n\
+__RSSH_JSON__\n{\"call\":\"second\"}\n__RSSH_JSON__\n";
+        assert_eq!(extract_json_payload(pty), Some("{\"call\":\"second\"}"));
+    }
+
+    // ─── ansi_c_quote ───────────────────────────────────────────────
+
+    #[test]
+    fn ansi_c_quote_empty() {
+        assert_eq!(ansi_c_quote(""), "$''");
+    }
+
+    #[test]
+    fn ansi_c_quote_plain_ascii() {
+        // 纯 ASCII 无元字符 —— 整段原样塞进 $'...'
+        assert_eq!(ansi_c_quote("hello world"), "$'hello world'");
+    }
+
+    #[test]
+    fn ansi_c_quote_newline_becomes_escape() {
+        // 关键不变量：真换行 → `\n` 两字符序列，shell 拿到的命令是单行 ASCII，
+        // 但 shell 展开后传给程序的 argv 含真实换行。
+        assert_eq!(ansi_c_quote("a\nb"), "$'a\\nb'");
+        assert_eq!(ansi_c_quote("line1\nline2\nline3"), "$'line1\\nline2\\nline3'");
+    }
+
+    #[test]
+    fn ansi_c_quote_single_quote_escapes() {
+        // 单引号转义为 `\'`（ANSI-C 风格，跟 POSIX `'\''` 不一样）
+        assert_eq!(ansi_c_quote("it's"), r"$'it\'s'");
+    }
+
+    #[test]
+    fn ansi_c_quote_backslash_doubles() {
+        // 反斜杠在 $'...' 内是转义引导，必须 `\\`
+        assert_eq!(ansi_c_quote(r"a\b"), r"$'a\\b'");
+    }
+
+    #[test]
+    fn ansi_c_quote_tab_and_cr() {
+        assert_eq!(ansi_c_quote("a\tb"), "$'a\\tb'");
+        assert_eq!(ansi_c_quote("a\rb"), "$'a\\rb'");
+    }
+
+    #[test]
+    fn ansi_c_quote_multibyte_passthrough() {
+        // 非 ASCII（中文 / emoji）原样塞进 $'...'，shell 当字节透传给 argv
+        assert_eq!(ansi_c_quote("中文"), "$'中文'");
+        assert_eq!(ansi_c_quote("🦀"), "$'🦀'");
+    }
+
+    #[test]
+    fn ansi_c_quote_shell_metachars_inert() {
+        // $ ` 等在 $'...' 内不展开（跟 "$..." 不同）
+        assert_eq!(ansi_c_quote("$HOME"), "$'$HOME'");
+        assert_eq!(ansi_c_quote("`whoami`"), "$'`whoami`'");
+    }
+
+    #[test]
+    fn ansi_c_quote_script_stays_single_line_ascii() {
+        // 真实脚本里全是真换行 —— ansi_c_quote 输出必须不含真换行字节，
+        // 否则 zsh ZLE 在 PTY 流里看到 `\n` 进 multi-line quote race。
+        let quoted = ansi_c_quote(PYTHON_MATCH_SCRIPT);
+        assert!(!quoted.contains('\n'), "ansi_c_quote leaked real newline");
+        assert!(!quoted.contains('\r'));
+        // 也确认开头 / 结尾 marker 存在
+        assert!(quoted.starts_with("$'"));
+        assert!(quoted.ends_with('\''));
+    }
+
+    // ─── build_match_cmd / build_modify_cmd / build_cp_cmd / build_diff_cmd / build_mv_cmd ───
 
     #[test]
     fn build_match_cmd_python3_form() {
         let cmd = build_match_cmd(Interpreter::Python3, "/etc/foo.yml", "old", 80, 80);
-        assert!(cmd.starts_with("python3 -c '"));
-        // path 透传到 shell_quote
+        // 形态：python3 -c $'<script>' '/etc/foo.yml' $'old' '80' '80'
+        assert!(cmd.starts_with("python3 -c $'"), "got: {cmd}");
+        // path 走 shell_quote / ~/ 展开
         assert!(cmd.contains("'/etc/foo.yml'"));
-        // find 走 base64："old" -> "b2xk"
-        assert!(cmd.contains("'b2xk'"));
-        // before / after 也 shell_quote
+        // find 走 ansi_c_quote："old" → $'old'
+        assert!(cmd.contains("$'old'"));
+        // before / after 走 shell_quote
         assert!(cmd.contains("'80'"));
+        // 整条命令必须单行（避免 PTY ZLE quote race）
+        assert!(!cmd.contains('\n'), "cmd has real newline: {cmd}");
     }
 
     #[test]
     fn build_match_cmd_perl_form() {
         let cmd = build_match_cmd(Interpreter::Perl, "/etc/foo.yml", "old", 80, 80);
-        assert!(cmd.starts_with("perl -e '"));
+        assert!(cmd.starts_with("perl -e $'"), "got: {cmd}");
+        assert!(!cmd.contains('\n'));
+    }
+
+    #[test]
+    fn build_match_cmd_python3_omits_arg_separator() {
+        // Regression: Python `-c` 不消耗 `--`，加上去会让 sys.argv[1] 变成字面 '--'，
+        // path 错位为 argv[2]。表现为 "io_error: invalid sys.argv".
+        let cmd = build_match_cmd(Interpreter::Python3, "/etc/foo.yml", "old", 80, 80);
+        assert!(
+            !cmd.contains(" -- '/etc/foo.yml'"),
+            "Python 路径 path 前不应有 `--`：{cmd}"
+        );
+    }
+
+    #[test]
+    fn build_match_cmd_perl_keeps_arg_separator() {
+        // Perl `-e` 之后 @ARGV 首元素若以 `-` 开头会被当未知 switch（"Unrecognized switch"），
+        // 必须用 `--` 强制结束 switch 解析。
+        let cmd = build_match_cmd(Interpreter::Perl, "/etc/foo.yml", "old", 80, 80);
+        assert!(
+            cmd.contains(" -- '/etc/foo.yml'"),
+            "Perl 脚本 + path 之间必须有 `--`：{cmd}"
+        );
     }
 
     #[test]
@@ -1786,40 +2092,84 @@ mod tests {
     }
 
     #[test]
-    fn build_match_cmd_find_with_shell_metachars() {
-        // find 含 $VAR、`cmd` 等 —— 走 base64，原文不进 shell
+    fn build_match_cmd_find_with_newline_stays_single_line() {
+        // 真实场景：LLM 提供含换行的 find（如多行 YAML 块）。命令仍须单行 ASCII。
+        let cmd = build_match_cmd(Interpreter::Python3, "/p", "line1\nline2", 0, 0);
+        assert!(!cmd.contains('\n'), "newline leaked into cmd: {cmd}");
+        // find 应当作 ANSI-C escape：$'line1\nline2'
+        assert!(cmd.contains(r"$'line1\nline2'"));
+    }
+
+    #[test]
+    fn build_match_cmd_find_with_shell_metachars_no_expansion() {
+        // find 含 $VAR / 反引号 —— $'...' 内不展开
         let cmd = build_match_cmd(Interpreter::Python3, "/p", "$HOME `whoami`", 0, 0);
-        let b64 = B64.encode(b"$HOME `whoami`");
-        assert!(cmd.contains(&format!("'{}'", b64)));
+        assert!(cmd.contains("$'$HOME `whoami`'"));
     }
 
     #[test]
-    fn build_patch_stage1_cmd_form() {
-        let cmd = build_patch_stage1_cmd(Interpreter::Python3, "/p", "old", "new", 3, "/p.tmp");
-        assert!(cmd.starts_with("python3 -c '"));
-        assert!(cmd.contains("'/p'"));
+    fn build_modify_cmd_python3_form() {
+        let cmd = build_modify_cmd(Interpreter::Python3, "/p.tmp", "old", "new", 3);
+        // 形态：python3 -c $'<script>' '/p.tmp' $'old' $'new' '3'
+        assert!(cmd.starts_with("python3 -c $'"), "got: {cmd}");
         assert!(cmd.contains("'/p.tmp'"));
-        assert!(cmd.contains("'b2xk'")); // "old" -> b2xk
-        assert!(cmd.contains("'bmV3'")); // "new" -> bmV3
-        assert!(cmd.contains("'3'"));    // expected_count
+        assert!(cmd.contains("$'old'"));
+        assert!(cmd.contains("$'new'"));
+        assert!(cmd.contains("'3'"));
+        assert!(!cmd.contains('\n'));
     }
 
     #[test]
-    fn build_patch_stage1_cmd_perl_form() {
-        let cmd = build_patch_stage1_cmd(Interpreter::Perl, "/p", "old", "new", 1, "/p.tmp");
-        assert!(cmd.starts_with("perl -e '"));
+    fn build_modify_cmd_perl_form() {
+        let cmd = build_modify_cmd(Interpreter::Perl, "/p.tmp", "old", "new", 1);
+        assert!(cmd.starts_with("perl -e $'"), "got: {cmd}");
+        // Perl 路径必须 `--` 分隔
+        assert!(cmd.contains(" -- '/p.tmp'"), "got: {cmd}");
+        assert!(!cmd.contains('\n'));
     }
 
     #[test]
-    fn build_patch_stage1_handles_special_chars_in_path() {
-        let cmd = build_patch_stage1_cmd(
-            Interpreter::Python3,
-            "/has space/it's",
-            "x", "y", 1,
-            "/has space/it's.tmp",
-        );
-        assert!(cmd.contains(r"'/has space/it'\''s'"));
+    fn build_modify_cmd_handles_replace_with_newline() {
+        // 多行 replace（真实场景：YAML block 替换）—— 不进 ZLE quote race
+        let cmd = build_modify_cmd(Interpreter::Python3, "/p.tmp", "k: 1", "k: 2\nk2: 3", 1);
+        assert!(!cmd.contains('\n'), "newline leaked: {cmd}");
+        assert!(cmd.contains(r"$'k: 2\nk2: 3'"));
+    }
+
+    #[test]
+    fn build_modify_cmd_handles_special_chars_in_path() {
+        let cmd = build_modify_cmd(Interpreter::Python3, "/has space/it's.tmp", "x", "y", 1);
         assert!(cmd.contains(r"'/has space/it'\''s.tmp'"));
+    }
+
+    #[test]
+    fn build_cp_cmd_form() {
+        let cmd = build_cp_cmd("/p", "/p.rssh-abc12345");
+        assert_eq!(cmd, "cp -- '/p' '/p.rssh-abc12345'");
+    }
+
+    #[test]
+    fn build_cp_cmd_with_tilde() {
+        let cmd = build_cp_cmd("~/foo", "~/foo.tmp");
+        assert_eq!(cmd, "cp -- \"$HOME\"/'foo' \"$HOME\"/'foo.tmp'");
+    }
+
+    #[test]
+    fn build_cp_cmd_with_special_chars() {
+        let cmd = build_cp_cmd("/has space/it's", "/has space/it's.tmp");
+        assert_eq!(cmd, r"cp -- '/has space/it'\''s' '/has space/it'\''s.tmp'");
+    }
+
+    #[test]
+    fn build_diff_cmd_form() {
+        let cmd = build_diff_cmd("/p", "/p.tmp");
+        assert_eq!(cmd, "diff -u -- '/p' '/p.tmp'");
+    }
+
+    #[test]
+    fn build_diff_cmd_with_tilde() {
+        let cmd = build_diff_cmd("~/foo", "~/foo.tmp");
+        assert_eq!(cmd, "diff -u -- \"$HOME\"/'foo' \"$HOME\"/'foo.tmp'");
     }
 
     #[test]
