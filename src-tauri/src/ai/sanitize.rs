@@ -229,9 +229,21 @@ fn find_write_redirect(tokens: &[&str]) -> Option<String> {
             continue;
         }
 
-        // 形态: token 包含 `>`（非白名单），如 ">/tmp/foo" / "2>err.log" / ">>append.log"
-        // 凡含 `>` 一律拒（除非全 token 命中 is_safe_redirect_token，前面已 continue 掉）
-        if t.contains('>') {
+        // 形态: token 包含 `>` 但不是独立的 redirect token —— 命令与重定向粘在一起的紧凑写法。
+        //
+        // shell 允许 `cmd>/dev/null` / `cmd>>/dev/null` 这种无空格形态，等价于 `cmd > /dev/null`。
+        // 之前一律拒 → `/dev/null` 白名单意图被破坏（"echo a>/dev/null" 被误拒，但语义和
+        // "echo a > /dev/null" 完全一样）。
+        //
+        // 修复：找第一个 `>` 把 token 切成 prefix + redirect 后缀。prefix 是命令名 / fd 数字 /
+        // 别的 token 片段（shell 视角是合法前缀，rssh 不深究）；只要后缀整段是
+        // `>/dev/null` 或 `>>/dev/null` 就放行。其余形态（含 `>file`、`>>append.log` 等）拒。
+        if let Some(pos) = t.find('>') {
+            let suffix = &t[pos..];
+            if suffix == ">/dev/null" || suffix == ">>/dev/null" {
+                i += 1;
+                continue;
+            }
             return Some(t.to_string());
         }
         i += 1;
@@ -900,6 +912,25 @@ mod tests {
         // 其他 fd 写到真实文件仍要拒
         assert!(matches!(
             validate("cmd 2>/tmp/err.log"),
+            Err(ShapeError::Write(_))
+        ));
+    }
+
+    #[test]
+    fn shape_devnull_glued_to_command_passes() {
+        // 紧贴形态（命令和重定向操作符之间无空格）—— shell 接受，rssh 也得接受。
+        // Regression：之前 split_whitespace 后整个 token 含 `>`，被一律拒，破坏 /dev/null 白名单意图。
+        assert!(validate("echo a>/dev/null").is_ok());
+        assert!(validate("echo a>>/dev/null").is_ok());
+        // cmd 名字以数字结尾 —— prefix 看起来像 fd 但实际是命令名，仍应放行
+        assert!(validate("cmd2>/dev/null").is_ok());
+        // 写到真实文件仍要拒（紧贴形态）
+        assert!(matches!(
+            validate("echo a>/etc/passwd"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("echo a>>/tmp/foo"),
             Err(ShapeError::Write(_))
         ));
     }

@@ -96,7 +96,7 @@ pub fn all_tools() -> Vec<ToolSchema> {
         },
         ToolSchema {
             name: TOOL_MATCH_FILE.into(),
-            description: "Locate every occurrence of a literal text inside a remote file (read-only, no user approval). \
+            description: "Locate every occurrence of a literal text inside a remote file (read-only; one approval card, auto-approved in danger_mode). \
                 Always call this **before** `patch_file` to: (1) confirm the find string actually exists and how many times; \
                 (2) verify the surrounding context matches the locations you want to change; \
                 (3) obtain `expected_count` for the follow-up `patch_file` call. \

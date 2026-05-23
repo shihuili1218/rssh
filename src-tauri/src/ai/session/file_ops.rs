@@ -82,23 +82,43 @@ fn parse_capabilities(output: &str) -> RemoteCapabilities {
 const JSON_MARKER: &str = "__RSSH_JSON__";
 
 /// 从 PTY 原始输出里抽出由 `JSON_MARKER` 包裹的内容。
-/// 找不到一对 marker 返回 None。
+/// 找不到一对独立成行的 marker 返回 None。
 ///
-/// 取**最后一对** marker —— 而不是最早一对。原因：脚本里 `M = "__RSSH_JSON__"`
-/// 这行常量定义会被 PTY ECHO 原样回显，因此 buffer 里实际含 3 个 marker：
+/// **按"独立成行"匹配**，不是 rfind 子串。脚本字面量里有 `M="__RSSH_JSON__"` 这行，
+/// 脚本协议把 marker 输出为**整行**（前后都是 `\n`）。如果用 rfind：
+///   1. 脚本源码 `M = "..."` 那行 echo 回显（marker 子串嵌在 `M = "<marker>"`）
+///   2. 脚本输出的开头 marker（整行）
+///   3. 脚本输出的结尾 marker（整行）
+///   4. **更危险**：match_file 的 context 字段如果含 marker 字面（用户在文件里写了
+///      `__RSSH_JSON__` 注释），子串扫到的位置会在 JSON 内部切，破坏解析。
 ///
-///   1. echo 区里的字面量（脚本源码 `M = "..."` 这行）
-///   2. 脚本输出的开头 marker
-///   3. 脚本输出的结尾 marker
-///
-/// 用"前两个"会抽到 echo 残片当 JSON（LLM 看到的"输出被截断"就是这种污染）。
-/// 用"后两个" → 永远是脚本运行时输出的那对，echo 中的字面量被自然忽略。
-/// 该协议下脚本源码只有 1 处 marker 字面量，所以"后两个"永远对应脚本输出。
+/// 按行匹配杜绝以上风险：只有"整行 trim 后等于 marker"的位置才算锚点。脚本输出的
+/// marker 一定独占一行；echo 回显里的字面量永远嵌在更长的源码行里，不会误匹配；
+/// JSON payload 里的 marker（包在引号 + 上下文里）也不会独占一行。
 fn extract_json_payload(pty_output: &str) -> Option<&str> {
-    let last = pty_output.rfind(JSON_MARKER)?;
-    let before_last = pty_output[..last].rfind(JSON_MARKER)?;
-    let after = before_last + JSON_MARKER.len();
-    Some(pty_output[after..last].trim())
+    // 找最后两个"整行等于 marker"的行，记录字节起止 offset，回切原 &str。
+    // line_indices 提供每行起始 offset + 内容；行尾 `\r\n` / `\r` / `\n` 都被 lines() 吃掉。
+    let mut last: Option<(usize, usize)> = None;
+    let mut prev: Option<(usize, usize)> = None;
+    let mut cursor = 0;
+    for raw_line in pty_output.split('\n') {
+        let start = cursor;
+        let end = cursor + raw_line.len();
+        cursor = end + 1; // 跳过 `\n`
+        // line trim 后等于 marker（兼容 `\r\n` —— raw_line 含末尾 `\r`，trim 掉）
+        if raw_line.trim() == JSON_MARKER {
+            prev = last;
+            last = Some((start, end));
+        }
+    }
+    let (_, prev_end) = prev?;
+    let (last_start, _) = last?;
+    // prev_end 是前一个 marker 行的结束（不含 `\n`）；下一字符是 `\n`，跳过再取
+    let body_start = prev_end + 1;
+    if body_start > last_start {
+        return None;
+    }
+    Some(pty_output[body_start..last_start].trim_matches('\n').trim())
 }
 
 // ─── 解释器脚本 ───────────────────────────────────────────────────
@@ -623,20 +643,69 @@ impl Actor {
                 return Ok(());
             }
         };
-        let count = serde_json::from_str::<serde_json::Value>(&payload)
-            .ok()
-            .and_then(|v| v.get("count").and_then(|c| c.as_u64()));
+        // 解析远端 JSON。`{"error": "..."}` 形态（file_not_found / io_error）走 push_tool_error，
+        // 与 patch_file 的错误处理保持一致 —— 不能把 error payload 当成功 ToolResult，否则 LLM
+        // 看不到失败信号会继续往下推（譬如基于 count=0 直接跑 patch_file，又一遍 file_not_found）。
+        let parsed: serde_json::Value = match serde_json::from_str(&payload) {
+            Ok(v) => v,
+            Err(e) => {
+                self.push_tool_error(
+                    &tc.id,
+                    &format!("match_file: malformed JSON ({e}). Raw: {payload}"),
+                );
+                return Ok(());
+            }
+        };
+        if let Some(err) = parsed.get("error").and_then(|e| e.as_str()) {
+            let msg = match err {
+                "file_not_found" => format!("match_file: file not found: {}", input.path),
+                "io_error" => format!(
+                    "match_file: io_error reading {} ({})",
+                    input.path,
+                    parsed.get("message").and_then(|m| m.as_str()).unwrap_or("")
+                ),
+                other => format!("match_file: remote error {other}: {payload}"),
+            };
+            self.push_tool_error(&tc.id, &msg);
+            return Ok(());
+        }
+        let count = parsed.get("count").and_then(|c| c.as_u64());
+
+        // 软上限：远端脚本无 cap，短 find（如 "a"）配大文件可产数千上万 matches，
+        // 撑爆 LLM context。后端截断 matches 数组，保留 count（真实数量）+ 前 N 个 matches +
+        // truncated 标识。LLM 能从 count > matches.len() 推断"还有更多"。
+        const MAX_MATCHES: usize = 50;
+        let mut parsed_out = parsed;
+        let total_matches = parsed_out
+            .get("matches")
+            .and_then(|m| m.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        let truncated = total_matches > MAX_MATCHES;
+        if truncated {
+            if let Some(arr) = parsed_out
+                .get_mut("matches")
+                .and_then(|m| m.as_array_mut())
+            {
+                arr.truncate(MAX_MATCHES);
+            }
+            parsed_out["truncated"] = json!(true);
+            parsed_out["matches_shown"] = json!(MAX_MATCHES);
+        }
+        let final_payload = serde_json::to_string(&parsed_out).unwrap_or(payload);
+
         self.audit_push(AuditKind::Note {
             message: format!(
-                "match_file: {} interp={} count={}",
+                "match_file: {} interp={} count={} matches_shown={}",
                 input.path,
                 interp.binary(),
-                count.map(|c| c.to_string()).unwrap_or_else(|| "?".into())
+                count.map(|c| c.to_string()).unwrap_or_else(|| "?".into()),
+                if truncated { MAX_MATCHES } else { total_matches }
             ),
         });
         self.history.push(ChatMessage::ToolResult {
             tool_call_id: tc.id,
-            content: payload,
+            content: final_payload,
             is_error: false,
         });
         Ok(())
@@ -827,7 +896,7 @@ impl Actor {
                 None,
             )
             .await?;
-        let diff = match outcome {
+        let diff_raw = match outcome {
             CommandOutcome::Rejected { reason } => {
                 self.push_tool_error(
                     &tc.id,
@@ -853,6 +922,14 @@ impl Actor {
                 output
             }
         };
+
+        // diff 走 max_output_bytes 截断 —— 原始 diff 可能很长（大文件差异、二进制差异等），
+        // 不截断会同时撑爆 (a) mv 卡片的 emit payload，导致前端 UI 渲染卡顿；(b) ToolResult
+        // 进 LLM history，吃掉 context window。截断后保留前缀供人审 / LLM 概览，丢失尾部
+        // 由 `diff_truncated_bytes` 显式告知。
+        let diff_trunc = sanitize::truncate(&diff_raw, self.cfg.max_output_bytes);
+        let diff = diff_trunc.text;
+        let diff_truncated_bytes = diff_trunc.truncated_bytes;
 
         // ── Card 4/4: mv tmp → path（原子覆盖） ─────────────────
         let outcome = self
@@ -897,7 +974,12 @@ impl Actor {
                         count
                     ),
                 });
-                let result = json!({ "diff": diff, "changed": count }).to_string();
+                let result = json!({
+                    "diff": diff,
+                    "diff_truncated_bytes": diff_truncated_bytes,
+                    "changed": count,
+                })
+                .to_string();
                 self.history.push(ChatMessage::ToolResult {
                     tool_call_id: tc.id,
                     content: result,
@@ -1169,6 +1251,23 @@ __rssh_done_abc:0\n";
         assert_eq!(
             extract_json_payload(pty),
             Some("{\"count\":5,\"matches\":[{\"line\":84}]}")
+        );
+    }
+
+    #[test]
+    fn extract_json_ignores_marker_literal_inside_json_payload() {
+        // Regression：之前用 rfind 子串。如果用户文件里写了 `__RSSH_JSON__` 注释，
+        // match_file 把 context 字段塞进 JSON 输出 —— rfind 会扫到 JSON 内部的 marker 子串，
+        // 在 JSON 中间切，破解析。按"独立成行"匹配杜绝这个：marker 子串嵌在引号 + 上下文里
+        // 时永远不会独占一行。
+        let pty = "\
+__RSSH_JSON__\n\
+{\"count\":1,\"matches\":[{\"line\":3,\"context\":\"# note: __RSSH_JSON__ is rssh internal\"}]}\n\
+__RSSH_JSON__\n\
+__rssh_done_xyz:0\n";
+        assert_eq!(
+            extract_json_payload(pty),
+            Some("{\"count\":1,\"matches\":[{\"line\":3,\"context\":\"# note: __RSSH_JSON__ is rssh internal\"}]}")
         );
     }
 

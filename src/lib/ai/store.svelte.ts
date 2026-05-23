@@ -373,9 +373,9 @@ async function attachListeners(info: AiSessionInfo) {
     pushChat(sid, { kind: "command", cmd: e.payload, at: Date.now() });
   }));
 
-  // internal_command：后端的 match_file / patch_file Stage A 用来跑 read-only cat。
-  // 不弹审批、不入 chat 时间线，直接粘到 PTY 跑——用户在终端历史里看到 cat 滚过，
-  // 透明但不打断流程。
+  // internal_command：当前只用于 file_ops 工具的远端能力探测（一行只读 echo "py3=... perl=... diff=..."）。
+  // 不弹审批、不入 chat 时间线，直接粘到 PTY 跑——用户在终端历史里看到探测命令滚过，
+  // 透明但不打断流程。后续若加其他 read-only 内部命令也走这条路径。
   u.push(await listen<{
     id: string;
     tool_call_id: string;
@@ -385,7 +385,22 @@ async function attachListeners(info: AiSessionInfo) {
   }>(`ai:internal_command:${sid}`, async (e) => {
     const kind = _targetKindByTarget[tid];
     if (!kind) {
-      console.error("[ai] internal_command without target_kind for", tid);
+      // fail-closed：必须给后端回一个 result，否则 wait_command_outcome 永远阻塞，
+      // session actor 卡在 file_ops handler 里 await 不出来，整个 AI 会话挂死。
+      const msg = `internal_command without target_kind for ${tid}`;
+      console.error("[ai]", msg);
+      try {
+        await invoke("ai_command_result", {
+          sessionId: sid,
+          toolCallId: e.payload.tool_call_id,
+          exitCode: -1,
+          output: msg,
+          timedOut: false,
+          earlyTerminated: false,
+        });
+      } catch (err) {
+        console.error("[ai] failed to report internal_command target_kind miss:", err);
+      }
       return;
     }
     const proposed: CommandProposed = {
