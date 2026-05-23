@@ -326,6 +326,7 @@ const en = {
   "ai.cmd.empty_output": "(empty output)",
   "ai.cmd.alert.exec_failed": "Execute failed: {error}",
   "ai.cmd.patch.tag": "[AI patch]",
+  "ai.cmd.proposed.tag": "[AI proposed]",
 
   // ── AI Diagnose: AiSettings ──
   "ai.settings.warn.byok": "⚠️ BYOK: command output is sanitized locally before being sent to the LLM provider. The provider may use this data per their terms",

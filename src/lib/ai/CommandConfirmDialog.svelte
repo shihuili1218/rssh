@@ -87,7 +87,7 @@
 <div class="cmd-card surface-flat" class:pending={isPending} class:done={!!result} class:rejected={!!rejected} class:patch={isPatch}>
     <div class="head">
         <span class="tag" class:patch-tag={isPatch}>
-            {isPatch ? t("ai.cmd.patch.tag") : "[AI proposed]"}
+            {isPatch ? t("ai.cmd.patch.tag") : t("ai.cmd.proposed.tag")}
         </span>
         <code class="cmd">{cmd.cmd}</code>
     </div>

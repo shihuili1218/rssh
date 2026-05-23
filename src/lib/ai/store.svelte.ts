@@ -110,8 +110,12 @@ export async function startSession(args: {
     model: args.model,
     locale: currentLocale(),
   });
-  _sessionByTarget[args.targetId] = info;
-  _targetKindByTarget[args.targetId] = args.targetKind;
+  // 用 info.target_id 作 key 而非 args.targetId —— attachListeners / internal_command
+  // 读 cache 时用 tid = info.target_id（见 attachListeners）。若两者哪天不一致（后端
+  // normalize 了 target_id），cache miss → internal_command 走 fail-closed 报错。统一用
+  // 后端权威的 info.target_id 消除分裂。
+  _sessionByTarget[info.target_id] = info;
+  _targetKindByTarget[info.target_id] = args.targetKind;
   _chatBySession[info.session_id] = [];
   _activeSessionId = info.session_id;
   await attachListeners(info);
