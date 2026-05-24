@@ -219,7 +219,10 @@ pub const INTERPRETERS_DENIED: &[&str] = &[
 /// **故意不含**：
 /// - `exec`：在 DESTRUCTIVE 里（替换 shell 进程），优先按危险命令拦截，不当 wrapper 透明
 /// - `time` / `nice`：罕见 LLM 用法，且 `time` 还是 zsh builtin，语义模糊
-pub const WRAPPERS: &[&str] = &["sudo", "env", "command", "busybox", "doas"];
+/// - `command`：单独 head 处理。`command -v X` / `-V X` 是 introspection（不执行 X），
+///   `command X` 真执行 X —— 当 wrapper 一律穿透会误拒前者，统一拒又错杀；放在
+///   `check_per_command_rules` 里看 args 决定。
+pub const WRAPPERS: &[&str] = &["sudo", "env", "busybox", "doas"];
 
 /// `sudo` / `doas` 的带参 flag：`-u user` / `-g group` 等。validator 跳过 wrapper 时
 /// 必须把 flag 和它的 value 都吞掉，否则 `sudo -u root rm a` 会把 `root` 当真正命令头。
@@ -328,50 +331,39 @@ fn node_text<'a>(n: &tree_sitter::Node, src: &'a [u8]) -> &'a str {
 
 /// 从 `command_name` 节点剥出命令头的归一化字面名（剥 quote / unescape `\X`）。
 ///
-/// fail-closed 规则：
-/// - command_name 含 command_substitution / process_substitution → 递归审查内部命令，
-///   本层无字面名（返回 None，跳过黑名单 —— 子命令已被审查过）
-/// - command_name 只有一个 child 且 kind 是 `word` / `raw_string` / `string` → 可靠归一
-/// - 其他形态（ansi_c_string / variable_expansion / 多片段拼接 `r"m"` 等）→ obfuscation，
-///   无法可靠还原 shell 真正执行的命令名，一律拒
+/// **fail-closed**：rssh 场景下 LLM 写命令头从来没有合法用例需要 substitution
+/// (`$(...)`/`` `...` ``)、ANSI-C hex escape (`$'r\x6d'`)、字段拼接 (`r"m"`)、
+/// 变量间接 (`$cmd`) —— 这些纯粹是 obfuscation。一律 Err，避免拼出 shell 真正
+/// 执行的黑名单命令。
 ///
-/// 拒理由：rssh 场景下 LLM 写命令头从来没有合法用例需要 ANSI-C hex escape
-/// (`$'r\x6d'`)、字段拼接 (`r"m"`)、变量间接 (`$cmd`) —— 这些纯粹是 obfuscation。
+/// 唯一放行：command_name 只含单个 `word` / `raw_string` / `string` 节点（或为空 —
+/// tree-sitter 实际不会这样，保险路径）。
 fn extract_command_name(
     name_node: &tree_sitter::Node,
     src: &[u8],
-) -> Result<Option<String>, ShapeError> {
+) -> Result<String, ShapeError> {
     let mut children: Vec<tree_sitter::Node> = Vec::new();
     let mut cur = name_node.walk();
     for c in name_node.children(&mut cur) {
         children.push(c);
     }
 
-    // command_name 位置出现 substitution（`$(printf rm) -rf /` / `` `printf rm` ``）：
-    // 哪怕内部命令安全（printf / echo）也能拼出黑名单命令名 → fail-closed。
-    // arg 位置的 substitution 走 check_command 里的 recurse_substitutions（保留递归）。
+    if children.is_empty()
+        || (children.len() == 1
+            && matches!(children[0].kind(), "word" | "raw_string" | "string"))
+    {
+        return Ok(normalize_head(node_text(name_node, src)));
+    }
+
+    let raw = node_text(name_node, src);
     if children
         .iter()
         .any(|c| matches!(c.kind(), "command_substitution" | "process_substitution"))
     {
         return Err(ShapeError::Destructive(format!(
-            "command substitution in command head '{}' (synthesized command names bypass the blacklist)",
-            node_text(name_node, src)
+            "command substitution in command head '{raw}' (synthesized command names bypass the blacklist)"
         )));
     }
-
-    // tree-sitter 对简单命令 `rm` 把 command_name 视为含单个 word；多片段或非
-    // 普通字面节点 → fail-closed
-    if children.len() == 1
-        && matches!(children[0].kind(), "word" | "raw_string" | "string")
-    {
-        return Ok(Some(normalize_head(node_text(name_node, src))));
-    }
-    // children 空（command_name 自己是 leaf）—— tree-sitter 实际不会这样，但稳妥处理
-    if children.is_empty() {
-        return Ok(Some(normalize_head(node_text(name_node, src))));
-    }
-    let raw = node_text(name_node, src);
     Err(ShapeError::Destructive(format!(
         "obfuscated command head '{raw}' (concatenation / variable expansion / ANSI-C escape not allowed)"
     )))
@@ -382,11 +374,7 @@ fn check_command(cmd: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeError> 
         Some(n) => n,
         None => return Ok(()), // 空命令（变量赋值前缀等），不管
     };
-    let raw_head = match extract_command_name(&name_node, src)? {
-        Some(h) => h,
-        // 命令头是 substitution，已递归审查；本层无字面命令名可判定
-        None => return Ok(()),
-    };
+    let raw_head = extract_command_name(&name_node, src)?;
 
     // 收集 arguments 节点 + 归一化后的文本。同时递归 walk 任意 substitution。
     let mut arg_strings: Vec<String> = Vec::new();
@@ -502,6 +490,19 @@ fn check_command_head(head: &str) -> Result<(), ShapeError> {
 /// 真正命令头之后剩下的 args 上跑 per-command 规则。args 已 normalize_head。
 fn check_per_command_rules(head: &str, args: &[String]) -> Result<(), ShapeError> {
     let arg_text: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+
+    // bash builtin `command`：
+    // - `command -v X` / `-V X`：introspection（仅查 X 是否可执行），放行
+    // - `command X` / `command -p X`：真执行 X，但 X 没经过 sanitize → 拒
+    //   （rssh 场景下 LLM 直接写命令名就行，不需要 `command` 前缀）
+    if head == "command" {
+        if arg_text.iter().any(|t| matches!(*t, "-v" | "-V")) {
+            return Ok(());
+        }
+        return Err(ShapeError::Destructive(
+            "command without -v/-V (the real command bypasses sanitize; use the bare name or `which`)".into(),
+        ));
+    }
 
     // shell `-c "..."` deferred-execution
     if SHELLS.contains(&head)
@@ -1351,7 +1352,8 @@ mod tests {
         assert!(validate("sudo ls -la").is_ok());
         assert!(validate("sudo -u root cat /etc/hosts").is_ok());
         assert!(validate("env FOO=bar grep pattern file").is_ok());
-        assert!(validate("command ps -ef").is_ok());
+        // 注意：`command X` 不再当 wrapper 透明跳过 —— 单独 head 处理，
+        // 看 shape_command_introspection。
     }
 
     #[test]
@@ -1441,6 +1443,24 @@ mod tests {
         ));
         // arg 位置的 substitution 仍按 recurse 逻辑：内部危险命令拒
         // （现有 shape_command_substitution_recurses 已覆盖）
+    }
+
+    #[test]
+    fn shape_command_introspection() {
+        // bash builtin `command -v X` / `-V X` 是 introspection（不执行 X，返回路径），
+        // 旧实现把 `command` 当透明 wrapper → `rm` 被当真正命令头 → 误拒。
+        assert!(validate("command -v rm").is_ok());
+        assert!(validate("command -V rm").is_ok());
+        assert!(validate("command -v perl").is_ok());
+        // 没 -v/-V 的 `command X` 真执行 X，必须拒（避免绕过黑名单）
+        assert!(matches!(
+            validate("command rm a"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("command -p rm a"),
+            Err(ShapeError::Destructive(_))
+        ));
     }
 
     #[test]
