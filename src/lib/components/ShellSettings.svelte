@@ -43,11 +43,13 @@
   }
 
   /** 切到 Custom radio：仅在 customPath 已有值时才写入持久化；
-   *  没填路径时只切 UI 状态，保留之前 selectedShell 不动，避免存空/占位污染。 */
+   *  没填路径时只切 UI 状态，保留之前 selectedShell 不动，避免存空/占位污染。
+   *  幂等：input refocus 时也调用本函数，已经等于 selectedShell 就不重复 invoke。 */
   function pickCustom() {
     pendingCustom = true;
-    if (customPath.trim()) {
-      selectedShell = customPath.trim();
+    const v = customPath.trim();
+    if (v && v !== selectedShell) {
+      selectedShell = v;
       saveShell();
     }
   }

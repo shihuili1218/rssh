@@ -16,8 +16,10 @@
     --elevation-pressed: none;
     /* A solid hairline. Mix text into bg (not transparent) — opaque,
        doesn't drift on alpha surfaces. ~45 brightness diff vs bg, both
-       light and dark palettes. */
-    --flat-border:         1px solid color-mix(in srgb, var(--text) 25%, var(--bg));
+       light and dark palettes.
+       拆开 color 单独 token —— shorthand 不能用作 background，多处复用就抽出来。 */
+    --flat-border-color:   color-mix(in srgb, var(--text) 25%, var(--bg));
+    --flat-border:         1px solid var(--flat-border-color);
     --flat-border-strong:  1px solid color-mix(in srgb, var(--text) 35%, var(--bg));
 }
 
@@ -90,7 +92,7 @@
 /* List 内部 trigger 跟选项区之间的接缝 divider 也跟 flat-border 同色。
    默认 ::before 用 var(--divider)，跟 trigger 的 flat-border 视觉不一致。 */
 :root[data-shape="flat"] .rssh-select-list::before {
-    background: color-mix(in srgb, var(--text) 25%, var(--bg));
+    background: var(--flat-border-color);
 }
 
 /* Checkbox / radio —— flat 风格：border + 中心 accent dot，跟 .shell-radio-indicator 同源。
