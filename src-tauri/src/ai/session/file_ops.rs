@@ -524,10 +524,9 @@ impl Actor {
     /// 3. 返回原始 `CommandOutcome` 给上层做错误分支（多步流程要根据 exit / JSON marker
     ///    决定是否中断、是否提示 tmp 残留等）。
     ///
-    /// `kind` 透传给前端 dialog；patch_file 走 `"patch_file"` 标记后，danger_mode 不自动批准。
-    /// 写文件比 read-only 命令风险高，"接受命令风险"不等于"接受任意文件改动" —— 强制
-    /// 用户每张卡片亲手点 approve 是 patch_file 的契约。match_file（read-only）不打 kind，
-    /// danger_mode 可以无声跑过。
+    /// `kind` 透传给前端 dialog —— 前端按 kind 查 per-tool 自动批准设置：
+    /// `patch_cp` / `patch_modify` / `patch_diff` / `patch_mv` 四张 patch_file 卡片各自一档；
+    /// `match_file` 一张卡片自己一档（read-only，默认自动批）。danger_mode 关时全部需人审。
     ///
     /// `diff` 透传给前端：patch_file 第 4 张 mv 卡片把第 3 张 diff 命令的输出当作审批
     /// 材料展示在卡片上 —— 用户审批 mv 时不用回滚翻第 3 张结果区域。其他卡片传 None。
@@ -661,7 +660,7 @@ impl Actor {
             }
         };
 
-        // 单卡片：搜索 path，read-only，回 JSON 给 LLM。kind=None 让 danger_mode 自动批。
+        // 单卡片：搜索 path，read-only，回 JSON 给 LLM。kind=match_file 让前端按 auto_match_file 决策。
         let cmd = build_match_cmd(interp, &input.path, &input.find, before, after);
         let outcome = self
             .run_file_op(
@@ -670,7 +669,7 @@ impl Actor {
                 format!("match_file: search `{}` (read-only)", input.path),
                 "read-only".into(),
                 60,
-                None,
+                Some("match_file"),
                 None,
             )
             .await?;
@@ -824,7 +823,7 @@ impl Actor {
                 format!("patch_file 1/4: copy `{}` to staging `{}`", input.path, tmp_path),
                 format!("Create {}", tmp_path),
                 30,
-                Some("patch_file"),
+                Some("patch_cp"),
                 None,
             )
             .await?;
@@ -862,7 +861,7 @@ impl Actor {
                 ),
                 format!("Modify {} in place", tmp_path),
                 60,
-                Some("patch_file"),
+                Some("patch_modify"),
                 None,
             )
             .await?;
@@ -944,7 +943,7 @@ impl Actor {
                 format!("patch_file 3/4: review diff of `{}` vs staged tmp", input.path),
                 "read-only (display diff for review)".into(),
                 30,
-                Some("patch_file"),
+                Some("patch_diff"),
                 None,
             )
             .await?;
@@ -1017,7 +1016,7 @@ impl Actor {
                 format!("patch_file 4/4: apply via `mv {} -> {}`", tmp_path, input.path),
                 format!("Atomic rename {} -> {}", tmp_path, input.path),
                 30,
-                Some("patch_file"),
+                Some("patch_mv"),
                 Some(&diff),
             )
             .await?;

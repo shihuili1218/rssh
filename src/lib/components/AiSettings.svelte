@@ -27,6 +27,19 @@
     let showDangerDialog = $state(false);
     let dangerNote = $state<string | null>(null);
 
+    // per-tool 自动批准。每个 checkbox 各自一个 boolean state。8 个字段平铺；
+    // 也可以塞成数组遍历，但 Linus 偏好显式 —— 8 行 boolean 比一坨 metadata 表
+    // 调试时更直观，也避免一行 toggle bug 同时拆掉 8 个开关。
+    let autoRunCommand = $state(true);
+    let autoMatchFile = $state(true);
+    let autoDownloadFile = $state(false);
+    let autoAnalyzeLocally = $state(false);
+    let autoPatchCp = $state(false);
+    let autoPatchModify = $state(false);
+    let autoPatchDiff = $state(false);
+    let autoPatchMv = $state(false);
+    let savingAuto = $state(false);
+
     /** onclick + preventDefault：Tauri webview 不支持原生 confirm()，且依赖 checkbox
      *  默认 toggle 会导致 cancel 后 DOM 与 Svelte state 错位。这里手动接管：
      *  开启时弹自定义模态等用户确认；关闭直接 save（关 = 回到安全默认，不拦）。 */
@@ -50,6 +63,33 @@
             dangerNote = t("ai.settings.danger.save_failed", { error: errMsg(err) });
         } finally {
             savingDanger = false;
+        }
+    }
+
+    /** 子开关写回后端。失败把 UI 状态回滚到 prev，避免界面与持久化失同步。 */
+    async function persistAuto(field: "autoRunCommand" | "autoMatchFile" | "autoDownloadFile"
+                                    | "autoAnalyzeLocally" | "autoPatchCp" | "autoPatchModify"
+                                    | "autoPatchDiff" | "autoPatchMv",
+                               next: boolean) {
+        savingAuto = true;
+        dangerNote = null;
+        try {
+            await ai.saveSettings({ [field]: next });
+        } catch (err) {
+            // 任一保存失败都把对应字段回滚——单 source of truth 是后端
+            switch (field) {
+                case "autoRunCommand":     autoRunCommand     = !next; break;
+                case "autoMatchFile":      autoMatchFile      = !next; break;
+                case "autoDownloadFile":   autoDownloadFile   = !next; break;
+                case "autoAnalyzeLocally": autoAnalyzeLocally = !next; break;
+                case "autoPatchCp":        autoPatchCp        = !next; break;
+                case "autoPatchModify":    autoPatchModify    = !next; break;
+                case "autoPatchDiff":      autoPatchDiff      = !next; break;
+                case "autoPatchMv":        autoPatchMv        = !next; break;
+            }
+            dangerNote = t("ai.settings.danger.save_failed", { error: errMsg(err) });
+        } finally {
+            savingAuto = false;
         }
     }
     let modelOptions = $state<ModelInfo[]>([]);
@@ -158,6 +198,14 @@
         endpoint = s.endpoint ?? "";
         hasKey = s.has_api_key;
         dangerMode = s.danger_mode;
+        autoRunCommand = s.auto_run_command;
+        autoMatchFile = s.auto_match_file;
+        autoDownloadFile = s.auto_download_file;
+        autoAnalyzeLocally = s.auto_analyze_locally;
+        autoPatchCp = s.auto_patch_cp;
+        autoPatchModify = s.auto_patch_modify;
+        autoPatchDiff = s.auto_patch_diff;
+        autoPatchMv = s.auto_patch_mv;
         if (hasKey) void autoLoadModels();
         await refreshSkills();
     });
@@ -354,6 +402,60 @@
         </label>
     </div>
 
+    <!-- per-tool 自动批准。danger_mode 关时整组 disabled —— 视觉灰显，不隐藏，
+         让用户知道这些选项存在、是怎么分粒度的；开 danger 时立刻可用。 -->
+    <div class="auto-section" class:disabled={!dangerMode}>
+        <div class="auto-section-title">{t("ai.settings.danger.auto.section")}</div>
+        <label class="auto-row">
+            <input type="checkbox" bind:checked={autoRunCommand}
+                   disabled={!dangerMode || savingAuto}
+                   onchange={(e) => persistAuto("autoRunCommand", (e.target as HTMLInputElement).checked)}/>
+            <span>{t("ai.settings.danger.auto.run_command")}</span>
+        </label>
+        <label class="auto-row">
+            <input type="checkbox" bind:checked={autoMatchFile}
+                   disabled={!dangerMode || savingAuto}
+                   onchange={(e) => persistAuto("autoMatchFile", (e.target as HTMLInputElement).checked)}/>
+            <span>{t("ai.settings.danger.auto.match_file")}</span>
+        </label>
+        <label class="auto-row">
+            <input type="checkbox" bind:checked={autoDownloadFile}
+                   disabled={!dangerMode || savingAuto}
+                   onchange={(e) => persistAuto("autoDownloadFile", (e.target as HTMLInputElement).checked)}/>
+            <span>{t("ai.settings.danger.auto.download_file")}</span>
+        </label>
+        <label class="auto-row">
+            <input type="checkbox" bind:checked={autoAnalyzeLocally}
+                   disabled={!dangerMode || savingAuto}
+                   onchange={(e) => persistAuto("autoAnalyzeLocally", (e.target as HTMLInputElement).checked)}/>
+            <span>{t("ai.settings.danger.auto.analyze_locally")}</span>
+        </label>
+        <label class="auto-row">
+            <input type="checkbox" bind:checked={autoPatchCp}
+                   disabled={!dangerMode || savingAuto}
+                   onchange={(e) => persistAuto("autoPatchCp", (e.target as HTMLInputElement).checked)}/>
+            <span>{t("ai.settings.danger.auto.patch_cp")}</span>
+        </label>
+        <label class="auto-row">
+            <input type="checkbox" bind:checked={autoPatchModify}
+                   disabled={!dangerMode || savingAuto}
+                   onchange={(e) => persistAuto("autoPatchModify", (e.target as HTMLInputElement).checked)}/>
+            <span>{t("ai.settings.danger.auto.patch_modify")}</span>
+        </label>
+        <label class="auto-row">
+            <input type="checkbox" bind:checked={autoPatchDiff}
+                   disabled={!dangerMode || savingAuto}
+                   onchange={(e) => persistAuto("autoPatchDiff", (e.target as HTMLInputElement).checked)}/>
+            <span>{t("ai.settings.danger.auto.patch_diff")}</span>
+        </label>
+        <label class="auto-row">
+            <input type="checkbox" bind:checked={autoPatchMv}
+                   disabled={!dangerMode || savingAuto}
+                   onchange={(e) => persistAuto("autoPatchMv", (e.target as HTMLInputElement).checked)}/>
+            <span>{t("ai.settings.danger.auto.patch_mv")}</span>
+        </label>
+    </div>
+
     <div class="section-label skill-header">
         {t("ai.settings.section.skills")}
         {#if !editing}
@@ -531,6 +633,41 @@
        把 title 颜色压成 --error——全局 .switch-card-title.on 默认是 --accent（绿），
        这里特化让"危险态"视觉上无法忽视，防止用户开了忘了又跑命令。 */
     .switch-card.danger.on .switch-card-title.on { color: var(--error); }
+
+    /* per-tool 自动批准面板 */
+    .auto-section {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 10px 12px;
+        border: 1px solid var(--divider);
+        border-radius: 6px;
+        background: var(--surface);
+    }
+    .auto-section.disabled {
+        opacity: 0.5;
+    }
+    .auto-section-title {
+        font-size: 12px;
+        color: var(--text-sub);
+        margin-bottom: 4px;
+    }
+    .auto-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        cursor: pointer;
+    }
+    .auto-row input[type="checkbox"] {
+        cursor: pointer;
+    }
+    .auto-section.disabled .auto-row {
+        cursor: not-allowed;
+    }
+    .auto-section.disabled .auto-row input[type="checkbox"] {
+        cursor: not-allowed;
+    }
     .danger-err {
         margin-top: 6px;
         font-size: 12px;

@@ -30,11 +30,17 @@ fn key_endpoint(provider: &str) -> String {
 fn key_api_key(provider: &str) -> String {
     setting_key(&format!("ai_{provider}_key"))
 }
-/// 危险模式（全局，不分 provider）：开启后前端跳过 CommandConfirmDialog 的人工确认，
-/// AI 提议的命令直接 auto-approve。这是 issue #39 的明确需求——用户在受控环境
-/// （隔离 VM、靶机）里期望像 Claude Code 一样无打扰自主跑。
+/// 危险模式（全局，不分 provider）：总闸；开启后才允许下面的 per-tool 自动批准生效。
+/// 这是 issue #39 的明确需求——用户在受控环境（隔离 VM、靶机）里期望像 Claude Code
+/// 一样无打扰自主跑，但要分粒度——文件改动比命令风险高一档，得让用户自己决定。
 fn key_danger_mode() -> String {
     setting_key("ai_danger_mode")
+}
+/// per-tool 自动批准开关。仅当 danger_mode=on 时生效。
+/// run_command / match_file 默认 true（向后兼容旧 danger_mode 全开的行为），
+/// 其它默认 false（写动作 / 大副作用，明确表示需要新设默认就开）。
+fn key_auto(name: &str) -> String {
+    setting_key(&format!("ai_auto_{name}"))
 }
 
 // ─── 命令 ──────────────────────────────────────────────────────────
@@ -370,8 +376,32 @@ pub struct AiSettings {
     pub model: String,
     pub endpoint: Option<String>,
     pub has_api_key: bool,
-    /// 全局（不随 provider 切换）。前端 toggle，开启后跳过命令确认对话框。
+    /// 危险模式总闸。off 时下面所有 auto_* 视同 false（per-tool 设置仍持久化，
+    /// 但运行时不生效，方便用户切回 danger 时复原选择）。
     pub danger_mode: bool,
+    /// per-tool 自动批准。命名直接映射到前端 CommandProposed.kind。
+    pub auto_run_command: bool,
+    pub auto_match_file: bool,
+    pub auto_download_file: bool,
+    pub auto_analyze_locally: bool,
+    pub auto_patch_cp: bool,
+    pub auto_patch_modify: bool,
+    pub auto_patch_diff: bool,
+    pub auto_patch_mv: bool,
+}
+
+/// per-tool auto-approve 字段的默认值 —— 在 ai_settings_get / ai_settings_set 间共享。
+/// run_command + match_file 默认开（向后兼容旧 danger_mode 全开行为），其余默认关。
+fn auto_default(name: &str) -> bool {
+    matches!(name, "run_command" | "match_file")
+}
+
+fn read_auto(state: &State<'_, AppState>, name: &str) -> AppResult<bool> {
+    Ok(state
+        .secret_store
+        .get(&key_auto(name))?
+        .map(|v| v == "1")
+        .unwrap_or_else(|| auto_default(name)))
 }
 
 /// `provider` 入参：传 `Some(p)` → 拉该 provider 的快照（不改 active）；
@@ -409,6 +439,14 @@ pub async fn ai_settings_get(
         endpoint,
         has_api_key,
         danger_mode,
+        auto_run_command: read_auto(&state, "run_command")?,
+        auto_match_file: read_auto(&state, "match_file")?,
+        auto_download_file: read_auto(&state, "download_file")?,
+        auto_analyze_locally: read_auto(&state, "analyze_locally")?,
+        auto_patch_cp: read_auto(&state, "patch_cp")?,
+        auto_patch_modify: read_auto(&state, "patch_modify")?,
+        auto_patch_diff: read_auto(&state, "patch_diff")?,
+        auto_patch_mv: read_auto(&state, "patch_mv")?,
     })
 }
 
@@ -441,6 +479,7 @@ pub async fn ai_list_models(
     client.list_models().await
 }
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn ai_settings_set(
     state: State<'_, AppState>,
@@ -449,6 +488,14 @@ pub async fn ai_settings_set(
     endpoint: Option<String>,
     api_key: Option<String>,
     danger_mode: Option<bool>,
+    auto_run_command: Option<bool>,
+    auto_match_file: Option<bool>,
+    auto_download_file: Option<bool>,
+    auto_analyze_locally: Option<bool>,
+    auto_patch_cp: Option<bool>,
+    auto_patch_modify: Option<bool>,
+    auto_patch_diff: Option<bool>,
+    auto_patch_mv: Option<bool>,
 ) -> AppResult<()> {
     if let Some(p) = provider.as_ref() {
         state.secret_store.set(&key_provider(), p)?;
@@ -478,6 +525,24 @@ pub async fn ai_settings_set(
         state
             .secret_store
             .set(&key_danger_mode(), if on { "1" } else { "0" })?;
+    }
+    // per-tool 自动批准。同 danger_mode 的存储约定（"1"/"0"），None 不动。
+    let auto_writes: &[(&str, Option<bool>)] = &[
+        ("run_command", auto_run_command),
+        ("match_file", auto_match_file),
+        ("download_file", auto_download_file),
+        ("analyze_locally", auto_analyze_locally),
+        ("patch_cp", auto_patch_cp),
+        ("patch_modify", auto_patch_modify),
+        ("patch_diff", auto_patch_diff),
+        ("patch_mv", auto_patch_mv),
+    ];
+    for (name, val) in auto_writes {
+        if let Some(on) = val {
+            state
+                .secret_store
+                .set(&key_auto(name), if *on { "1" } else { "0" })?;
+        }
     }
     Ok(())
 }

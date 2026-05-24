@@ -17,9 +17,29 @@ export interface AiSettings {
   model: string;
   endpoint: string | null;
   has_api_key: boolean;
-  /** 危险模式：跳过 CommandConfirmDialog 确认，AI 提议命令直接执行。默认 false。 */
+  /** 危险模式总闸。off 时下面 8 个 auto_* 视同 false（持久化保留，方便切回时复原）。 */
   danger_mode: boolean;
+  /** per-tool 自动批准。仅当 danger_mode=true 时生效；UI 上 danger 关时整组禁用。 */
+  auto_run_command: boolean;
+  auto_match_file: boolean;
+  auto_download_file: boolean;
+  auto_analyze_locally: boolean;
+  auto_patch_cp: boolean;
+  auto_patch_modify: boolean;
+  auto_patch_diff: boolean;
+  auto_patch_mv: boolean;
 }
+
+/** AI 工具卡片 kind —— 后端 emit command_proposed 时打的 tag；前端按它查 auto_* 设置。 */
+export type CommandKind =
+  | "run_command"
+  | "match_file"
+  | "download_file"
+  | "analyze_locally"
+  | "patch_cp"
+  | "patch_modify"
+  | "patch_diff"
+  | "patch_mv";
 
 export interface ModelInfo {
   id: string;
@@ -54,13 +74,10 @@ export interface CommandProposed {
   side_effect: string;
   timeout_s: number;
   /**
-   * 工具来源标记：
-   * - undefined  普通 run_command / read-only file_op（match_file）。danger_mode 可自动批准。
-   * - "patch_file"  patch_file 的写操作卡片（cp / modify / diff / mv 全 4 张都打这个）。
-   *   即便 danger_mode 也强制人审 —— 文件改动比 run_command 风险高，"接受命令风险"不等于
-   *   "接受任意文件改动"，必须每张卡片亲手 approve。
+   * 工具卡片类型 —— 前端按 kind 查 settings.auto_<kind> 决定是否自动批准。
+   * 历史回放（旧 audit log 重渲染）可能没有 kind，按未知处理走人审。
    */
-  kind?: "patch_file";
+  kind?: CommandKind;
   /**
    * patch_file 第 4 张 mv 卡片携带的 diff 文本（来自第 3 张 diff 命令的输出）——
    * 让用户审批 mv 时直接在卡片上看到 diff，不用回滚翻第 3 张的 result 区域。

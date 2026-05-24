@@ -290,7 +290,21 @@ export async function loadSettings(provider?: LlmProvider): Promise<AiSettings> 
   if (!provider) _settings = snapshot;
   return snapshot;
 }
-export async function saveSettings(s: Partial<{ provider: string; model: string; endpoint: string | null; apiKey: string | null; dangerMode: boolean }>) {
+export async function saveSettings(s: Partial<{
+  provider: string;
+  model: string;
+  endpoint: string | null;
+  apiKey: string | null;
+  dangerMode: boolean;
+  autoRunCommand: boolean;
+  autoMatchFile: boolean;
+  autoDownloadFile: boolean;
+  autoAnalyzeLocally: boolean;
+  autoPatchCp: boolean;
+  autoPatchModify: boolean;
+  autoPatchDiff: boolean;
+  autoPatchMv: boolean;
+}>) {
   await invoke("ai_settings_set", s);
   await loadSettings();
 }
