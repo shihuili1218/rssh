@@ -6,13 +6,22 @@
 
   let shells = $state<string[]>([]);
   let selectedShell = $state("");
+  /** Custom radio 自己的 path —— 独立持有，切到内置 shell 再回来不丢用户输入。 */
+  let customPath = $state("");
   let verboseLog = $state(true);
   let connectTimeout = $state(10);
   let commandBlockBar = $state(true);
 
+  /** 用户当前选中的是 Custom 还是某个内置 shell。
+   *  selectedShell 不在 shells 列表里 && 非空 → custom 模式。 */
+  let customMode = $derived(selectedShell !== "" && !shells.includes(selectedShell));
+
   onMount(async () => {
     try { shells = await invoke<string[]>("list_shells"); } catch { shells = []; }
     selectedShell = await invoke<string | null>("get_setting", { key: "local_shell" }) ?? "";
+    if (selectedShell && !shells.includes(selectedShell)) {
+      customPath = selectedShell;
+    }
     verboseLog = (await invoke<string | null>("get_setting", { key: "verbose_log" })) !== "false";
     const ts = await invoke<string | null>("get_setting", { key: "connect_timeout" });
     if (ts) connectTimeout = parseInt(ts, 10) || 10;
@@ -21,6 +30,33 @@
 
   async function saveShell() {
     await invoke("set_setting", { key: "local_shell", value: selectedShell });
+  }
+
+  /** 选中内置 shell —— radio onchange 触发。 */
+  function pickShell(sh: string) {
+    selectedShell = sh;
+    saveShell();
+  }
+
+  /** 切到 Custom radio：把 selectedShell 设成 customPath（若已有）。 */
+  function pickCustom() {
+    if (customPath.trim()) {
+      selectedShell = customPath.trim();
+      saveShell();
+    } else {
+      // 没输入内容，先标记 custom 模式（用一个不在 shells 里的占位让 derived customMode=true）
+      selectedShell = " "; // 空格，渲染时显示空 input
+      saveShell();
+    }
+  }
+
+  /** Custom input blur：把 input 内容写回 selectedShell。 */
+  function onCustomBlur() {
+    const v = customPath.trim();
+    if (v) {
+      selectedShell = v;
+      saveShell();
+    }
   }
 
   async function saveVerbose() {
@@ -40,26 +76,43 @@
 
 <div class="page">
   <div class="section-label">LOCAL SHELL</div>
-  <!-- shell 列表 + Custom Path 合在一个 .card.surface-raised（跟 GitHubSyncScreen / AiSettings 同款）。 -->
   <div class="card surface-raised shell-card">
-    <div class="shell-list">
-      {#each shells as sh}
-        <button
-          class="shell-option neu-sm"
-          class:active={selectedShell === sh || (!selectedShell && shells[0] === sh)}
-          onclick={() => { selectedShell = sh; saveShell(); }}
-        >
-          <span class="shell-name">{sh}</span>
-          {#if selectedShell === sh || (!selectedShell && shells[0] === sh)}
-            <span class="check">&#x2713;</span>
-          {/if}
-        </button>
-      {/each}
+    <div class="shell-hint">
+      Pick a shell to use for new local terminals, or choose Custom and type your own path.
     </div>
-    <div class="custom-shell">
-      <label for="shell-custom-path">Custom Path</label>
-      <input id="shell-custom-path" type="text" bind:value={selectedShell}
-             placeholder="/usr/local/bin/fish" onblur={saveShell} />
+    <div class="radio-group" role="radiogroup">
+      {#each shells as sh, i}
+        {@const id = `shell-r-${i}`}
+        {@const basename = (sh.split("/").pop() || sh).toUpperCase()}
+        <div class="radio-wrapper">
+          <input type="radio" id={id} name="local-shell" class="radio-state"
+                 value={sh} checked={!customMode && (selectedShell === sh || (!selectedShell && shells[0] === sh))}
+                 onchange={() => pickShell(sh)} />
+          <label for={id} class="radio-label">
+            <span class="shell-radio-indicator" aria-hidden="true"></span>
+            <span class="info">
+              <span class="name">{basename}</span>
+              <span class="path">({sh})</span>
+            </span>
+          </label>
+        </div>
+      {/each}
+      <div class="radio-wrapper">
+        <input type="radio" id="shell-r-custom" name="local-shell" class="radio-state"
+               checked={customMode}
+               onchange={pickCustom} />
+        <label for="shell-r-custom" class="radio-label">
+          <span class="shell-radio-indicator" aria-hidden="true"></span>
+          <span class="info">
+            <span class="name">CUSTOM</span>
+            <input class="custom-input" type="text"
+                   bind:value={customPath}
+                   placeholder="/usr/local/bin/fish"
+                   onfocus={() => pickCustom()}
+                   onblur={onCustomBlur} />
+          </span>
+        </label>
+      </div>
     </div>
   </div>
 
@@ -131,31 +184,142 @@
     gap: 14px;
   }
 
-  .shell-list { display: flex; flex-direction: column; gap: 6px; }
-  .shell-option {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 14px; border: none; cursor: pointer;
-    font-family: monospace; font-size: 13px;
-    color: var(--text-sub); background: var(--bg);
-    transition: all 0.15s;
-  }
-  .shell-option:hover { color: var(--text); }
-  .shell-option.active {
-    color: var(--accent); font-weight: 600;
-    outline: 1px solid var(--accent); outline-offset: -1px;
-  }
-  .shell-name { flex: 1; }
-  .check { color: var(--accent); font-size: 16px; }
-
-  .custom-shell {
-    display: flex; flex-direction: column; gap: 4px;
-  }
-  .custom-shell label {
+  /* 提示文本：跟 GitHubSyncScreen .pat-hint 同一档（11px / text-dim / 行高 1.5）。 */
+  .shell-hint {
     font-size: 11px;
-    color: var(--text-sub);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    line-height: 1.5;
   }
+
+  /* Radio group —— 复刻 uiverse neu radio：三层圆形阴影（外圈 raised + 内圈 reversed well +
+     凸起盖板）。选中时盖板缩小+下移+淡出，露出底下的"井"。
+     颜色 token 化：#ecf0f3 → var(--surface)、#d1d9e6 → var(--shadow-dark)、#fff → var(--shadow-light)。
+     尺寸：indicator 从参考的 30px 缩到 20px（rssh 字体 13-14px，30 太大），阴影 offset/blur 按比例缩。 */
+  .radio-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .radio-wrapper {
+    position: relative;
+  }
+
+  /* 真 input：照搬参考。pointer-events:none → 鼠标穿透到 label，label[for] 转发让 input
+     获取 focus；focus 状态触发 `:focus ~ .radio-label .info` 右移 8px。
+     注意不能照参考留默认 width/height —— 全局 input 给了 0/0 之外的尺寸会盖住后面 sibling。 */
+  .radio-state {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 1px;
+    height: 1px;
+    opacity: 1e-5;
+    pointer-events: none;
+    margin: 0;
+    padding: 0;
+    box-shadow: none;
+  }
+
+  .radio-label {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    min-height: 20px;
+  }
+
+  /* indicator 视觉按主题分化：neu 在这里写（三层阴影），flat / material 各自在
+     styles/shapes/*.css 接管。class 用 :global() 暴露给外部 shape selector hook。
+     裸默认（无主题匹配时）= 透明圆，避免空白 fallback 难看。 */
+  :global(.shell-radio-indicator) {
+    position: relative;
+    flex-shrink: 0;
+    border-radius: 50%;
+    height: 20px;
+    width: 20px;
+    overflow: hidden;
+  }
+
+  /* neu 主题：三层圆形阴影（外圈 raised + 内圈 reversed well + 凸起盖板）。
+     :checked 时盖板缩小+下移+淡出，露出底下的"井"。 */
+  :global(:root[data-shape="neumorphism"] .shell-radio-indicator) {
+    box-shadow:
+        -5px -3px 5px 0px var(--shadow-light),
+        5px 3px 8px 0px var(--shadow-dark);
+  }
+  :global(:root[data-shape="neumorphism"] .shell-radio-indicator::before),
+  :global(:root[data-shape="neumorphism"] .shell-radio-indicator::after) {
+    content: "";
+    position: absolute;
+    top: 10%;
+    left: 10%;
+    height: 80%;
+    width: 80%;
+    border-radius: 50%;
+  }
+  :global(:root[data-shape="neumorphism"] .shell-radio-indicator::before) {
+    box-shadow:
+        -3px -1.5px 3px 0px var(--shadow-dark),
+        3px 1.5px 5px 0px var(--shadow-light);
+  }
+  :global(:root[data-shape="neumorphism"] .shell-radio-indicator::after) {
+    background-color: var(--surface);
+    box-shadow:
+        -3px -1.5px 3px 0px var(--shadow-light),
+        3px 1.5px 5px 0px var(--shadow-dark);
+    transform: scale3d(1, 1, 1);
+    transition: opacity 0.25s ease-in-out, transform 0.25s ease-in-out;
+  }
+  /* :checked 用 input[type="radio"] + sibling label 的 element selector，
+     避免 scoped class hash 问题；.shell-radio-indicator 限定只命中本组件的 radio。 */
+  :global(:root[data-shape="neumorphism"] input[type="radio"]:checked ~ label .shell-radio-indicator::after) {
+    transform: scale3d(0.975, 0.975, 1) translate3d(0, 10%, 0);
+    opacity: 0;
+  }
+
+  /* 文字：name + path 单行 inline 排列。
+     opacity 1 不衰减 —— 之前 0.6→1 的微交互是参考里 `:focus ~` 那套的辅助效果，
+     focus 部分删了之后留着反而让 Custom 行的 input placeholder 也跟着淡到 0.36
+     几乎看不见。状态对比交给 name 的 accent 配色就够。 */
+  .info {
+    flex: 1;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+  }
+  .name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+  }
+  .radio-state:checked ~ .radio-label .name { color: var(--accent); }
+  .path {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: monospace;
+    word-break: break-all;
+  }
+
+  /* Custom radio 行的 input 紧贴 name 后面，跟其它行的 path 同槽位、同样式（dim/monospace）。
+     placeholder 写 "(/usr/local/bin/fish)"，括号风格跟内置行的 (/bin/zsh) 一致。 */
+  .custom-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 0;
+    font-size: 11px;
+    font-family: monospace;
+    color: var(--text-dim);
+    border-radius: 0;
+    min-width: 0;
+  }
+  .custom-input:focus { outline: none; color: var(--text); }
+  .custom-input::placeholder { color: var(--text-dim); opacity: 0.6; }
 
   .timeout-row {
     display: flex; align-items: center; gap: 10px;

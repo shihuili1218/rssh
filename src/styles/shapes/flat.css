@@ -103,6 +103,33 @@
     border: var(--flat-border);
 }
 
+/* ShellSettings 自定义 radio —— flat 实现：边框风格，无阴影。
+   未选中 = 空心圆 + 普通 border；选中 = accent border + 中心 accent 实心圆点（scale 动画）。 */
+:root[data-shape="flat"] .shell-radio-indicator {
+    border: var(--flat-border);
+    background: var(--surface);
+    box-sizing: border-box;
+    transition: border-color 0.15s;
+}
+:root[data-shape="flat"] .shell-radio-indicator::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    transform: translate(-50%, -50%) scale(0);
+    transition: transform 0.15s ease-out;
+}
+:root[data-shape="flat"] input[type="radio"]:checked ~ label .shell-radio-indicator {
+    border-color: var(--accent);
+}
+:root[data-shape="flat"] input[type="radio"]:checked ~ label .shell-radio-indicator::after {
+    transform: translate(-50%, -50%) scale(1);
+}
+
 /* 选中 tab：accent 整块反白填充。idle/hover 由组件 scoped CSS 接管。 */
 :root[data-shape="flat"] .sb-item.active {
     background: var(--accent);

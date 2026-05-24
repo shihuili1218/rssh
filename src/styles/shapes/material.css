@@ -49,6 +49,33 @@
     box-shadow: var(--elevation-low);
 }
 
+/* ShellSettings 自定义 radio —— Material Design 风格：2px 边框 + 中心实心圆点 with elastic scale。
+   未选中 = text-dim 边框；选中 = accent 边框 + 中心 accent dot 弹入 + ripple-like ring。 */
+:root[data-shape="material"] .shell-radio-indicator {
+    border: 2px solid var(--text-dim);
+    background: transparent;
+    box-sizing: border-box;
+    transition: border-color 0.15s;
+}
+:root[data-shape="material"] .shell-radio-indicator::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent);
+    transform: translate(-50%, -50%) scale(0);
+    transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+:root[data-shape="material"] input[type="radio"]:checked ~ label .shell-radio-indicator {
+    border-color: var(--accent);
+}
+:root[data-shape="material"] input[type="radio"]:checked ~ label .shell-radio-indicator::after {
+    transform: translate(-50%, -50%) scale(1);
+}
+
 /* 选中 tab：3px accent underline（Material Tabs 规范）。idle/hover 由组件 scoped CSS 接管。 */
 :root[data-shape="material"] .sb-item.active {
     background: transparent;
