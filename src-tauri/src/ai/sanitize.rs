@@ -176,6 +176,12 @@ pub const COUNTED_LOOP: &[&str] = &["vmstat", "iostat", "pidstat", "mpstat", "sa
 /// 写文件动词。这些命令的存在本身就在改文件系统状态，统一拒绝，LLM 改文件走 patch_file。
 pub const WRITE_VERBS: &[&str] = &["tee", "cp", "mv", "ln", "install"];
 
+/// Shell 列表：用于识别 `bash -c "..."` 这类 deferred-execution 形态。
+/// **不在 INTERPRETERS_DENIED 里**——shell 编排 pipe (`cmd1 | cmd2`) 是合法用例，
+/// 但 `-c "..."` 把后续命令字面塞进 string，sanitize 看不到 → 所有规则全废。
+/// rssh 远端命令本身就跑在 shell 里，从来没有合法用例需要再起一层 `bash -c`。
+pub const SHELLS: &[&str] = &["bash", "sh", "zsh", "dash", "ksh", "mksh", "ash"];
+
 /// 全拒的脚本解释器：任意一个都可以通过 `open()` 类 API 写文件，绕过 patch_file 守护。
 /// 业务上 LLM 也不需要它们——读文件用 cat/grep/awk(read-only)，改文件用 patch_file。
 ///
@@ -445,6 +451,19 @@ fn validate_segment(seg: &str) -> Result<(), ShapeError> {
     if INTERPRETERS_DENIED.contains(&first) {
         return Err(ShapeError::Write(format!(
             "{first} (rssh blocks script interpreters; use patch_file / match_file for file work)"
+        )));
+    }
+
+    // shell `-c "..."` / `--command "..."`：deferred-execution，string 内容看不见 → 拒。
+    // `bash file.sh` / `bash --version` / `ps | grep bash` 等不动（保留 shell pipe 编排合法承诺）。
+    if SHELLS.contains(&first)
+        && tokens
+            .iter()
+            .skip(1)
+            .any(|t| *t == "-c" || *t == "--command" || t.starts_with("-c"))
+    {
+        return Err(ShapeError::Write(format!(
+            "{first} -c (deferred execution hides the real command from sanitize; use direct piping)"
         )));
     }
 
@@ -1284,6 +1303,54 @@ mod tests {
             validate("a&&b;cp x y"),
             Err(ShapeError::Write(_))
         ));
+    }
+
+    #[test]
+    fn shape_shell_dash_c_blocked() {
+        // bash/sh/zsh/dash 的 `-c "..."` 是 deferred-execution：sanitize 看不到字符串内容，
+        // 后面任何 `rm -rf /` / 写文件 / 解释器调用都绕过所有规则。
+        //
+        // rssh 远端命令本身就跑在 shell 里，"shell pipe 编排"用 `|` `&&` 直接写就行，
+        // **没有任何合法用例需要 `bash -c`**。
+        assert!(matches!(
+            validate("bash -c 'rm -rf /'"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("sh -c 'echo a > /tmp/x'"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("zsh -c 'cat /etc/passwd'"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("dash -c 'ls'"),
+            Err(ShapeError::Write(_))
+        ));
+        // 带路径前缀
+        assert!(matches!(
+            validate("/bin/bash -c 'whoami'"),
+            Err(ShapeError::Write(_))
+        ));
+        // 长选项 --command
+        assert!(matches!(
+            validate("bash --command 'ls'"),
+            Err(ShapeError::Write(_))
+        ));
+        // wrapper 套也要穿透
+        assert!(matches!(
+            validate("sudo bash -c 'rm /tmp/x'"),
+            Err(ShapeError::Write(_))
+        ));
+        // 第二段也要拦（不能 `echo ok && bash -c '...'` 绕）
+        assert!(matches!(
+            validate("echo ok && bash -c 'rm a'"),
+            Err(ShapeError::Write(_))
+        ));
+        // 没 -c 的 shell 调用不动（保持注释里的"shell 编排合法"承诺）
+        assert!(validate("bash --version").is_ok());
+        assert!(validate("ps -ef | grep bash").is_ok());
     }
 
     #[test]
