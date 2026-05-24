@@ -31,8 +31,8 @@
     let isAckOnly = $derived(cmd.kind === "download_file" || cmd.kind === "analyze_locally");
 
     /** 把 kind 映射到 settings 上对应的 auto_* 字段 —— 命中即可自动批准。
-     *  TS 上 switch 已 exhaustive 覆盖 CommandKind 8 个值；但运行时 cmd.kind
-     *  可能是 LLM/历史回放传入的未知字符串，fail-closed 显式 return false。 */
+     *  default 分支用 `never` 哨兵：CommandKind 新增联合成员时这里类型推断会失败、
+     *  编译报错提醒补 case；同时运行时 fail-closed（type-violation 入参也不放过）。 */
     function autoApproveAllowed(s: AiSettings | null, kind?: CommandKind): boolean {
         if (!s || !s.danger_mode || !kind) return false;
         switch (kind) {
@@ -44,7 +44,11 @@
             case "patch_modify":    return s.auto_patch_modify;
             case "patch_diff":      return s.auto_patch_diff;
             case "patch_mv":        return s.auto_patch_mv;
-            default:                return false;
+            default: {
+                const _exhaustive: never = kind;
+                void _exhaustive;
+                return false;
+            }
         }
     }
 
@@ -52,7 +56,8 @@
      *  store 的 _runningExecutions 表登记的是 PTY 句柄，无法守门重入。
      *  Dialog 实例可能销毁重建（panel close/reopen），且 result prop 在事件
      *  抵达前是 undefined → isPending=true，会再次自动 approve 发重复 ack。
-     *  用 module-level Set 兜底：tool_call_id 是 UUID 不复用，已 ack 过永久标记。 */
+     *  用 module-level Set 兜底：approve 后登记；result/rejected 抵达后由
+     *  $effect 清理，避免长会话累积 UUID 字符串。 */
     const _ackedToolCalls = new Set<string>();
 
     // 自动批准：每次新 command 进 chat 会创建一个新的 CommandConfirmDialog 实例，
@@ -75,6 +80,15 @@
             && autoApproveAllowed(ai.settings(), cmd.kind)
         ) {
             void approve();
+        }
+    });
+
+    // result / rejected prop 抵达 → 把对应 tool_call_id 从 _ackedToolCalls 移除。
+    // 此后该 dialog 再 remount 走的是 isPending=false 分支不会触发 approve，
+    // Set 也不会无限增长。
+    $effect(() => {
+        if (result || rejected) {
+            _ackedToolCalls.delete(cmd.tool_call_id);
         }
     });
 
