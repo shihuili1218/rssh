@@ -9,7 +9,6 @@
   - 得考虑export/import/save_to_remote
   - 新数据：value = "enc:v1:<base64-ciphertext>"
 - ai 增加正则脱敏，增加命令黑名单
-- ai 内置文件读写的skill
 
 好好扫描一下所有rust代码，相当于一次完整review和refactor，找出不好设计/数据结构错误/错误实现/badsmell，我需要真实的问题，而不是为了找出问题而找出问题
 
