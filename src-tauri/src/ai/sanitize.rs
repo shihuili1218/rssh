@@ -226,6 +226,10 @@ pub const WRAPPERS: &[&str] = &["sudo", "env", "command", "busybox", "doas"];
 const SUDO_FLAGS_WITH_ARG: &[&str] =
     &["-u", "-g", "-U", "-C", "-h", "-T", "-D", "-p", "-r", "-t"];
 
+/// GNU `env` 的带参 flag：`-u VAR` / `--unset VAR` / `-C DIR` / `--chdir DIR`。
+/// 不吞 value 会让 `env -u FOO rm a` 把 `FOO` 当真正命令头，rm 全程跳过黑名单。
+const ENV_FLAGS_WITH_ARG: &[&str] = &["-u", "--unset", "-C", "--chdir"];
+
 /// 取一个 token 的 basename（去掉路径前缀）。`/bin/rm` → `rm`。
 fn bare(t: &str) -> &str {
     t.rsplit('/').next().unwrap_or(t)
@@ -343,14 +347,17 @@ fn extract_command_name(
         children.push(c);
     }
 
-    // 命令头是纯 substitution / 内含 substitution → 全部递归审查后返回 None
-    if children.iter().any(|c| {
-        matches!(c.kind(), "command_substitution" | "process_substitution")
-    }) {
-        for c in &children {
-            walk_ast(c, src)?;
-        }
-        return Ok(None);
+    // command_name 位置出现 substitution（`$(printf rm) -rf /` / `` `printf rm` ``）：
+    // 哪怕内部命令安全（printf / echo）也能拼出黑名单命令名 → fail-closed。
+    // arg 位置的 substitution 走 check_command 里的 recurse_substitutions（保留递归）。
+    if children
+        .iter()
+        .any(|c| matches!(c.kind(), "command_substitution" | "process_substitution"))
+    {
+        return Err(ShapeError::Destructive(format!(
+            "command substitution in command head '{}' (synthesized command names bypass the blacklist)",
+            node_text(name_node, src)
+        )));
     }
 
     // tree-sitter 对简单命令 `rm` 把 command_name 视为含单个 word；多片段或非
@@ -390,8 +397,8 @@ fn check_command(cmd: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeError> 
     }
 
     // wrapper 透明跳过：依次吞掉 wrapper 名 + 它的 flag/value，args 第一个非 flag word
-    // 视为真正命令头。
-    let (head, head_args_start) = strip_wrappers(&raw_head, &arg_strings);
+    // 视为真正命令头。env -S 之类 deferred-exec 在这里直接 Err。
+    let (head, head_args_start) = strip_wrappers(&raw_head, &arg_strings)?;
 
     check_command_head(head)?;
     check_per_command_rules(head, &arg_strings[head_args_start..])?;
@@ -411,13 +418,27 @@ fn recurse_substitutions(n: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeE
 
 /// 跳过 wrapper 链（sudo / env / command / busybox / doas）。
 /// 返回 (真正命令头 bare 名, 真正命令头之后第一个 arg 的 index)。args 已经过 normalize_head。
-fn strip_wrappers<'a>(raw_head: &'a str, args: &'a [String]) -> (&'a str, usize) {
+///
+/// `env -S 'rm -rf /'` / `env --split-string=...` 是 GNU env 的 deferred-execution
+/// （把 string 当命令字面解析），同 `bash -c` 性质，直接拒。
+fn strip_wrappers<'a>(
+    raw_head: &'a str,
+    args: &'a [String],
+) -> Result<(&'a str, usize), ShapeError> {
     let mut head: &str = bare(raw_head);
     let mut i = 0;
     while WRAPPERS.contains(&head) && i < args.len() {
         let wrapper = head;
         while i < args.len() {
             let t = args[i].as_str();
+            // env -S / --split-string=... ：deferred-execution
+            if wrapper == "env"
+                && (t == "-S" || t == "--split-string" || t.starts_with("--split-string="))
+            {
+                return Err(ShapeError::Write(
+                    "env -S (deferred execution hides the real command from sanitize)".into(),
+                ));
+            }
             if t.starts_with('-') {
                 i += 1;
                 if (wrapper == "sudo" || wrapper == "doas")
@@ -425,6 +446,11 @@ fn strip_wrappers<'a>(raw_head: &'a str, args: &'a [String]) -> (&'a str, usize)
                     && i < args.len()
                 {
                     i += 1; // 吞 value
+                } else if wrapper == "env"
+                    && ENV_FLAGS_WITH_ARG.contains(&t)
+                    && i < args.len()
+                {
+                    i += 1; // 吞 -u VAR / --unset VAR / -C DIR / --chdir DIR 的 value
                 }
                 continue;
             }
@@ -440,7 +466,7 @@ fn strip_wrappers<'a>(raw_head: &'a str, args: &'a [String]) -> (&'a str, usize)
         head = bare(args[i].as_str());
         i += 1;
     }
-    (head, i)
+    Ok((head, i))
 }
 
 fn check_command_head(head: &str) -> Result<(), ShapeError> {
@@ -1396,6 +1422,60 @@ mod tests {
         assert!(validate("ps -ef | grep java | head -10").is_ok());
         assert!(validate("cat /etc/hosts | wc -l").is_ok());
         assert!(validate("ls -la | sort").is_ok());
+    }
+
+    #[test]
+    fn shape_substitution_in_command_head_blocked() {
+        // command_name 位置含 `$(...)` 的拼接命令头：内部 substitution 哪怕是"安全"命令
+        // （printf / echo）仍能拼出黑名单命令名 → bypass。
+        // 修复：command_name 位置的 substitution 一律 fail-closed（arg 位置仍走 recurse）。
+        assert!(matches!(
+            validate("$(printf rm) -rf /"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("`printf rm` -rf /"),
+            Err(ShapeError::Destructive(_))
+        ));
+        // 组合：substitution + 字面前缀已被 multi-children 规则拦下，这里再加保险
+        assert!(matches!(
+            validate("$(echo rm) /tmp/x"),
+            Err(ShapeError::Destructive(_))
+        ));
+        // arg 位置的 substitution 仍按 recurse 逻辑：内部危险命令拒
+        // （现有 shape_command_substitution_recurses 已覆盖）
+    }
+
+    #[test]
+    fn shape_env_advanced_flags_blocked() {
+        // GNU env `-S` / `--split-string`：把 string 当命令字面解析，deferred-execution，
+        // 等同 `bash -c` 性质。
+        assert!(matches!(
+            validate("env -S 'rm -rf /'"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("env --split-string='cp a b'"),
+            Err(ShapeError::Write(_))
+        ));
+        // `env -u VAR cmd ...` / `env --unset VAR cmd ...`：旧 strip_wrappers 只跳
+        // `KEY=VAL`，没跳 `-u` 的 value → `VAR` 被当命令头。
+        assert!(matches!(
+            validate("env -u FOO rm a"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("env --unset FOO cp a b"),
+            Err(ShapeError::Write(_))
+        ));
+        // `env -C dir cmd ...` / `--chdir` 同理
+        assert!(matches!(
+            validate("env -C /tmp rm a"),
+            Err(ShapeError::Destructive(_))
+        ));
+        // 安全用例仍放行
+        assert!(validate("env -u FOO ls").is_ok());
+        assert!(validate("env -i ls").is_ok()); // -i 无参数
     }
 
     #[test]
