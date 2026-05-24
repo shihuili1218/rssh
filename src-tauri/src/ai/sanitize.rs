@@ -297,6 +297,14 @@ pub fn validate(cmd: &str) -> Result<(), ShapeError> {
         None => return Err(ShapeError::Destructive("parser cancelled".into())),
     };
     let root = tree.root_node();
+    // tree-sitter-bash 对语法错（未闭合 quote / 残缺 substitution / 残缺 redirect 等）
+    // 返回带 ERROR 节点的 partial AST。walk 这样的 tree 可能跳过被破坏的 command /
+    // redirect 节点 → 漏拦黑名单。安全验证必须 fail-closed。
+    if root.has_error() {
+        return Err(ShapeError::Destructive(
+            "syntax error in command (sanitize requires valid shell syntax)".into(),
+        ));
+    }
     let src = trimmed.as_bytes();
     walk_ast(&root, src)
 }
@@ -1571,6 +1579,25 @@ mod tests {
     }
 
     #[test]
+    fn shape_syntax_error_fail_closed() {
+        // tree-sitter-bash 对语法错命令仍返回带 ERROR 节点的 partial AST，walk 这样的
+        // tree 可能漏拦 redirect / 命令。安全验证必须 fail-closed：root.has_error() → 拒。
+        // 未关闭引号 / 不完整 substitution / 残缺 redirect 等。
+        assert!(matches!(
+            validate("cmd 'unclosed"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("cmd \"unclosed"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("rm $(echo"),
+            Err(ShapeError::Destructive(_))
+        ));
+    }
+
+    #[test]
     fn shape_quoted_command_head_blocked() {
         // bash 允许 quote / escape 命令名仍然执行：`'rm' -rf /` / `"cp" a b` /
         // `\rm -rf /` / `$'rm' -rf /` 跟 `rm -rf /` / `cp a b` / `rm -rf /` 等价。
@@ -1703,19 +1730,17 @@ mod tests {
 
     #[test]
     fn shape_readwrite_redirect_blocked() {
-        // bash `<>` 是 read+write redirect，会写文件。旧 check_redirects 找首个 `<`/`>`，
-        // `<>` 的首字符是 `<` → 当输入放行 → 写文件 bypass。
-        // 修：含 `>` 一律走输出检查（destination 必须 fd-dup 或 /dev/null）。
+        // bash `<>` 是 read+write redirect，会写文件。tree-sitter-bash 把 `<>` 解析成
+        // ERROR 节点（grammar 不完整支持），root.has_error() fail-closed 兜底拦下：
+        // 既不让我们的 redirect 检查放行，也不需要在 walker 内部识别 `<>` operator。
         assert!(matches!(
             validate("cmd <> /tmp/x"),
-            Err(ShapeError::Write(_))
+            Err(ShapeError::Destructive(_))
         ));
         assert!(matches!(
             validate("cmd <>/etc/passwd"),
-            Err(ShapeError::Write(_))
+            Err(ShapeError::Destructive(_))
         ));
-        // <> /dev/null 仍放行（fd 复用，不写）
-        assert!(validate("cmd <> /dev/null").is_ok());
     }
 
     #[test]
