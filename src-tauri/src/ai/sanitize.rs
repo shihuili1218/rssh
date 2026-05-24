@@ -217,192 +217,9 @@ pub const WRAPPERS: &[&str] = &["sudo", "env", "command", "busybox", "doas"];
 const SUDO_FLAGS_WITH_ARG: &[&str] =
     &["-u", "-g", "-U", "-C", "-h", "-T", "-D", "-p", "-r", "-t"];
 
-/// 重定向白名单：只有目标是 /dev/null 的重定向放行（保留 `cmd > /dev/null 2>&1` 这种丢弃输出用法）。
-/// 标准 fd 复制（2>&1 / 1>&2）也是丢弃/复用 fd，不写文件，放行。
-/// 带 fd 前缀的 /dev/null 重定向（`2>/dev/null` / `1>/dev/null` / `2>>/dev/null` 等）也放行 ——
-/// 这是丢 stderr 的常见 idiom。
-fn is_safe_redirect_token(t: &str) -> bool {
-    if matches!(
-        t,
-        "2>&1" | "1>&2" | ">/dev/null" | ">>/dev/null" | "&>/dev/null" | "&>>/dev/null"
-    ) {
-        return true;
-    }
-    // 形如 N>/dev/null / N>>/dev/null，N 是单个数字 fd（实际只见过 0-9）
-    if let Some(first_char) = t.chars().next() {
-        if first_char.is_ascii_digit() {
-            let rest = &t[1..];
-            if rest == ">/dev/null" || rest == ">>/dev/null" {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// 扫描所有 token 找写文件重定向。返回第一个不安全的形态字符串供错误信息引用。
-///
-/// 识别形态：
-/// - `> path` / `>> path`（带空格分隔，target 是下一个 token）
-/// - `>path` / `>>path`（紧贴写在一起，token 自身含 `>`）
-/// - `2>file` 等带 fd 前缀的写（token 含 `>` 但不是白名单 fd 复制）
-fn find_write_redirect(tokens: &[&str]) -> Option<String> {
-    let mut i = 0;
-    while i < tokens.len() {
-        let t = tokens[i];
-
-        if is_safe_redirect_token(t) {
-            i += 1;
-            continue;
-        }
-
-        // 形态: token 完全等于 ">" 或 ">>"，target 在下一个 token
-        if t == ">" || t == ">>" {
-            let target = tokens.get(i + 1).copied().unwrap_or("");
-            if target != "/dev/null" {
-                return Some(format!("{t} {target}"));
-            }
-            i += 2;
-            continue;
-        }
-
-        // 形态: token 是 "N>" / "N>>" / "&>" / "&>>"（fd 前缀 + 带空格的写运算符），
-        // target 在下一个 token。`cmd 2> /dev/null` / `cmd &> /dev/null` 等 ——
-        // split_whitespace 切成 [..., "2>" or "&>", "/dev/null"]。
-        // is_safe_redirect_token 只识别紧贴形态（如 `2>/dev/null` / `&>/dev/null`），
-        // 不识别带空格的；这里补齐 spaced fd-redirect 的 /dev/null 白名单。
-        if (t.ends_with(">>") || t.ends_with('>')) && t.len() <= 4 {
-            let fd_prefix = t.trim_end_matches('>');
-            // fd_prefix 合法形态：
-            // - 纯数字 fd（"2", "1", "0"）→ `2> /dev/null`
-            // - `&` → `&> /dev/null` / `&>> /dev/null`（bash 风格 stdout+stderr 重定向）
-            let is_valid_prefix = !fd_prefix.is_empty()
-                && (fd_prefix == "&" || fd_prefix.chars().all(|c| c.is_ascii_digit()));
-            if is_valid_prefix {
-                let target = tokens.get(i + 1).copied().unwrap_or("");
-                if target == "/dev/null" {
-                    i += 2;
-                    continue;
-                }
-                return Some(format!("{t} {target}"));
-            }
-        }
-
-        // 形态: token 包含 `>` 但不是独立的 redirect token —— 命令与重定向粘在一起的紧凑写法。
-        //
-        // shell 允许 `cmd>/dev/null` / `cmd>>/dev/null` 这种无空格形态，等价于 `cmd > /dev/null`。
-        // 之前一律拒 → `/dev/null` 白名单意图被破坏（"echo a>/dev/null" 被误拒，但语义和
-        // "echo a > /dev/null" 完全一样）。
-        //
-        // 修复：找第一个 `>` 把 token 切成 prefix + redirect 后缀。prefix 是命令名 / fd 数字 /
-        // 别的 token 片段（shell 视角是合法前缀，rssh 不深究）；只要后缀整段是
-        // `>/dev/null` 或 `>>/dev/null` 就放行。其余形态（含 `>file`、`>>append.log` 等）拒。
-        if let Some(pos) = t.find('>') {
-            let suffix = &t[pos..];
-            if suffix == ">/dev/null" || suffix == ">>/dev/null" {
-                i += 1;
-                continue;
-            }
-            return Some(t.to_string());
-        }
-        i += 1;
-    }
-    None
-}
-
+/// 取一个 token 的 basename（去掉路径前缀）。`/bin/rm` → `rm`。
 fn bare(t: &str) -> &str {
     t.rsplit('/').next().unwrap_or(t)
-}
-
-/// 从 tokens 里找出"真正的命令头"——跳过透明 wrapper (sudo/env/...) 和它们的 flag / 带参 value。
-/// 用于 per-command 检查（`sed -i` / `chmod -R` / `tail -f` / `touch -d`），这些规则之前用
-/// `tokens[0]` 当命令头，wrapper 一包就全废。
-///
-/// 同上面 wrapper-aware 命令头扫描的逻辑（吞 `-X` flag、`sudo -u user` 的 user、`env KEY=VAL`），
-/// 但只返回第一个真正命令名，不做黑名单判定。
-fn real_command_head<'a>(tokens: &'a [&'a str]) -> &'a str {
-    let mut iter = tokens.iter().peekable();
-    while let Some(&t) = iter.next() {
-        let b = bare(t);
-        if !WRAPPERS.contains(&b) {
-            return b;
-        }
-        let wrapper = b;
-        while let Some(&&next) = iter.peek() {
-            if next.starts_with('-') {
-                iter.next();
-                if (wrapper == "sudo" || wrapper == "doas")
-                    && SUDO_FLAGS_WITH_ARG.contains(&next)
-                {
-                    iter.next();
-                }
-                continue;
-            }
-            if wrapper == "env" && next.contains('=') {
-                iter.next();
-                continue;
-            }
-            break;
-        }
-    }
-    // 全是 wrapper 没有真命令 —— 返回最后看到的 token（兜底，不应发生）
-    bare(tokens.last().copied().unwrap_or(""))
-}
-
-/// 按 shell separator (`;` `|` `||` `&&` `&` background) 把命令字符串切成 segments。
-///
-/// **quote-unaware（与现有 redirect 检查一致）**：不识别 quoted 字符串内的 separator。
-/// 安全优先：宁可让 `echo 'a;b'` 多分一段（两段都通过 validate，不误拒），也不放过
-/// `echo ok;rm -rf /` / `cmd&&touch -d 'x' file` 紧贴 separator 的 bypass。
-///
-/// 识别规则：
-/// - `;` → 切
-/// - `||` / `|` → 切
-/// - `&&` → 切
-/// - `&` → 切（background），但以下两种 `&` 不切：
-///   - `&>` / `&>>`：bash 风格 stdout+stderr 重定向 operator
-///   - `>&` / `N>&M`：fd duplicate（如 `2>&1`），`&` 的前一个非空字符是 `>` 时识别
-fn split_segments(cmd: &str) -> Vec<&str> {
-    let bytes = cmd.as_bytes();
-    let mut segments = Vec::new();
-    let mut start = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        let next = bytes.get(i + 1).copied();
-        let prev = if i > 0 { Some(bytes[i - 1]) } else { None };
-        let (is_sep, sep_len) = match b {
-            b';' => (true, 1),
-            b'|' => (true, if next == Some(b'|') { 2 } else { 1 }),
-            b'&' => {
-                // `&>` / `&>>`：stdout+stderr 重定向 → 不切
-                // `>&` / `N>&M`：fd duplicate（如 `2>&1`） → 不切
-                if next == Some(b'>') || prev == Some(b'>') {
-                    (false, 0)
-                } else if next == Some(b'&') {
-                    (true, 2)
-                } else {
-                    (true, 1)
-                }
-            }
-            _ => (false, 0),
-        };
-        if is_sep {
-            let seg = cmd[start..i].trim();
-            if !seg.is_empty() {
-                segments.push(seg);
-            }
-            i += sep_len;
-            start = i;
-        } else {
-            i += 1;
-        }
-    }
-    let last = cmd[start..].trim();
-    if !last.is_empty() {
-        segments.push(last);
-    }
-    segments
 }
 
 pub fn validate(cmd: &str) -> Result<(), ShapeError> {
@@ -411,85 +228,211 @@ pub fn validate(cmd: &str) -> Result<(), ShapeError> {
         return Err(ShapeError::Empty);
     }
 
-    // fork bomb 形态 — 在 split 之前查。fork bomb 自带 `;` `|` `&` 三种分隔符，
-    // split_segments 会把它切碎让每段单独看都人畜无害，必须在分段前匹配整串。
+    // fork bomb：tree-sitter-bash 把它识别成 function_definition + 后续 command，
+    // 在 AST 上识别要走 function 节点 —— 直接字符串预检最稳，特殊语法本就是
+    // 一坨 separator 滥用而已。
     let no_space: String = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
     if no_space.contains(":(){:|:&};:") {
         return Err(ShapeError::Destructive("fork bomb".into()));
     }
 
-    // 数据结构：把命令字符串切成 segments，每段独立 validate。
-    // 这一步消除了之前 `at_command_head` 状态机靠 split_whitespace 切独立 token 才能识别
-    // separator 的硬伤 —— `echo ok;rm -rf /` / `cmd&&touch -d ...` 紧贴 separator 直接绕过。
-    for seg in split_segments(trimmed) {
-        validate_segment(seg)?;
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_bash::LANGUAGE.into())
+        .expect("tree-sitter-bash language load");
+    let tree = match parser.parse(trimmed, None) {
+        Some(t) => t,
+        // parser 取消（不该发生在同步路径），fail-closed
+        None => return Err(ShapeError::Destructive("parser cancelled".into())),
+    };
+    let root = tree.root_node();
+    let src = trimmed.as_bytes();
+    walk_ast(&root, src)
+}
+
+/// 在 AST 上 DFS 遇到 command / redirected_statement 就跑形态规则；
+/// pipeline / list / 顶层多 command（紧贴 `;`）天然平铺成 children，不再需要分段函数。
+fn walk_ast(n: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeError> {
+    let mut cursor = n.walk();
+    for child in n.children(&mut cursor) {
+        match child.kind() {
+            "command" => check_command(&child, src)?,
+            "redirected_statement" => {
+                if let Some(body) = child.child_by_field_name("body") {
+                    if body.kind() == "command" {
+                        check_command(&body, src)?;
+                    } else {
+                        walk_ast(&body, src)?;
+                    }
+                }
+                check_redirects(&child, src)?;
+            }
+            _ => walk_ast(&child, src)?,
+        }
     }
     Ok(())
 }
 
-/// 单个 shell segment 的形态校验。caller 已经按 `;` `|` `||` `&&` `&` 切过段，
-/// 这里只看一条命令（含 wrapper 和 redirect）。
-fn validate_segment(seg: &str) -> Result<(), ShapeError> {
-    let tokens: Vec<&str> = seg.split_whitespace().collect();
-    if tokens.is_empty() {
+/// 取一个节点的字面文本（不含外层引号——node text 保留原引号字符）。
+fn node_text<'a>(n: &tree_sitter::Node, src: &'a [u8]) -> &'a str {
+    std::str::from_utf8(&src[n.byte_range()]).unwrap_or("")
+}
+
+/// 从 `command_name` 节点剥出命令头字符串。若内部含 command_substitution
+/// 则递归校验里面的命令，并返回空字符串（无法判定字面命令头，跳过命令头黑名单）。
+fn extract_command_name<'a>(
+    name_node: &tree_sitter::Node,
+    src: &'a [u8],
+) -> Result<&'a str, ShapeError> {
+    // command_name 节点通常包一个 word，但也可能包 command_substitution / string 等。
+    let mut cur = name_node.walk();
+    for c in name_node.children(&mut cur) {
+        if c.kind() == "command_substitution" || c.kind() == "process_substitution" {
+            walk_ast(&c, src)?;
+            return Ok("");
+        }
+    }
+    Ok(node_text(name_node, src))
+}
+
+fn check_command(cmd: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeError> {
+    let name_node = match cmd.child_by_field_name("name") {
+        Some(n) => n,
+        None => return Ok(()), // 空命令（变量赋值前缀等），不管
+    };
+    let raw_head = extract_command_name(&name_node, src)?;
+
+    // 收集 arguments 节点 + 文本。同时递归 walk 任意 substitution。
+    let mut arg_nodes: Vec<tree_sitter::Node> = Vec::new();
+    let mut cur = cmd.walk();
+    for c in cmd.children_by_field_name("argument", &mut cur) {
+        // command substitution / process substitution 内的命令必须同等审查
+        recurse_substitutions(&c, src)?;
+        arg_nodes.push(c);
+    }
+
+    if raw_head.is_empty() {
+        // 命令头是 substitution，已递归审查；本层无字面命令名可判定
         return Ok(());
     }
 
-    // 真正的命令头（穿透 sudo / env / command / busybox / doas 等透明 wrapper）。
-    // 单段只有一个命令头，wrapper 跳过后 first 就是要做 per-command 检查的命令名。
-    let first = real_command_head(&tokens);
+    // wrapper 透明跳过：依次吞掉 wrapper 名 + 它的 flag/value，args 第一个非 flag word
+    // 视为真正命令头。
+    let (head, head_args_start) = strip_wrappers(raw_head, &arg_nodes, src);
 
-    // 1. 命令头扫描：DESTRUCTIVE / WRITE_VERBS / INTERPRETERS_DENIED。
-    if DESTRUCTIVE.contains(&first) {
-        return Err(ShapeError::Destructive(first.to_string()));
+    check_command_head(head)?;
+    check_per_command_rules(head, &arg_nodes[head_args_start..], src)?;
+    Ok(())
+}
+
+fn recurse_substitutions(n: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeError> {
+    if matches!(n.kind(), "command_substitution" | "process_substitution") {
+        return walk_ast(n, src);
     }
-    if WRITE_VERBS.contains(&first) {
+    let mut cur = n.walk();
+    for c in n.children(&mut cur) {
+        recurse_substitutions(&c, src)?;
+    }
+    Ok(())
+}
+
+/// 跳过 wrapper 链（sudo / env / command / busybox / doas）。
+/// 返回 (真正命令头 bare 名, 真正命令头之后第一个 arg 的 index)。
+fn strip_wrappers<'a>(
+    raw_head: &'a str,
+    args: &[tree_sitter::Node],
+    src: &'a [u8],
+) -> (&'a str, usize) {
+    let mut head = bare(raw_head);
+    let mut i = 0;
+    while WRAPPERS.contains(&head) && i < args.len() {
+        let wrapper = head;
+        // 吞 wrapper 后的 flag (-X / sudo 带参 flag 的 value / env KEY=VAL)
+        while i < args.len() {
+            let t = node_text(&args[i], src);
+            if t.starts_with('-') {
+                i += 1;
+                if (wrapper == "sudo" || wrapper == "doas")
+                    && SUDO_FLAGS_WITH_ARG.contains(&t)
+                    && i < args.len()
+                {
+                    i += 1; // 吞 value
+                }
+                continue;
+            }
+            if wrapper == "env" && t.contains('=') {
+                i += 1;
+                continue;
+            }
+            break;
+        }
+        if i >= args.len() {
+            break;
+        }
+        head = bare(node_text(&args[i], src));
+        i += 1;
+    }
+    (head, i)
+}
+
+fn check_command_head(head: &str) -> Result<(), ShapeError> {
+    if DESTRUCTIVE.contains(&head) {
+        return Err(ShapeError::Destructive(head.to_string()));
+    }
+    if WRITE_VERBS.contains(&head) {
         return Err(ShapeError::Write(format!(
-            "{first} (file modification must go through patch_file)"
+            "{head} (file modification must go through patch_file)"
         )));
     }
-    if INTERPRETERS_DENIED.contains(&first) {
+    if INTERPRETERS_DENIED.contains(&head) {
         return Err(ShapeError::Write(format!(
-            "{first} (rssh blocks script interpreters; use patch_file / match_file for file work)"
+            "{head} (rssh blocks script interpreters; use patch_file / match_file for file work)"
         )));
     }
+    Ok(())
+}
 
-    // shell `-c "..."` / `--command "..."`：deferred-execution，string 内容看不见 → 拒。
-    // `bash file.sh` / `bash --version` / `ps | grep bash` 等不动（保留 shell pipe 编排合法承诺）。
-    if SHELLS.contains(&first)
-        && tokens
+/// 真正命令头之后剩下的 args 上跑 per-command 规则。
+fn check_per_command_rules(
+    head: &str,
+    args: &[tree_sitter::Node],
+    src: &[u8],
+) -> Result<(), ShapeError> {
+    let arg_text: Vec<&str> = args.iter().map(|n| node_text(n, src)).collect();
+
+    // shell `-c "..."` deferred-execution
+    if SHELLS.contains(&head)
+        && arg_text
             .iter()
-            .skip(1)
             .any(|t| *t == "-c" || *t == "--command" || t.starts_with("-c"))
     {
         return Err(ShapeError::Write(format!(
-            "{first} -c (deferred execution hides the real command from sanitize; use direct piping)"
+            "{head} -c (deferred execution hides the real command from sanitize; use direct piping)"
         )));
     }
 
-    // 2. chmod -R / chown -R
-    if (first == "chmod" || first == "chown")
-        && tokens
+    // chmod -R / chown -R
+    if (head == "chmod" || head == "chown")
+        && arg_text
             .iter()
             .any(|t| t.starts_with("-R") || *t == "--recursive")
     {
-        return Err(ShapeError::Destructive(format!("{first} -R")));
+        return Err(ShapeError::Destructive(format!("{head} -R")));
     }
 
-    // 3. tail -f / -F
-    if first == "tail" && tokens.iter().any(|t| *t == "-f" || *t == "-F") {
+    // tail -f / -F
+    if head == "tail" && arg_text.iter().any(|t| *t == "-f" || *t == "-F") {
         return Err(ShapeError::Interactive("tail -f".into()));
     }
 
-    // 4. 单独的交互式命令 / 没批处理标志的 top
-    if INTERACTIVE_BARE.contains(&first) && tokens.len() == 1 {
-        return Err(ShapeError::Interactive(first.to_string()));
+    // 单独的交互式命令 / 没批处理标志的 top
+    if INTERACTIVE_BARE.contains(&head) && arg_text.is_empty() {
+        return Err(ShapeError::Interactive(head.to_string()));
     }
-    if first == "top" {
+    if head == "top" {
         // Linux: -b -n N    macOS: -l N    放过任一形态
-        let has_batch = tokens
+        let has_batch = arg_text
             .iter()
-            .skip(1)
             .any(|t| t.starts_with("-b") || t.starts_with("-l"));
         if !has_batch {
             return Err(ShapeError::Interactive(
@@ -498,9 +441,9 @@ fn validate_segment(seg: &str) -> Result<(), ShapeError> {
         }
     }
 
-    // 5. in-place 编辑：sed -i / awk -i inplace / perl -i (含组合短选项 -pi/-ni 等)
-    if first == "sed"
-        && tokens.iter().any(|t| {
+    // in-place 编辑：sed -i / awk -i inplace / perl -i (含组合短选项 -pi/-ni 等)
+    if head == "sed"
+        && arg_text.iter().any(|t| {
             *t == "-i"
                 || t.starts_with("-i")
                 || *t == "--in-place"
@@ -511,8 +454,8 @@ fn validate_segment(seg: &str) -> Result<(), ShapeError> {
             "sed -i (in-place edit; use patch_file)".into(),
         ));
     }
-    if first == "perl"
-        && tokens.iter().any(|t| {
+    if head == "perl"
+        && arg_text.iter().any(|t| {
             t.starts_with('-') && !t.starts_with("--") && t.len() > 1 && t[1..].contains('i')
         })
     {
@@ -520,9 +463,9 @@ fn validate_segment(seg: &str) -> Result<(), ShapeError> {
             "perl -i (in-place edit; use patch_file)".into(),
         ));
     }
-    if first == "awk" {
+    if head == "awk" {
         let mut prev_i = false;
-        for t in tokens.iter().skip(1) {
+        for t in &arg_text {
             if *t == "-i" {
                 prev_i = true;
                 continue;
@@ -536,10 +479,9 @@ fn validate_segment(seg: &str) -> Result<(), ShapeError> {
         }
     }
 
-    // 6. touch 时间戳标志：留 touch 本身合法（创建空文件），但拒所有改 mtime 形态。
-    //    含空格分隔的长选项（`touch --date 2026-01-01 file`）和紧贴 `=` 形态（`--date=...`）都拦。
-    if first == "touch" {
-        for t in tokens.iter().skip(1) {
+    // touch 时间戳标志：留 touch 本身合法（创建空文件），但拒所有改 mtime 形态。
+    if head == "touch" {
+        for t in &arg_text {
             let bad = matches!(
                 *t,
                 "-a" | "-m" | "-am" | "-ma" | "--date" | "--time" | "--reference"
@@ -557,18 +499,11 @@ fn validate_segment(seg: &str) -> Result<(), ShapeError> {
         }
     }
 
-    // 7. 写文件重定向（> / >>，白名单 /dev/null）
-    if let Some(form) = find_write_redirect(&tokens) {
-        return Err(ShapeError::Write(format!(
-            "redirect '{form}' (file modification must go through patch_file; '/dev/null' is the only allowed target)"
-        )));
-    }
-
-    // 8. 循环采样必须有 ≥2 个连续数字（interval + count）
-    if COUNTED_LOOP.contains(&first) {
+    // 循环采样必须有 ≥2 个连续数字（interval + count）
+    if COUNTED_LOOP.contains(&head) {
         let mut consecutive: u32 = 0;
         let mut maxc: u32 = 0;
-        for t in tokens.iter().skip(1) {
+        for t in &arg_text {
             if t.parse::<u64>().is_ok() {
                 consecutive += 1;
                 maxc = maxc.max(consecutive);
@@ -578,11 +513,38 @@ fn validate_segment(seg: &str) -> Result<(), ShapeError> {
         }
         if maxc < 2 {
             return Err(ShapeError::UnboundedLoop(format!(
-                "{first} requires two consecutive numbers 'interval count'"
+                "{head} requires two consecutive numbers 'interval count'"
             )));
         }
     }
 
+    Ok(())
+}
+
+/// redirected_statement 上检查每个 file_redirect：destination 必须是 fd 数字 (fd dup)
+/// 或字面 `/dev/null`。其余一律拒（含 heredoc / herestring 已经不是 file_redirect 节点）。
+fn check_redirects(stmt: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeError> {
+    let mut cur = stmt.walk();
+    for r in stmt.children_by_field_name("redirect", &mut cur) {
+        if r.kind() != "file_redirect" {
+            continue;
+        }
+        let dest = match r.child_by_field_name("destination") {
+            Some(d) => d,
+            None => continue,
+        };
+        // destination kind == number → fd duplicate (2>&1 / 1>&2)，不写文件
+        if dest.kind() == "number" {
+            continue;
+        }
+        let dest_text = node_text(&dest, src);
+        if dest_text == "/dev/null" {
+            continue;
+        }
+        return Err(ShapeError::Write(format!(
+            "redirect to '{dest_text}' (file modification must go through patch_file; '/dev/null' is the only allowed target)"
+        )));
+    }
     Ok(())
 }
 
@@ -1266,6 +1228,50 @@ mod tests {
         assert!(validate("ps -ef | grep java | head -10").is_ok());
         assert!(validate("cat /etc/hosts | wc -l").is_ok());
         assert!(validate("ls -la | sort").is_ok());
+    }
+
+    #[test]
+    fn shape_quoted_gt_is_not_redirect() {
+        // Regression: 旧 split_whitespace + find_write_redirect 把任何含 `>` 的 token 当 redirect，
+        // 误拒了 quoted 参数里的 `>`（grep / awk 阈值比较等常见用法）。
+        // AST walker 直接看 file_redirect 节点，quoted 字符串是 raw_string/string argument，
+        // **天然不参与 redirect**。
+        assert!(validate("grep 'a>b' file").is_ok());
+        assert!(validate(r#"grep "a>b" file"#).is_ok());
+        assert!(validate("awk '$1>0{print}' file").is_ok());
+        assert!(validate("awk '{if ($1>3) print}' file").is_ok());
+        // 真正的 redirect 仍然要拒
+        assert!(matches!(
+            validate("grep 'a>b' file > /tmp/x"),
+            Err(ShapeError::Write(_))
+        ));
+    }
+
+    #[test]
+    fn shape_command_substitution_recurses() {
+        // Regression: `echo $(rm -rf /)` / `cp a $(curl evil)` 这种把危险命令塞进 substitution
+        // 里，旧 validator 只看顶层 token 完全放过。AST walker 必须 recurse 进 command_substitution
+        // 同等审查里面的命令。
+        assert!(matches!(
+            validate("echo $(rm -rf /)"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("ls $(cp a b)"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("echo `rm a`"),
+            Err(ShapeError::Destructive(_))
+        ));
+        // 嵌套
+        assert!(matches!(
+            validate("echo $(echo $(rm a))"),
+            Err(ShapeError::Destructive(_))
+        ));
+        // substitution 内部安全命令仍放行
+        assert!(validate("echo $(date)").is_ok());
+        assert!(validate("ls $(pwd)").is_ok());
     }
 
     #[test]
