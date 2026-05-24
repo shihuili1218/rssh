@@ -10,7 +10,8 @@
 //!
 //! **核心不变量**：所有送进 PTY 的 file_ops 命令在 shell 视角下必须是**单行**（无字面
 //! `\n` / `\r`），避开 zsh ZLE multi-line quote race（详见 `ansi_c_quote` 注释）。
-//! 非 ASCII 字符（中文 / emoji）允许，`$'...'` ANSI-C quoting 用 `\xHH` 序列编码。
+//! 非 ASCII 字符（中文 / emoji）在 `$'...'` 内直接透传 —— bash / zsh 都按 UTF-8
+//! 解释字面字节，只有控制字符 / DEL / 单引号 / 反斜杠需要 `\xHH` 编码。
 
 use serde_json::json;
 

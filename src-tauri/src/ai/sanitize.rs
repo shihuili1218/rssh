@@ -431,9 +431,12 @@ fn strip_wrappers<'a>(
         let wrapper = head;
         while i < args.len() {
             let t = args[i].as_str();
-            // env -S / --split-string=... ：deferred-execution
+            // env -S / -SSTRING / --split-string=... ：deferred-execution。
+            // `-SSTRING` 是 GNU env 的紧贴短选项形态（含 t == "-S"），等同 `-S STRING`。
             if wrapper == "env"
-                && (t == "-S" || t == "--split-string" || t.starts_with("--split-string="))
+                && (t.starts_with("-S")
+                    || t == "--split-string"
+                    || t.starts_with("--split-string="))
             {
                 return Err(ShapeError::Write(
                     "env -S (deferred execution hides the real command from sanitize)".into(),
@@ -556,15 +559,8 @@ fn check_per_command_rules(head: &str, args: &[String]) -> Result<(), ShapeError
             "sed -i (in-place edit; use patch_file)".into(),
         ));
     }
-    if head == "perl"
-        && arg_text.iter().any(|t| {
-            t.starts_with('-') && !t.starts_with("--") && t.len() > 1 && t[1..].contains('i')
-        })
-    {
-        return Err(ShapeError::Write(
-            "perl -i (in-place edit; use patch_file)".into(),
-        ));
-    }
+    // perl -i 不再单独检查 —— perl 整个已在 INTERPRETERS_DENIED 命令头扫描时拒掉
+    // （包括 perl -ne / perl -pe 等纯读用法），到这里走不到。
     if head == "awk" {
         let mut prev_i = false;
         for t in &arg_text {
@@ -713,10 +709,11 @@ fn check_redirects(stmt: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeErro
             recurse_substitutions(&dest, src)?;
         }
         // 区分输入 vs 输出：file_redirect 节点 text 形如 "> /tmp/x" / "<file" / "2>&1" /
-        // "&> out" / "1< file"。第一个出现的 `<` 或 `>` 决定方向。
+        // "&> out" / "1< file" / "<> rw"。
+        // **不含 `>`** → 纯输入 (`<`, `0<`, `N<`)，放行；
+        // **含 `>`** → 输出 / 读写 (`>`, `>>`, `&>`, `<>`, `N>`)，必须 fd-dup 或 /dev/null。
         let r_text = node_text(&r, src);
-        if r_text.chars().find(|&c| c == '<' || c == '>') == Some('<') {
-            // 输入重定向（含 `<` `0<` `N<`），读 stdin 不写
+        if !r_text.contains('>') {
             continue;
         }
         let dest = match dest_opt {
@@ -1648,6 +1645,37 @@ mod tests {
         assert!(validate("curl -o /dev/null example.com").is_ok());
         assert!(validate("wget -O /dev/null example.com").is_ok());
         assert!(validate("wget -O - example.com").is_ok());
+    }
+
+    #[test]
+    fn shape_readwrite_redirect_blocked() {
+        // bash `<>` 是 read+write redirect，会写文件。旧 check_redirects 找首个 `<`/`>`，
+        // `<>` 的首字符是 `<` → 当输入放行 → 写文件 bypass。
+        // 修：含 `>` 一律走输出检查（destination 必须 fd-dup 或 /dev/null）。
+        assert!(matches!(
+            validate("cmd <> /tmp/x"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("cmd <>/etc/passwd"),
+            Err(ShapeError::Write(_))
+        ));
+        // <> /dev/null 仍放行（fd 复用，不写）
+        assert!(validate("cmd <> /dev/null").is_ok());
+    }
+
+    #[test]
+    fn shape_env_short_attached_blocked() {
+        // GNU env `-SSTRING`（紧贴短选项）= `-S STRING` deferred-execution。
+        // 旧检查只匹配独立 `-S` token，紧贴形态绕过。
+        assert!(matches!(
+            validate("env -SSTRING rm a"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("env -S'rm -rf /'"),
+            Err(ShapeError::Write(_))
+        ));
     }
 
     #[test]
