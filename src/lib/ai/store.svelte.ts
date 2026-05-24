@@ -420,7 +420,21 @@ async function attachListeners(info: AiSessionInfo) {
     try {
       await executeCommand(sid, proposed, kind, tid);
     } catch (err) {
+      // executeCommand 在 PTY listen 失败等情况下可能在自己发 ai_command_result 之前就抛。
+      // 不补一个失败 result，wait_command_outcome 会永挂在 Rust 侧。
       console.error("[ai] internal_command exec failed:", err);
+      try {
+        await invoke("ai_command_result", {
+          sessionId: sid,
+          toolCallId: e.payload.tool_call_id,
+          exitCode: -1,
+          output: err instanceof Error ? err.message : String(err),
+          timedOut: false,
+          earlyTerminated: false,
+        });
+      } catch (reportErr) {
+        console.error("[ai] failed to report internal_command exec failure:", reportErr);
+      }
     }
   }));
 

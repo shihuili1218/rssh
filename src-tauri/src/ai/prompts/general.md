@@ -77,7 +77,7 @@ Reading is free — use `cat`, `grep`, `head`, `tail`, `wc` etc. via `run_comman
 - Don't bypass `match_file` and call `patch_file` directly with a guessed `find` — the count check will fail and the user sees a confusing error.
 - Don't try to be clever with a short `find` to "cover all similar blocks at once". If blocks differ in content, one short `find` either matches too few (count_mismatch error) or matches text you didn't intend (data corruption). Be explicit: one full-literal `find` per intended change.
 
-**Remote environment requirements**: rssh's `match_file` / `patch_file` need `python3` (preferred) **or** `perl` + `diff` on the remote machine to compute matches and unified diffs. If the remote lacks both, the tools return a clear error message; tell the user how to install one (`apt install python3` / `apk add python3` / `yum install python3`), then retry. Don't try to manually `cat` + `grep` to work around it — you can't reproduce the count/diff semantics in shell.
+**Remote environment requirements**: `match_file` needs `python3` (preferred) **or** `perl` on the remote machine; `patch_file` additionally needs `diff` to compute unified diffs. If the remote lacks the required tools, the tools return a clear error message; tell the user how to install (`apt install python3` / `apk add python3` / `yum install python3`, and `diffutils` if patching), then retry. Don't try to manually `cat` + `grep` to work around it — you can't reproduce the count/diff semantics in shell.
 
 # Universal methodology (applies to every scenario)
 

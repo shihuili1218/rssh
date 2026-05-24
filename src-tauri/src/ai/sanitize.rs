@@ -231,6 +231,41 @@ fn bare(t: &str) -> &str {
     t.rsplit('/').next().unwrap_or(t)
 }
 
+/// 把 quoted / escaped 命令头归一化为 shell 真正执行的字面命令名。
+/// `'rm'` → `rm`，`"rm"` → `rm`，`$'rm'` → `rm`，`\rm` → `rm`。
+///
+/// 不展开 expansion / substitution：含 `$var` `$()` `` ` ` `` 的 head 走另一条
+/// 路径（recurse_substitutions 已经在 walker 里递归审查内部命令）。
+fn normalize_head(raw: &str) -> String {
+    // ANSI-C $'...' —— 必须先于单引号检查
+    if let Some(inner) = raw.strip_prefix("$'").and_then(|s| s.strip_suffix('\'')) {
+        return strip_backslashes(inner);
+    }
+    if let Some(inner) = raw.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
+        // 单引号内 100% literal，不动
+        return inner.to_string();
+    }
+    if let Some(inner) = raw.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+        return strip_backslashes(inner);
+    }
+    strip_backslashes(raw)
+}
+
+fn strip_backslashes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(next) = chars.next() {
+                out.push(next);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 pub fn validate(cmd: &str) -> Result<(), ShapeError> {
     let trimmed = cmd.trim();
     if trimmed.is_empty() {
@@ -287,21 +322,20 @@ fn node_text<'a>(n: &tree_sitter::Node, src: &'a [u8]) -> &'a str {
     std::str::from_utf8(&src[n.byte_range()]).unwrap_or("")
 }
 
-/// 从 `command_name` 节点剥出命令头字符串。若内部含 command_substitution
-/// 则递归校验里面的命令，并返回空字符串（无法判定字面命令头，跳过命令头黑名单）。
-fn extract_command_name<'a>(
+/// 从 `command_name` 节点剥出命令头的归一化字面名（剥 quote / unescape `\X`）。
+/// 若内部含 command_substitution 则递归校验里面的命令，并返回 None（无字面命令头可判定）。
+fn extract_command_name(
     name_node: &tree_sitter::Node,
-    src: &'a [u8],
-) -> Result<&'a str, ShapeError> {
-    // command_name 节点通常包一个 word，但也可能包 command_substitution / string 等。
+    src: &[u8],
+) -> Result<Option<String>, ShapeError> {
     let mut cur = name_node.walk();
     for c in name_node.children(&mut cur) {
         if c.kind() == "command_substitution" || c.kind() == "process_substitution" {
             walk_ast(&c, src)?;
-            return Ok("");
+            return Ok(None);
         }
     }
-    Ok(node_text(name_node, src))
+    Ok(Some(normalize_head(node_text(name_node, src))))
 }
 
 fn check_command(cmd: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeError> {
@@ -309,28 +343,26 @@ fn check_command(cmd: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeError> 
         Some(n) => n,
         None => return Ok(()), // 空命令（变量赋值前缀等），不管
     };
-    let raw_head = extract_command_name(&name_node, src)?;
+    let raw_head = match extract_command_name(&name_node, src)? {
+        Some(h) => h,
+        // 命令头是 substitution，已递归审查；本层无字面命令名可判定
+        None => return Ok(()),
+    };
 
-    // 收集 arguments 节点 + 文本。同时递归 walk 任意 substitution。
-    let mut arg_nodes: Vec<tree_sitter::Node> = Vec::new();
+    // 收集 arguments 节点 + 归一化后的文本。同时递归 walk 任意 substitution。
+    let mut arg_strings: Vec<String> = Vec::new();
     let mut cur = cmd.walk();
     for c in cmd.children_by_field_name("argument", &mut cur) {
-        // command substitution / process substitution 内的命令必须同等审查
         recurse_substitutions(&c, src)?;
-        arg_nodes.push(c);
-    }
-
-    if raw_head.is_empty() {
-        // 命令头是 substitution，已递归审查；本层无字面命令名可判定
-        return Ok(());
+        arg_strings.push(normalize_head(node_text(&c, src)));
     }
 
     // wrapper 透明跳过：依次吞掉 wrapper 名 + 它的 flag/value，args 第一个非 flag word
     // 视为真正命令头。
-    let (head, head_args_start) = strip_wrappers(raw_head, &arg_nodes, src);
+    let (head, head_args_start) = strip_wrappers(&raw_head, &arg_strings);
 
     check_command_head(head)?;
-    check_per_command_rules(head, &arg_nodes[head_args_start..], src)?;
+    check_per_command_rules(head, &arg_strings[head_args_start..])?;
     Ok(())
 }
 
@@ -346,19 +378,14 @@ fn recurse_substitutions(n: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeE
 }
 
 /// 跳过 wrapper 链（sudo / env / command / busybox / doas）。
-/// 返回 (真正命令头 bare 名, 真正命令头之后第一个 arg 的 index)。
-fn strip_wrappers<'a>(
-    raw_head: &'a str,
-    args: &[tree_sitter::Node],
-    src: &'a [u8],
-) -> (&'a str, usize) {
-    let mut head = bare(raw_head);
+/// 返回 (真正命令头 bare 名, 真正命令头之后第一个 arg 的 index)。args 已经过 normalize_head。
+fn strip_wrappers<'a>(raw_head: &'a str, args: &'a [String]) -> (&'a str, usize) {
+    let mut head: &str = bare(raw_head);
     let mut i = 0;
     while WRAPPERS.contains(&head) && i < args.len() {
         let wrapper = head;
-        // 吞 wrapper 后的 flag (-X / sudo 带参 flag 的 value / env KEY=VAL)
         while i < args.len() {
-            let t = node_text(&args[i], src);
+            let t = args[i].as_str();
             if t.starts_with('-') {
                 i += 1;
                 if (wrapper == "sudo" || wrapper == "doas")
@@ -378,7 +405,7 @@ fn strip_wrappers<'a>(
         if i >= args.len() {
             break;
         }
-        head = bare(node_text(&args[i], src));
+        head = bare(args[i].as_str());
         i += 1;
     }
     (head, i)
@@ -411,13 +438,9 @@ fn check_command_head(head: &str) -> Result<(), ShapeError> {
     Ok(())
 }
 
-/// 真正命令头之后剩下的 args 上跑 per-command 规则。
-fn check_per_command_rules(
-    head: &str,
-    args: &[tree_sitter::Node],
-    src: &[u8],
-) -> Result<(), ShapeError> {
-    let arg_text: Vec<&str> = args.iter().map(|n| node_text(n, src)).collect();
+/// 真正命令头之后剩下的 args 上跑 per-command 规则。args 已 normalize_head。
+fn check_per_command_rules(head: &str, args: &[String]) -> Result<(), ShapeError> {
+    let arg_text: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
     // shell `-c "..."` deferred-execution
     if SHELLS.contains(&head)
@@ -444,8 +467,10 @@ fn check_per_command_rules(
         return Err(ShapeError::Interactive("tail -f".into()));
     }
 
-    // 单独的交互式命令 / 没批处理标志的 top
-    if INTERACTIVE_BARE.contains(&head) && arg_text.is_empty() {
+    // INTERACTIVE_BARE 一律拒。`less foo` / `vim file` / `watch -n1 date` 等命令
+    // 即使有 operand 仍然是屏幕刷新的交互式 TUI，rssh 这种 ssh exec 拿不到结构化输出，
+    // 应该走 cat / tail -n / 一次性命令替代。
+    if INTERACTIVE_BARE.contains(&head) {
         return Err(ShapeError::Interactive(head.to_string()));
     }
     if head == "top" {
@@ -616,25 +641,27 @@ fn check_per_command_rules(
 /// 或字面 `/dev/null`。其余一律拒（含 heredoc / herestring 已经不是 file_redirect 节点）。
 ///
 /// **输入重定向 (`cmd < file`)** 是 file_redirect 节点但 operator 是 `<`，读文件不写。
-/// 通过扫节点 text 里第一个 `<`/`>` 区分 —— `<` 在前是输入，放行。
+/// 通过扫节点 text 里第一个 `<`/`>` 区分 —— `<` 在前是输入，放行写检查；但仍要
+/// 递归 destination 找 command_substitution（`cat < $(rm -rf /)` 否则绕过）。
 fn check_redirects(stmt: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeError> {
     let mut cur = stmt.walk();
     for r in stmt.children_by_field_name("redirect", &mut cur) {
         if r.kind() != "file_redirect" {
             continue;
         }
+        let dest_opt = r.child_by_field_name("destination");
+        // 不管输入 / 输出 / fd-dup：destination 可能含 `$(...)`，里面的命令必审查。
+        if let Some(dest) = dest_opt {
+            recurse_substitutions(&dest, src)?;
+        }
         // 区分输入 vs 输出：file_redirect 节点 text 形如 "> /tmp/x" / "<file" / "2>&1" /
         // "&> out" / "1< file"。第一个出现的 `<` 或 `>` 决定方向。
         let r_text = node_text(&r, src);
-        if r_text
-            .chars()
-            .find(|&c| c == '<' || c == '>')
-            == Some('<')
-        {
+        if r_text.chars().find(|&c| c == '<' || c == '>') == Some('<') {
             // 输入重定向（含 `<` `0<` `N<`），读 stdin 不写
             continue;
         }
-        let dest = match r.child_by_field_name("destination") {
+        let dest = match dest_opt {
             Some(d) => d,
             None => continue,
         };
@@ -1336,6 +1363,40 @@ mod tests {
     }
 
     #[test]
+    fn shape_quoted_command_head_blocked() {
+        // bash 允许 quote / escape 命令名仍然执行：`'rm' -rf /` / `"cp" a b` /
+        // `\rm -rf /` / `$'rm' -rf /` 跟 `rm -rf /` / `cp a b` / `rm -rf /` 等价。
+        // 旧 walker 直接用 node_text 当命令头，引号被保留 → 不匹配黑名单 → 全 bypass。
+        // 修：在做黑名单匹配前，剥外层 quote + backslash escape，归一化命令头。
+        assert!(matches!(
+            validate("'rm' -rf /"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("\"cp\" a b"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("\\rm -rf /"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("$'rm' -rf /"),
+            Err(ShapeError::Destructive(_))
+        ));
+        // 路径前缀 + 引号
+        assert!(matches!(
+            validate("'/bin/rm' a"),
+            Err(ShapeError::Destructive(_))
+        ));
+        // wrapper 套 quoted 真命令
+        assert!(matches!(
+            validate("sudo 'rm' a"),
+            Err(ShapeError::Destructive(_))
+        ));
+    }
+
+    #[test]
     fn shape_deferred_exec_blocked() {
         // eval / source / . —— 和 `bash -c` 同性质，把后续字符串作为命令执行，
         // sanitize 看不到内容。
@@ -1443,6 +1504,25 @@ mod tests {
         assert!(matches!(
             validate("cat > /tmp/x"),
             Err(ShapeError::Write(_))
+        ));
+    }
+
+    #[test]
+    fn shape_redirect_destination_substitution_recurses() {
+        // Regression: input / output redirect 的 destination 可能含 command_substitution
+        // `$(...)`，里面的命令必须同等审查。之前 check_redirects 直接看 destination text，
+        // 没递归子树 → `cat < "$(rm -rf /)"` 整个绕过。
+        assert!(matches!(
+            validate("cat < $(rm -rf /)"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("echo a > $(cp evil)"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("cmd 2> $(rm a)"),
+            Err(ShapeError::Destructive(_))
         ));
     }
 
