@@ -80,3 +80,60 @@
     background: color-mix(in srgb, var(--accent) 22%, var(--surface));
 }
 
+/* Checkbox / radio —— 复刻 ShellSettings 的 uiverse neu radio 视觉到全局：
+   三层阴影（外圈 raised + 内圈 reversed well + 凸起盖板 ::after），
+   :checked 时盖板缩小+下移+淡出露出底下的"井"。
+   覆盖 global.css 默认的"实色 accent 块 + 白勾"。 */
+:root[data-shape="neumorphism"] input[type="checkbox"],
+:root[data-shape="neumorphism"] input[type="radio"] {
+    background: var(--surface);
+    box-shadow:
+        -5px -3px 5px 0px var(--shadow-light),
+        5px 3px 8px 0px var(--shadow-dark);
+    border-color: transparent;
+    overflow: hidden;
+}
+:root[data-shape="neumorphism"] input[type="checkbox"]::before,
+:root[data-shape="neumorphism"] input[type="checkbox"]::after,
+:root[data-shape="neumorphism"] input[type="radio"]::before,
+:root[data-shape="neumorphism"] input[type="radio"]::after {
+    content: "";
+    position: absolute;
+    top: 10%;
+    left: 10%;
+    height: 80%;
+    width: 80%;
+    border-radius: inherit;
+    /* 清掉 global.css 默认 ::after 的 checkmark / dot 样式 */
+    border: none;
+    transform: none;
+}
+:root[data-shape="neumorphism"] input[type="checkbox"]::before,
+:root[data-shape="neumorphism"] input[type="radio"]::before {
+    box-shadow:
+        -3px -1.5px 3px 0px var(--shadow-dark),
+        3px 1.5px 5px 0px var(--shadow-light);
+}
+:root[data-shape="neumorphism"] input[type="checkbox"]::after,
+:root[data-shape="neumorphism"] input[type="radio"]::after {
+    background-color: var(--surface);
+    box-shadow:
+        -3px -1.5px 3px 0px var(--shadow-light),
+        3px 1.5px 5px 0px var(--shadow-dark);
+    transform: scale3d(1, 1, 1);
+    transition: opacity 0.25s ease-in-out, transform 0.25s ease-in-out;
+}
+:root[data-shape="neumorphism"] input[type="checkbox"]:checked,
+:root[data-shape="neumorphism"] input[type="radio"]:checked {
+    background: var(--surface);
+    box-shadow:
+        -5px -3px 5px 0px var(--shadow-light),
+        5px 3px 8px 0px var(--shadow-dark);
+    border-color: transparent;
+}
+:root[data-shape="neumorphism"] input[type="checkbox"]:checked::after,
+:root[data-shape="neumorphism"] input[type="radio"]:checked::after {
+    transform: scale3d(0.975, 0.975, 1) translate3d(0, 10%, 0);
+    opacity: 0;
+}
+

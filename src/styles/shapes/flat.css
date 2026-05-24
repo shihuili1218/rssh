@@ -88,14 +88,38 @@
     border-bottom: var(--flat-border);
 }
 
-/* Checkbox/radio: outline when unchecked, solid when checked. */
+/* Checkbox / radio —— flat 风格：border + 中心 accent dot，跟 .shell-radio-indicator 同源。
+   覆盖 global.css 默认的"实色 accent 块 + 白勾"，统一三主题视觉。 */
 :root[data-shape="flat"] input[type="checkbox"],
 :root[data-shape="flat"] input[type="radio"] {
     border: var(--flat-border);
+    background: var(--surface);
+    box-shadow: none;
+    box-sizing: border-box;
+}
+:root[data-shape="flat"] input[type="checkbox"]::after,
+:root[data-shape="flat"] input[type="radio"]::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: none;
+    transform: translate(-50%, -50%) scale(0);
+    transition: transform 0.15s ease-out;
 }
 :root[data-shape="flat"] input[type="checkbox"]:checked,
 :root[data-shape="flat"] input[type="radio"]:checked {
+    background: var(--surface);
     box-shadow: none;
+    border-color: var(--accent);
+}
+:root[data-shape="flat"] input[type="checkbox"]:checked::after,
+:root[data-shape="flat"] input[type="radio"]:checked::after {
+    transform: translate(-50%, -50%) scale(1);
 }
 
 /* Switch slider: thin border instead of inset. */

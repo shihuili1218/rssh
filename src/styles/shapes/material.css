@@ -49,8 +49,9 @@
     box-shadow: var(--elevation-low);
 }
 
-/* ShellSettings 自定义 radio —— Material Design 风格：2px 边框 + 中心实心圆点 with elastic scale。
-   未选中 = text-dim 边框；选中 = accent 边框 + 中心 accent dot 弹入 + ripple-like ring。 */
+/* ShellSettings 自定义 radio + 全局 checkbox/radio —— Material Design 风格：
+   2px 边框 + 中心实心圆点 with elastic scale。未选中 = text-dim 边框；
+   选中 = accent 边框 + 中心 accent dot 弹入。 */
 :root[data-shape="material"] .shell-radio-indicator {
     border: 2px solid var(--text-dim);
     background: transparent;
@@ -73,6 +74,41 @@
     border-color: var(--accent);
 }
 :root[data-shape="material"] input[type="radio"]:checked ~ label .shell-radio-indicator::after {
+    transform: translate(-50%, -50%) scale(1);
+}
+
+/* 同款规则推广到全局 native checkbox / radio —— 覆盖 global.css 的实色 accent 块 + 白勾，
+   统一三主题视觉规则。 */
+:root[data-shape="material"] input[type="checkbox"],
+:root[data-shape="material"] input[type="radio"] {
+    background: transparent;
+    box-shadow: none;
+    border: 2px solid var(--text-dim);
+    box-sizing: border-box;
+    transition: border-color 0.15s;
+}
+:root[data-shape="material"] input[type="checkbox"]::after,
+:root[data-shape="material"] input[type="radio"]::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: none;
+    transform: translate(-50%, -50%) scale(0);
+    transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+:root[data-shape="material"] input[type="checkbox"]:checked,
+:root[data-shape="material"] input[type="radio"]:checked {
+    background: transparent;
+    box-shadow: none;
+    border-color: var(--accent);
+}
+:root[data-shape="material"] input[type="checkbox"]:checked::after,
+:root[data-shape="material"] input[type="radio"]:checked::after {
     transform: translate(-50%, -50%) scale(1);
 }
 

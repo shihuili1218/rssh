@@ -335,7 +335,7 @@ const en = {
   "ai.settings.label.endpoint": "ENDPOINT",
   "ai.settings.label.api_key": "API KEY",
   "ai.settings.provider.openai_compat": "OpenAI compatible endpoint",
-  "ai.settings.btn.load_models": "Refresh",
+  "ai.settings.btn.load_models": "𖦹 Refresh",
   "ai.settings.btn.loading_models": "Refreshing…",
   "ai.settings.note.models_loaded": "Loaded {count} models",
   "ai.settings.note.models_failed": "Fetch failed: {error}",
