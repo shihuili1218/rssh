@@ -343,88 +343,109 @@ fn real_command_head<'a>(tokens: &'a [&'a str]) -> &'a str {
     bare(tokens.last().copied().unwrap_or(""))
 }
 
+/// 按 shell separator (`;` `|` `||` `&&` `&` background) 把命令字符串切成 segments。
+///
+/// **quote-unaware（与现有 redirect 检查一致）**：不识别 quoted 字符串内的 separator。
+/// 安全优先：宁可让 `echo 'a;b'` 多分一段（两段都通过 validate，不误拒），也不放过
+/// `echo ok;rm -rf /` / `cmd&&touch -d 'x' file` 紧贴 separator 的 bypass。
+///
+/// 识别规则：
+/// - `;` → 切
+/// - `||` / `|` → 切
+/// - `&&` → 切
+/// - `&` → 切（background），但以下两种 `&` 不切：
+///   - `&>` / `&>>`：bash 风格 stdout+stderr 重定向 operator
+///   - `>&` / `N>&M`：fd duplicate（如 `2>&1`），`&` 的前一个非空字符是 `>` 时识别
+fn split_segments(cmd: &str) -> Vec<&str> {
+    let bytes = cmd.as_bytes();
+    let mut segments = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        let next = bytes.get(i + 1).copied();
+        let prev = if i > 0 { Some(bytes[i - 1]) } else { None };
+        let (is_sep, sep_len) = match b {
+            b';' => (true, 1),
+            b'|' => (true, if next == Some(b'|') { 2 } else { 1 }),
+            b'&' => {
+                // `&>` / `&>>`：stdout+stderr 重定向 → 不切
+                // `>&` / `N>&M`：fd duplicate（如 `2>&1`） → 不切
+                if next == Some(b'>') || prev == Some(b'>') {
+                    (false, 0)
+                } else if next == Some(b'&') {
+                    (true, 2)
+                } else {
+                    (true, 1)
+                }
+            }
+            _ => (false, 0),
+        };
+        if is_sep {
+            let seg = cmd[start..i].trim();
+            if !seg.is_empty() {
+                segments.push(seg);
+            }
+            i += sep_len;
+            start = i;
+        } else {
+            i += 1;
+        }
+    }
+    let last = cmd[start..].trim();
+    if !last.is_empty() {
+        segments.push(last);
+    }
+    segments
+}
+
 pub fn validate(cmd: &str) -> Result<(), ShapeError> {
     let trimmed = cmd.trim();
     if trimmed.is_empty() {
         return Err(ShapeError::Empty);
     }
 
-    // fork bomb 形态 — 在 token 化之前查（特殊字符不便 split）
+    // fork bomb 形态 — 在 split 之前查。fork bomb 自带 `;` `|` `&` 三种分隔符，
+    // split_segments 会把它切碎让每段单独看都人畜无害，必须在分段前匹配整串。
     let no_space: String = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
     if no_space.contains(":(){:|:&};:") {
         return Err(ShapeError::Destructive("fork bomb".into()));
     }
 
-    let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+    // 数据结构：把命令字符串切成 segments，每段独立 validate。
+    // 这一步消除了之前 `at_command_head` 状态机靠 split_whitespace 切独立 token 才能识别
+    // separator 的硬伤 —— `echo ok;rm -rf /` / `cmd&&touch -d ...` 紧贴 separator 直接绕过。
+    for seg in split_segments(trimmed) {
+        validate_segment(seg)?;
+    }
+    Ok(())
+}
+
+/// 单个 shell segment 的形态校验。caller 已经按 `;` `|` `||` `&&` `&` 切过段，
+/// 这里只看一条命令（含 wrapper 和 redirect）。
+fn validate_segment(seg: &str) -> Result<(), ShapeError> {
+    let tokens: Vec<&str> = seg.split_whitespace().collect();
     if tokens.is_empty() {
-        return Err(ShapeError::Empty);
+        return Ok(());
     }
 
-    // 命令名提取（跳过 wrapper 找真正命令头）。第一个 pipeline segment 之后的 per-command
-    // 检查（sed -i / chmod -R / tail -f / touch -d 等）全部用 `first`，必须穿透 wrapper —
-    // 否则 `sudo sed -i ...` 这种写法绕过所有 per-command 规则。
+    // 真正的命令头（穿透 sudo / env / command / busybox / doas 等透明 wrapper）。
+    // 单段只有一个命令头，wrapper 跳过后 first 就是要做 per-command 检查的命令名。
     let first = real_command_head(&tokens);
 
-    // 1. 命令头扫描：DESTRUCTIVE / WRITE_VERBS / INTERPRETERS_DENIED
-    //    任何 |, ||, &&, ;, & 之后的第一个 token 都是新命令头。
-    //
-    // **透明 wrapper 跳过**：`sudo cp a b` / `env rm -rf /` / `command rm` / `busybox ls` 这种
-    //    wrapper 把真正的命令名推后一位。原先只看第一个 token → wrapper 名（如 "sudo"）不在
-    //    黑名单 → 检查被绕过，写文件 / destructive 命令直接放行。这是安全 bug。
-    //    修复：识别透明 wrapper 后保持 `at_command_head = true`，**继续**扫描下一个非 flag token
-    //    作为真正命令头。`sudo -u user cp ...` 也覆盖（跳过 sudo + 跳过 `-u user`，命中 cp）。
-    let mut at_command_head = true;
-    let mut iter = tokens.iter().peekable();
-    while let Some(&t) = iter.next() {
-        if matches!(t, "|" | "||" | "&&" | ";" | "&") {
-            at_command_head = true;
-            continue;
-        }
-        if at_command_head {
-            let b = bare(t);
-            // wrapper 透明跳过：自身放行，下个非 flag token 继续按命令头扫描。
-            // - sudo / doas：吞 `-X` 类 flag；遇到 SUDO_FLAGS_WITH_ARG 还要再吞一个 value token
-            // - env：吞 KEY=VAL 形态的 env 赋值 + `-X` flag
-            // - command / busybox：吞 `-X` flag（罕见）
-            if WRAPPERS.contains(&b) {
-                let wrapper = b;
-                while let Some(&&next) = iter.peek() {
-                    if next.starts_with('-') {
-                        // 吞这个 flag
-                        iter.next();
-                        // sudo/doas 的带参 flag 还要再吞 value
-                        if (wrapper == "sudo" || wrapper == "doas")
-                            && SUDO_FLAGS_WITH_ARG.contains(&next)
-                        {
-                            iter.next();
-                        }
-                        continue;
-                    }
-                    if wrapper == "env" && next.contains('=') {
-                        // env KEY=VAL ...
-                        iter.next();
-                        continue;
-                    }
-                    break;
-                }
-                // at_command_head 保持 true，循环下一轮继续按命令头扫描真正命令名
-                continue;
-            }
-            if DESTRUCTIVE.contains(&b) {
-                return Err(ShapeError::Destructive(b.to_string()));
-            }
-            if WRITE_VERBS.contains(&b) {
-                return Err(ShapeError::Write(format!(
-                    "{b} (file modification must go through patch_file)"
-                )));
-            }
-            if INTERPRETERS_DENIED.contains(&b) {
-                return Err(ShapeError::Write(format!(
-                    "{b} (rssh blocks script interpreters; use patch_file / match_file for file work)"
-                )));
-            }
-            at_command_head = false;
-        }
+    // 1. 命令头扫描：DESTRUCTIVE / WRITE_VERBS / INTERPRETERS_DENIED。
+    if DESTRUCTIVE.contains(&first) {
+        return Err(ShapeError::Destructive(first.to_string()));
+    }
+    if WRITE_VERBS.contains(&first) {
+        return Err(ShapeError::Write(format!(
+            "{first} (file modification must go through patch_file)"
+        )));
+    }
+    if INTERPRETERS_DENIED.contains(&first) {
+        return Err(ShapeError::Write(format!(
+            "{first} (rssh blocks script interpreters; use patch_file / match_file for file work)"
+        )));
     }
 
     // 2. chmod -R / chown -R
@@ -1226,5 +1247,85 @@ mod tests {
         assert!(validate("ps -ef | grep java | head -10").is_ok());
         assert!(validate("cat /etc/hosts | wc -l").is_ok());
         assert!(validate("ls -la | sort").is_ok());
+    }
+
+    #[test]
+    fn shape_glued_separator_bypass_blocked() {
+        // Regression: split_whitespace 不识别紧贴 separator（无空格），命令头扫描的
+        // `at_command_head` 状态机靠独立 separator token 触发重置 → 紧贴形态可绕过。
+        // 修复后 validator 先 split_segments 再每段独立 validate，与有无空格无关。
+        assert!(matches!(
+            validate("echo ok;rm -rf /"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("cat f|tee /tmp/x"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("ls&&rm a"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("ls&&cp a b"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("foo||rm -rf /"),
+            Err(ShapeError::Destructive(_))
+        ));
+        // background `&` 后跟危险命令
+        assert!(matches!(
+            validate("ls&rm a"),
+            Err(ShapeError::Destructive(_))
+        ));
+        // 三段紧贴 + 中间嵌套
+        assert!(matches!(
+            validate("a&&b;cp x y"),
+            Err(ShapeError::Write(_))
+        ));
+    }
+
+    #[test]
+    fn shape_multi_segment_per_command_check() {
+        // Regression: per-command 检查（chmod -R / tail -f / sed -i / awk -i inplace /
+        // touch -d / top no batch）之前只跑在 first segment 的 real_command_head 上，
+        // `true && sed -i ...` / `echo ok; touch -d ...` 可绕过。
+        // 修复后 validate 把每段都过一遍 per-command 规则。
+        assert!(matches!(
+            validate("true && sed -i 's/a/b/' file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("echo ok; touch -d '2026-01-01' file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("echo ok && chmod -R 755 /tmp"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("echo ok; awk -i inplace '{print}' file"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("echo ok && tail -f /var/log/syslog"),
+            Err(ShapeError::Interactive(_))
+        ));
+        // top no batch 在第二段
+        assert!(matches!(
+            validate("echo ok; top"),
+            Err(ShapeError::Interactive(_))
+        ));
+        // 紧贴 separator + 第二段 per-command
+        assert!(matches!(
+            validate("ok&&touch -d 'x' file"),
+            Err(ShapeError::Write(_))
+        ));
+        // counted loop 在第二段也要检查
+        assert!(matches!(
+            validate("echo ok && vmstat 1"),
+            Err(ShapeError::UnboundedLoop(_))
+        ));
     }
 }
