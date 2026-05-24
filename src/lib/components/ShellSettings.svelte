@@ -40,22 +40,26 @@
 
 <div class="page">
   <div class="section-label">LOCAL SHELL</div>
-  <div class="shell-list">
-    {#each shells as sh}
-      <button
-        class="shell-option neu-sm"
-        class:active={selectedShell === sh || (!selectedShell && shells[0] === sh)}
-        onclick={() => { selectedShell = sh; saveShell(); }}
-      >
-        <span class="shell-name">{sh}</span>
-        {#if selectedShell === sh || (!selectedShell && shells[0] === sh)}
-          <span class="check">&#x2713;</span>
-        {/if}
-      </button>
-    {/each}
+  <!-- shell 列表 + Custom Path 合在一个 .card.surface-raised（跟 GitHubSyncScreen / AiSettings 同款）。 -->
+  <div class="card surface-raised shell-card">
+    <div class="shell-list">
+      {#each shells as sh}
+        <button
+          class="shell-option neu-sm"
+          class:active={selectedShell === sh || (!selectedShell && shells[0] === sh)}
+          onclick={() => { selectedShell = sh; saveShell(); }}
+        >
+          <span class="shell-name">{sh}</span>
+          {#if selectedShell === sh || (!selectedShell && shells[0] === sh)}
+            <span class="check">&#x2713;</span>
+          {/if}
+        </button>
+      {/each}
+    </div>
     <div class="custom-shell">
-      <label>Custom Path</label>
-      <input type="text" bind:value={selectedShell} placeholder="/usr/local/bin/fish" onblur={saveShell} />
+      <label for="shell-custom-path">Custom Path</label>
+      <input id="shell-custom-path" type="text" bind:value={selectedShell}
+             placeholder="/usr/local/bin/fish" onblur={saveShell} />
     </div>
   </div>
 
@@ -80,37 +84,52 @@
   </div>
 
   <div class="section-label">{t("settings.shell.command_block")}</div>
-  <div class="switch-card">
-    <div class="switch-card-body">
-      <div class="switch-card-title"
-           class:on={commandBlockBar} class:off={!commandBlockBar}>
-        {t("settings.shell.command_block_bar")}
+  <!-- 命令块侧栏开关 + 启用后的快捷键提示合在一个 .card.surface-raised。
+       关时只有开关行；开时分隔线下展开 tips，跟 .danger-card 同款"主开关 + 分隔 + 子内容"结构。 -->
+  <div class="card surface-raised cmd-block-card">
+    <div class="cmd-block-head">
+      <div class="cmd-block-head-body">
+        <div class="cmd-block-title"
+             class:on={commandBlockBar} class:off={!commandBlockBar}>
+          {t("settings.shell.command_block_bar")}
+        </div>
+        <div class="cmd-block-desc">{t("settings.shell.command_block_bar_desc")}</div>
       </div>
-      <div class="switch-card-desc">{t("settings.shell.command_block_bar_desc")}</div>
+      <label class="switch">
+        <input type="checkbox" bind:checked={commandBlockBar} onchange={saveCommandBlockBar} />
+        <span class="slider"></span>
+      </label>
     </div>
-    <label class="switch">
-      <input type="checkbox" bind:checked={commandBlockBar} onchange={saveCommandBlockBar} />
-      <span class="slider"></span>
-    </label>
-  </div>
 
-  {#if commandBlockBar}
-    <div class="tips-card">
-      <div class="tips-title">{t("settings.shell.command_block_tips_title")}</div>
-      <ul class="tips-list">
-        <li>{t("settings.shell.command_block_tip_click")}</li>
-        <li>{t("settings.shell.command_block_tip_shift_click")}</li>
-        <li>{t("settings.shell.command_block_tip_cmd_click")}</li>
-        <li>{t("settings.shell.command_block_tip_right_click")}</li>
-        <li>{t("settings.shell.command_block_tip_clear")}</li>
-      </ul>
-    </div>
-  {/if}
+    {#if commandBlockBar}
+      <div class="card-divider"></div>
+      <div class="tips-group">
+        <div class="tips-title">{t("settings.shell.command_block_tips_title")}</div>
+        <ul class="tips-list">
+          <li>{t("settings.shell.command_block_tip_click")}</li>
+          <li>{t("settings.shell.command_block_tip_shift_click")}</li>
+          <li>{t("settings.shell.command_block_tip_cmd_click")}</li>
+          <li>{t("settings.shell.command_block_tip_right_click")}</li>
+          <li>{t("settings.shell.command_block_tip_clear")}</li>
+        </ul>
+      </div>
+    {/if}
+  </div>
 
 </div>
 
 <style>
   .page { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+
+  /* 卡片：复用全局 .card.surface-raised，本地只加 padding + 内布局，
+     跟 GitHubSyncScreen / AiSettings 同款。 */
+  .shell-card,
+  .cmd-block-card {
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
 
   .shell-list { display: flex; flex-direction: column; gap: 6px; }
   .shell-option {
@@ -130,7 +149,12 @@
 
   .custom-shell {
     display: flex; flex-direction: column; gap: 4px;
-    margin-top: 8px;
+  }
+  .custom-shell label {
+    font-size: 11px;
+    color: var(--text-sub);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
   .timeout-row {
@@ -143,13 +167,45 @@
     font-size: 11px; color: var(--text-dim);
   }
 
-  /* Tips 卡：开启侧栏后展开，把交互快捷方式列清楚（单击/shift/cmd/右键/Esc）。
-     视觉上比 switch-card 更"轻"——边框替代背景填充，让用户一看就知道是辅助信息。 */
-  .tips-card {
-    border: 1px solid var(--divider);
-    border-radius: 6px;
-    padding: 10px 14px;
-    background: color-mix(in srgb, var(--accent) 4%, transparent);
+  /* 命令块卡片：主开关行（title/desc + switch）→ 分隔线 → tips 列表，
+     跟 .danger-card 同样的"主开关 + 子内容"结构。 */
+  .cmd-block-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .cmd-block-head-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .cmd-block-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .cmd-block-title.on { color: var(--accent); }
+  .cmd-block-desc {
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+
+  /* 卡片内分隔线：负边距贯穿到卡片左右边缘。 */
+  .card-divider {
+    height: 1px;
+    background: var(--divider);
+    margin: 2px -18px;
+  }
+
+  /* Tips 列表 —— 嵌在 .cmd-block-card 内，不再有自己的 bg/border。 */
+  .tips-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
   }
   .tips-title {
     font-size: 11px;
@@ -157,7 +213,6 @@
     color: var(--text-sub);
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    margin-bottom: 6px;
   }
   .tips-list {
     margin: 0;

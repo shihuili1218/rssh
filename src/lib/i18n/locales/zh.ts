@@ -337,7 +337,7 @@ const zh: Messages = {
   "ai.settings.label.endpoint": "ENDPOINT",
   "ai.settings.label.api_key": "API KEY",
   "ai.settings.provider.openai_compat": "OpenAI 兼容端点",
-  "ai.settings.btn.load_models": "刷新",
+  "ai.settings.btn.load_models": "𖦹 刷新",
   "ai.settings.btn.loading_models": "刷新中…",
   "ai.settings.note.models_loaded": "已加载 {count} 个模型",
   "ai.settings.note.models_failed": "拉取失败: {error}",
