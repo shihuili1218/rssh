@@ -4,6 +4,7 @@
   import * as app from "../stores/app.svelte.ts";
   import { t, errMsg } from "../i18n/index.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
+  import Select from "./Select.svelte";
 
   let { id = null }: { id: string | null } = $props();
 
@@ -11,6 +12,15 @@
   let credentialType = $state("password"); let secret = $state("");
   let saveToRemote = $state(false);
   let saving = $state(false);
+
+  /** 翻译跟着 locale 变，必须 $derived。 */
+  let credentialTypeOptions = $derived([
+    { value: "password",    label: t("credential.type.password") },
+    { value: "key",         label: t("credential.type.key") },
+    { value: "agent",       label: t("credential.type.agent") },
+    { value: "none",        label: t("credential.type.none") },
+    { value: "interactive", label: t("credential.type.interactive") },
+  ]);
 
   onMount(async () => {
     if (id) {
@@ -46,13 +56,7 @@
     <label>{t("credential.username")}</label>
     <input type="text" bind:value={username} placeholder="root" />
     <label>{t("credential.auth_type")}</label>
-    <select bind:value={credentialType}>
-      <option value="password">{t("credential.type.password")}</option>
-      <option value="key">{t("credential.type.key")}</option>
-      <option value="agent">{t("credential.type.agent")}</option>
-      <option value="none">{t("credential.type.none")}</option>
-      <option value="interactive">{t("credential.type.interactive")}</option>
-    </select>
+    <Select bind:value={credentialType} options={credentialTypeOptions} />
     {#if credentialType === "password"}
       <label>{t("credential.password")}</label>
       <input type="password" bind:value={secret} />

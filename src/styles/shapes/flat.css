@@ -63,11 +63,29 @@
     box-shadow: none;
 }
 
-/* Inputs: border instead of inset shadow. */
+/* Inputs: border instead of inset shadow. Includes the custom Select trigger
+   (Tauri webview ignores CSS on <option>, so we render a button + dropdown). */
 :root[data-shape="flat"] input,
 :root[data-shape="flat"] select,
-:root[data-shape="flat"] textarea {
+:root[data-shape="flat"] textarea,
+:root[data-shape="flat"] .rssh-select-trigger {
     border: var(--flat-border);
+}
+/* Open 态接缝：trigger 自带 border + list (.surface-raised) 自带 border，
+   贴在一起会成 2px 双线。抹掉 trigger 朝向 list 那一侧的 border，
+   接缝处只保留 list 的那一条；同时把 Select.svelte 默认的 divider 色覆盖成 flat-border
+   保持视觉一致。drop-up 时 list 在 trigger 上方，贴边在 list 的 bottom。 */
+:root[data-shape="flat"] .rssh-select.open:not(.drop-up) .rssh-select-trigger {
+    border-bottom-color: transparent;
+}
+:root[data-shape="flat"] .rssh-select.open.drop-up .rssh-select-trigger {
+    border-top-color: transparent;
+}
+:root[data-shape="flat"] .rssh-select:not(.drop-up) .rssh-select-list {
+    border-top: var(--flat-border);
+}
+:root[data-shape="flat"] .rssh-select.drop-up .rssh-select-list {
+    border-bottom: var(--flat-border);
 }
 
 /* Checkbox/radio: outline when unchecked, solid when checked. */

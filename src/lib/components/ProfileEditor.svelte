@@ -5,6 +5,7 @@
   import type { Credential, Profile, Group } from "../stores/app.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
   import { t, errMsg } from "../i18n/index.svelte.ts";
+  import Select from "./Select.svelte";
 
   let { id = null }: { id: string | null } = $props();
 
@@ -21,6 +22,19 @@
   let saving = $state(false);
 
   let bastionProfiles = $derived(profiles.filter(p => p.id !== id));
+
+  /** 下拉选项 —— 列表动态，跟随 onMount 拉到的数据。 */
+  let credentialOptions = $derived(
+    credentials.map((c) => ({ value: c.id, label: `${c.name} (${c.username})` })),
+  );
+  let bastionOptions = $derived([
+    { value: null, label: "-- None --" },
+    ...bastionProfiles.map((p) => ({ value: p.id, label: `${p.name} (${p.host}:${p.port})` })),
+  ]);
+  let groupOptions = $derived([
+    { value: null, label: "-- None --" },
+    ...groups.map((g) => ({ value: g.id, label: g.name })),
+  ]);
 
   onMount(async () => {
     [credentials, profiles, groups] = await Promise.all([app.loadCredentials(), app.loadProfiles(), app.loadGroups()]);
@@ -61,26 +75,11 @@
     <label>Port</label>
     <input type="number" bind:value={port} min="1" max="65535" />
     <label>Credential</label>
-    <select bind:value={credentialId}>
-      <option value="" disabled>-- Select Credential --</option>
-      {#each credentials as c (c.id)}
-        <option value={c.id}>{c.name} ({c.username})</option>
-      {/each}
-    </select>
+    <Select bind:value={credentialId} options={credentialOptions} placeholder="-- Select Credential --" />
     <label>Bastion Host (optional)</label>
-    <select bind:value={bastionId}>
-      <option value={null}>-- None --</option>
-      {#each bastionProfiles as p (p.id)}
-        <option value={p.id}>{p.name} ({p.host}:{p.port})</option>
-      {/each}
-    </select>
+    <Select bind:value={bastionId} options={bastionOptions} />
     <label>Group (optional)</label>
-    <select bind:value={groupId}>
-      <option value={null}>-- None --</option>
-      {#each groups as g (g.id)}
-        <option value={g.id}>{g.name}</option>
-      {/each}
-    </select>
+    <Select bind:value={groupId} options={groupOptions} />
     <label>Init Command (optional)</label>
     <input type="text" bind:value={shellCommand} placeholder="cd /app && ls" />
     <button class="btn btn-accent" onclick={save} disabled={saving || !name || !host || !credentialId}>

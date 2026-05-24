@@ -4,6 +4,15 @@
     import * as ai from "../ai/store.svelte.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import type { LlmProvider, ModelInfo, SkillRecord } from "../ai/types.ts";
+    import Select from "./Select.svelte";
+
+    /** Provider 下拉选项 —— OpenAI 那项的翻译用 $derived 跟着 locale 自动重算。 */
+    let providerOptions = $derived([
+        { value: "anthropic", label: "Anthropic (Claude)" },
+        { value: "openai",    label: `OpenAI / ${t("ai.settings.provider.openai_compat")}` },
+        { value: "deepseek",  label: "DeepSeek" },
+        { value: "glm",       label: "GLM (智谱)" },
+    ]);
 
     function openExternal(e: MouseEvent, url: string) {
         e.preventDefault();
@@ -338,12 +347,10 @@
 
         <div class="row">
             <label for="ai-provider">{t("ai.settings.label.provider")}</label>
-            <select id="ai-provider" bind:value={provider} onchange={onProviderChange}>
-                <option value="anthropic">Anthropic (Claude)</option>
-                <option value="openai">OpenAI / {t("ai.settings.provider.openai_compat")}</option>
-                <option value="deepseek">DeepSeek</option>
-                <option value="glm">GLM (智谱)</option>
-            </select>
+            <Select id="ai-provider"
+                    bind:value={provider as string}
+                    options={providerOptions}
+                    onchange={onProviderChange} />
         </div>
         <div class="row">
             <label for="ai-endpoint">{t("ai.settings.label.endpoint")}</label>

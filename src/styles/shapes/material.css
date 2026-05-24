@@ -19,10 +19,12 @@
     --radius-md: 18px;
 }
 
-/* Pressed inputs: tint background instead of inset shadow. */
+/* Pressed inputs: tint background instead of inset shadow. Includes the custom
+   Select trigger (Tauri webview ignores CSS on <option>). */
 [data-shape="material"] input,
 [data-shape="material"] select,
-[data-shape="material"] textarea {
+[data-shape="material"] textarea,
+[data-shape="material"] .rssh-select-trigger {
     background: var(--surface);
     box-shadow: var(--elevation-pressed);
 }

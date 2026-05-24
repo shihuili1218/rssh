@@ -5,6 +5,7 @@
   import type { Profile } from "../stores/app.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
   import { t, errMsg } from "../i18n/index.svelte.ts";
+  import Select from "./Select.svelte";
 
   let { id = null }: { id: string | null } = $props();
 
@@ -13,6 +14,13 @@
   let remotePort = $state(80); let profileId = $state("");
   let profiles = $state<Profile[]>([]);
   let saving = $state(false);
+
+  let profileOptions = $derived(profiles.map((p) => ({ value: p.id, label: p.name })));
+  const forwardTypeOptions = [
+    { value: "local",   label: "Local Forward" },
+    { value: "remote",  label: "Remote Forward" },
+    { value: "dynamic", label: "Dynamic (SOCKS5)" },
+  ];
 
   onMount(async () => {
     profiles = await app.loadProfiles();
@@ -51,16 +59,9 @@
     <label>Name</label>
     <input type="text" bind:value={name} placeholder="Web Forward" />
     <label>Profile</label>
-    <select bind:value={profileId}>
-      <option value="">-- Select --</option>
-      {#each profiles as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
-    </select>
+    <Select bind:value={profileId} options={profileOptions} placeholder="-- Select --" />
     <label>Type</label>
-    <select bind:value={forwardType}>
-      <option value="local">Local Forward</option>
-      <option value="remote">Remote Forward</option>
-      <option value="dynamic">Dynamic (SOCKS5)</option>
-    </select>
+    <Select bind:value={forwardType} options={forwardTypeOptions} />
     {#if forwardType === "dynamic"}
       <div class="field"><label>Local Port (SOCKS5 proxy)</label><input type="number" bind:value={localPort} /></div>
     {:else}

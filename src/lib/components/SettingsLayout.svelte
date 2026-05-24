@@ -23,6 +23,10 @@
   import CliSettings from "./CliSettings.svelte";
   import AppearanceSettings from "./AppearanceSettings.svelte";
   import AiSettings from "./AiSettings.svelte";
+  import Select from "./Select.svelte";
+
+  /** locale 下拉选项 —— AVAILABLE_LOCALES 是常量，不需要 $derived。 */
+  const localeOptions = AVAILABLE_LOCALES.map((l) => ({ value: l.code, label: l.label }));
 
   type MenuItem = { id: app.SettingsPage; label: string; section: string };
 
@@ -127,15 +131,13 @@
         </button>
       {/each}
     {/each}
-    <select
-      class="lang-select"
-      value={locale()}
-      onchange={(e) => setLocale((e.currentTarget as HTMLSelectElement).value as Locale)}
-    >
-      {#each AVAILABLE_LOCALES as l}
-        <option value={l.code}>{l.label}</option>
-      {/each}
-    </select>
+    <div class="lang-select">
+      <Select
+        value={locale()}
+        options={localeOptions}
+        onchange={(v) => setLocale(v as Locale)}
+      />
+    </div>
   </nav>
   {/if}
 
