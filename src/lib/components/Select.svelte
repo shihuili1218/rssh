@@ -122,12 +122,16 @@
 <div class="rssh-select" class:open class:disabled class:drop-up={dropUp}
      style:--rssh-trigger-h="{triggerH}px"
      onfocusout={onFocusOut}>
+    <!-- 不声明 role="listbox" / role="option"：ARIA listbox 模式要求 ArrowKey
+         导航 + active-descendant，rssh 当前实现是 button 列表（鼠标交互为主）。
+         role lying 比 no role 更糟 —— screen reader 会按 listbox 期望去找
+         active option 然后困惑。aria-haspopup="true" 仍传达"按下有 popup"。 -->
     <button
         {id}
         type="button"
         class="rssh-select-trigger"
         {disabled}
-        aria-haspopup="listbox"
+        aria-haspopup="true"
         aria-expanded={open}
         onclick={toggle}
         bind:this={triggerEl}
@@ -139,20 +143,15 @@
     </button>
 
     {#if open}
-        <ul
-            class="rssh-select-list surface-raised"
-            role="listbox"
-            bind:this={listEl}
-        >
+        <ul class="rssh-select-list surface-raised" bind:this={listEl}>
             {#each options as opt (opt.value)}
-                <li role="presentation">
+                <li>
                     <button
                         type="button"
                         class="rssh-select-option"
                         class:active={opt.value === value}
                         disabled={opt.disabled}
-                        role="option"
-                        aria-selected={opt.value === value}
+                        aria-pressed={opt.value === value}
                         onclick={() => select(opt)}
                     >
                         {opt.label}

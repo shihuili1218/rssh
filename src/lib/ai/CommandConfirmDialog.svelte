@@ -1,3 +1,15 @@
+<script lang="ts" module>
+    /** ack-only 工具（download_file / analyze_locally）不走 PTY，
+     *  store 的 _runningExecutions 表登记的是 PTY 句柄，无法守门重入。
+     *  Dialog 实例可能销毁重建（panel close/reopen），且 result prop 在事件
+     *  抵达前是 undefined → isPending=true，会再次自动 approve 发重复 ack。
+     *
+     *  Set 必须在 `<script module>` 里 —— 写在 instance script 里每次组件 mount
+     *  都会新建一个，完全不能跨实例共享，等于没防护。
+     *  生命周期：invoke 成功后才 add；result/rejected 抵达由 $effect 清理。 */
+    const _ackedToolCalls = new Set<string>();
+</script>
+
 <script lang="ts">
     import { onMount } from "svelte";
     import { invoke } from "@tauri-apps/api/core";
@@ -52,14 +64,6 @@
         }
     }
 
-    /** ack-only 工具（download_file / analyze_locally）不走 PTY，
-     *  store 的 _runningExecutions 表登记的是 PTY 句柄，无法守门重入。
-     *  Dialog 实例可能销毁重建（panel close/reopen），且 result prop 在事件
-     *  抵达前是 undefined → isPending=true，会再次自动 approve 发重复 ack。
-     *  用 module-level Set 兜底：approve 后登记；result/rejected 抵达后由
-     *  $effect 清理，避免长会话累积 UUID 字符串。 */
-    const _ackedToolCalls = new Set<string>();
-
     // 自动批准：每次新 command 进 chat 会创建一个新的 CommandConfirmDialog 实例，
     // onMount 触发一次按 kind 查 settings.auto_<kind>。UI 上"提议→执行"全程可见，
     // 审计 trail 完整；后端 emit 流程不变。挂载时若已有 result/rejected（历史记录
@@ -102,17 +106,25 @@
                 // 投一个 stub result 让它继续，由后端自己跑 SFTP / 开窗，跑完会
                 // emit command_completed 把卡片切到结果态。executing 不在 finally 里
                 // reset —— 让卡片维持"executing"视觉直到 result prop 抵达。
-                // 先登记 acked 再 invoke：先 invoke 后登记会让 await 期间的
-                // 并发 onMount 撞重复 invoke。
+                //
+                // 双重守门防 invoke 失败 stuck：
+                // 1) 先 add 防 await 期间并发 onMount 撞重复 invoke
+                // 2) catch 里 delete 回退，让用户能重试
+                // 走到 return 之前 invoke 已 resolve，acked 状态留着到 result 抵达
                 _ackedToolCalls.add(cmd.tool_call_id);
-                await invoke("ai_command_result", {
-                    sessionId,
-                    toolCallId: cmd.tool_call_id,
-                    exitCode: 0,
-                    output: "",
-                    timedOut: false,
-                    earlyTerminated: false,
-                });
+                try {
+                    await invoke("ai_command_result", {
+                        sessionId,
+                        toolCallId: cmd.tool_call_id,
+                        exitCode: 0,
+                        output: "",
+                        timedOut: false,
+                        earlyTerminated: false,
+                    });
+                } catch (e) {
+                    _ackedToolCalls.delete(cmd.tool_call_id);
+                    throw e;
+                }
                 return;
             }
             await ai.executeCommand(sessionId, cmd, targetKind, targetSessionId);
