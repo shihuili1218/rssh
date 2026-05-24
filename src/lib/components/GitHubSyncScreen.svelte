@@ -68,24 +68,37 @@
 </script>
 
 <div class="page">
-    <div class="form">
-        <div>
+    <!-- 单卡片包住所有内容（参考 sshell config_manager_screen）。
+         背景用项目现成的 .surface-raised，避免新加自定义视觉令牌。 -->
+    <div class="card surface-raised">
+        <p class="pat-hint">
             Create a PAT at github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens.<br/>
-            Repository access：Select "Only select repositories" (instead of "All repositories")<br/>
-            with "Contents" read & write permission.
+            Repository access: Select "Only select repositories" (instead of "All repositories")<br/>
+            with "Contents" read &amp; write permission.
+        </p>
+
+        <div class="field">
+            <label for="gh-token">Personal Access Token</label>
+            <input id="gh-token" type="password" bind:value={githubToken} placeholder="ghp_xxxx"/>
         </div>
-        <label>Personal Access Token</label>
-        <input type="password" bind:value={githubToken} placeholder="ghp_xxxx"/>
-        <label>Repository (owner/repo)</label>
-        <input type="text" bind:value={githubRepo} placeholder="user/rssh-config"/>
-        <label>Branch</label>
-        <input type="text" bind:value={githubBranch} placeholder="main"/>
-        <button class="btn btn-sm" onclick={saveSettings}>Save</button>
-        <div class="divider"></div>
+        <div class="field">
+            <label for="gh-repo">Repository (owner/repo)</label>
+            <input id="gh-repo" type="text" bind:value={githubRepo} placeholder="user/rssh-config"/>
+        </div>
+        <div class="field">
+            <label for="gh-branch">Branch</label>
+            <input id="gh-branch" type="text" bind:value={githubBranch} placeholder="main"/>
+        </div>
+
+        <!-- Save 跟 Push 同属"主操作"，用同样的 btn-accent 样式。
+             Pull 用默认 btn（secondary）跟 sshell buildSecondaryButton 对齐。 -->
+        <button class="btn btn-accent btn-sm save-btn" onclick={saveSettings}>⛰ Save</button>
+
         <div class="btn-row">
-            <button class="btn btn-accent btn-sm" onclick={() => askPassword("push")} disabled={syncing}>Push to GitHub</button>
-            <button class="btn btn-sm" onclick={() => askPassword("pull")} disabled={syncing}>Pull from GitHub</button>
+            <button class="btn btn-accent btn-sm" onclick={() => askPassword("push")} disabled={syncing}>𓍼 ོ☁︎ Push to GitHub</button>
+            <button class="btn btn-sm" onclick={() => askPassword("pull")} disabled={syncing}>༄ Pull from GitHub</button>
         </div>
+
         {#if msg}
             <div class="msg">{msg}</div>
         {/if}
@@ -120,10 +133,42 @@
         padding: 24px;
     }
 
-    .form {
+    /* 卡片：复用全局 .surface-raised 提供的 bg + 阴影 + 圆角，本地只加 padding + 内布局。 */
+    .card {
+        padding: 18px;
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 12px;
+    }
+
+    /* PAT 说明：跟 sshell 对齐 —— 11px / text-dim / 行高 1.5。
+       不用 11.5/12 因为内容多行密集，11+1.5 行高最易扫读。 */
+    .pat-hint {
+        margin: 0;
+        font-size: 11px;
+        color: var(--text-dim);
+        line-height: 1.5;
+    }
+
+    .field {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+    .field label {
+        font-size: 11px;
+        color: var(--text-sub);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    .field input {
+        width: 100%;
+        box-sizing: border-box;
+    }
+
+    /* Save 单独一行；Push/Pull 一行。两组间留同 gap，无需 divider。 */
+    .save-btn {
+        align-self: flex-start;
     }
 
     .btn-row {
