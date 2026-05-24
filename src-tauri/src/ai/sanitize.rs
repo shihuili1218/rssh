@@ -701,12 +701,16 @@ fn check_redirects(stmt: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeErro
         if dest.kind() == "number" {
             continue;
         }
-        let dest_text = node_text(&dest, src);
-        if dest_text == "/dev/null" {
+        // destination 可能被引号包围（`>"/dev/null"` / `>'/dev/null'`）—— tree-sitter 把
+        // string / raw_string 节点的 text 保留引号字符，直接相等比较会误拒。
+        // 归一化（剥外层引号 + 反斜杠 escape）后再对比，和命令头 / arg 检查保持一致。
+        let dest_raw = node_text(&dest, src);
+        let dest_norm = normalize_head(dest_raw);
+        if dest_norm == "/dev/null" {
             continue;
         }
         return Err(ShapeError::Write(format!(
-            "redirect to '{dest_text}' (file modification must go through patch_file; '/dev/null' is the only allowed target)"
+            "redirect to '{dest_raw}' (file modification must go through patch_file; '/dev/null' is the only allowed target)"
         )));
     }
     Ok(())
@@ -1576,6 +1580,27 @@ mod tests {
         // 输出重定向到非 /dev/null 仍拒
         assert!(matches!(
             validate("cat > /tmp/x"),
+            Err(ShapeError::Write(_))
+        ));
+    }
+
+    #[test]
+    fn shape_quoted_devnull_redirect_passes() {
+        // shell 允许 `cmd >"/dev/null"` / `cmd >'/dev/null'` —— tree-sitter 把 destination
+        // 解析成 string / raw_string 节点，node_text 保留外层引号。
+        // 旧 check_redirects 直接 dest_text == "/dev/null" → 误拒。
+        // 修：destination 也 normalize_head 剥引号再比较。
+        assert!(validate("cmd >\"/dev/null\"").is_ok());
+        assert!(validate("cmd >'/dev/null'").is_ok());
+        assert!(validate("cmd > \"/dev/null\" 2>&1").is_ok());
+        assert!(validate("cmd 2> '/dev/null'").is_ok());
+        // 写到非 /dev/null 的 quoted 文件仍要拒
+        assert!(matches!(
+            validate("cmd >\"/tmp/x\""),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("cmd >'/etc/passwd'"),
             Err(ShapeError::Write(_))
         ));
     }
