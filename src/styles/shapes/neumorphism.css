@@ -31,3 +31,45 @@
 :root[data-shape="neumorphism"] .sb-item.active {
     box-shadow: var(--elevation-pressed);
 }
+
+/* Toggle switch 复刻参考的两层 neu 设计：
+   - track (.slider)：圆角 + overflow:hidden + "外凸 + 内凹"复合阴影（边缘高光感）
+   - indicator (.slider::before)：宽度 200% 的色块，在 track 内左右平移
+     未选中 translateX(-75%) / 选中 translateX(25%)，靠 indicator 位置而非圆球表达状态
+   全局 .switch .slider 默认是单调 inset + 圆球 thumb，这里完全覆盖。
+
+   阴影按 rssh 44×24（参考是 60×30）缩放比例 ~75%；用 token 替换硬编码颜色，
+   保留 affordance：indicator 在 checked 时染 accent tint，让"开启"有色彩反馈。 */
+:root[data-shape="neumorphism"] .switch .slider {
+    background: var(--surface);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow:
+        -6px -3px 6px var(--shadow-light),
+        6px 3px 9px var(--shadow-dark),
+        3px 2px 3px var(--shadow-dark) inset,
+        -3px -2px 3px var(--shadow-light) inset;
+}
+:root[data-shape="neumorphism"] .switch .slider::before {
+    /* 重写圆球 thumb → 200% 宽 indicator */
+    width: 200%;
+    height: 100%;
+    left: 0;
+    top: 0;
+    background: var(--surface);
+    border-radius: 12px;
+    box-shadow:
+        -6px -3px 6px var(--shadow-light),
+        6px 3px 9px var(--shadow-dark);
+    transform: translate3d(-75%, 0, 0);
+    transition: transform 0.4s cubic-bezier(0.85, 0.05, 0.18, 1.35),
+                background 0.4s;
+}
+:root[data-shape="neumorphism"] .switch input:checked + .slider {
+    /* 不再用 accent tint 染 track —— 状态切换交给 indicator 滑动 + 染色 */
+    background: var(--surface);
+}
+:root[data-shape="neumorphism"] .switch input:checked + .slider::before {
+    transform: translate3d(25%, 0, 0);
+    background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+}
