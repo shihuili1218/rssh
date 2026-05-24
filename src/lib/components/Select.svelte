@@ -217,6 +217,12 @@
         position: relative;
         z-index: 2;
     }
+    /* open 态的 transparent border 把 :focus-visible 的 accent 焦点环也盖了。
+       键盘 Tab 到 open trigger 必须看到焦点 —— 加一条 specificity 更高的复合
+       规则把 accent border 恢复回来。 */
+    :global(.rssh-select.open .rssh-select-trigger:focus-visible) {
+        border-color: var(--accent);
+    }
 
     :global(.rssh-select-value) {
         flex: 1;

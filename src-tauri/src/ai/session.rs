@@ -569,7 +569,9 @@ impl Actor {
                         "exit_code": 1,
                         "timed_out": false,
                         "early_terminated": false,
-                        "output": format!("rejected: {reason}"),
+                        // 卡片 output 是给用户看的，按 AGENT.md Pr1 用中文。
+                        // push_tool_error 内容保持英文 —— 喂给 LLM 推理用。
+                        "output": format!("已拒绝：{reason}"),
                         "original_bytes": 0,
                         "truncated_bytes": 0,
                     }),
@@ -628,7 +630,7 @@ impl Actor {
                     local_path: local_str.clone(),
                     bytes,
                 });
-                let card_output = format!("downloaded {} bytes -> {}", bytes, local_str);
+                let card_output = format!("已下载 {} 字节 → {}", bytes, local_str);
                 self.emit(
                     "command_completed",
                     json!({
@@ -659,14 +661,14 @@ impl Actor {
                 // 用 code() 给个语义分类 + 远端路径让用户辨识，足以指导下一步动作。
                 let card_msg = match e.code() {
                     "sftp_file_too_large" => format!(
-                        "Remote file exceeds {MAX_DOWNLOAD_MB} MB cap: {}",
+                        "远端文件超出 {MAX_DOWNLOAD_MB} MB 上限：{}",
                         input.remote_path
                     ),
                     "sftp_io_failed" => format!(
-                        "Cannot access remote file (may not exist or not readable): {}",
+                        "无法访问远端文件（不存在或不可读）：{}",
                         input.remote_path
                     ),
-                    other => format!("SFTP failed ({other}): {}", input.remote_path),
+                    _ => format!("下载失败：{}", input.remote_path),
                 };
                 self.emit(
                     "command_completed",
@@ -750,7 +752,7 @@ impl Actor {
                         "exit_code": 1,
                         "timed_out": false,
                         "early_terminated": false,
-                        "output": format!("rejected: {reason}"),
+                        "output": format!("已拒绝：{reason}"),
                         "original_bytes": 0,
                         "truncated_bytes": 0,
                     }),
@@ -820,7 +822,7 @@ impl Actor {
                 .initialization_script(&init_script)
                 .build()
             {
-                emit_done(self, 1, format!("failed to open window: {e}"));
+                emit_done(self, 1, format!("打开分析窗口失败：{e}"));
                 self.push_tool_error(
                     &tc.id,
                     &format!(
@@ -837,7 +839,7 @@ impl Actor {
                 ),
             });
 
-            emit_done(self, 0, format!("opened analysis window for {}", input.local_path));
+            emit_done(self, 0, format!("已打开分析窗口：{}", input.local_path));
             self.history.push(ChatMessage::ToolResult {
                 tool_call_id: tc.id,
                 content: format!(
@@ -853,7 +855,7 @@ impl Actor {
         #[cfg(mobile)]
         {
             let _ = (init_script, label);
-            emit_done(self, 1, "analyze_locally is desktop-only".into());
+            emit_done(self, 1, "该功能仅支持桌面端".into());
             self.push_tool_error(
                 &tc.id,
                 "analyze_locally is desktop-only: this build cannot spawn additional windows. Continue diagnosis in the current session.",

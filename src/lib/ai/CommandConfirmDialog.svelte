@@ -30,7 +30,9 @@
     // download_file / analyze_locally 不走 PTY，approve 只发 ack 给后端；视觉无需特化。
     let isAckOnly = $derived(cmd.kind === "download_file" || cmd.kind === "analyze_locally");
 
-    /** 把 kind 映射到 settings 上对应的 auto_* 字段 —— 命中即可自动批准。 */
+    /** 把 kind 映射到 settings 上对应的 auto_* 字段 —— 命中即可自动批准。
+     *  TS 上 switch 已 exhaustive 覆盖 CommandKind 8 个值；但运行时 cmd.kind
+     *  可能是 LLM/历史回放传入的未知字符串，fail-closed 显式 return false。 */
     function autoApproveAllowed(s: AiSettings | null, kind?: CommandKind): boolean {
         if (!s || !s.danger_mode || !kind) return false;
         switch (kind) {
@@ -42,8 +44,16 @@
             case "patch_modify":    return s.auto_patch_modify;
             case "patch_diff":      return s.auto_patch_diff;
             case "patch_mv":        return s.auto_patch_mv;
+            default:                return false;
         }
     }
+
+    /** ack-only 工具（download_file / analyze_locally）不走 PTY，
+     *  store 的 _runningExecutions 表登记的是 PTY 句柄，无法守门重入。
+     *  Dialog 实例可能销毁重建（panel close/reopen），且 result prop 在事件
+     *  抵达前是 undefined → isPending=true，会再次自动 approve 发重复 ack。
+     *  用 module-level Set 兜底：tool_call_id 是 UUID 不复用，已 ack 过永久标记。 */
+    const _ackedToolCalls = new Set<string>();
 
     // 自动批准：每次新 command 进 chat 会创建一个新的 CommandConfirmDialog 实例，
     // onMount 触发一次按 kind 查 settings.auto_<kind>。UI 上"提议→执行"全程可见，
@@ -61,6 +71,7 @@
             isPending
             && !executing
             && !ai.isCommandRunning(cmd.tool_call_id)
+            && !_ackedToolCalls.has(cmd.tool_call_id)
             && autoApproveAllowed(ai.settings(), cmd.kind)
         ) {
             void approve();
@@ -69,6 +80,7 @@
 
     async function approve() {
         if (executing) return;
+        if (isAckOnly && _ackedToolCalls.has(cmd.tool_call_id)) return;
         executing = true;
         try {
             if (isAckOnly) {
@@ -76,6 +88,9 @@
                 // 投一个 stub result 让它继续，由后端自己跑 SFTP / 开窗，跑完会
                 // emit command_completed 把卡片切到结果态。executing 不在 finally 里
                 // reset —— 让卡片维持"executing"视觉直到 result prop 抵达。
+                // 先登记 acked 再 invoke：先 invoke 后登记会让 await 期间的
+                // 并发 onMount 撞重复 invoke。
+                _ackedToolCalls.add(cmd.tool_call_id);
                 await invoke("ai_command_result", {
                     sessionId,
                     toolCallId: cmd.tool_call_id,

@@ -211,6 +211,7 @@ const COMMAND_ALIASES: &[(&str, &str)] = &[
     ("gchown", "chown"),
     ("gtouch", "touch"),
     ("gtail", "tail"),
+    ("gcpio", "cpio"),
     // awk 实现变体
     ("gawk", "awk"),
     ("mawk", "awk"),
@@ -1610,6 +1611,11 @@ mod tests {
         ));
         assert!(matches!(
             validate("gtar xf foo.tar"),
+            Err(ShapeError::Write(_))
+        ));
+        // cpio 同款：macOS brew install cpio 实际装的是 `gcpio`，没归一会漏拦。
+        assert!(matches!(
+            validate("gcpio -i < foo.cpio"),
             Err(ShapeError::Write(_))
         ));
     }
