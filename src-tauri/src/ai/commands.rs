@@ -17,16 +17,27 @@ use super::session::{self, DiagnoseSession, UserAction};
 use super::skills::{self, SkillRecord};
 
 // ─── BYOK 设置存储键 ────────────────────────────────────────────────
+//
+// 分两类存储：
+//   - API key：真 secret，走 keychain（state.secret_store，带 "setting:" 命名空间前缀）
+//   - 其它（provider/model/endpoint/danger_mode/auto_*）：行为偏好，走 DB settings 表
+//     （明文裸 key），跟 locale / theme / verbose_log 同档次。
+//
+// 之前历史版本所有 ai_* 都塞进 keychain，把 keychain 当通用键值库用 ——
+// 滥用 keychain 容量、增加 OS 解锁次数（mac Touch ID 弹窗）、语义错乱（行为偏好
+// 不是 secret）。
 
 fn key_provider() -> String {
-    setting_key("ai_provider")
+    "ai_provider".into()
 }
 fn key_model(provider: &str) -> String {
-    setting_key(&format!("ai_{provider}_model"))
+    format!("ai_{provider}_model")
 }
 fn key_endpoint(provider: &str) -> String {
-    setting_key(&format!("ai_{provider}_endpoint"))
+    format!("ai_{provider}_endpoint")
 }
+/// API key 走 keychain —— 唯一真 secret，命名空间带 "setting:" 前缀以跟其它
+/// secret（cred:* 等）隔离。
 fn key_api_key(provider: &str) -> String {
     setting_key(&format!("ai_{provider}_key"))
 }
@@ -34,13 +45,13 @@ fn key_api_key(provider: &str) -> String {
 /// 这是 issue #39 的明确需求——用户在受控环境（隔离 VM、靶机）里期望像 Claude Code
 /// 一样无打扰自主跑，但要分粒度——文件改动比命令风险高一档，得让用户自己决定。
 fn key_danger_mode() -> String {
-    setting_key("ai_danger_mode")
+    "ai_danger_mode".into()
 }
 /// per-tool 自动批准开关。仅当 danger_mode=on 时生效。
 /// run_command / match_file 默认 true（向后兼容旧 danger_mode 全开的行为），
 /// 其它默认 false（写动作 / 大副作用，明确表示需要新设默认就开）。
 fn key_auto(name: &str) -> String {
-    setting_key(&format!("ai_auto_{name}"))
+    format!("ai_auto_{name}")
 }
 
 // ─── 命令 ──────────────────────────────────────────────────────────
@@ -134,12 +145,12 @@ pub async fn ai_session_start(
         }
     }
 
-    // 1. API key
+    // 1. API key（走 keychain）+ endpoint（走 DB settings 明文）
     let api_key = state
         .secret_store
         .get(&key_api_key(&provider))?
         .ok_or_else(|| AppError::config("api_key_missing", json!({ "provider": provider })))?;
-    let endpoint = state.secret_store.get(&key_endpoint(&provider))?;
+    let endpoint = crate::db::settings::get(&state.db, &key_endpoint(&provider))?;
 
     // 2. 校验 target 存在 + 抓 SSH handle 给 download_file 工具复用
     let ssh_handle = match target_kind.as_str() {
@@ -397,9 +408,7 @@ fn auto_default(name: &str) -> bool {
 }
 
 fn read_auto(state: &State<'_, AppState>, name: &str) -> AppResult<bool> {
-    Ok(state
-        .secret_store
-        .get(&key_auto(name))?
+    Ok(crate::db::settings::get(&state.db, &key_auto(name))?
         .map(|v| v == "1")
         .unwrap_or_else(|| auto_default(name)))
 }
@@ -413,24 +422,18 @@ pub async fn ai_settings_get(
 ) -> AppResult<AiSettings> {
     let provider = match provider.filter(|s| !s.is_empty()) {
         Some(p) => p,
-        None => state
-            .secret_store
-            .get(&key_provider())?
+        None => crate::db::settings::get(&state.db, &key_provider())?
             .unwrap_or_else(|| "anthropic".into()),
     };
-    let model = state
-        .secret_store
-        .get(&key_model(&provider))?
-        .unwrap_or_default();
-    let endpoint = state.secret_store.get(&key_endpoint(&provider))?;
+    let model = crate::db::settings::get(&state.db, &key_model(&provider))?.unwrap_or_default();
+    let endpoint = crate::db::settings::get(&state.db, &key_endpoint(&provider))?;
+    // API key 仍走 keychain
     let has_api_key = state
         .secret_store
         .get(&key_api_key(&provider))?
         .filter(|s| !s.is_empty())
         .is_some();
-    let danger_mode = state
-        .secret_store
-        .get(&key_danger_mode())?
+    let danger_mode = crate::db::settings::get(&state.db, &key_danger_mode())?
         .map(|v| v == "1")
         .unwrap_or(false);
     Ok(AiSettings {
@@ -474,7 +477,7 @@ pub async fn ai_list_models(
     let endpoint = endpoint
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .or_else(|| state.secret_store.get(&key_endpoint(&provider)).ok().flatten());
+        .or_else(|| crate::db::settings::get(&state.db, &key_endpoint(&provider)).ok().flatten());
     let client = llm::build_client(&provider, api_key, endpoint)?;
     client.list_models().await
 }
@@ -498,20 +501,19 @@ pub async fn ai_settings_set(
     auto_patch_mv: Option<bool>,
 ) -> AppResult<()> {
     if let Some(p) = provider.as_ref() {
-        state.secret_store.set(&key_provider(), p)?;
+        crate::db::settings::set(&state.db, &key_provider(), p)?;
     }
     let active_provider = provider
         .clone()
-        .or_else(|| state.secret_store.get(&key_provider()).ok().flatten())
+        .or_else(|| crate::db::settings::get(&state.db, &key_provider()).ok().flatten())
         .unwrap_or_else(|| "anthropic".into());
     if let Some(m) = model.as_ref() {
-        state.secret_store.set(&key_model(&active_provider), m)?;
+        crate::db::settings::set(&state.db, &key_model(&active_provider), m)?;
     }
     if let Some(e) = endpoint {
-        state
-            .secret_store
-            .set(&key_endpoint(&active_provider), &e)?;
+        crate::db::settings::set(&state.db, &key_endpoint(&active_provider), &e)?;
     }
+    // API key 仍走 keychain；空串语义保留（用 delete 抹掉而不是存空）
     if let Some(k) = api_key {
         if k.is_empty() {
             state.secret_store.delete(&key_api_key(&active_provider))?;
@@ -522,9 +524,7 @@ pub async fn ai_settings_set(
     if let Some(on) = danger_mode {
         // 用 "1"/"0" 而不是 delete on false——显式记录用户的"我关了"，
         // 与"从未设置过"区分开，后续审计/排错更直接。
-        state
-            .secret_store
-            .set(&key_danger_mode(), if on { "1" } else { "0" })?;
+        crate::db::settings::set(&state.db, &key_danger_mode(), if on { "1" } else { "0" })?;
     }
     // per-tool 自动批准。同 danger_mode 的存储约定（"1"/"0"），None 不动。
     let auto_writes: &[(&str, Option<bool>)] = &[
@@ -539,9 +539,7 @@ pub async fn ai_settings_set(
     ];
     for (name, val) in auto_writes {
         if let Some(on) = val {
-            state
-                .secret_store
-                .set(&key_auto(name), if *on { "1" } else { "0" })?;
+            crate::db::settings::set(&state.db, &key_auto(name), if *on { "1" } else { "0" })?;
         }
     }
     Ok(())
