@@ -147,6 +147,19 @@
     </div>
 
     <div class="section-label">{t("settings.appearance.terminal_palette")}</div>
+    <div class="switch-card">
+        <div class="switch-card-body">
+            <div class="switch-card-title"
+                 class:on={termBgFollow} class:off={!termBgFollow}>
+                {t("settings.appearance.term.bg_follow")}
+            </div>
+            <div class="switch-card-desc">{t("settings.appearance.term.bg_follow_desc")}</div>
+        </div>
+        <label class="switch">
+            <input type="checkbox" bind:checked={termBgFollow} onchange={saveTermBgFollow} />
+            <span class="slider"></span>
+        </label>
+    </div>
     <div class="layout-grid">
         <!-- Inherit: follow the UI palette -->
         <button
@@ -224,21 +237,16 @@
         </button>
     </div>
 
-    <div class="switch-card">
-        <div class="switch-card-body">
-            <div class="switch-card-title"
-                 class:on={termBgFollow} class:off={!termBgFollow}>
-                {t("settings.appearance.term.bg_follow")}
-            </div>
-            <div class="switch-card-desc">{t("settings.appearance.term.bg_follow_desc")}</div>
-        </div>
-        <label class="switch">
-            <input type="checkbox" bind:checked={termBgFollow} onchange={saveTermBgFollow} />
-            <span class="slider"></span>
-        </label>
-    </div>
-
     <div class="section-label">{t("settings.appearance.surface_style")}</div>
+    <div class="density-row">
+        {#each densities as d}
+            <button
+                    class="density-btn"
+                    class:active={densityId === d.id}
+                    onclick={() => pickDensity(d.id)}
+            >{t(`settings.appearance.density.${d.id}` as any)}</button>
+        {/each}
+    </div>
     <div class="layout-grid">
         {#each shapes as s}
             <button
@@ -255,16 +263,7 @@
         {/each}
     </div>
 
-    <div class="section-label">{t("settings.appearance.density")}</div>
-    <div class="density-row">
-        {#each densities as d}
-            <button
-                class="density-btn"
-                class:active={densityId === d.id}
-                onclick={() => pickDensity(d.id)}
-            >{t(`settings.appearance.density.${d.id}` as any)}</button>
-        {/each}
-    </div>
+
 
     <div class="section-label">{t("settings.appearance.sidebar_position")}</div>
     <div class="layout-grid">

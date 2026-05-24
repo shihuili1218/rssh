@@ -52,7 +52,7 @@
     {#each recordings as rec}
       <div class="rec-row neu-sm">
         <span class="rec-name">{rec}</span>
-        <button class="btn btn-sm" onclick={() => playRecording(rec)}>Playback</button>
+        <button class="btn btn-sm" onclick={() => playRecording(rec)}>▶ Playback</button>
       </div>
     {/each}
   {/if}
