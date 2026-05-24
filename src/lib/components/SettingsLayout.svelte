@@ -131,7 +131,7 @@
         </button>
       {/each}
     {/each}
-    <div class="lang-select">
+    <div >
       <Select
         value={locale()}
         options={localeOptions}
@@ -173,11 +173,14 @@
   }
 
   .settings-menu {
-    width: 200px;
+    width: 230px;
     flex-shrink: 0;
     background: var(--bg);
     border-right: 1px solid var(--divider);
-    padding: 12px 8px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+    padding-left: 18px;
+    padding-right: 14px;
     overflow-y: auto;
   }
 
@@ -197,7 +200,7 @@
     display: block;
     width: 100%;
     padding: calc(9px * var(--density)) calc(12px * var(--density));
-    margin-bottom: calc(10px * var(--density));
+    margin-bottom: calc(12px * var(--density));
     border: none;
     border-radius: var(--radius-sm);
     background: var(--bg);

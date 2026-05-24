@@ -146,11 +146,11 @@
 <style>
   .page { padding: 24px; }
   .toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
-  .item-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .item-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
   .item-info { display: flex; align-items: center; gap: 10px; }
   .item-name { font-weight: 600; font-size: 14px; }
   .item-sub { font-size: 12px; color: var(--text-sub); }
-  .item-actions { display: flex; gap: 6px; }
+  .item-actions { display: flex; gap: 10px; }
   .color-swatch {
     width: 20px; height: 20px; border-radius: 4px; flex-shrink: 0;
     border: 1px solid var(--divider);
@@ -161,6 +161,6 @@
   }
   .inline-form input[type="color"] { width: 48px; height: 32px; padding: 2px; border: 1px solid var(--divider); border-radius: 4px; cursor: pointer; }
   .inline-form input[type="number"] { width: 80px; }
-  .form-actions { display: flex; gap: 6px; margin-top: 4px; }
+  .form-actions { display: flex; gap: 10px; margin-top: 4px; }
   .empty { text-align: center; color: var(--text-dim); padding: 32px; }
 </style>

@@ -44,9 +44,9 @@
 <style>
   .page { padding: 24px; }
   .toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
-  .item-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .item-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
   .item-name { font-weight: 600; font-size: 14px; }
   .item-sub { font-size: 12px; color: var(--text-sub); }
-  .item-actions { display: flex; gap: 6px; }
+  .item-actions { display: flex; gap: 10px; }
   .empty { text-align: center; color: var(--text-dim); padding: 32px; }
 </style>

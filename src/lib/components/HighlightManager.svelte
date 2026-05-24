@@ -74,7 +74,7 @@
   }
   .color-hex { font-size: 12px; font-family: monospace; color: var(--text-dim); }
 
-  .rules-list { display: flex; flex-direction: column; gap: 4px; }
+  .rules-list { display: flex; flex-direction: column; gap: 12px; }
   .rule-row {
     display: flex; align-items: center; gap: calc(10px * var(--density));
     padding: calc(10px * var(--density)) calc(14px * var(--density));

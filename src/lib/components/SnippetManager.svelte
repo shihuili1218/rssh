@@ -44,7 +44,7 @@
   .page { padding: 24px; }
   .add-row { display: flex; gap: 8px; margin-bottom: 12px; }
   .add-row input { flex: 1; }
-  .item-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .item-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
   .item-name { font-weight: 600; font-size: 13px; }
   .item-sub { font-size: 12px; color: var(--text-sub); font-family: monospace; }
   .empty { text-align: center; color: var(--text-dim); padding: 32px; }
