@@ -96,6 +96,15 @@
         }
     }
 
+    /** Tab 移焦点出 select 时关掉下拉 —— 否则点开后 Tab 到下个控件，
+     *  下拉还浮着挡视野。relatedTarget 是 focus 下一个落点，null 通常是点 chrome 之外。 */
+    function onFocusOut(e: FocusEvent) {
+        if (!open) return;
+        const next = e.relatedTarget as Node | null;
+        if (next && (triggerEl?.contains(next) || listEl?.contains(next))) return;
+        close();
+    }
+
     onMount(() => {
         measureTrigger();
         const onResize = () => { measureTrigger(); pickPlacement(); };
@@ -111,7 +120,8 @@
 <svelte:window onclick={onWindowClick} onkeydown={onKeydown} />
 
 <div class="rssh-select" class:open class:disabled class:drop-up={dropUp}
-     style:--rssh-trigger-h="{triggerH}px">
+     style:--rssh-trigger-h="{triggerH}px"
+     onfocusout={onFocusOut}>
     <button
         {id}
         type="button"

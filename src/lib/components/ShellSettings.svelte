@@ -8,13 +8,16 @@
   let selectedShell = $state("");
   /** Custom radio 自己的 path —— 独立持有，切到内置 shell 再回来不丢用户输入。 */
   let customPath = $state("");
+  /** 用户选了 Custom 但还没填路径的瞬态标记 —— 不持久化。
+   *  避免把占位字符串写进 local_shell 设置导致重启坏 shell。 */
+  let pendingCustom = $state(false);
   let verboseLog = $state(true);
   let connectTimeout = $state(10);
   let commandBlockBar = $state(true);
 
   /** 用户当前选中的是 Custom 还是某个内置 shell。
-   *  selectedShell 不在 shells 列表里 && 非空 → custom 模式。 */
-  let customMode = $derived(selectedShell !== "" && !shells.includes(selectedShell));
+   *  pendingCustom（点了 Custom 没填）或 selectedShell 不在 shells 里都算 custom。 */
+  let customMode = $derived(pendingCustom || (selectedShell !== "" && !shells.includes(selectedShell)));
 
   onMount(async () => {
     try { shells = await invoke<string[]>("list_shells"); } catch { shells = []; }
@@ -34,18 +37,17 @@
 
   /** 选中内置 shell —— radio onchange 触发。 */
   function pickShell(sh: string) {
+    pendingCustom = false;
     selectedShell = sh;
     saveShell();
   }
 
-  /** 切到 Custom radio：把 selectedShell 设成 customPath（若已有）。 */
+  /** 切到 Custom radio：仅在 customPath 已有值时才写入持久化；
+   *  没填路径时只切 UI 状态，保留之前 selectedShell 不动，避免存空/占位污染。 */
   function pickCustom() {
+    pendingCustom = true;
     if (customPath.trim()) {
       selectedShell = customPath.trim();
-      saveShell();
-    } else {
-      // 没输入内容，先标记 custom 模式（用一个不在 shells 里的占位让 derived customMode=true）
-      selectedShell = " "; // 空格，渲染时显示空 input
       saveShell();
     }
   }
@@ -53,7 +55,7 @@
   /** Custom input blur：把 input 内容写回 selectedShell。 */
   function onCustomBlur() {
     const v = customPath.trim();
-    if (v) {
+    if (v && pendingCustom) {
       selectedShell = v;
       saveShell();
     }

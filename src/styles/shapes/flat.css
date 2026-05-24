@@ -87,6 +87,11 @@
 :root[data-shape="flat"] .rssh-select.drop-up .rssh-select-list {
     border-bottom: var(--flat-border);
 }
+/* List 内部 trigger 跟选项区之间的接缝 divider 也跟 flat-border 同色。
+   默认 ::before 用 var(--divider)，跟 trigger 的 flat-border 视觉不一致。 */
+:root[data-shape="flat"] .rssh-select-list::before {
+    background: color-mix(in srgb, var(--text) 25%, var(--bg));
+}
 
 /* Checkbox / radio —— flat 风格：border + 中心 accent dot，跟 .shell-radio-indicator 同源。
    覆盖 global.css 默认的"实色 accent 块 + 白勾"，统一三主题视觉。 */
