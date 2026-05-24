@@ -596,6 +596,7 @@ impl Actor {
                         "output": trunc.text,
                         "original_bytes": trunc.original_bytes,
                         "truncated_bytes": trunc.truncated_bytes,
+                        "duration_ms": started_at.elapsed().as_millis() as u64,
                     }),
                 );
                 self.audit_push(AuditKind::CommandExecuted {

@@ -37,8 +37,8 @@
     let dangerNote = $state<string | null>(null);
 
     // per-tool 自动批准。每个 checkbox 各自一个 boolean state。8 个字段平铺；
-    // 也可以塞成数组遍历，但 Linus 偏好显式 —— 8 行 boolean 比一坨 metadata 表
-    // 调试时更直观，也避免一行 toggle bug 同时拆掉 8 个开关。
+    // 也可以塞成数组遍历，但显式 boolean 比 metadata 表调试时更直观，也避免一行
+    // toggle bug 同时拆掉 8 个开关。
     let autoRunCommand = $state(true);
     let autoMatchFile = $state(true);
     let autoDownloadFile = $state(false);

@@ -554,6 +554,9 @@ impl Actor {
                 "kind": "download_file",
             }),
         );
+        // 跟 run_command 一致：审批 + 实际执行的端到端耗时计入 duration_ms，
+        // 前端 CommandResult.duration_ms 期待这个字段，缺了会渲染 "undefinedms"。
+        let started_at = std::time::Instant::now();
 
         match self.wait_command_outcome(&tc.id).await? {
             CommandOutcome::Rejected { reason } => {
@@ -574,6 +577,7 @@ impl Actor {
                         "output": format!("已拒绝：{reason}"),
                         "original_bytes": 0,
                         "truncated_bytes": 0,
+                        "duration_ms": started_at.elapsed().as_millis() as u64,
                     }),
                 );
                 self.push_tool_error(
@@ -641,6 +645,7 @@ impl Actor {
                         "output": card_output,
                         "original_bytes": card_output.len(),
                         "truncated_bytes": 0,
+                        "duration_ms": started_at.elapsed().as_millis() as u64,
                     }),
                 );
                 self.history.push(ChatMessage::ToolResult {
@@ -680,6 +685,7 @@ impl Actor {
                         "output": card_msg,
                         "original_bytes": 0,
                         "truncated_bytes": 0,
+                        "duration_ms": started_at.elapsed().as_millis() as u64,
                     }),
                 );
                 let msg = if e.code() == "sftp_file_too_large" {
@@ -739,6 +745,7 @@ impl Actor {
                 "kind": "analyze_locally",
             }),
         );
+        let started_at = std::time::Instant::now();
         match self.wait_command_outcome(&tc.id).await? {
             CommandOutcome::Rejected { reason } => {
                 self.audit_push(AuditKind::CommandRejected {
@@ -755,6 +762,7 @@ impl Actor {
                         "output": format!("已拒绝：{reason}"),
                         "original_bytes": 0,
                         "truncated_bytes": 0,
+                        "duration_ms": started_at.elapsed().as_millis() as u64,
                     }),
                 );
                 self.push_tool_error(
@@ -808,6 +816,7 @@ impl Actor {
                     "output": output,
                     "original_bytes": 0,
                     "truncated_bytes": 0,
+                    "duration_ms": started_at.elapsed().as_millis() as u64,
                 }),
             );
         };
@@ -953,6 +962,7 @@ impl Actor {
                             "output": trunc.text,
                             "original_bytes": trunc.original_bytes,
                             "truncated_bytes": trunc.truncated_bytes,
+                            "duration_ms": started_at.elapsed().as_millis() as u64,
                         }),
                     );
 
