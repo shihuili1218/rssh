@@ -8,8 +8,9 @@
 //! 与会话主框架（dialogue_turn / run_command / SFTP）耦合面很窄（只通过 Actor 的几个
 //! pub(super) 方法和字段），按职责分离更利于阅读。
 //!
-//! **核心不变量**：所有送进 PTY 的 file_ops 命令在 shell 视角下必须是**单行 ASCII**，
-//! 避开 zsh ZLE multi-line quote race（详见 `ansi_c_quote` 注释）。
+//! **核心不变量**：所有送进 PTY 的 file_ops 命令在 shell 视角下必须是**单行**（无字面
+//! `\n` / `\r`），避开 zsh ZLE multi-line quote race（详见 `ansi_c_quote` 注释）。
+//! 非 ASCII 字符（中文 / emoji）允许，`$'...'` ANSI-C quoting 用 `\xHH` 序列编码。
 
 use serde_json::json;
 

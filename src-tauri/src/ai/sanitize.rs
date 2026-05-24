@@ -323,19 +323,51 @@ fn node_text<'a>(n: &tree_sitter::Node, src: &'a [u8]) -> &'a str {
 }
 
 /// 从 `command_name` 节点剥出命令头的归一化字面名（剥 quote / unescape `\X`）。
-/// 若内部含 command_substitution 则递归校验里面的命令，并返回 None（无字面命令头可判定）。
+///
+/// fail-closed 规则：
+/// - command_name 含 command_substitution / process_substitution → 递归审查内部命令，
+///   本层无字面名（返回 None，跳过黑名单 —— 子命令已被审查过）
+/// - command_name 只有一个 child 且 kind 是 `word` / `raw_string` / `string` → 可靠归一
+/// - 其他形态（ansi_c_string / variable_expansion / 多片段拼接 `r"m"` 等）→ obfuscation，
+///   无法可靠还原 shell 真正执行的命令名，一律拒
+///
+/// 拒理由：rssh 场景下 LLM 写命令头从来没有合法用例需要 ANSI-C hex escape
+/// (`$'r\x6d'`)、字段拼接 (`r"m"`)、变量间接 (`$cmd`) —— 这些纯粹是 obfuscation。
 fn extract_command_name(
     name_node: &tree_sitter::Node,
     src: &[u8],
 ) -> Result<Option<String>, ShapeError> {
+    let mut children: Vec<tree_sitter::Node> = Vec::new();
     let mut cur = name_node.walk();
     for c in name_node.children(&mut cur) {
-        if c.kind() == "command_substitution" || c.kind() == "process_substitution" {
-            walk_ast(&c, src)?;
-            return Ok(None);
-        }
+        children.push(c);
     }
-    Ok(Some(normalize_head(node_text(name_node, src))))
+
+    // 命令头是纯 substitution / 内含 substitution → 全部递归审查后返回 None
+    if children.iter().any(|c| {
+        matches!(c.kind(), "command_substitution" | "process_substitution")
+    }) {
+        for c in &children {
+            walk_ast(c, src)?;
+        }
+        return Ok(None);
+    }
+
+    // tree-sitter 对简单命令 `rm` 把 command_name 视为含单个 word；多片段或非
+    // 普通字面节点 → fail-closed
+    if children.len() == 1
+        && matches!(children[0].kind(), "word" | "raw_string" | "string")
+    {
+        return Ok(Some(normalize_head(node_text(name_node, src))));
+    }
+    // children 空（command_name 自己是 leaf）—— tree-sitter 实际不会这样，但稳妥处理
+    if children.is_empty() {
+        return Ok(Some(normalize_head(node_text(name_node, src))));
+    }
+    let raw = node_text(name_node, src);
+    Err(ShapeError::Destructive(format!(
+        "obfuscated command head '{raw}' (concatenation / variable expansion / ANSI-C escape not allowed)"
+    )))
 }
 
 fn check_command(cmd: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeError> {
@@ -1360,6 +1392,47 @@ mod tests {
         assert!(validate("ps -ef | grep java | head -10").is_ok());
         assert!(validate("cat /etc/hosts | wc -l").is_ok());
         assert!(validate("ls -la | sort").is_ok());
+    }
+
+    #[test]
+    fn shape_obfuscated_command_head_blocked() {
+        // ANSI-C `$'r\x6d'` 在 bash/zsh 执行 `rm` —— strip_backslashes 把它归一为 `rx6d`，
+        // 不匹配黑名单 → bypass。实现完整 ANSI-C unescape 工程量大且没合法用例
+        // （LLM 写命令头从不需要 hex/octal escape），改 fail-closed：ANSI-C 命令头一律拒。
+        assert!(matches!(
+            validate("$'r\\x6d' -rf /"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("$'\\x72m' -rf /"),
+            Err(ShapeError::Destructive(_))
+        ));
+        // 普通 $'echo' 等也拒（rssh 没有合法用例需要 ANSI-C quoting 在命令头位置）
+        assert!(matches!(
+            validate("$'echo' a"),
+            Err(ShapeError::Destructive(_))
+        ));
+
+        // 字段拼接 `r"m"` 在 shell 里粘成 `rm` —— tree-sitter 把 command_name 解析成
+        // 多个子节点（word + string），normalize_head 拿整段 text 只剥外层引号，
+        // 不还原拼接结果。同理 `$cmd` 变量展开拿不到字面名。
+        // fail-closed：command_name 含多片段 / 变量展开 / 其他无法可靠归一的节点 → 拒。
+        assert!(matches!(
+            validate("r\"m\" -rf /"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("\"r\"\"m\" -rf /"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("$cmd -rf /"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("${cmd} -rf /"),
+            Err(ShapeError::Destructive(_))
+        ));
     }
 
     #[test]
