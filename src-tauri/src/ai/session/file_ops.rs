@@ -431,30 +431,34 @@ fn build_modify_cmd(
     )
 }
 
-/// `cp -- path tmp`：patch_file 第一步，把原文复制到同目录 tmp（保证后续 mv 单 rename(2)）。
+/// `\cp -- path tmp`：patch_file 第一步，把原文复制到同目录 tmp（保证后续 mv 单 rename(2)）。
+///
+/// **`\` 前缀**：远端用户可能配 `alias cp='cp -i'`/`alias mv='mv -i'`，互动询问会让
+/// 命令挂到 timeout。bash/zsh 的转义命令头（`\cp` / `\mv`）跳过 alias 展开但仍命中
+/// 真正可执行文件。`\diff` 同理（虽然 `alias diff='diff --color'` 一般不影响 exit）。
 fn build_cp_cmd(path: &str, tmp: &str) -> String {
     format!(
-        "cp -- {} {}",
+        "\\cp -- {} {}",
         prepare_remote_path(path),
         prepare_remote_path(tmp),
     )
 }
 
-/// `diff -u path tmp`：patch_file 第三步，给用户审批用的 unified diff。
+/// `\diff -u path tmp`：patch_file 第三步，给用户审批用的 unified diff。
 /// exit 0=无差异 / 1=有差异（**正常**）/ ≥2=工具失败 —— 调用方必须按此判，不能套
 /// "exit != 0 ⇒ 错误"的通用规则。
 fn build_diff_cmd(path: &str, tmp: &str) -> String {
     format!(
-        "diff -u -- {} {}",
+        "\\diff -u -- {} {}",
         prepare_remote_path(path),
         prepare_remote_path(tmp),
     )
 }
 
-/// `mv -- tmp path`：patch_file 最后一步，原子覆盖。
+/// `\mv -- tmp path`：patch_file 最后一步，原子覆盖。
 fn build_mv_cmd(tmp: &str, path: &str) -> String {
     format!(
-        "mv -- {} {}",
+        "\\mv -- {} {}",
         prepare_remote_path(tmp),
         prepare_remote_path(path),
     )
@@ -944,7 +948,7 @@ impl Actor {
                 None,
             )
             .await?;
-        let diff_raw = match outcome {
+        let (diff_exit, diff_raw) = match outcome {
             CommandOutcome::Rejected { reason } => {
                 self.push_tool_error(
                     &tc.id,
@@ -967,9 +971,35 @@ impl Actor {
                     );
                     return Ok(());
                 }
-                output
+                (exit_code, output)
             }
         };
+
+        // diff exit 0 = 修改后内容与原文件完全一样（modify 步是 no-op）。继续 mv 会
+        // 白改 mtime/inode，给依赖 mtime 的工具（make / 缓存 / 备份）带来误判。
+        // 直接报 no-changes 返回，tmp 留着让用户自行清（同 reject 流程的行为）。
+        if diff_exit == 0 {
+            self.audit_push(AuditKind::Note {
+                message: format!(
+                    "patch_file no-op: {} matched count={} but replacement equals original (interp={})",
+                    input.path, count, interp.binary()
+                ),
+            });
+            let result = json!({
+                "diff": "",
+                "diff_truncated_bytes": 0,
+                "changed": 0,
+                "no_op": true,
+                "note": format!("patch_file: no-op (replacement matches original; mv skipped). Tmp at {tmp_path}, user may rm if not needed."),
+            })
+            .to_string();
+            self.history.push(ChatMessage::ToolResult {
+                tool_call_id: tc.id,
+                content: result,
+                is_error: false,
+            });
+            return Ok(());
+        }
 
         // diff 走 max_output_bytes 截断 —— 原始 diff 可能很长（大文件差异、二进制差异等），
         // 不截断会同时撑爆 (a) mv 卡片的 emit payload，导致前端 UI 渲染卡顿；(b) ToolResult
@@ -1583,42 +1613,42 @@ __RSSH_JSON__\n{\"call\":\"second\"}\n__RSSH_JSON__\n";
     #[test]
     fn build_cp_cmd_form() {
         let cmd = build_cp_cmd("/p", "/p.rssh-abc12345");
-        assert_eq!(cmd, "cp -- '/p' '/p.rssh-abc12345'");
+        assert_eq!(cmd, r"\cp -- '/p' '/p.rssh-abc12345'");
     }
 
     #[test]
     fn build_cp_cmd_with_tilde() {
         let cmd = build_cp_cmd("~/foo", "~/foo.tmp");
-        assert_eq!(cmd, "cp -- \"$HOME\"/'foo' \"$HOME\"/'foo.tmp'");
+        assert_eq!(cmd, "\\cp -- \"$HOME\"/'foo' \"$HOME\"/'foo.tmp'");
     }
 
     #[test]
     fn build_cp_cmd_with_special_chars() {
         let cmd = build_cp_cmd("/has space/it's", "/has space/it's.tmp");
-        assert_eq!(cmd, r"cp -- '/has space/it'\''s' '/has space/it'\''s.tmp'");
+        assert_eq!(cmd, r"\cp -- '/has space/it'\''s' '/has space/it'\''s.tmp'");
     }
 
     #[test]
     fn build_diff_cmd_form() {
         let cmd = build_diff_cmd("/p", "/p.tmp");
-        assert_eq!(cmd, "diff -u -- '/p' '/p.tmp'");
+        assert_eq!(cmd, r"\diff -u -- '/p' '/p.tmp'");
     }
 
     #[test]
     fn build_diff_cmd_with_tilde() {
         let cmd = build_diff_cmd("~/foo", "~/foo.tmp");
-        assert_eq!(cmd, "diff -u -- \"$HOME\"/'foo' \"$HOME\"/'foo.tmp'");
+        assert_eq!(cmd, "\\diff -u -- \"$HOME\"/'foo' \"$HOME\"/'foo.tmp'");
     }
 
     #[test]
     fn build_mv_cmd_form() {
         let cmd = build_mv_cmd("/p.rssh-abc12345", "/p");
-        assert_eq!(cmd, "mv -- '/p.rssh-abc12345' '/p'");
+        assert_eq!(cmd, r"\mv -- '/p.rssh-abc12345' '/p'");
     }
 
     #[test]
     fn build_mv_cmd_with_tilde() {
         let cmd = build_mv_cmd("~/foo.tmp", "~/foo");
-        assert_eq!(cmd, "mv -- \"$HOME\"/'foo.tmp' \"$HOME\"/'foo'");
+        assert_eq!(cmd, "\\mv -- \"$HOME\"/'foo.tmp' \"$HOME\"/'foo'");
     }
 }
