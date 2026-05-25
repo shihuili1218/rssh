@@ -137,6 +137,38 @@ jobs:
 
           ls -lh dist/
 
+      # 解压即可用版（用户反馈）：Tauri build 出的 rssh.exe 本身 standalone，
+      # 只是 release 默认不发它，加这步把 GUI + CLI 一起打 zip。共享 WebView2
+      # Runtime（Win10 1803+ / Win11 系统自带），老系统按 README.txt 提示自行
+      # 安装 ~150MB 的 Microsoft 官方组件。
+      - name: Build Windows portable zip
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PORTABLE="rssh-${VERSION}-windows-x86_64-portable"
+          REL="src-tauri/target/${{ matrix.target }}/release"
+          mkdir -p "${PORTABLE}"
+          cp "${REL}/rssh.exe" "${PORTABLE}/"
+          cp "${REL}/rssh-cli.exe" "${PORTABLE}/"
+          cat > "${PORTABLE}/README.txt" <<'EOF'
+          RSSH portable for Windows x86_64
+          --------------------------------
+          Just unzip and run rssh.exe — no installation needed.
+          rssh-cli.exe is the CLI binary; add this folder to PATH if you want
+          to use `rssh` from any terminal.
+
+          WebView2 Runtime requirement:
+            - Windows 11 / Windows 10 1803+ : built-in, ready to go.
+            - Older / stripped Windows      : install WebView2 Runtime first:
+              https://developer.microsoft.com/microsoft-edge/webview2/
+
+          User data is stored under %USERPROFILE%\.rssh (same as installed
+          builds — portable here means "no installer", not "fully isolated").
+          EOF
+          7z a "dist/${PORTABLE}.zip" "${PORTABLE}/"
+          ls -lh dist/
+
       - name: Upload
         uses: softprops/action-gh-release@v2
         with:
