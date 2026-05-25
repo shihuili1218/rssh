@@ -19,13 +19,16 @@ use super::skills::{self, SkillRecord};
 // ─── BYOK 设置存储键 ────────────────────────────────────────────────
 //
 // 分两类存储：
-//   - API key：真 secret，走 keychain（state.secret_store，带 "setting:" 命名空间前缀）
-//   - 其它（provider/model/endpoint/danger_mode/auto_*）：行为偏好，走 DB settings 表
+//   - API key：真 secret，走 state.secret_store（= HybridStore，ChaCha20-Poly1305
+//     加密后落 DB.secrets 表；主密钥在 keychain 或 master.key 文件），带 "setting:"
+//     命名空间前缀。
+//   - 其它（provider/model/endpoint/danger_mode/auto_*）：行为偏好，走 DB.settings 表
 //     （明文裸 key），跟 locale / theme / verbose_log 同档次。
 //
 // 之前历史版本所有 ai_* 都塞进 keychain，把 keychain 当通用键值库用 ——
 // 滥用 keychain 容量、增加 OS 解锁次数（mac Touch ID 弹窗）、语义错乱（行为偏好
-// 不是 secret）。
+// 不是 secret）。PR #59 把行为偏好迁出 keychain；PR #60 把 secret 统一走 HybridStore
+// 加密 DB 解决 Windows Credential Manager 2560 字节硬限。
 
 fn key_provider() -> String {
     "ai_provider".into()

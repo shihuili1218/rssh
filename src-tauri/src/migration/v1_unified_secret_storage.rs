@@ -22,6 +22,7 @@
 
 use crate::db::{self, credential, Db};
 use crate::error::AppResult;
+use crate::secret::crypto::is_encrypted_v1;
 use crate::secret::{cred_passphrase_key, cred_secret_key, setting_key, SecretStore};
 
 const MIGRATION_MARKER: &str = "migration_v1_unified_secret_storage";
@@ -39,14 +40,35 @@ pub fn run(
         return Ok(());
     }
 
-    // keychain 不可用：直接写 marker。这种用户 v0.1.10 时代就走 DbStore（明文）
-    // 没旧 keychain 数据，本次 HybridStore 切换无感知。
+    let mut report = Report::default();
+
+    // ── 旧 DbStore 明文 → HybridStore 加密 ──
+    // v0.1.x 时代 keychain 不可用的用户（Android / Linux headless）走 DbStore
+    // fallback，把 secret 明文写进 DB.secrets。新 HybridStore 把同一张表当密文
+    // 库用，明文条目 decrypt 会撞 "format_unknown"。一次性扫一遍重加密回去。
+    //
+    // 桌面用户 keychain 一直可用：DB.secrets 此前为空，这个循环遍历 0 条，零开销。
+    for (key, value) in db::secret::list_all(db)? {
+        if !is_encrypted_v1(&value) {
+            // new_store.set 走 HybridStore：触发 master key lazy 生成 + 加密回写
+            new_store.set(&key, &value)?;
+            report.db_plaintext_reencrypted += 1;
+        }
+    }
+
+    // keychain 不可用时（桌面 keychain 临时挂 / Android）：没旧 keychain 数据
+    // 可迁，但**不写 marker** —— 桌面 keychain 后续恢复时还能跑这次迁移。
+    // 真无 keychain 平台每次启动跑这分支但都直接 return（settings::get 是
+    // 一次 SQLite 查询，~0.05ms 可忽略）。
     let Some(kr) = raw_keyring else {
-        db::settings::set(db, MIGRATION_MARKER, "1")?;
+        if report.any() {
+            log::info!(
+                "secret migration v1 partial (no keyring): db_plaintext_reencrypted={}",
+                report.db_plaintext_reencrypted
+            );
+        }
         return Ok(());
     };
-
-    let mut report = Report::default();
 
     // ── 1+3. cred:<id>:secret 加密迁；cred:<id>:passphrase 清理 ──
     for cred in credential::list(db)? {
@@ -103,11 +125,12 @@ pub fn run(
 
     if report.any() {
         log::info!(
-            "secret migration v1 done: creds={} passphrases_cleared={} settings_secret={} settings_plain={}",
+            "secret migration v1 done: creds={} passphrases_cleared={} settings_secret={} settings_plain={} db_plaintext_reencrypted={}",
             report.creds_migrated,
             report.passphrases_cleared,
             report.settings_secret_migrated,
             report.settings_plain_migrated,
+            report.db_plaintext_reencrypted,
         );
     }
 
@@ -121,6 +144,8 @@ struct Report {
     passphrases_cleared: u32,
     settings_secret_migrated: u32,
     settings_plain_migrated: u32,
+    /// v0.1.x 时代走 DbStore fallback 的用户：DB.secrets 里有明文，这次重加密。
+    db_plaintext_reencrypted: u32,
 }
 
 impl Report {
@@ -129,6 +154,7 @@ impl Report {
             + self.passphrases_cleared
             + self.settings_secret_migrated
             + self.settings_plain_migrated
+            + self.db_plaintext_reencrypted
             > 0
     }
 }
@@ -269,12 +295,68 @@ mod tests {
     }
 
     #[test]
-    fn no_keyring_writes_marker_only() {
-        // 模拟 keychain 不可用的平台（Android / headless）
+    fn no_keyring_skips_without_marker() {
+        // keychain 不可用 + 没旧 DbStore 明文 → 无操作，**不写 marker**。
+        // 这样桌面 keychain 临时挂的下次启动还能跑迁移，不会丢老 keychain 数据。
         let (db, _kr, ns, _tmp) = make_env();
         run(&db, None, ns.as_ref()).unwrap();
-        // marker 已写
+        // marker 不写 — 让下次启动再试
+        assert!(db::settings::get(&db, MIGRATION_MARKER).unwrap().is_none());
+    }
+
+    #[test]
+    fn db_plaintext_reencrypted_then_marker_written() {
+        // 模拟 v0.1.x 走 DbStore fallback 的用户：DB.secrets 直接有明文
+        let (db, _kr, ns, _tmp) = make_env();
+        // 绕过 HybridStore 直接写明文进 DB.secrets，模拟旧 DbStore 行为
+        db::secret::set(&db, "cred:legacy:secret", "raw-pem-plaintext").unwrap();
+
+        run(&db, None, ns.as_ref()).unwrap();
+
+        // 明文已被加密重写：DB.secrets 里的 raw 值是 enc:v1: 密文，HybridStore 读出明文
+        let raw = db::secret::get(&db, "cred:legacy:secret").unwrap().unwrap();
+        assert!(raw.starts_with("enc:v1:"), "DB.secrets 必须是密文，实际: {raw}");
+        assert_eq!(
+            ns.get("cred:legacy:secret").unwrap().as_deref(),
+            Some("raw-pem-plaintext")
+        );
+        // 这次走的是 no_keyring 分支，但有 db_plaintext 数据要迁；marker 不写
+        // （这条迁移逻辑跟 keychain 迁移分两段，no-keyring 路径不能算"全部完成"）
+        assert!(db::settings::get(&db, MIGRATION_MARKER).unwrap().is_none());
+    }
+
+    #[test]
+    fn db_plaintext_reencrypted_with_keyring() {
+        // 有 keychain 的情况下，DB.secrets 明文也得 re-encrypt
+        let (db, kr, ns, _tmp) = make_env();
+        db::secret::set(&db, "setting:github_token", "ghp_plain_old").unwrap();
+
+        run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
+
+        // 重加密：DB raw 值是密文，HybridStore 读出原明文
+        let raw = db::secret::get(&db, "setting:github_token").unwrap().unwrap();
+        assert!(raw.starts_with("enc:v1:"));
+        assert_eq!(
+            ns.get("setting:github_token").unwrap().as_deref(),
+            Some("ghp_plain_old")
+        );
+        // 有 keyring → marker 写入
         assert_eq!(db::settings::get(&db, MIGRATION_MARKER).unwrap().as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn already_encrypted_db_values_left_alone() {
+        // 之前已经加密过的（同 PR 内 hybrid.set 写入）再跑迁移不重复加密
+        let (db, kr, ns, _tmp) = make_env();
+        ns.set("setting:github_token", "ghp_new").unwrap();
+        let raw_before = db::secret::get(&db, "setting:github_token").unwrap().unwrap();
+
+        run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
+
+        // raw 没变（is_encrypted_v1 跳过 re-encrypt）
+        let raw_after = db::secret::get(&db, "setting:github_token").unwrap().unwrap();
+        assert_eq!(raw_before, raw_after);
+        assert_eq!(ns.get("setting:github_token").unwrap().as_deref(), Some("ghp_new"));
     }
 
     #[test]

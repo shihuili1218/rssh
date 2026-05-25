@@ -35,6 +35,17 @@ pub fn delete(db: &Db, key: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// 罗列整表 (key, value) — 仅迁移代码用：v0.1.x 时代 keychain 不可用 fallback
+/// 到 DbStore 走的是明文存储，新版本 HybridStore 要把这些明文 re-encrypt 一遍。
+/// 普通运行时不应该用这个 API（SecretStore trait 也没暴露），避免误用让明文
+/// 漏出 secrets 表边界。
+pub fn list_all(db: &Db) -> AppResult<Vec<(String, String)>> {
+    let conn = db.lock()?;
+    let mut stmt = conn.prepare("SELECT key, value FROM secrets")?;
+    let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

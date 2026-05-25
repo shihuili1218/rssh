@@ -20,10 +20,20 @@ pub(crate) struct CliCtx {
 }
 
 impl CliCtx {
+    /// 失败场景：sticky backend 标记是 keyring 但当前 keychain 拿不到 → 写 stderr
+    /// 退出 1，跟 `Db::open` 失败处理一致。CLI 不能 silently fallback file（会让
+    /// 旧密文全废）。
+    /// 签名仍返 `&Arc<dyn SecretStore>`，让 12 处调用方零改动。
     pub fn secret_store(&self) -> &Arc<dyn SecretStore> {
         self.secret_store.get_or_init(|| {
-            let sys = secret::open(self.db.clone(), &self.data_dir);
-            // 启动一次性迁移。CLI 失败也不阻塞执行（log warn）。
+            let sys = match secret::open(self.db.clone(), &self.data_dir) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Failed to open secret storage: {e}");
+                    std::process::exit(1);
+                }
+            };
+            // 启动一次性迁移。CLI 不阻塞执行（log warn，下次启动重试）。
             if let Err(e) = migration::run_migrations(
                 &self.db,
                 sys.raw_keyring.as_deref(),

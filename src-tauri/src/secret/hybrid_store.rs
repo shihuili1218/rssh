@@ -23,21 +23,27 @@
 //! 主密钥生命周期：首次 set/get 触发 lazy 加载（OnceLock 缓存）。新用户没 secret
 //! 就永不触发，零 keychain 调用。
 
-use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use serde_json::json;
 
 use super::crypto::{self, MASTER_KEY_LEN};
 use super::db_store::DbStore;
 use super::master_key::MasterKeyBackend;
 use super::SecretStore;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 pub struct HybridStore {
     db_store: Arc<DbStore>,
     mk_backend: Arc<dyn MasterKeyBackend>,
-    /// OnceLock：首次调用 master_key() 时初始化，后续调用 atomic load 无锁。
-    /// 多线程并发首次调用由 OnceLock 内部串行化。
+    /// OnceLock 提供 atomic fast path：已初始化后所有线程无锁 atomic load。
     master_key: OnceLock<[u8; MASTER_KEY_LEN]>,
+    /// Init 期间的串行化锁：第一次 master_key.get() == None 时多线程都会进入
+    /// load_or_create；如果两个线程同时跑 KeyringMasterKey.load_or_create，
+    /// A 看 keychain 没有 → 生成 mk_A 写入，B 看 keychain 没有 → 生成 mk_B 覆盖；
+    /// OnceLock 只接受第一个 set（mk_A），但 keychain 持久化的是 mk_B → 重启
+    /// 后 mk_A 加密的密文永久无法解。用 Mutex 串行化 init 排除这种 race。
+    init_lock: Mutex<()>,
     backend_label: &'static str,
 }
 
@@ -52,18 +58,31 @@ impl HybridStore {
             db_store,
             mk_backend,
             master_key: OnceLock::new(),
+            init_lock: Mutex::new(()),
             backend_label,
         }
     }
 
+    /// Double-checked locking：fast path 无锁；slow path 拿锁后再次 check（防两个
+    /// 线程都过了第一次 check）。OnceLock::get_or_try_init 至今仍是 nightly，
+    /// stable Rust 用这套模式是惯用替代。
     fn master_key(&self) -> AppResult<&[u8; MASTER_KEY_LEN]> {
-        // OnceLock::get_or_try_init 是 nightly。用 get + 手动初始化模拟。
+        // fast path：已初始化直接返回
+        if let Some(k) = self.master_key.get() {
+            return Ok(k);
+        }
+        // slow path：锁住 init 临界区
+        let _guard = self
+            .init_lock
+            .lock()
+            .map_err(|e| AppError::other("master_key_init_lock_poisoned", json!({ "err": e.to_string() })))?;
+        // 二次 check：A 拿锁前可能 B 已经初始化完释放锁
         if let Some(k) = self.master_key.get() {
             return Ok(k);
         }
         let k = self.mk_backend.load_or_create()?;
-        // 并发首次调用：第一个 set 成功，后面 set 失败但 get 拿到的是首个成功的
-        let _ = self.master_key.set(k);
+        // 持锁状态下 set，第一个也是唯一一个
+        self.master_key.set(k).expect("OnceLock set under init_lock cannot race");
         Ok(self.master_key.get().expect("just initialized"))
     }
 }

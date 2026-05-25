@@ -41,7 +41,10 @@ pub fn run() {
             #[cfg(not(target_os = "android"))]
             let data_dir = db::data_dir();
             let db = Arc::new(db::Db::open(&data_dir)?);
-            let secret_system = secret::open(db.clone(), &data_dir);
+            // secret::open 可能失败：sticky backend 标记 keyring 但 keychain 现在
+            // 拿不到（系统 keychain 损坏 / D-Bus 挂等）→ 硬 fail 启动。silently
+            // fallback file 会用新主密钥让旧密文全部解不开，比启动失败更危险。
+            let secret_system = secret::open(db.clone(), &data_dir)?;
 
             // 启动一次性迁移。失败不阻塞启动（log warn，下次启动重试），跟原
             // passphrase 清理逻辑的"软失败"风格一致。所有 marker 走 settings 表，

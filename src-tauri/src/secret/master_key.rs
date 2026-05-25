@@ -141,24 +141,34 @@ fn decode_b64_master_key(b64: &str) -> AppResult<[u8; MASTER_KEY_LEN]> {
     })
 }
 
-/// 写入文件并尝试设置 0600 权限（Unix）；Windows 没有 mode 概念，依赖用户目录的 ACL。
+/// 原子 0600 创建并写入文件。Unix 用 `OpenOptions::mode` 让文件**自创建瞬间**
+/// 就是 0600，避免默认 umask（022 → 0644）下"先写 0644 再 chmod 0600"的暴露
+/// 窗口（TOCTOU：攻击者在 chmod 前 stat 到文件、open 拿到 fd）。
+/// Windows 无 mode 概念，依赖用户目录 ACL（rssh data dir 默认 user-owned）。
 fn write_file_secure(path: &std::path::Path, data: &[u8]) -> AppResult<()> {
-    std::fs::write(path, data).map_err(|e| {
+    use std::io::Write;
+
+    let map_err = |op: &'static str, e: std::io::Error| {
         AppError::other(
             "master_key_write_failed",
-            json!({ "path": path.display().to_string(), "err": e.to_string() }),
+            json!({
+                "op": op,
+                "path": path.display().to_string(),
+                "err": e.to_string(),
+            }),
         )
-    })?;
+    };
+
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|e| {
-            AppError::other(
-                "master_key_chmod_failed",
-                json!({ "path": path.display().to_string(), "err": e.to_string() }),
-            )
-        })?;
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
     }
+    let mut f = opts.open(path).map_err(|e| map_err("open", e))?;
+    f.write_all(data).map_err(|e| map_err("write", e))?;
+    f.sync_all().map_err(|e| map_err("sync", e))?;
     Ok(())
 }
 
