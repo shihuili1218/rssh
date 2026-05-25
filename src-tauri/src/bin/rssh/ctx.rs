@@ -1,22 +1,38 @@
 //! CliCtx — DB + 懒加载 SecretStore。Deref<Target=Db> 让所有 `db::*::*(ctx, ...)`
 //! 调用零改动透传。`secret_store` 只在首次访问时探测系统 keychain，避免
 //! `rssh ls` 等只读命令付出 keychain 探测延迟。
+//!
+//! 首次构造 SecretStore 同时跑一次启动迁移（idempotent），跟 GUI 入口对齐。
+//! Marker 在 DB 共享，两入口任一跑过另一入口启动时直接跳过。
 
 use std::ops::Deref;
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use rssh_lib::db::Db;
+use rssh_lib::migration;
 use rssh_lib::secret::{self, SecretStore};
 
 pub(crate) struct CliCtx {
     pub db: Arc<Db>,
+    pub data_dir: PathBuf,
     pub secret_store: OnceLock<Arc<dyn SecretStore>>,
 }
 
 impl CliCtx {
     pub fn secret_store(&self) -> &Arc<dyn SecretStore> {
-        self.secret_store
-            .get_or_init(|| secret::open(self.db.clone()))
+        self.secret_store.get_or_init(|| {
+            let sys = secret::open(self.db.clone(), &self.data_dir);
+            // 启动一次性迁移。CLI 失败也不阻塞执行（log warn）。
+            if let Err(e) = migration::run_migrations(
+                &self.db,
+                sys.raw_keyring.as_deref(),
+                sys.store.as_ref(),
+            ) {
+                log::warn!("migration failed (will retry on next startup): {e}");
+            }
+            sys.store
+        })
     }
 }
 

@@ -1,24 +1,52 @@
-//! 密钥存储抽象层。
+//! 密钥存储抽象层 —— 统一架构（所有平台一致）。
 //!
-//! 优先用系统 keychain（macOS Keychain / Windows Credential Manager / Linux Secret Service）。
-//! 不可用时（Android、Linux headless、容器无 D-Bus 等）自动降级到 DB 的 `secrets` 表。
+//! 设计：master-key envelope encryption + DB 表存储。
+//!
+//! ```text
+//!     SecretStore.set/get   ← 调用方（cred:* / setting:* 等）
+//!         │
+//!         ▼
+//!     HybridStore             ← ChaCha20-Poly1305 加/解密
+//!       ├── master_key (32B)
+//!       │     ├── KeyringMasterKey  ← keychain（mac/win/linux-desktop）
+//!       │     └── FileMasterKey     ← <data_dir>/master.key（headless/Android）
+//!       │
+//!       └── DbStore  ← rssh.db 的 `secrets` 表（密文 base64）
+//! ```
+//!
+//! 为什么不再像旧版那样直接走 keychain：
+//!   - Windows Credential Manager 硬限 2560 字节，RSA 私钥 PEM 必撞
+//!   - 跨平台 keychain 容量/性能不统一
+//!   - "把布尔开关塞 keychain" 是滥用（PR #59 已把行为偏好搬出去）
+//!
+//! 主密钥 lazy 生成：首次 set/get 触发；新用户没 secret 就永不触发 keychain。
 //!
 //! Service 名固定 `rssh`，account 命名规则全平台、CLI/GUI 共用：
 //! - `cred:<credential_id>:secret`     凭证主 secret（密码或私钥 PEM）
 //! - `setting:github_token`            GitHub PAT
+//! - `setting:ai_<provider>_key`       BYOK API key
 //!
-//! 历史遗留：`cred:<credential_id>:passphrase` 曾用于存储私钥 passphrase，
-//! 已废弃 — 启动时统一清空（参见 `lib.rs` 中的迁移），新流程通过终端交互输入
-//! 并仅在进程内缓存。`cred_passphrase_key` 仍保留，仅供该清空逻辑使用。
+//! 历史遗留：`cred:<credential_id>:passphrase` 曾用于存私钥 passphrase，
+//! 已废弃 — 启动时统一清空（migration），新流程仅进程内缓存。
 
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::db::Db;
 use crate::error::AppResult;
 
+pub mod crypto;
 mod db_store;
+mod hybrid_store;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod keyring_store;
+mod master_key;
+
+pub use db_store::DbStore;
+pub use hybrid_store::HybridStore;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub use keyring_store::KeyringStore;
+pub use master_key::{FileMasterKey, KeyringMasterKey, MasterKeyBackend};
 
 /// 服务名 — keychain 用，所有 rssh 数据都在这个 service 下。
 pub const SERVICE: &str = "rssh";
@@ -30,17 +58,43 @@ pub trait SecretStore: Send + Sync {
     fn backend_name(&self) -> &'static str;
 }
 
-/// 打开 SecretStore：能用 keychain 就用，否则降级到 DB。
-pub fn open(db: Arc<Db>) -> Arc<dyn SecretStore> {
+/// 打开 SecretStore 系统 —— 返回组合对象：
+///   - `store`：调用方用的统一 SecretStore（HybridStore，加密 DB 入口）
+///   - `raw_keyring`：底层 keychain handle 作为 trait object，给 migration 用来读老
+///     keychain 残留；keychain 不可用时为 None
+///
+/// migration::run_migrations 启动时被调一次（lib.rs setup / CLI ctx）。
+pub struct SecretSystem {
+    pub store: Arc<dyn SecretStore>,
+    pub raw_keyring: Option<Arc<dyn SecretStore>>,
+}
+
+pub fn open(db: Arc<Db>, data_dir: &Path) -> SecretSystem {
+    let db_store = Arc::new(DbStore::new(db.clone()));
+
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
-        if let Some(store) = keyring_store::try_open() {
-            log::info!("secret store backend: keychain ({})", store.backend_name());
-            return Arc::new(store);
+        if let Some(kr) = keyring_store::try_open() {
+            let kr_arc: Arc<KeyringStore> = Arc::new(kr);
+            let mk_backend: Arc<dyn MasterKeyBackend> =
+                Arc::new(KeyringMasterKey::new(kr_arc.clone()));
+            let store: Arc<dyn SecretStore> =
+                Arc::new(HybridStore::new(db_store.clone(), mk_backend));
+            log::info!("secret store backend: hybrid-keyring (master key in OS keychain)");
+            return SecretSystem {
+                store,
+                raw_keyring: Some(kr_arc as Arc<dyn SecretStore>),
+            };
         }
-        log::warn!("system keychain unavailable, falling back to DB-backed secret store");
+        log::warn!("system keychain unavailable, master key will be stored at <data_dir>/master.key");
     }
-    Arc::new(db_store::DbStore::new(db))
+
+    let mk_backend: Arc<dyn MasterKeyBackend> = Arc::new(FileMasterKey::new(data_dir));
+    let store: Arc<dyn SecretStore> = Arc::new(HybridStore::new(db_store, mk_backend));
+    SecretSystem {
+        store,
+        raw_keyring: None,
+    }
 }
 
 // --- helpers for canonical key naming (CLI/GUI must agree) ---

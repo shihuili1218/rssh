@@ -154,6 +154,7 @@ fn main() {
     }));
     let conn = CliCtx {
         db,
+        data_dir,
         secret_store: OnceLock::new(),
     };
 

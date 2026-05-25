@@ -40,9 +40,10 @@ impl Db {
     }
 
     /// 测试专用：跳过文件系统，直接开一个 in-memory SQLite 并跑完 schema migrate。
-    /// 单测里每个 case 都用独立实例，互不污染。
+    /// 单测里每个 case 都用独立实例，互不污染。pub(crate) 让 crate 内其它模块
+    /// （secret / migration 等）的测试能复用，避免每个模块自己 reimplement 一遍。
     #[cfg(test)]
-    pub(in crate::db) fn open_in_memory() -> AppResult<Self> {
+    pub(crate) fn open_in_memory() -> AppResult<Self> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         schema::migrate(&conn)?;
