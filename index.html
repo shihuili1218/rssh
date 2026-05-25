@@ -1,9 +1,23 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="preload">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>RSSH</title>
+    <!--
+      Boot 期间禁掉所有 transition / animation。Android Tauri WebView 冷启动 I/O 慢，
+      theme.init() 异步把 data-shape / data-density / palette 写到 <html> 上时首屏已画完，
+      .btn 的 `transition: box-shadow ...` 等会触发可见的"全屏按钮闪一下"。
+      main.ts 在 theme.init() 完成后下一帧撕掉 .preload。
+      规则放 <link rel="stylesheet"> 前面，确保首屏前就生效。
+    -->
+    <style>
+      html.preload *, html.preload *::before, html.preload *::after {
+        transition: none !important;
+        animation-duration: 0s !important;
+        animation-delay: 0s !important;
+      }
+    </style>
     <link rel="stylesheet" href="/src/styles/global.css" />
   </head>
   <body oncontextmenu="if(!/Android|iPhone|iPad/i.test(navigator.userAgent))event.preventDefault()">
