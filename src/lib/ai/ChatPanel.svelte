@@ -111,7 +111,7 @@
             <span class="title-danger" title={t("ai.title.danger_tip")}>{t("ai.title.danger_suffix")}</span>
         {/if}
         {#if session}
-            <button class="btn btn-ghost btn-sm" onclick={() => (auditOpen = !auditOpen)}>
+            <button class="btn btn-ghost btn-sm audit-toggle" onclick={() => (auditOpen = !auditOpen)}>
                 {auditOpen ? t("ai.toolbar.back_to_chat") : t("ai.toolbar.audit")}
             </button>
         {/if}
@@ -220,6 +220,15 @@
         background: color-mix(in srgb, var(--error) 8%, transparent);
     }
     .grow { flex: 1; }
+    /* 审计/对话同一颗按钮，label 在两种语言下宽度不一（"✎𓂃审计" vs "← 对话"，
+       "✎𓂃Audit" vs "← Chat"）。固定宽高让它在 toggle 时不抖动，也跟工具栏其他
+       元素的视觉重心稳定一致。padding 归零交给 .btn 的 flex 居中处理。 */
+    .audit-toggle {
+        width: calc(88px * var(--density));
+        height: calc(30px * var(--density));
+        padding: 0;
+        flex-shrink: 0;
+    }
     .btn-primary { background: var(--accent); color: var(--white); border-color: var(--accent); }
     .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
     .btn-stop {
