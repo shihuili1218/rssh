@@ -937,6 +937,15 @@ impl Actor {
                         id: cmd_id.clone(),
                         reason: reason.clone(),
                     });
+                    // 前端只在 command_completed/command_rejected 上清 pending；
+                    // 缺这个 emit 会让用户拒绝后命令卡片一直 pending 卡死。
+                    self.emit(
+                        "command_rejected",
+                        json!({
+                            "id": cmd_id.clone(),
+                            "reason": reason.clone(),
+                        }),
+                    );
                     self.push_tool_error(
                         &tc.id,
                         &format!("User rejected the command. Reason: {reason}. Adjust your plan based on this reason."),

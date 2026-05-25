@@ -79,12 +79,12 @@
 </script>
 
 <div class="page">
-  <div class="section-label">LOCAL SHELL</div>
+  <div class="section-label" id="local-shell-label">LOCAL SHELL</div>
   <div class="card surface-raised shell-card">
     <div class="shell-hint">
       Pick a shell to use for new local terminals, or choose Custom and type your own path.
     </div>
-    <div class="radio-group" role="radiogroup">
+    <div class="radio-group" role="radiogroup" aria-labelledby="local-shell-label">
       {#each shells as sh, i}
         {@const id = `shell-r-${i}`}
         {@const basename = (sh.split("/").pop() || sh).toUpperCase()}

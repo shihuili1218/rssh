@@ -136,6 +136,7 @@
         value={locale()}
         options={localeOptions}
         onchange={(v) => setLocale(v as Locale)}
+        ariaLabel={t("settings.locale.aria")}
       />
     </div>
   </nav>

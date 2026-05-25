@@ -471,6 +471,22 @@ async function attachListeners(info: AiSessionInfo) {
     }
   }));
 
+  // 拒绝路径单独事件 —— complete 跟 reject 是两种语义，复用 command_completed
+  // 加 rejected:true 字段会让 listener 分支模糊。后端 RejectCommand 分支 emit
+  // 这个，前端清 pending + 标记 ChatItem.rejected。
+  u.push(await listen<{ id: string; reason: string }>(`ai:command_rejected:${sid}`, (e) => {
+    _pendingByTarget[tid] = null;
+    const arr = _chatBySession[sid] ?? [];
+    for (let i = arr.length - 1; i >= 0; i--) {
+      const item = arr[i];
+      if (item.kind === "command" && item.cmd.id === e.payload.id) {
+        const replaced: ChatItem = { ...item, rejected: { reason: e.payload.reason } };
+        _chatBySession[sid] = [...arr.slice(0, i), replaced, ...arr.slice(i + 1)];
+        break;
+      }
+    }
+  }));
+
   u.push(await listen<{ message: string }>(`ai:error:${sid}`, (e) => {
     pushChat(sid, { kind: "error", text: e.payload.message, at: Date.now() });
   }));

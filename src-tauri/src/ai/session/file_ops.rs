@@ -573,9 +573,19 @@ impl Actor {
         match self.wait_command_outcome(tool_call_id).await? {
             CommandOutcome::Rejected { reason } => {
                 self.audit_push(AuditKind::CommandRejected {
-                    id: cmd_id,
+                    id: cmd_id.clone(),
                     reason: reason.clone(),
                 });
+                // 前端只在 command_completed/command_rejected 上清 pending。
+                // 之前忘了 emit，导致用户拒绝 match_file/patch_file 子卡后
+                // 卡片永远停在 pending 状态。
+                self.emit(
+                    "command_rejected",
+                    json!({
+                        "id": cmd_id,
+                        "reason": reason.clone(),
+                    }),
+                );
                 Ok(CommandOutcome::Rejected { reason })
             }
             CommandOutcome::Result {

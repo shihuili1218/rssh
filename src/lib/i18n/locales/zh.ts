@@ -56,6 +56,7 @@ const zh: Messages = {
 
   // ── 设置菜单 ──
   "settings.title": "设置",
+  "settings.locale.aria": "语言",
   "settings.section.profiles": "Profile",
   "settings.section.credentials": "凭证",
   "settings.section.forwards": "端口转发",

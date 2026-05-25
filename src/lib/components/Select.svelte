@@ -20,6 +20,8 @@
         id,
         disabled = false,
         placeholder = "",
+        ariaLabel,
+        ariaLabelledby,
     }: {
         value: OptionValue;
         options: Option[];
@@ -27,6 +29,10 @@
         id?: string;
         disabled?: boolean;
         placeholder?: string;
+        /** Accessible name 给 SR — 当组件不在 <label for=...> 关联里时用 */
+        ariaLabel?: string;
+        /** Accessible name 引用方式 — 指向页面上其他 element 的 id */
+        ariaLabelledby?: string;
     } = $props();
 
     let open = $state(false);
@@ -133,6 +139,8 @@
         {disabled}
         aria-haspopup="true"
         aria-expanded={open}
+        aria-label={ariaLabel}
+        aria-labelledby={ariaLabelledby}
         onclick={toggle}
         bind:this={triggerEl}
     >

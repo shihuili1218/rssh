@@ -54,6 +54,7 @@ const en = {
 
   // ── Settings menu ──
   "settings.title": "Settings",
+  "settings.locale.aria": "Language",
   "settings.section.profiles": "Profiles",
   "settings.section.credentials": "Credentials",
   "settings.section.forwards": "Port Forwards",
