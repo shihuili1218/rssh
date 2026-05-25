@@ -29,9 +29,10 @@ impl CliCtx {
             let sys = match secret::open(self.db.clone(), &self.data_dir) {
                 Ok(s) => s,
                 Err(e) => {
-                    // user-facing 中文短句进 stderr；技术细节进 log 给排错用。
+                    // CLI 不接 i18n catalog（见 helpers/tui.rs），跟 main.rs 的
+                    // `Failed to open database` 风格对齐。技术细节同时入 log。
                     log::error!("secret::open failed: {e}");
-                    eprintln!("无法打开密钥存储，rssh 无法继续。详情见日志。");
+                    eprintln!("Failed to open secret storage: {e}");
                     std::process::exit(1);
                 }
             };

@@ -46,12 +46,17 @@ pub struct HybridStore {
 }
 
 impl HybridStore {
-    pub fn new(db_store: Arc<DbStore>, mk_backend: Arc<dyn MasterKeyBackend>) -> Self {
-        let backend_label = match mk_backend.backend_name() {
-            "keyring" => "hybrid-keyring",
-            "file" => "hybrid-file",
-            _ => "hybrid",
-        };
+    /// `backend_label`: 对外暴露的 backend 名字（CLI `rssh config show`、GUI tauri
+    /// command `secret_backend` 显示给用户）。**保留 PR #60 前的字符串契约**：
+    /// keychain 路径仍叫 `macos-keychain` / `windows-credential-manager` /
+    /// `linux-secret-service`；新增的 `file` 给 FileMasterKey 路径。这样用户在
+    /// CLI/GUI 看到的"我的 secret 存在哪"语义不变 —— secret 本来就锚定在 master
+    /// key 的存储位置（root of trust），envelope 加密 DB 只是实现细节。
+    pub fn new(
+        db_store: Arc<DbStore>,
+        mk_backend: Arc<dyn MasterKeyBackend>,
+        backend_label: &'static str,
+    ) -> Self {
         Self {
             db_store,
             mk_backend,
@@ -90,7 +95,8 @@ impl SecretStore for HybridStore {
             return Ok(None);
         };
         let mk = self.master_key()?;
-        let plaintext = crypto::decrypt(mk, &stored)?;
+        // key 作 AAD 绑死：行被 cut-and-paste 到别的 key 名下后 decrypt 必失败
+        let plaintext = crypto::decrypt(mk, key, &stored)?;
         Ok(Some(String::from_utf8(plaintext).map_err(|e| {
             AppError::other(
                 "secret_utf8_decode_failed",
@@ -101,7 +107,8 @@ impl SecretStore for HybridStore {
 
     fn set(&self, key: &str, value: &str) -> AppResult<()> {
         let mk = self.master_key()?;
-        let encrypted = crypto::encrypt(mk, value.as_bytes())?;
+        // key 作 AAD（详见 crypto.rs 文档）
+        let encrypted = crypto::encrypt(mk, key, value.as_bytes())?;
         self.db_store.set(key, &encrypted)
     }
 
@@ -126,7 +133,7 @@ mod tests {
         let db = Arc::new(Db::open_in_memory().unwrap());
         let db_store = Arc::new(DbStore::new(db));
         let mk = Arc::new(FileMasterKey::with_path(tmp.path().join("mk")));
-        let hs = HybridStore::new(db_store, mk);
+        let hs = HybridStore::new(db_store, mk, "file");
         (hs, tmp)
     }
 
@@ -190,6 +197,22 @@ mod tests {
         let raw2 = hs.db_store.get("k").unwrap().unwrap();
         assert_ne!(raw1, raw2, "随机 nonce 让同明文同 key 两次 set 产出不同密文");
         assert_eq!(hs.get("k").unwrap().as_deref(), Some("v"));
+    }
+
+    #[test]
+    fn cross_key_swap_rejected_at_secretstore_layer() {
+        // 攻击模拟：attacker 能写 SQLite secrets 表，把 cred:A:secret 的密文 raw
+        // 复制到 cred:B:secret 行。HybridStore.get(cred:B:secret) 必须报 AEAD tag
+        // 失败，不能静默返回 A 的明文密码。
+        let (hs, _tmp) = make_hybrid();
+        hs.set("cred:A:secret", "password-A").unwrap();
+        // 拿 raw 密文（绕过 HybridStore 直接读 DB.secrets）
+        let raw_a = hs.db_store.get("cred:A:secret").unwrap().unwrap();
+        // 把 A 的密文搬到 B 的 key 下
+        hs.db_store.set("cred:B:secret", &raw_a).unwrap();
+        // HybridStore.get 解 B 必须失败 — AAD 不一致 tag fail
+        let err = hs.get("cred:B:secret").unwrap_err();
+        assert_eq!(err.code(), "secret_decrypt_failed_or_wrong_key");
     }
 
     #[test]

@@ -114,11 +114,13 @@ impl FileMasterKey {
 }
 
 impl MasterKeyBackend for FileMasterKey {
-    /// 并发/重启安全的"创建 or 读取"：
-    ///   1. 确保父目录存在
-    ///   2. 用 `create_new = true` 原子创建文件 + 0600 + 写入新密钥
+    /// 并发/重启安全的"读取 or 创建"：
+    ///   1. **先 try read** —— 已存在直接解码返回，不调 RNG（避免临时 getrandom 故障
+    ///       影响现存用户）
+    ///   2. 不存在则确保父目录存在
+    ///   3. 用 `create_new = true` 原子创建文件 + 0600 + 写入新密钥
     ///      → OS 层面让"文件已存在"返回 `EEXIST`，**绝不覆盖**对手进程刚写好的密钥
-    ///   3. 命中 `AlreadyExists` → 读对手写的密钥，本进程也用它
+    ///   4. 命中 `AlreadyExists`（read 之后到 create 之前对手抢先写）→ 读对手写的
     ///
     /// 旧版本 `exists() → 不存在则 create+truncate` 在两个进程首次启动时有竞态：
     /// A 看 exists()=false → 生成 mk_A → write_truncate；同一窗口 B 也看 exists()=
@@ -126,6 +128,13 @@ impl MasterKeyBackend for FileMasterKey {
     /// 存）继续工作，DB 落下 mk_A 加密的密文；下次启动从文件读 mk_B → mk_A 密文
     /// 永久解不开。`create_new` 把这层 race window 消掉。
     fn load_or_create(&self) -> AppResult<[u8; MASTER_KEY_LEN]> {
+        // ── 快路径：已存在直接读，零 RNG 依赖 ──
+        // RNG 暂时不可用（rare）的用户仍能解锁现存数据，只在真的需要生成时才 fail。
+        if let Some(existing) = read_existing(&self.path)? {
+            return decode_b64_master_key(&existing);
+        }
+
+        // ── 慢路径：创建 ──
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
                 AppError::other(
@@ -141,14 +150,17 @@ impl MasterKeyBackend for FileMasterKey {
         match create_new_secure(&self.path, b64.as_bytes()) {
             Ok(()) => Ok(mk),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                // 别人（其他进程 / 同进程其他线程在更早窗口）已写过；读他写的
-                let existing = std::fs::read_to_string(&self.path).map_err(|e| {
-                    AppError::other(
+                // 对手在我们 read→create 之间抢先创建；用他的
+                let Some(existing) = read_existing(&self.path)? else {
+                    return Err(AppError::other(
                         "master_key_read_failed",
-                        json!({ "path": self.path.display().to_string(), "err": e.to_string() }),
-                    )
-                })?;
-                decode_b64_master_key(existing.trim())
+                        json!({
+                            "path": self.path.display().to_string(),
+                            "err": "file vanished after AlreadyExists",
+                        }),
+                    ));
+                };
+                decode_b64_master_key(&existing)
             }
             Err(e) => Err(AppError::other(
                 "master_key_write_failed",
@@ -167,6 +179,19 @@ impl MasterKeyBackend for FileMasterKey {
 }
 
 // ── helpers ─────────────────────────────────────────────────────────
+
+/// 读 master.key 内容；不存在返回 None（NotFound 不视为错误，让 caller 决定生成）。
+/// 其他 IO 错误（权限、磁盘）作 `master_key_read_failed` 抛出。
+fn read_existing(path: &std::path::Path) -> AppResult<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => Ok(Some(s.trim().to_string())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(AppError::other(
+            "master_key_read_failed",
+            json!({ "path": path.display().to_string(), "err": e.to_string() }),
+        )),
+    }
+}
 
 fn random_master_key() -> AppResult<[u8; MASTER_KEY_LEN]> {
     let mut mk = [0u8; MASTER_KEY_LEN];

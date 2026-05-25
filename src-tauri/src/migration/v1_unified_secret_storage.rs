@@ -221,7 +221,7 @@ mod tests {
         let real_db_store = Arc::new(DbStore::new(db.clone()));
         let mk: Arc<dyn MasterKeyBackend> =
             Arc::new(FileMasterKey::with_path(tmp.path().join("mk")));
-        let new_store = Arc::new(HybridStore::new(real_db_store, mk));
+        let new_store = Arc::new(HybridStore::new(real_db_store, mk, "file"));
         (db, mock_keyring, new_store, tmp)
     }
 

@@ -170,11 +170,14 @@ fn build_keyring_system(
     db_store: Arc<DbStore>,
     keyring: Arc<dyn SecretStore>,
 ) -> SecretSystem {
+    // backend_label 直接透传 KeyringStore 的 OS-specific 名字（"macos-keychain"
+    // 等），跟 PR #60 前 CLI/GUI 显示一致，不破坏 user-facing 字符串契约。
+    let label = keyring.backend_name();
     // db 传给 KeyringMasterKey 做 SQLite IMMEDIATE 跨进程互斥（CLI+GUI 并发首次启
     // 动时序列化 master key 生成）。FileMasterKey 不需要，文件创建已经原子。
     let mk_backend: Arc<dyn MasterKeyBackend> =
         Arc::new(KeyringMasterKey::new(keyring.clone(), db));
-    let store: Arc<dyn SecretStore> = Arc::new(HybridStore::new(db_store, mk_backend));
+    let store: Arc<dyn SecretStore> = Arc::new(HybridStore::new(db_store, mk_backend, label));
     SecretSystem {
         store,
         raw_keyring: Some(keyring),
@@ -187,7 +190,7 @@ fn build_file_system(
     probed_keyring: Option<Arc<dyn SecretStore>>,
 ) -> SecretSystem {
     let mk_backend: Arc<dyn MasterKeyBackend> = Arc::new(FileMasterKey::new(data_dir));
-    let store: Arc<dyn SecretStore> = Arc::new(HybridStore::new(db_store, mk_backend));
+    let store: Arc<dyn SecretStore> = Arc::new(HybridStore::new(db_store, mk_backend, "file"));
     SecretSystem {
         store,
         raw_keyring: probed_keyring,
