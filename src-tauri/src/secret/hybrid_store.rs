@@ -25,13 +25,11 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use serde_json::json;
-
 use super::crypto::{self, MASTER_KEY_LEN};
 use super::db_store::DbStore;
 use super::master_key::MasterKeyBackend;
 use super::SecretStore;
-use crate::error::{AppError, AppResult};
+use crate::error::{self, AppError, AppResult};
 
 pub struct HybridStore {
     db_store: Arc<DbStore>,
@@ -71,11 +69,10 @@ impl HybridStore {
         if let Some(k) = self.master_key.get() {
             return Ok(k);
         }
-        // slow path：锁住 init 临界区
-        let _guard = self
-            .init_lock
-            .lock()
-            .map_err(|e| AppError::other("master_key_init_lock_poisoned", json!({ "err": e.to_string() })))?;
+        // slow path：锁住 init 临界区。poison 走 crate::error::locked() 统一映射到
+        // AppError::Lock（code = "lock_poisoned"），跟 codebase 其他 Mutex 处理一致，
+        // 共享一套已有 i18n。
+        let _guard = error::locked(&self.init_lock)?;
         // 二次 check：A 拿锁前可能 B 已经初始化完释放锁
         if let Some(k) = self.master_key.get() {
             return Ok(k);
@@ -95,7 +92,7 @@ impl SecretStore for HybridStore {
         let mk = self.master_key()?;
         let plaintext = crypto::decrypt(mk, &stored)?;
         Ok(Some(String::from_utf8(plaintext).map_err(|e| {
-            crate::error::AppError::other(
+            AppError::other(
                 "secret_utf8_decode_failed",
                 serde_json::json!({ "err": e.to_string() }),
             )

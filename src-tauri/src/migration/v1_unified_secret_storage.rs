@@ -70,14 +70,24 @@ pub fn run(
         return Ok(());
     };
 
+    // ── 不覆盖更新过的新值 ──
+    // raw_keyring=None 那次启动用户可能已经在 HybridStore / DB.settings 上手动设
+    // 过新值（API key 改了、token 重发了……）。后续启动 keychain 恢复，本迁移再
+    // 跑时若无脑 `set()`，就把用户的新值覆盖成 keychain 里的旧值。
+    // 策略：destination 已有值 → 跳过 set，但仍删 keychain 旧值清理残留。
+
     // ── 1+3. cred:<id>:secret 加密迁；cred:<id>:passphrase 清理 ──
     for cred in credential::list(db)? {
         let secret_key = cred_secret_key(&cred.id);
         if let Some(plaintext) = kr.get(&secret_key)? {
-            // new_store.set 内部走 HybridStore：第一次写入时 lazy 触发主密钥生成
-            new_store.set(&secret_key, &plaintext)?;
+            if new_store.get(&secret_key)?.is_none() {
+                // new_store.set 内部走 HybridStore：第一次写入时 lazy 触发主密钥生成
+                new_store.set(&secret_key, &plaintext)?;
+                report.creds_migrated += 1;
+            } else {
+                report.creds_skipped_newer += 1;
+            }
             kr.delete(&secret_key)?;
-            report.creds_migrated += 1;
         }
         let pp_key = cred_passphrase_key(&cred.id);
         if kr.get(&pp_key)?.is_some() {
@@ -94,9 +104,13 @@ pub fn run(
     for raw in &secret_settings {
         let kc_key = setting_key(raw);
         if let Some(plaintext) = kr.get(&kc_key)? {
-            new_store.set(&kc_key, &plaintext)?;
+            if new_store.get(&kc_key)?.is_none() {
+                new_store.set(&kc_key, &plaintext)?;
+                report.settings_secret_migrated += 1;
+            } else {
+                report.settings_secret_skipped_newer += 1;
+            }
             kr.delete(&kc_key)?;
-            report.settings_secret_migrated += 1;
         }
     }
 
@@ -106,9 +120,13 @@ pub fn run(
     for raw in &plain_global {
         let kc_key = setting_key(raw);
         if let Some(value) = kr.get(&kc_key)? {
-            db::settings::set(db, raw, &value)?;
+            if db::settings::get(db, raw)?.is_none() {
+                db::settings::set(db, raw, &value)?;
+                report.settings_plain_migrated += 1;
+            } else {
+                report.settings_plain_skipped_newer += 1;
+            }
             kr.delete(&kc_key)?;
-            report.settings_plain_migrated += 1;
         }
     }
     for p in PROVIDERS_V1_10 {
@@ -116,20 +134,27 @@ pub fn run(
             let raw = format!("ai_{p}_{suffix}");
             let kc_key = setting_key(&raw);
             if let Some(value) = kr.get(&kc_key)? {
-                db::settings::set(db, &raw, &value)?;
+                if db::settings::get(db, &raw)?.is_none() {
+                    db::settings::set(db, &raw, &value)?;
+                    report.settings_plain_migrated += 1;
+                } else {
+                    report.settings_plain_skipped_newer += 1;
+                }
                 kr.delete(&kc_key)?;
-                report.settings_plain_migrated += 1;
             }
         }
     }
 
     if report.any() {
         log::info!(
-            "secret migration v1 done: creds={} passphrases_cleared={} settings_secret={} settings_plain={} db_plaintext_reencrypted={}",
+            "secret migration v1 done: creds={} (skipped_newer={}) passphrases_cleared={} settings_secret={} (skipped_newer={}) settings_plain={} (skipped_newer={}) db_plaintext_reencrypted={}",
             report.creds_migrated,
+            report.creds_skipped_newer,
             report.passphrases_cleared,
             report.settings_secret_migrated,
+            report.settings_secret_skipped_newer,
             report.settings_plain_migrated,
+            report.settings_plain_skipped_newer,
             report.db_plaintext_reencrypted,
         );
     }
@@ -141,9 +166,13 @@ pub fn run(
 #[derive(Default)]
 struct Report {
     creds_migrated: u32,
+    /// keychain 旧值存在但 HybridStore 已有新值 → 不覆盖用户更新，仅清 keychain。
+    creds_skipped_newer: u32,
     passphrases_cleared: u32,
     settings_secret_migrated: u32,
+    settings_secret_skipped_newer: u32,
     settings_plain_migrated: u32,
+    settings_plain_skipped_newer: u32,
     /// v0.1.x 时代走 DbStore fallback 的用户：DB.secrets 里有明文，这次重加密。
     db_plaintext_reencrypted: u32,
 }
@@ -151,9 +180,12 @@ struct Report {
 impl Report {
     fn any(&self) -> bool {
         self.creds_migrated
+            + self.creds_skipped_newer
             + self.passphrases_cleared
             + self.settings_secret_migrated
+            + self.settings_secret_skipped_newer
             + self.settings_plain_migrated
+            + self.settings_plain_skipped_newer
             + self.db_plaintext_reencrypted
             > 0
     }
@@ -365,6 +397,50 @@ mod tests {
         let (db, kr, ns, _tmp) = make_env();
         run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
         assert_eq!(db::settings::get(&db, MIGRATION_MARKER).unwrap().as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn does_not_overwrite_user_new_cred_secret() {
+        // 场景：raw_keyring=None 时用户用 HybridStore 改过 cred 密码（new value 在
+        // new_store）；之后 keychain 恢复，迁移再跑，绝不能用 keychain 旧值覆盖。
+        let (db, kr, ns, _tmp) = make_env();
+        add_cred(&db, "x");
+        // keychain 残留旧值
+        kr.set(&cred_secret_key("x"), "old-keychain-pem").unwrap();
+        // 用户已经在 HybridStore 设了新值
+        ns.set(&cred_secret_key("x"), "new-user-pem").unwrap();
+
+        run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
+
+        // new_store 仍是新值，不被覆盖
+        assert_eq!(ns.get(&cred_secret_key("x")).unwrap().as_deref(), Some("new-user-pem"));
+        // keychain 旧值被清掉（清理依然进行）
+        assert!(kr.get(&cred_secret_key("x")).unwrap().is_none());
+    }
+
+    #[test]
+    fn does_not_overwrite_user_new_github_token() {
+        let (db, kr, ns, _tmp) = make_env();
+        kr.set(&setting_key("github_token"), "ghp_old").unwrap();
+        ns.set(&setting_key("github_token"), "ghp_new").unwrap();
+
+        run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
+
+        assert_eq!(ns.get(&setting_key("github_token")).unwrap().as_deref(), Some("ghp_new"));
+        assert!(kr.get(&setting_key("github_token")).unwrap().is_none());
+    }
+
+    #[test]
+    fn does_not_overwrite_user_new_plain_setting() {
+        let (db, kr, ns, _tmp) = make_env();
+        kr.set(&setting_key("ai_provider"), "openai").unwrap();
+        db::settings::set(&db, "ai_provider", "deepseek").unwrap();
+
+        run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
+
+        // 用户后改的 deepseek 留下
+        assert_eq!(db::settings::get(&db, "ai_provider").unwrap().as_deref(), Some("deepseek"));
+        assert!(kr.get(&setting_key("ai_provider")).unwrap().is_none());
     }
 
     #[test]

@@ -92,16 +92,18 @@ impl FileMasterKey {
 }
 
 impl MasterKeyBackend for FileMasterKey {
+    /// 并发/重启安全的"创建 or 读取"：
+    ///   1. 确保父目录存在
+    ///   2. 用 `create_new = true` 原子创建文件 + 0600 + 写入新密钥
+    ///      → OS 层面让"文件已存在"返回 `EEXIST`，**绝不覆盖**对手进程刚写好的密钥
+    ///   3. 命中 `AlreadyExists` → 读对手写的密钥，本进程也用它
+    ///
+    /// 旧版本 `exists() → 不存在则 create+truncate` 在两个进程首次启动时有竞态：
+    /// A 看 exists()=false → 生成 mk_A → write_truncate；同一窗口 B 也看 exists()=
+    /// false → 生成 mk_B → write_truncate 覆盖 A 写的；A 进程持有 mk_A（OnceLock 缓
+    /// 存）继续工作，DB 落下 mk_A 加密的密文；下次启动从文件读 mk_B → mk_A 密文
+    /// 永久解不开。`create_new` 把这层 race window 消掉。
     fn load_or_create(&self) -> AppResult<[u8; MASTER_KEY_LEN]> {
-        if self.path.exists() {
-            let b64 = std::fs::read_to_string(&self.path).map_err(|e| {
-                AppError::other(
-                    "master_key_read_failed",
-                    json!({ "path": self.path.display().to_string(), "err": e.to_string() }),
-                )
-            })?;
-            return decode_b64_master_key(b64.trim());
-        }
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
                 AppError::other(
@@ -110,9 +112,31 @@ impl MasterKeyBackend for FileMasterKey {
                 )
             })?;
         }
+
         let mk = random_master_key()?;
-        write_file_secure(&self.path, STANDARD.encode(mk).as_bytes())?;
-        Ok(mk)
+        let b64 = STANDARD.encode(mk);
+
+        match create_new_secure(&self.path, b64.as_bytes()) {
+            Ok(()) => Ok(mk),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // 别人（其他进程 / 同进程其他线程在更早窗口）已写过；读他写的
+                let existing = std::fs::read_to_string(&self.path).map_err(|e| {
+                    AppError::other(
+                        "master_key_read_failed",
+                        json!({ "path": self.path.display().to_string(), "err": e.to_string() }),
+                    )
+                })?;
+                decode_b64_master_key(existing.trim())
+            }
+            Err(e) => Err(AppError::other(
+                "master_key_write_failed",
+                json!({
+                    "op": "create_new",
+                    "path": self.path.display().to_string(),
+                    "err": e.to_string(),
+                }),
+            )),
+        }
     }
 
     fn backend_name(&self) -> &'static str {
@@ -141,34 +165,28 @@ fn decode_b64_master_key(b64: &str) -> AppResult<[u8; MASTER_KEY_LEN]> {
     })
 }
 
-/// 原子 0600 创建并写入文件。Unix 用 `OpenOptions::mode` 让文件**自创建瞬间**
-/// 就是 0600，避免默认 umask（022 → 0644）下"先写 0644 再 chmod 0600"的暴露
-/// 窗口（TOCTOU：攻击者在 chmod 前 stat 到文件、open 拿到 fd）。
+/// 原子 0600 **新建**并写入文件。两层保险：
+///   - `create_new = true`：文件已存在 → OS 返回 `AlreadyExists`，**不写**。调用方
+///     凭这个错误码判断 "对手已建文件" 走读取分支，杜绝覆盖竞争对手写的密钥。
+///   - Unix `mode(0o600)`：文件自创建瞬间就是 0600，不经过 0644 中间态。
+///     避免默认 umask（022）下"先 0644 再 chmod 0600"的 TOCTOU 窗口。
+///
+/// 返回 `io::Result` 而不是 `AppResult` —— 让 caller 用 `e.kind() ==
+/// AlreadyExists` 决定走读取分支还是真错。把语义在边界处保留。
 /// Windows 无 mode 概念，依赖用户目录 ACL（rssh data dir 默认 user-owned）。
-fn write_file_secure(path: &std::path::Path, data: &[u8]) -> AppResult<()> {
+fn create_new_secure(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
 
-    let map_err = |op: &'static str, e: std::io::Error| {
-        AppError::other(
-            "master_key_write_failed",
-            json!({
-                "op": op,
-                "path": path.display().to_string(),
-                "err": e.to_string(),
-            }),
-        )
-    };
-
     let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
+    opts.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut f = opts.open(path).map_err(|e| map_err("open", e))?;
-    f.write_all(data).map_err(|e| map_err("write", e))?;
-    f.sync_all().map_err(|e| map_err("sync", e))?;
+    let mut f = opts.open(path)?;
+    f.write_all(data)?;
+    f.sync_all()?;
     Ok(())
 }
 
@@ -223,6 +241,19 @@ mod tests {
         std::fs::write(&path, b"!!!not base64!!!").unwrap();
         let err = FileMasterKey::with_path(path).load_or_create().unwrap_err();
         assert_eq!(err.code(), "master_key_b64_decode_failed");
+    }
+
+    #[test]
+    fn create_new_race_loser_reads_winner_key() {
+        // 模拟竞争：先用 backend A 创建一把 mk_A 写入文件；接下来 backend B 在同
+        // 路径上 load_or_create —— B 走 AlreadyExists 分支，读到 mk_A，不能写新的
+        // mk_B 覆盖 mk_A。
+        let tmp = tempdir();
+        let path = tmp.path().join(FILE_NAME);
+        let mk_a = FileMasterKey::with_path(path.clone()).load_or_create().unwrap();
+        // 第二个 backend 实例（模拟另一进程同时启动），在文件已存在时不能覆盖
+        let mk_b = FileMasterKey::with_path(path.clone()).load_or_create().unwrap();
+        assert_eq!(mk_a, mk_b, "AlreadyExists 必须走读取，不得覆盖竞争对手密钥");
     }
 
     #[test]

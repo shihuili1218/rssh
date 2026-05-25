@@ -538,6 +538,23 @@ const zh: Messages = {
   "error.cli_osascript_failed": "运行 osascript 失败：{err}",
   "error.cli_install_cancelled": "安装被取消或失败",
   "error.cli_priv_request_failed": "申请权限失败：{err}",
+
+  // ── 密钥存储（envelope 加密 DB + master-key 后端）──
+  "error.keychain_unavailable_but_required": "系统 keychain 不可用，但本机之前已把主密钥存到 keychain。请打开系统 keychain（macOS Keychain Access / Windows 凭据管理器 / Linux Secret Service）并解锁，然后重启 rssh。",
+  "error.master_key_backend_unknown": "数据库 master-key 后端标记未知：{value}。请到设置 → 从备份恢复，或联系支持。",
+  "error.master_key_read_failed": "读取 master.key 失败（{path}）：{err}",
+  "error.master_key_write_failed": "写入 master.key 失败（{op}，{path}）：{err}",
+  "error.master_key_mkdir_failed": "创建 master-key 目录失败（{dir}）：{err}",
+  "error.master_key_rng_failed": "生成主密钥随机数失败：{err}",
+  "error.master_key_b64_decode_failed": "主密钥 base64 解码失败：{err}",
+  "error.master_key_wrong_length": "主密钥长度异常（期望 {expected}，实际 {got}）。master.key 可能已损坏。",
+  "error.secret_rng_failed": "生成密文 nonce 失败：{err}",
+  "error.secret_encrypt_failed": "密文加密失败",
+  "error.secret_format_unknown": "密文格式未知（缺 enc:v1: 前缀）。存储的值不是当前 rssh 版本写入的。",
+  "error.secret_b64_decode_failed": "密文 base64 解码失败：{err}",
+  "error.secret_blob_too_short": "密文 blob 长度不足 —— 数据损坏",
+  "error.secret_decrypt_failed_or_wrong_key": "密文解密失败（主密钥不匹配或密文被篡改）",
+  "error.secret_utf8_decode_failed": "解密后的内容不是合法 UTF-8：{err}",
 };
 
 export default zh;

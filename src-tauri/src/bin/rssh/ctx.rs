@@ -29,7 +29,9 @@ impl CliCtx {
             let sys = match secret::open(self.db.clone(), &self.data_dir) {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("Failed to open secret storage: {e}");
+                    // user-facing 中文短句进 stderr；技术细节进 log 给排错用。
+                    log::error!("secret::open failed: {e}");
+                    eprintln!("无法打开密钥存储，rssh 无法继续。详情见日志。");
                     std::process::exit(1);
                 }
             };

@@ -536,6 +536,23 @@ const en = {
   "error.cli_osascript_failed": "Run osascript failed: {err}",
   "error.cli_install_cancelled": "Installation cancelled or failed",
   "error.cli_priv_request_failed": "Request privileges failed: {err}",
+
+  // ── secret storage (envelope-encrypted DB + master-key backend) ──
+  "error.keychain_unavailable_but_required": "System keychain is unavailable, but this install has previously stored the master key there. Open the system keychain (macOS Keychain Access / Windows Credential Manager / Linux Secret Service) and unlock it, then restart rssh.",
+  "error.master_key_backend_unknown": "Unknown master-key backend marker in DB: {value}. Open Settings → restore from backup, or contact support.",
+  "error.master_key_read_failed": "Read master.key failed ({path}): {err}",
+  "error.master_key_write_failed": "Write master.key failed ({op}, {path}): {err}",
+  "error.master_key_mkdir_failed": "Create master-key directory failed ({dir}): {err}",
+  "error.master_key_rng_failed": "Master-key RNG failed: {err}",
+  "error.master_key_b64_decode_failed": "Master-key base64 decode failed: {err}",
+  "error.master_key_wrong_length": "Master-key wrong length (expected {expected}, got {got}). master.key may be corrupted.",
+  "error.secret_rng_failed": "Secret nonce RNG failed: {err}",
+  "error.secret_encrypt_failed": "Secret encryption failed",
+  "error.secret_format_unknown": "Secret format unknown (not enc:v1:). Stored value is not from this rssh version.",
+  "error.secret_b64_decode_failed": "Secret base64 decode failed: {err}",
+  "error.secret_blob_too_short": "Secret blob too short — malformed ciphertext",
+  "error.secret_decrypt_failed_or_wrong_key": "Secret decryption failed (wrong master key or tampered ciphertext)",
+  "error.secret_utf8_decode_failed": "Decrypted secret is not valid UTF-8: {err}",
 };
 
 export default en;

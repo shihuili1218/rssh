@@ -39,7 +39,10 @@ pub fn delete(db: &Db, key: &str) -> AppResult<()> {
 /// 到 DbStore 走的是明文存储，新版本 HybridStore 要把这些明文 re-encrypt 一遍。
 /// 普通运行时不应该用这个 API（SecretStore trait 也没暴露），避免误用让明文
 /// 漏出 secrets 表边界。
-pub fn list_all(db: &Db) -> AppResult<Vec<(String, String)>> {
+///
+/// `pub(crate)`：API 暴露面收窄到本 lib 内部，外部 binary 无法直接拿到所有
+/// 密文/旧明文 blob —— 防止被误调进非迁移路径，把整表 secret 流出。
+pub(crate) fn list_all(db: &Db) -> AppResult<Vec<(String, String)>> {
     let conn = db.lock()?;
     let mut stmt = conn.prepare("SELECT key, value FROM secrets")?;
     let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
