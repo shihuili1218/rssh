@@ -68,6 +68,26 @@ impl Db {
         tx.commit()?;
         Ok(result)
     }
+
+    /// 跨进程互斥地执行 critical section。SQLite `BEGIN IMMEDIATE` 在文件层级
+    /// 取 reserved-lock，其他进程的 IMMEDIATE/EXCLUSIVE 会阻塞到本事务
+    /// commit/rollback；同进程其他 connection 也会阻塞。比 `with_transaction`
+    /// 的默认 DEFERRED 多了"启动时立刻拿写锁"语义，专给"序列化外部副作用"
+    /// 场景用（典型：master key 生成期间不能让别的进程同时跑 get→set）。
+    ///
+    /// 闭包内**不能再调本 Db 的其他方法**（已持 Mutex 会死锁），可以读写
+    /// keychain / 文件等独立子系统。错误自动 rollback（tx drop = ROLLBACK），
+    /// 成功才 commit。
+    pub(crate) fn with_exclusive_lock<F, T>(&self, f: F) -> AppResult<T>
+    where
+        F: FnOnce() -> AppResult<T>,
+    {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let result = f()?;
+        tx.commit()?;
+        Ok(result)
+    }
 }
 
 /// 数据目录：桌面用 ~/.rssh，Android 用 app_data_dir
@@ -75,4 +95,49 @@ pub fn data_dir() -> PathBuf {
     let mut p = dirs::home_dir().expect("home directory unavailable");
     p.push(".rssh");
     p
+}
+
+#[cfg(test)]
+mod with_exclusive_lock_tests {
+    use super::*;
+    use crate::error::AppError;
+
+    #[test]
+    fn ok_branch_returns_value() {
+        let db = Db::open_in_memory().unwrap();
+        let r: i32 = db.with_exclusive_lock(|| Ok(42)).unwrap();
+        assert_eq!(r, 42);
+    }
+
+    #[test]
+    fn err_branch_propagates() {
+        // 闭包 Err → 整个事务 drop（自动 ROLLBACK），错误透传出去。
+        // 注：闭包内不能再调 db.* 方法（会死锁），所以这里只验证 Err 流转，
+        // ROLLBACK 由 rusqlite::Transaction 的 Drop 语义保证（无需手动测）。
+        let db = Db::open_in_memory().unwrap();
+        let r: AppResult<i32> = db.with_exclusive_lock(|| {
+            Err(AppError::other("intentional", serde_json::json!({})))
+        });
+        let err = r.unwrap_err();
+        assert_eq!(err.code(), "intentional");
+    }
+
+    #[test]
+    fn lock_released_after_return() {
+        // 第二次 call 必须能拿到锁；如果释放有问题这里会 hang 或失败。
+        let db = Db::open_in_memory().unwrap();
+        db.with_exclusive_lock(|| Ok(())).unwrap();
+        db.with_exclusive_lock(|| Ok(())).unwrap();
+    }
+
+    #[test]
+    fn lock_released_after_err() {
+        // 失败路径也要释放锁；不然第二次 call 会 hang。
+        let db = Db::open_in_memory().unwrap();
+        let _ = db.with_exclusive_lock(|| -> AppResult<()> {
+            Err(AppError::other("first", serde_json::json!({})))
+        });
+        // 锁已释放：第二次 call 立刻拿得到
+        db.with_exclusive_lock(|| Ok(())).unwrap();
+    }
 }

@@ -99,7 +99,7 @@ pub fn open(db: Arc<Db>, data_dir: &Path) -> AppResult<SecretSystem> {
         // ── sticky keyring + 可用 → 用 keyring ──
         (Some(BACKEND_KEYRING), Some(kr)) => {
             log::debug!("secret backend: keyring (sticky)");
-            Ok(build_keyring_system(db_store, kr))
+            Ok(build_keyring_system(db.clone(), db_store, kr))
         }
 
         // ── sticky keyring + 不可用 → 硬 fail ──
@@ -130,7 +130,7 @@ pub fn open(db: Arc<Db>, data_dir: &Path) -> AppResult<SecretSystem> {
         (None, Some(kr)) => {
             db::settings::set(&db, BACKEND_MARKER, BACKEND_KEYRING)?;
             log::info!("secret backend selected: keyring (first run)");
-            Ok(build_keyring_system(db_store, kr))
+            Ok(build_keyring_system(db.clone(), db_store, kr))
         }
         (None, None) => {
             db::settings::set(&db, BACKEND_MARKER, BACKEND_FILE)?;
@@ -166,10 +166,14 @@ fn probe_keyring() -> Option<Arc<dyn SecretStore>> {
 }
 
 fn build_keyring_system(
+    db: Arc<Db>,
     db_store: Arc<DbStore>,
     keyring: Arc<dyn SecretStore>,
 ) -> SecretSystem {
-    let mk_backend: Arc<dyn MasterKeyBackend> = Arc::new(KeyringMasterKey::new(keyring.clone()));
+    // db 传给 KeyringMasterKey 做 SQLite IMMEDIATE 跨进程互斥（CLI+GUI 并发首次启
+    // 动时序列化 master key 生成）。FileMasterKey 不需要，文件创建已经原子。
+    let mk_backend: Arc<dyn MasterKeyBackend> =
+        Arc::new(KeyringMasterKey::new(keyring.clone(), db));
     let store: Arc<dyn SecretStore> = Arc::new(HybridStore::new(db_store, mk_backend));
     SecretSystem {
         store,

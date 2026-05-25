@@ -25,6 +25,7 @@ use serde_json::json;
 
 use super::crypto::MASTER_KEY_LEN;
 use super::SecretStore;
+use crate::db::Db;
 use crate::error::{AppError, AppResult};
 
 /// keychain 里主密钥的 key 名。带 v1 后缀方便未来轮换。
@@ -49,22 +50,43 @@ pub struct KeyringMasterKey {
     /// 任意 SecretStore，但**绝不能**传 HybridStore，否则 HybridStore 找主密钥时
     /// 又调回 HybridStore.get 死循环。secret::open 内部保证只传 raw KeyringStore。
     keyring: Arc<dyn SecretStore>,
+    /// 用来做跨进程互斥锁。SQLite `BEGIN IMMEDIATE` 是文件级 reserved-lock，
+    /// 跨进程天然互斥，不需要新依赖（rssh.db 本来就有）。
+    db: Arc<Db>,
 }
 
 impl KeyringMasterKey {
-    pub fn new(keyring: Arc<dyn SecretStore>) -> Self {
-        Self { keyring }
+    pub fn new(keyring: Arc<dyn SecretStore>, db: Arc<Db>) -> Self {
+        Self { keyring, db }
     }
 }
 
 impl MasterKeyBackend for KeyringMasterKey {
+    /// 并发安全的"读 keychain 或生成":
+    ///   - 快路径：keyring 已有 → 直接读，零数据库 IO
+    ///   - 慢路径：拿 SQLite IMMEDIATE 锁 → 持锁后二次 check keyring → 生成 + 写入
+    ///
+    /// 跨进程 race 修复（CLI + GUI 同时首次启动）：
+    /// 旧版本 `get() == None → set()` 两步之间另一进程可能也走了相同流程，
+    /// 两个 random master key 被先后写入，winner 覆盖 loser；loser 进程缓存
+    /// 的 mk_L 加密的密文重启后永久无法解（keychain 里只剩 mk_W）。
+    /// 加 SQLite 文件锁后，整个 get→generate→set 序列被同一锁串行化：第二
+    /// 个进程拿不到锁阻塞等待，等到时 keyring 已经有 winner 的 key，直接读
+    /// 用之即可。
     fn load_or_create(&self) -> AppResult<[u8; MASTER_KEY_LEN]> {
         if let Some(b64) = self.keyring.get(KEYRING_KEY_NAME)? {
             return decode_b64_master_key(&b64);
         }
-        let mk = random_master_key()?;
-        self.keyring.set(KEYRING_KEY_NAME, &STANDARD.encode(mk))?;
-        Ok(mk)
+        // 慢路径：跨进程互斥的临界区
+        self.db.with_exclusive_lock(|| {
+            // 持锁后二次 check：等锁期间别的进程可能已经写入
+            if let Some(b64) = self.keyring.get(KEYRING_KEY_NAME)? {
+                return decode_b64_master_key(&b64);
+            }
+            let mk = random_master_key()?;
+            self.keyring.set(KEYRING_KEY_NAME, &STANDARD.encode(mk))?;
+            Ok(mk)
+        })
     }
 
     fn backend_name(&self) -> &'static str {

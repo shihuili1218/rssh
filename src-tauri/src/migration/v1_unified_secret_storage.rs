@@ -25,7 +25,11 @@ use crate::error::AppResult;
 use crate::secret::crypto::is_encrypted_v1;
 use crate::secret::{cred_passphrase_key, cred_secret_key, setting_key, SecretStore};
 
+/// "全部完成"marker：含 keychain 迁移。两个阶段都跑过才写。
 const MIGRATION_MARKER: &str = "migration_v1_unified_secret_storage";
+/// 仅 DB 明文重加密完成 marker：不依赖 keyring，headless / Android / keychain
+/// 临时不可用场景下也能写。避免每次启动全表扫 `secrets`。
+const REENCRYPT_MARKER: &str = "migration_v1_db_plaintext_reencrypted";
 
 /// v0.1.10 时代支持的 BYOK provider 命名。命名跟 `ai_<provider>_*` 的 provider
 /// 段一致；新增 provider 已经走新存储路径不需要迁。
@@ -42,24 +46,30 @@ pub fn run(
 
     let mut report = Report::default();
 
-    // ── 旧 DbStore 明文 → HybridStore 加密 ──
+    // ── 阶段 1：旧 DbStore 明文 → HybridStore 加密 ──
     // v0.1.x 时代 keychain 不可用的用户（Android / Linux headless）走 DbStore
     // fallback，把 secret 明文写进 DB.secrets。新 HybridStore 把同一张表当密文
     // 库用，明文条目 decrypt 会撞 "format_unknown"。一次性扫一遍重加密回去。
     //
-    // 桌面用户 keychain 一直可用：DB.secrets 此前为空，这个循环遍历 0 条，零开销。
-    for (key, value) in db::secret::list_all(db)? {
-        if !is_encrypted_v1(&value) {
-            // new_store.set 走 HybridStore：触发 master key lazy 生成 + 加密回写
-            new_store.set(&key, &value)?;
-            report.db_plaintext_reencrypted += 1;
+    // 桌面用户 keychain 一直可用：DB.secrets 此前为空，扫描 0 条零开销。
+    // **独立 marker**：headless 平台 raw_keyring 永远 None，全局 MIGRATION_MARKER
+    // 不会写，否则每次启动都得 list_all 全表扫。本 marker 单独写在阶段 1 完成时，
+    // 之后启动看见就跳过整个 list_all。
+    if db::settings::get(db, REENCRYPT_MARKER)?.is_none() {
+        for (key, value) in db::secret::list_all(db)? {
+            if !is_encrypted_v1(&value) {
+                // new_store.set 走 HybridStore：触发 master key lazy 生成 + 加密回写
+                new_store.set(&key, &value)?;
+                report.db_plaintext_reencrypted += 1;
+            }
         }
+        db::settings::set(db, REENCRYPT_MARKER, "1")?;
     }
 
     // keychain 不可用时（桌面 keychain 临时挂 / Android）：没旧 keychain 数据
-    // 可迁，但**不写 marker** —— 桌面 keychain 后续恢复时还能跑这次迁移。
-    // 真无 keychain 平台每次启动跑这分支但都直接 return（settings::get 是
-    // 一次 SQLite 查询，~0.05ms 可忽略）。
+    // 可迁，但**不写 MIGRATION_MARKER** —— 桌面 keychain 后续恢复时还能跑这次
+    // 迁移。但 REENCRYPT_MARKER 已经在上面写过了，所以这次返回的成本是 2 次
+    // settings::get 查询（~0.1ms），不再触发全表扫描。
     let Some(kr) = raw_keyring else {
         if report.any() {
             log::info!(
@@ -337,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn db_plaintext_reencrypted_then_marker_written() {
+    fn db_plaintext_reencrypted_then_reencrypt_marker_written() {
         // 模拟 v0.1.x 走 DbStore fallback 的用户：DB.secrets 直接有明文
         let (db, _kr, ns, _tmp) = make_env();
         // 绕过 HybridStore 直接写明文进 DB.secrets，模拟旧 DbStore 行为
@@ -352,9 +362,35 @@ mod tests {
             ns.get("cred:legacy:secret").unwrap().as_deref(),
             Some("raw-pem-plaintext")
         );
-        // 这次走的是 no_keyring 分支，但有 db_plaintext 数据要迁；marker 不写
-        // （这条迁移逻辑跟 keychain 迁移分两段，no-keyring 路径不能算"全部完成"）
+        // no-keyring：REENCRYPT_MARKER 写入（阶段 1 已完成），但 MIGRATION_MARKER
+        // 不写（阶段 2 keychain 迁移没跑）。下次启动跳过 list_all 全表扫。
+        assert_eq!(
+            db::settings::get(&db, REENCRYPT_MARKER).unwrap().as_deref(),
+            Some("1")
+        );
         assert!(db::settings::get(&db, MIGRATION_MARKER).unwrap().is_none());
+    }
+
+    #[test]
+    fn reencrypt_marker_skips_second_full_scan() {
+        // 头部 marker 已写后，后续启动**不再扫**全表 —— 即使 DB.secrets 里又被
+        // 写进明文（理论上不该有，但作为优化的护栏测试）
+        let (db, _kr, ns, _tmp) = make_env();
+        run(&db, None, ns.as_ref()).unwrap();
+        assert_eq!(
+            db::settings::get(&db, REENCRYPT_MARKER).unwrap().as_deref(),
+            Some("1")
+        );
+
+        // 第二次 run 之前手工塞一条明文进 DB.secrets：如果阶段 1 仍在跑就会被
+        // 加密；marker 起作用就被跳过保留原样
+        db::secret::set(&db, "leaked", "should-stay-plaintext").unwrap();
+        run(&db, None, ns.as_ref()).unwrap();
+        let raw = db::secret::get(&db, "leaked").unwrap().unwrap();
+        assert_eq!(
+            raw, "should-stay-plaintext",
+            "REENCRYPT_MARKER 应让阶段 1 跳过，明文不被重写"
+        );
     }
 
     #[test]
