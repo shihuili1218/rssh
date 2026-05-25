@@ -96,7 +96,7 @@ pub fn all_tools() -> Vec<ToolSchema> {
         },
         ToolSchema {
             name: TOOL_MATCH_FILE.into(),
-            description: "Locate every occurrence of a literal text inside a remote file (read-only; one approval card, auto-approved in danger_mode). \
+            description: "Locate every occurrence of a literal text inside a remote file (read-only; one approval card — may be auto-approved per user settings: auto_match_file under danger_mode). \
                 Always call this **before** `patch_file` to: (1) confirm the find string actually exists and how many times; \
                 (2) verify the surrounding context matches the locations you want to change; \
                 (3) obtain `expected_count` for the follow-up `patch_file` call. \
@@ -136,7 +136,7 @@ pub fn all_tools() -> Vec<ToolSchema> {
                 You MUST call `match_file` first to verify the find string exists and to obtain `expected_count`. \
                 rssh re-reads the file just before patching and refuses the change if the count differs (race-condition / staleness guard). \
                 The new file content is written atomically (tmp + mv). Returns a unified diff for your final review. \
-                User confirms the diff in a UI dialog before the write is executed.".into(),
+                The flow has 4 approval cards (cp → modify → diff → mv); each card may be auto-approved independently per user settings (auto_patch_cp/_modify/_diff/_mv under danger_mode).".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

@@ -426,7 +426,8 @@ impl Actor {
                     self.emit(
                         "error",
                         json!({
-                            "message": "工具正在运行，无法发送新消息。请等待结果，或在命令卡片上批准 / 拒绝。",
+                            // 统一英文跟 handle_run_command 的"pending approval"错误一致，前端 ai:error 直显，不绕 i18n
+                            "message": "Cannot send a new message while a tool call is running. Wait for it to finish, or approve/reject the command card.",
                         }),
                     );
                     continue;
