@@ -237,21 +237,12 @@ export async function executeCommand(
     },
   };
 
-  // 用 bracketed paste mode 包裹命令（xterm 标准 / DECSET 2004）：
-  //   \e[200~ → shell 进入 paste 模式，后续字节绕过所有 zle widget 直接入 buffer
-  //   \e[201~ → 退出 paste 模式
-  //   末尾 \r → 等价于人按下 Enter 提交；Unix ICRNL 翻成 \n，Windows ConPTY 也认 \r
-  // 这样能规避所有 shell line-editor 小聪明，典型如：
-  //   1) zsh url-quote-magic 把 URL 后的 `;` 自动转义成 `\;`，导致 `cmd; echo sentinel`
-  //      被解析成 `cmd ';' 'echo' 'sentinel'`，哨兵永远不出现
-  //   2) history expansion (!)、abbreviation、autosuggestion 等同类问题
-  // 兼容性：bash 4.4+ / zsh 5.1+ / PowerShell 7.2+ / fish / Win10 1809+ ConPTY 均默认支持。
-  //
+  // 写命令到 PTY；末尾 \r 等价于按下回车，触发 shell 执行。
+  // 不能用 \n：Windows ConPTY/PowerShell 只认 \r，Unix cooked PTY 会把 \r 经 ICRNL 翻成 \n，
+  // 所以 \r 是唯一跨平台正确的"回车"字节，和用户手按 Enter 时 xterm.js 发的字节一致。
   // 如果 invoke 抛错（session 已关闭等），listener / _runningExecutions 已经登记，
   // 必须走 finish() 清理一遍，否则会泄漏并让 isCommandRunning() 永远卡 true。
-  const data = Array.from(
-    new TextEncoder().encode(`\x1b[200~${proposed.full_cmd}\x1b[201~\r`),
-  );
+  const data = Array.from(new TextEncoder().encode(proposed.full_cmd + "\r"));
   try {
     await invoke(writeCmd, { sessionId: target_session_id, data });
   } catch (e) {
