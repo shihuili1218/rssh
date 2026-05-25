@@ -565,20 +565,15 @@ impl Actor {
                     id: dl_id.clone(),
                     reason: reason.clone(),
                 });
-                // UI 卡片切到结果态：前端等 ai:command_completed 把 chat item 标 done。
+                // 跟 run_command / file_ops 一致用 command_rejected —— 前端 listener
+                // 清 pending + 把 ChatItem.rejected 填上。之前用 fake command_completed
+                // + exit_code=1 + 中文 "已拒绝" output 是 hack（rejection 被 UI 当成
+                // failed execution，填 result 不是 rejected）。
                 self.emit(
-                    "command_completed",
+                    "command_rejected",
                     json!({
                         "id": dl_id,
-                        "exit_code": 1,
-                        "timed_out": false,
-                        "early_terminated": false,
-                        // 卡片 output 是给用户看的，按 AGENT.md Pr1 用中文。
-                        // push_tool_error 内容保持英文 —— 喂给 LLM 推理用。
-                        "output": format!("已拒绝：{reason}"),
-                        "original_bytes": 0,
-                        "truncated_bytes": 0,
-                        "duration_ms": started_at.elapsed().as_millis() as u64,
+                        "reason": reason.clone(),
                     }),
                 );
                 self.push_tool_error(
@@ -753,17 +748,12 @@ impl Actor {
                     id: card_id.clone(),
                     reason: reason.clone(),
                 });
+                // 跟 download_file / run_command / file_ops 统一用 command_rejected
                 self.emit(
-                    "command_completed",
+                    "command_rejected",
                     json!({
                         "id": card_id,
-                        "exit_code": 1,
-                        "timed_out": false,
-                        "early_terminated": false,
-                        "output": format!("已拒绝：{reason}"),
-                        "original_bytes": 0,
-                        "truncated_bytes": 0,
-                        "duration_ms": started_at.elapsed().as_millis() as u64,
+                        "reason": reason.clone(),
                     }),
                 );
                 self.push_tool_error(

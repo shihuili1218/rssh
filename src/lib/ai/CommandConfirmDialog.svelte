@@ -193,11 +193,13 @@
                 <button class="btn btn-approve" onclick={approve} disabled={executing}>
                     {executing ? t("ai.cmd.btn.executing") : t("ai.cmd.btn.approve")}
                 </button>
-                {#if executing}
+                {#if executing && !isAckOnly}
+                    <!-- ack-only 命令（download_file / analyze_locally）没 PTY，
+                         Terminate 发 Ctrl+C 是 no-op，不该露给用户当 affordance。 -->
                     <button class="btn btn-terminate" onclick={terminate} disabled={terminating}>
                         {terminating ? t("ai.cmd.btn.terminating") : t("ai.cmd.btn.terminate")}
                     </button>
-                {:else}
+                {:else if !executing}
                     <button class="btn btn-reject" onclick={reject}>{t("ai.cmd.btn.reject")}</button>
                 {/if}
             </div>
