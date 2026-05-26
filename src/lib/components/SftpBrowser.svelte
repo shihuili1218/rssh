@@ -6,6 +6,9 @@
     import type {RemoteEntry} from "../stores/app.svelte.ts";
     import { errMsg, t } from "../i18n/index.svelte.ts";
 
+    /** Backend WalkEntry：rel_path 始终以 '/' 分隔。 */
+    interface WalkEntry { rel_path: string; size: number; }
+
     let {meta}: { meta: Record<string, string> } = $props();
 
     let sftpId = $state<string | null>(null);
@@ -16,6 +19,16 @@
     let loading = $state(true);
     let error = $state("");
     let notice = $state("");
+
+    /** 当前目录内已选 entry 的 name 集合。换目录即清空（跨目录不保留）。 */
+    let selected = $state(new Set<string>());
+    /** Upload 下拉菜单开关。 */
+    let uploadMenuOpen = $state(false);
+    let uploadWrapEl: HTMLDivElement | undefined;
+
+    const selectedCount = $derived(selected.size);
+    const allSelected = $derived(entries.length > 0 && selected.size === entries.length);
+    const someSelected = $derived(selected.size > 0 && selected.size < entries.length);
 
     onMount(async () => {
         try {
@@ -50,6 +63,8 @@
         error = "";
         try {
             entries = await invoke<RemoteEntry[]>("sftp_list", {sftpId, path});
+            // 换目录立刻清空选中 —— 数据语义跨目录无意义。
+            selected = new Set();
             cwd = path;
             pathInput = path;
         } catch (e: any) {
@@ -93,51 +108,34 @@
     }
 
     function openEntry(e: RemoteEntry) {
-        if (e.is_dir) listDir(cwd === "/" ? `/${e.name}` : `${cwd}/${e.name}`);
+        if (e.is_dir) listDir(joinRemote(cwd, e.name));
     }
 
     function basename(p: string): string {
         return p.split(/[\\/]/).pop() || p;
     }
 
-    async function download(e: RemoteEntry) {
-        error = "";
-        notice = "";
-        if (!meta.sessionId) { error = "Missing SSH session"; return; }
-        try {
-            const localPath = await invoke<string | null>("sftp_pick_save_path", { defaultName: e.name });
-            if (!localPath) return;
-            const remotePath = cwd === "/" ? `/${e.name}` : `${cwd}/${e.name}`;
-            await transfers.startDownload({
-                sessionId: meta.sessionId,
-                remotePath,
-                localPath,
-                sizeHint: e.size,
-            });
-            notice = `Queued: ${e.name}`;
-        } catch (err: any) {
-            error = String(err);
+    /** 拼接远端路径：始终 '/' 分隔，过滤空段，根目录特判。 */
+    function joinRemote(...parts: string[]): string {
+        let acc = "";
+        for (const p of parts) {
+            if (!p) continue;
+            const cleaned = p.replace(/^\/+|\/+$/g, "");
+            if (cleaned) acc += "/" + cleaned;
         }
+        return acc || "/";
     }
 
-    async function upload() {
-        error = "";
-        notice = "";
-        if (!meta.sessionId) { error = "Missing SSH session"; return; }
-        try {
-            const localPath = await invoke<string | null>("sftp_pick_open_path");
-            if (!localPath) return;
-            const name = basename(localPath);
-            const remotePath = cwd === "/" ? `/${name}` : `${cwd}/${name}`;
-            await transfers.startUpload({
-                sessionId: meta.sessionId,
-                localPath,
-                remotePath,
-            });
-            notice = `Queued: ${name}`;
-        } catch (err: any) {
-            error = String(err);
+    /** 拼接本地路径：分隔符跟 root 看齐（Windows '\\'，Unix '/'）。rel_path 内 '/' 转成平台分隔符。 */
+    function joinLocal(root: string, ...rels: string[]): string {
+        const sep = root.includes("\\") ? "\\" : "/";
+        let acc = root.replace(/[\\/]+$/, "");
+        for (const r of rels) {
+            if (!r) continue;
+            const cleaned = r.replace(/^[\\/]+|[\\/]+$/g, "").replace(/\//g, sep);
+            if (cleaned) acc += sep + cleaned;
         }
+        return acc;
     }
 
     function formatSize(bytes: number): string {
@@ -147,22 +145,179 @@
         return `${(bytes / 1073741824).toFixed(1)} G`;
     }
 
-    function gotoDownloads() {
-        app.openDownloads();
+    /** 渲染 mtime：当年用 MM-DD HH:mm，跨年用 YYYY-MM-DD。0 表示服务端未给。 */
+    function formatMtime(secs: number): string {
+        if (!secs) return "—";
+        const d = new Date(secs * 1000);
+        const yy = d.getFullYear();
+        const now = new Date();
+        const pad = (n: number) => n.toString().padStart(2, "0");
+        if (yy === now.getFullYear()) {
+            return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        }
+        return `${yy}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
     }
+
+    function toggleSelected(name: string) {
+        const next = new Set(selected);
+        if (next.has(name)) next.delete(name);
+        else next.add(name);
+        selected = next;
+    }
+
+    function toggleAll() {
+        if (selected.size === entries.length) selected = new Set();
+        else selected = new Set(entries.map(e => e.name));
+    }
+
+    function closeUploadMenu() { uploadMenuOpen = false; }
+    function toggleUploadMenu() { uploadMenuOpen = !uploadMenuOpen; }
+
+    function onWindowMouseDown(ev: MouseEvent) {
+        if (!uploadMenuOpen) return;
+        const target = ev.target as Node | null;
+        if (uploadWrapEl && target && !uploadWrapEl.contains(target)) closeUploadMenu();
+    }
+
+    $effect(() => {
+        if (uploadMenuOpen) {
+            window.addEventListener("mousedown", onWindowMouseDown);
+            return () => window.removeEventListener("mousedown", onWindowMouseDown);
+        }
+    });
+
+    async function downloadSelected() {
+        error = "";
+        notice = "";
+        if (!meta.sessionId) { error = "Missing SSH session"; return; }
+        if (selected.size === 0) return;
+        const items = entries.filter(e => selected.has(e.name));
+        try {
+            const dir = await invoke<string | null>("sftp_pick_save_dir");
+            if (!dir) return;
+            let queued = 0;
+            for (const e of items) {
+                const remote = joinRemote(cwd, e.name);
+                if (e.is_dir) {
+                    // 整棵子树展开为 N 条独立 Transfer。Walk 失败仅这棵跳过，不影响其余选中项。
+                    try {
+                        const walked = await invoke<WalkEntry[]>("sftp_walk_remote_dir", {
+                            sftpId, remoteRoot: remote,
+                        });
+                        for (const w of walked) {
+                            await transfers.startDownload({
+                                sessionId: meta.sessionId,
+                                remotePath: joinRemote(remote, w.rel_path),
+                                localPath:  joinLocal(dir, e.name, w.rel_path),
+                                sizeHint:   w.size,
+                            });
+                            queued++;
+                        }
+                    } catch (err) {
+                        error = `Walk failed: ${e.name} — ${errMsg(err)}`;
+                    }
+                } else {
+                    await transfers.startDownload({
+                        sessionId: meta.sessionId,
+                        remotePath: remote,
+                        localPath:  joinLocal(dir, e.name),
+                        sizeHint:   e.size,
+                    });
+                    queued++;
+                }
+            }
+            if (queued > 0) notice = `Queued ${queued} transfer(s)`;
+            selected = new Set();
+        } catch (err: any) {
+            error = errMsg(err);
+        }
+    }
+
+    async function uploadFiles() {
+        error = "";
+        notice = "";
+        if (!meta.sessionId) { error = "Missing SSH session"; return; }
+        try {
+            const paths = await invoke<string[] | null>("sftp_pick_open_files");
+            if (!paths || paths.length === 0) return;
+            for (const p of paths) {
+                const name = basename(p);
+                await transfers.startUpload({
+                    sessionId: meta.sessionId,
+                    localPath:  p,
+                    remotePath: joinRemote(cwd, name),
+                });
+            }
+            notice = `Queued ${paths.length} upload(s)`;
+        } catch (err: any) {
+            error = errMsg(err);
+        }
+    }
+
+    async function uploadFolder() {
+        error = "";
+        notice = "";
+        if (!meta.sessionId) { error = "Missing SSH session"; return; }
+        try {
+            const dir = await invoke<string | null>("sftp_pick_open_folder");
+            if (!dir) return;
+            const walked = await invoke<WalkEntry[]>("walk_local_dir", { localRoot: dir });
+            if (walked.length === 0) { notice = "Folder has no files"; return; }
+            const folderName = basename(dir);
+            for (const w of walked) {
+                await transfers.startUpload({
+                    sessionId: meta.sessionId,
+                    localPath:  joinLocal(dir, w.rel_path),
+                    remotePath: joinRemote(cwd, folderName, w.rel_path),
+                });
+            }
+            notice = `Queued ${walked.length} upload(s)`;
+        } catch (err: any) {
+            error = errMsg(err);
+        }
+    }
+
+    function toggleTransfers() {
+        app.toggleDownloads();
+    }
+
+    /** 后台有 transfer 在跑或排队时，图标右上角点一个小绿点 —— 用户从 SFTP 离开后仍知道有活动。 */
+    const xferActive = $derived(transfers.activeCount() > 0);
 </script>
 
 <div class="sftp">
     <div class="toolbar">
         <span class="title">SFTP</span>
         <span class="grow"></span>
+        <button type="button"
+                class="btn-icon transfers-icon"
+                class:active={xferActive}
+                data-transfers-trigger="true"
+                onclick={toggleTransfers}
+                aria-label={t("downloads.title")}
+                title={t("downloads.title")}>
+            ⇅
+            {#if xferActive}<span class="transfers-dot" aria-hidden="true"></span>{/if}
+        </button>
         <button type="button" class="btn-icon" onclick={() => app.closeSftp()} aria-label={t("common.close")} title={t("common.close")}>×</button>
     </div>
     <div class="header">
         <button class="btn btn-sm" onclick={goUp}>← Up</button>
         <button class="btn btn-sm" onclick={() => listDir(cwd)}>Refresh</button>
-        <button class="btn btn-sm" disabled={!sftpId} onclick={upload}>⬆ Upload</button>
-        <button class="btn btn-sm btn-link" onclick={gotoDownloads}>Transfers →</button>
+        <div class="upload-wrap" bind:this={uploadWrapEl}>
+            <button class="btn btn-sm" disabled={!sftpId} onclick={toggleUploadMenu} aria-haspopup="menu" aria-expanded={uploadMenuOpen}>
+                ⬆ Upload <span class="caret">▾</span>
+            </button>
+            {#if uploadMenuOpen}
+                <div class="upload-menu" role="menu">
+                    <button role="menuitem" onclick={() => { closeUploadMenu(); uploadFiles(); }}>Files…</button>
+                    <button role="menuitem" onclick={() => { closeUploadMenu(); uploadFolder(); }}>Folder…</button>
+                </div>
+            {/if}
+        </div>
+        <button class="btn btn-sm" disabled={selectedCount === 0 || !sftpId} onclick={downloadSelected}>
+            ⬇ Download{selectedCount > 0 ? ` (${selectedCount})` : ""}
+        </button>
     </div>
     <input
         type="text"
@@ -187,16 +342,37 @@
         <p class="loading">Loading...</p>
     {:else}
         <div class="file-list">
+            <div class="file-row file-header">
+                <span class="cell-check">
+                    <input
+                        type="checkbox"
+                        checked={allSelected}
+                        indeterminate={someSelected}
+                        disabled={entries.length === 0}
+                        onchange={toggleAll}
+                        aria-label="Select all"
+                    />
+                </span>
+                <span class="cell-name h-label">Name</span>
+                <span class="cell-size h-label">Size</span>
+                <span class="cell-mtime h-label">Modified</span>
+            </div>
             {#each entries as e (e.name)}
-                <div class="file-row" class:dir={e.is_dir}>
-                    <button class="file-name" onclick={() => openEntry(e)}>
-                        <span class="file-icon">{e.is_dir ? "📁" : "📄"}</span>
-                        {e.name}
+                <div class="file-row" class:dir={e.is_dir} class:selected={selected.has(e.name)}>
+                    <span class="cell-check">
+                        <input
+                            type="checkbox"
+                            checked={selected.has(e.name)}
+                            onchange={() => toggleSelected(e.name)}
+                            aria-label={`Select ${e.name}`}
+                        />
+                    </span>
+                    <button class="file-name cell-name" onclick={() => openEntry(e)} title={e.name}>
+                        <span class="file-icon">{e.is_dir ? "📁" : (e.is_symlink ? "🔗" : "📄")}</span>
+                        <span class="file-label">{e.name}</span>
                     </button>
-                    <span class="file-size">{e.is_dir ? "" : formatSize(e.size)}</span>
-                    {#if !e.is_dir}
-                        <button class="btn btn-sm" onclick={() => download(e)}>Download</button>
-                    {/if}
+                    <span class="cell-size">{e.is_dir ? "—" : formatSize(e.size)}</span>
+                    <span class="cell-mtime">{formatMtime(e.mtime)}</span>
                 </div>
             {:else}
                 <p class="empty">Empty directory</p>
@@ -213,6 +389,7 @@
         padding: 12px 14px;
         box-sizing: border-box;
         overflow-y: auto;
+        container-type: inline-size;
         /* aside 把 SFTP 收成侧边栏；不再做 max-width 居中。窄宽度下让按钮换行而不是溢出。 */
     }
 
@@ -256,6 +433,44 @@
         gap: 8px;
         margin-bottom: 8px;
         flex-wrap: wrap;
+    }
+
+    .upload-wrap {
+        position: relative;
+        display: inline-flex;
+    }
+    .caret {
+        font-size: 9px;
+        margin-left: 2px;
+        opacity: 0.75;
+    }
+    .upload-menu {
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 0;
+        z-index: 10;
+        background: var(--surface);
+        border: 1px solid var(--divider);
+        border-radius: var(--radius-sm);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+        min-width: 140px;
+        padding: 4px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+    .upload-menu button {
+        background: transparent;
+        border: none;
+        text-align: left;
+        font: inherit;
+        color: var(--text);
+        padding: 6px 10px;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+    }
+    .upload-menu button:hover {
+        background: var(--accent-soft);
     }
 
     .breadcrumb-input {
@@ -309,7 +524,8 @@
     }
 
     .file-row {
-        display: flex;
+        display: grid;
+        grid-template-columns: 24px 1fr 60px 90px;
         align-items: center;
         gap: 8px;
         padding: 6px 8px;
@@ -317,12 +533,40 @@
         transition: background 0.1s;
     }
 
-    .file-row:hover {
+    .file-row:not(.file-header):hover {
         background: color-mix(in srgb, var(--text-sub) 15%, transparent);
+    }
+    .file-row.selected {
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+    }
+    .file-row.selected:hover {
+        background: color-mix(in srgb, var(--accent) 18%, transparent);
+    }
+
+    .file-header {
+        font-size: 11px;
+        color: var(--text-dim);
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+        border-bottom: 1px solid var(--divider);
+        padding-bottom: 6px;
+        margin-bottom: 2px;
+    }
+    .h-label { user-select: none; }
+    .cell-size.h-label, .cell-mtime.h-label { text-align: right; }
+
+    .cell-check {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .cell-check input {
+        cursor: pointer;
+        margin: 0;
     }
 
     .file-name {
-        flex: 1;
+        grid-column: 2;
         border: none;
         background: none;
         text-align: left;
@@ -333,6 +577,13 @@
         display: flex;
         align-items: center;
         gap: 6px;
+        min-width: 0; /* 让 file-label 能 ellipsis */
+        padding: 0;
+    }
+    .file-label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .file-row.dir .file-name {
@@ -342,13 +593,27 @@
 
     .file-icon {
         font-size: 14px;
+        flex-shrink: 0;
     }
 
-    .file-size {
+    .cell-size {
         font-size: 11px;
         color: var(--text-dim);
-        width: 60px;
         text-align: right;
+    }
+    .cell-mtime {
+        font-size: 11px;
+        color: var(--text-dim);
+        text-align: right;
+        white-space: nowrap;
+    }
+
+    /* 窄宽度：先隐 mtime 列。size 始终保留 —— 多文件下载用户最关心的还是大小。 */
+    @container (max-width: 360px) {
+        .file-row {
+            grid-template-columns: 24px 1fr 60px;
+        }
+        .cell-mtime { display: none; }
     }
 
     .empty {
@@ -357,10 +622,19 @@
         padding: 24px;
     }
 
-    .btn-link {
-        background: transparent;
-        box-shadow: none;
-        color: var(--accent);
-        margin-left: auto;
+    /* 上下双箭头图标 + 活动点：transfer 还在跑/排队时点亮，把"后台有事"暴露到 toolbar */
+    .transfers-icon {
+        position: relative;
+    }
+    .transfers-icon.active { color: var(--accent); }
+    .transfers-dot {
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--success);
+        box-shadow: 0 0 0 2px var(--bg);
     }
 </style>

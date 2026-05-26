@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -18,7 +19,30 @@ pub const CANCELLED_CODE: &str = "transfer_cancelled";
 pub struct RemoteEntry {
     pub name: String,
     pub is_dir: bool,
+    pub is_symlink: bool,
     pub size: u64,
+    /// unix epoch seconds; 0 表示服务端未提供 mtime
+    pub mtime: u64,
+}
+
+/// Flat walk 输出：rel_path 总是用 '/' 分隔（即使本地是 Windows），
+/// 由前端在拼接为本地物理路径时按平台替换。
+#[derive(Debug, Clone, Serialize)]
+pub struct WalkEntry {
+    pub rel_path: String,
+    pub size: u64,
+}
+
+/// 递归遍历的最大深度（含根目录）。防止 symlink 环 + 服务端误导。
+const WALK_DEPTH_CAP: u32 = 32;
+
+/// 拼接远端路径：根 "/" 时特判，避免出现 "//foo"。复刻调用方的现有约定。
+fn join_remote(dir: &str, name: &str) -> String {
+    if dir == "/" {
+        format!("/{}", name)
+    } else {
+        format!("{}/{}", dir.trim_end_matches('/'), name)
+    }
 }
 
 pub struct SftpHandle {
@@ -112,9 +136,15 @@ impl SftpHandle {
         let mut result: Vec<RemoteEntry> = entries
             .map(|e| {
                 let name = e.file_name();
-                let is_dir = e.file_type().is_dir();
-                let size = e.metadata().size.unwrap_or(0);
-                RemoteEntry { name, is_dir, size }
+                let ft = e.file_type();
+                let meta = e.metadata();
+                RemoteEntry {
+                    name,
+                    is_dir: ft.is_dir(),
+                    is_symlink: ft.is_symlink(),
+                    size: meta.size.unwrap_or(0),
+                    mtime: meta.mtime.map(u64::from).unwrap_or(0),
+                }
             })
             .collect();
 
@@ -124,6 +154,69 @@ impl SftpHandle {
                 .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
 
+        Ok(result)
+    }
+
+    /// 递归列出 `root` 下所有可下载文件，返回 (相对路径, 大小) 列表。
+    ///
+    /// - BFS 遍历，避免深递归栈炸。
+    /// - Symlink-to-file：跟一次得到 size 后当文件下；symlink-to-dir：跳过（防环）。
+    /// - 深度超过 `WALK_DEPTH_CAP` 则整条命令失败（防递归病态）。
+    /// - 中间某个文件失败不在这里处理：每个文件最终独立调度为一条 Transfer，
+    ///   失败由 transfer 自己捕获。这里只负责"造单"。
+    pub async fn walk_files(&self, root: &str) -> AppResult<Vec<WalkEntry>> {
+        let root_norm = root.trim_end_matches('/').to_string();
+        let mut queue: VecDeque<(String, u32)> = VecDeque::new();
+        queue.push_back((root.to_string(), 0));
+        let mut result: Vec<WalkEntry> = Vec::new();
+
+        while let Some((dir, depth)) = queue.pop_front() {
+            if depth > WALK_DEPTH_CAP {
+                return Err(AppError::sftp(
+                    "sftp_tree_too_deep",
+                    json!({ "path": dir, "depth": depth, "limit": WALK_DEPTH_CAP }),
+                ));
+            }
+            let entries = self.sftp.read_dir(&dir).await.map_err(|e| {
+                AppError::sftp(
+                    "sftp_io_failed",
+                    json!({ "op": "read_dir", "path": dir, "err": e.to_string() }),
+                )
+            })?;
+            for e in entries {
+                let name = e.file_name();
+                let full = join_remote(&dir, &name);
+                let rel = full
+                    .strip_prefix(&root_norm)
+                    .unwrap_or(&full)
+                    .trim_start_matches('/')
+                    .to_string();
+                let ft = e.file_type();
+                if ft.is_dir() {
+                    queue.push_back((full, depth + 1));
+                } else if ft.is_file() {
+                    result.push(WalkEntry {
+                        rel_path: rel,
+                        size: e.metadata().size.unwrap_or(0),
+                    });
+                } else if ft.is_symlink() {
+                    // 跟一次：用 metadata（STAT，follow symlink）拿到目标信息
+                    if let Ok(meta) = self.sftp.metadata(&full).await {
+                        if meta.is_dir() {
+                            // skip symlink-to-dir，防环
+                        } else if !meta.file_type().is_other() {
+                            // file / regular / 其它非目录非 other：当文件处理
+                            result.push(WalkEntry {
+                                rel_path: rel,
+                                size: meta.size.unwrap_or(0),
+                            });
+                        }
+                    }
+                    // metadata 失败（broken symlink）静默跳过
+                }
+                // Other types (block/char/fifo) 跳过
+            }
+        }
         Ok(result)
     }
 
@@ -273,6 +366,12 @@ impl SftpHandle {
             .await
             .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "open", "err": e.to_string() })))?;
 
+        // 多选下载时 local_path 可能位于一个尚未创建的子目录里
+        // （e.g. <pick_dir>/<root>/<subdir>/file.txt）。
+        // 单文件下载时 parent 已存在，create_dir_all 是 no-op，无破坏。
+        if let Some(parent) = local_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
         let mut local_file = tokio::fs::File::create(local_path).await?;
 
         let mut transferred: u64 = 0;
@@ -309,6 +408,32 @@ impl SftpHandle {
         Ok(transferred)
     }
 
+    /// 远端 mkdir -p：确保 `path` 的所有祖先目录存在。
+    /// 热路径（dir 已存在）只多 1 次 metadata，无 create_dir 调用。
+    async fn mkdir_p(&self, path: &str) -> AppResult<()> {
+        if path.is_empty() || path == "/" {
+            return Ok(());
+        }
+        if self.sftp.metadata(path).await.is_ok() {
+            return Ok(()); // 整段已存在，热路径
+        }
+        // 从根逐级建：每段先 stat，不存在才 create_dir。
+        let mut current = String::new();
+        for part in path.split('/').filter(|s| !s.is_empty()) {
+            current.push('/');
+            current.push_str(part);
+            if self.sftp.metadata(&current).await.is_err() {
+                self.sftp.create_dir(&current).await.map_err(|e| {
+                    AppError::sftp(
+                        "sftp_io_failed",
+                        json!({ "op": "mkdir_p", "path": &current, "err": e.to_string() }),
+                    )
+                })?;
+            }
+        }
+        Ok(())
+    }
+
     /// Stream-upload a local file to a remote path, emitting progress events.
     pub async fn upload_streaming(
         &self,
@@ -324,6 +449,14 @@ impl SftpHandle {
         let total = local_meta.len();
 
         let mut local_file = tokio::fs::File::open(local_path).await?;
+
+        // 多选上传整个文件夹时 remote_path 可能位于尚未创建的远端子目录里。
+        // 单文件上传时 parent 已存在，mkdir_p 走热路径（1 次 metadata），无破坏。
+        if let Some((parent, _)) = remote_path.rsplit_once('/') {
+            if !parent.is_empty() {
+                self.mkdir_p(parent).await?;
+            }
+        }
 
         let mut remote_file = self
             .sftp

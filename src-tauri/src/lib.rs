@@ -147,6 +147,8 @@ pub fn run() {
             commands::sftp::sftp_connect_session,
             commands::sftp::sftp_home,
             commands::sftp::sftp_list,
+            commands::sftp::sftp_walk_remote_dir,
+            commands::sftp::walk_local_dir,
             commands::sftp::sftp_download,
             commands::sftp::sftp_upload,
             commands::sftp::sftp_mkdir,
@@ -160,6 +162,12 @@ pub fn run() {
             commands::sftp::sftp_pick_save_path,
             #[cfg(not(target_os = "android"))]
             commands::sftp::sftp_pick_open_path,
+            #[cfg(not(target_os = "android"))]
+            commands::sftp::sftp_pick_save_dir,
+            #[cfg(not(target_os = "android"))]
+            commands::sftp::sftp_pick_open_folder,
+            #[cfg(not(target_os = "android"))]
+            commands::sftp::sftp_pick_open_files,
             #[cfg(not(target_os = "android"))]
             commands::sftp::sftp_download_to,
             #[cfg(not(target_os = "android"))]

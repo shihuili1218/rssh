@@ -227,8 +227,6 @@
         const tab = app.activeTab();
         if (app.settingsActive()) {
             getCurrentWindow().setTitle("Settings");
-        } else if (app.downloadsActive()) {
-            getCurrentWindow().setTitle(t("downloads.title"));
         } else if (tab) {
             const termTitle = app.terminalTitle(tab.id);
             const title = termTitle ? `${tab.label} — ${termTitle}` : tab.label;
@@ -236,6 +234,7 @@
         } else {
             getCurrentWindow().setTitle("RSSH");
         }
+        // Transfers 浮窗不改窗口标题 —— 它只是 overlay，不接管路由。
     });
 
     let pinnedProfiles = $derived(
@@ -254,7 +253,7 @@
         && (aiActiveTab.type === "ssh" || aiActiveTab.type === "local")
         && !!aiSessionId
         && !app.settingsActive()
-        && !app.downloadsActive()
+        // Transfers 浮窗不影响 AI 面板可见性 —— 浮窗是 overlay
     );
     let xferBadge = $derived.by(() => {
         const n = transfers.activeCount();
@@ -266,7 +265,8 @@
     // sftpVisible 只控制 aside 视觉是否展开 + 哪个 pane 显示 —— 切到无 SFTP 的 tab 时实例不 unmount。
     let sftpTabs = $derived(app.tabsWithSftp());
     let sftpVisible = $derived(
-        !app.settingsActive() && !app.downloadsActive() && app.sftpOpen()
+        !app.settingsActive() && app.sftpOpen()
+        // Transfers 浮窗不藏 SFTP —— 浮窗是 overlay
     );
 
     /* ── AI 面板宽度：用户拖拽 → localStorage，覆盖响应式默认值。
@@ -423,9 +423,10 @@
     }
 
     function isActiveItem(item: NavItem): boolean {
-        if (item.kind === "tab") return !app.settingsActive() && !app.downloadsActive() && item.tab.id === app.activeTabId();
+        if (item.kind === "tab") return !app.settingsActive() && item.tab.id === app.activeTabId();
         if (item.kind === "settings") return app.settingsActive();
-        if (item.kind === "downloads") return app.downloadsActive();
+        // Downloads 是浮窗、不是路由。"active" 只跟真路由走（home / settings）。
+        // 浮窗是否打开靠 badge 体现，不抢侧栏 active 高亮。
         return false;
     }
 
@@ -506,7 +507,8 @@
     }
 
     function selectDownloads() {
-        app.openDownloads();
+        // 浮窗：每次点 sidebar 入口都 toggle —— 开了再点关，关了再点开
+        app.toggleDownloads();
         closeDrawer();
     }
 
@@ -856,15 +858,11 @@
                 <div class="pane visible">
                     <SettingsLayout/>
                 </div>
-            {:else if app.downloadsActive()}
-                <div class="pane visible">
-                    <DownloadsScreen/>
-                </div>
             {/if}
 
             {#each app.tabs() as tab (tab.id)}
                 <div class="pane"
-                     class:visible={!app.settingsActive() && !app.downloadsActive() && tab.id === app.activeTabId()}
+                     class:visible={!app.settingsActive() && tab.id === app.activeTabId()}
                      oncontextmenu={app.isMobile ? undefined : (e) => openCtxMenu(e, tab)}>
                     {#if tab.type === "home"}
                         <HomeScreen/>
@@ -897,6 +895,10 @@
         {/if}
     </div>
 </div>
+
+{#if app.downloadsActive()}
+    <DownloadsScreen/>
+{/if}
 
 <style>
     .shell {

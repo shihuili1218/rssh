@@ -41,6 +41,7 @@ const zh: Messages = {
   "downloads.remove": "移除",
   "downloads.clear_finished": "清除已完成",
   "downloads.status.running": "传输中",
+  "downloads.status.queued": "排队中",
   "downloads.status.done": "完成",
   "downloads.status.failed": "失败",
   "downloads.status.cancelled": "已取消",

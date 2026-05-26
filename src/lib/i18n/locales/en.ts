@@ -39,6 +39,7 @@ const en = {
   "downloads.remove": "Remove",
   "downloads.clear_finished": "Clear finished",
   "downloads.status.running": "Transferring",
+  "downloads.status.queued": "Queued",
   "downloads.status.done": "Done",
   "downloads.status.failed": "Failed",
   "downloads.status.cancelled": "Cancelled",

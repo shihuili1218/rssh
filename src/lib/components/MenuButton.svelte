@@ -114,6 +114,7 @@
     ondrop={onDrop}
     ondragend={onDragEnd}
     title={label}
+    data-transfers-trigger={item.kind === "downloads" ? "true" : undefined}
     style={horizontal && showActive && groupColor ? `--accent: ${groupColor}; --accent-soft: color-mix(in srgb, ${groupColor} 15%, transparent)` : null}
 >
     <span class="sb-icon-wrap">

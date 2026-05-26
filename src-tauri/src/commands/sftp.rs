@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -6,8 +8,11 @@ use tauri::State;
 
 use crate::error::{locked, AppError, AppResult};
 use crate::models::{Credential, CredentialType};
-use crate::ssh::sftp::{RemoteEntry, SftpHandle};
+use crate::ssh::sftp::{RemoteEntry, SftpHandle, WalkEntry};
 use crate::state::AppState;
+
+/// 本地递归遍历的最大深度。与远端 walker 同样保守。
+const LOCAL_WALK_DEPTH_CAP: u32 = 32;
 
 /// RAII：注册 cancel flag 并在 drop 时自动 unregister，无论 streaming 正常返回、
 /// 早 `?`、还是 panic。替代旧的手写 register/unregister 配对。
@@ -116,6 +121,78 @@ pub async fn sftp_list(
 ) -> AppResult<Vec<RemoteEntry>> {
     let h = get_sftp(&state, &sftp_id)?;
     h.list_dir(&path).await
+}
+
+/// 递归列出远端目录下所有文件（含 symlink-to-file，跳 symlink-to-dir）。
+/// 前端把展开后的扁平列表逐个排进下载队列；目录概念只在这一步存在。
+#[tauri::command]
+pub async fn sftp_walk_remote_dir(
+    state: State<'_, AppState>,
+    sftp_id: String,
+    remote_root: String,
+) -> AppResult<Vec<WalkEntry>> {
+    let h = get_sftp(&state, &sftp_id)?;
+    h.walk_files(&remote_root).await
+}
+
+/// 递归列出本地目录下所有文件，对称于 `sftp_walk_remote_dir`。
+/// rel_path 始终用 '/'，前端在重建本地物理路径时按平台替换。
+#[tauri::command]
+pub async fn walk_local_dir(local_root: String) -> AppResult<Vec<WalkEntry>> {
+    let root = PathBuf::from(&local_root);
+    let mut queue: VecDeque<(PathBuf, u32)> = VecDeque::new();
+    queue.push_back((root.clone(), 0));
+    let mut result: Vec<WalkEntry> = Vec::new();
+
+    while let Some((dir, depth)) = queue.pop_front() {
+        if depth > LOCAL_WALK_DEPTH_CAP {
+            return Err(AppError::other(
+                "local_tree_too_deep",
+                json!({
+                    "path": dir.display().to_string(),
+                    "depth": depth,
+                    "limit": LOCAL_WALK_DEPTH_CAP,
+                }),
+            ));
+        }
+        let mut rd = tokio::fs::read_dir(&dir).await?;
+        while let Some(entry) = rd.next_entry().await? {
+            let ft = entry.file_type().await?;
+            let path = entry.path();
+            if ft.is_dir() {
+                queue.push_back((path, depth + 1));
+            } else if ft.is_file() {
+                let meta = entry.metadata().await?;
+                result.push(WalkEntry {
+                    rel_path: rel_unix(&path, &root),
+                    size: meta.len(),
+                });
+            } else if ft.is_symlink() {
+                // follow 一次（std/tokio fs::metadata 默认 follow）
+                if let Ok(meta) = tokio::fs::metadata(&path).await {
+                    if meta.is_file() {
+                        result.push(WalkEntry {
+                            rel_path: rel_unix(&path, &root),
+                            size: meta.len(),
+                        });
+                    }
+                    // symlink-to-dir 跳过防环；broken symlink metadata 失败也跳过
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// 把 `full` 相对于 `root` 的部分转为 '/' 分隔字符串。
+/// Windows 上 std::path::Component 用 '\'，统一替换；前端 join 时再换回平台分隔符。
+fn rel_unix(full: &Path, root: &Path) -> String {
+    let stripped = full.strip_prefix(root).unwrap_or(full);
+    stripped
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 #[tauri::command]
@@ -232,6 +309,30 @@ pub async fn sftp_pick_save_path(default_name: String) -> AppResult<Option<Strin
 pub async fn sftp_pick_open_path() -> AppResult<Option<String>> {
     let handle = rfd::AsyncFileDialog::new().pick_file().await;
     Ok(handle.map(|h| h.path().display().to_string()))
+}
+
+/// 选保存目录（多选下载的目标根）。rfd 跨平台用同一个 folder dialog。
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn sftp_pick_save_dir() -> AppResult<Option<String>> {
+    let handle = rfd::AsyncFileDialog::new().pick_folder().await;
+    Ok(handle.map(|h| h.path().display().to_string()))
+}
+
+/// 选要上传的目录（递归上传的源根）。
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn sftp_pick_open_folder() -> AppResult<Option<String>> {
+    let handle = rfd::AsyncFileDialog::new().pick_folder().await;
+    Ok(handle.map(|h| h.path().display().to_string()))
+}
+
+/// 多选上传的源文件（一次选 N 个）。rfd 的 pick_files 跨平台支持 multi。
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn sftp_pick_open_files() -> AppResult<Option<Vec<String>>> {
+    let handles = rfd::AsyncFileDialog::new().pick_files().await;
+    Ok(handles.map(|hs| hs.into_iter().map(|h| h.path().display().to_string()).collect()))
 }
 
 /// Stream-download to a caller-supplied local path. transfer_id is used as the
