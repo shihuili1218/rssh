@@ -208,6 +208,9 @@ input[type="checkbox"]:checked, input[type="radio"]:checked {
   background: var(--accent);
   box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 40%, transparent);
   border-color: var(--accent);
+  transform: scale(1.1);
+  outline: 3px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  outline-offset: 1px;
 }
 input[type="checkbox"]:checked::after {
   content: "";

@@ -125,7 +125,7 @@
 }
 :root[data-shape="neumorphism"] input[type="checkbox"]:checked,
 :root[data-shape="neumorphism"] input[type="radio"]:checked {
-    background: var(--surface);
+    background: var(--accent);
     box-shadow:
         -5px -3px 5px 0px var(--shadow-light),
         5px 3px 8px 0px var(--shadow-dark);
