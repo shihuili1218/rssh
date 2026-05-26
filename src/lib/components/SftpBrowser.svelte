@@ -277,28 +277,12 @@
         }
     }
 
-    function toggleTransfers() {
-        app.toggleDownloads();
-    }
-
-    /** 后台有 transfer 在跑或排队时，图标右上角点一个小绿点 —— 用户从 SFTP 离开后仍知道有活动。 */
-    const xferActive = $derived(transfers.activeCount() > 0);
 </script>
 
 <div class="sftp">
     <div class="toolbar">
         <span class="title">SFTP</span>
         <span class="grow"></span>
-        <button type="button"
-                class="btn-icon transfers-icon"
-                class:active={xferActive}
-                data-transfers-trigger="true"
-                onclick={toggleTransfers}
-                aria-label={t("downloads.title")}
-                title={t("downloads.title")}>
-            ⇅
-            {#if xferActive}<span class="transfers-dot" aria-hidden="true"></span>{/if}
-        </button>
         <button type="button" class="btn-icon" onclick={() => app.closeSftp()} aria-label={t("common.close")} title={t("common.close")}>×</button>
     </div>
     <div class="header">
@@ -622,19 +606,4 @@
         padding: 24px;
     }
 
-    /* 上下双箭头图标 + 活动点：transfer 还在跑/排队时点亮，把"后台有事"暴露到 toolbar */
-    .transfers-icon {
-        position: relative;
-    }
-    .transfers-icon.active { color: var(--accent); }
-    .transfers-dot {
-        position: absolute;
-        top: 2px;
-        right: 2px;
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: var(--success);
-        box-shadow: 0 0 0 2px var(--bg);
-    }
 </style>
