@@ -115,6 +115,10 @@ async function runTransfer(id: string): Promise<void> {
       cur.error = errMsg(e);
       cur.finishedAt = Date.now();
     }
+    // This early-return bypasses the try/finally below, so we must promote
+    // the next queued transfer here — otherwise this slot stays "taken" by
+    // a failed transfer and the queue stalls until something else finishes.
+    promoteNextQueued();
     return;
   }
   try {

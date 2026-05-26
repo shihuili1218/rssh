@@ -34,8 +34,10 @@ pub struct WalkEntry {
     pub size: u64,
 }
 
-/// Maximum recursion depth (including the root directory). Guards against
-/// symlink cycles and pathological server-side trees.
+/// Maximum recursion depth, counting the root as depth 0. With CAP = 32 the
+/// walker accepts paths up to 32 segments deep (root through depth 31) and
+/// fails the whole command at depth 32 — guards against symlink cycles and
+/// pathological server-side trees.
 const WALK_DEPTH_CAP: u32 = 32;
 
 /// Join a remote path segment. Special-cases dir == "/" so the result never
@@ -177,7 +179,7 @@ impl SftpHandle {
         let mut result: Vec<WalkEntry> = Vec::new();
 
         while let Some((dir, depth)) = queue.pop_front() {
-            if depth > WALK_DEPTH_CAP {
+            if depth >= WALK_DEPTH_CAP {
                 return Err(AppError::sftp(
                     "sftp_tree_too_deep",
                     json!({ "path": dir, "depth": depth, "limit": WALK_DEPTH_CAP }),

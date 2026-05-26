@@ -148,7 +148,7 @@ pub async fn walk_local_dir(local_root: String) -> AppResult<Vec<WalkEntry>> {
     let mut result: Vec<WalkEntry> = Vec::new();
 
     while let Some((dir, depth)) = queue.pop_front() {
-        if depth > LOCAL_WALK_DEPTH_CAP {
+        if depth >= LOCAL_WALK_DEPTH_CAP {
             return Err(AppError::other(
                 "local_tree_too_deep",
                 json!({
