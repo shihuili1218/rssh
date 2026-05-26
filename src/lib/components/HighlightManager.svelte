@@ -1,71 +1,176 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import * as app from "../stores/app.svelte.ts";
   import type { HighlightRule } from "../stores/app.svelte.ts";
+  import * as app from "../stores/app.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
   import { t, errMsg } from "../i18n/index.svelte.ts";
 
   let items = $state<HighlightRule[]>([]);
-  let newKw = $state("");
-  let newColor = $state("#FF6B6B");
+  let adding = $state(false);
+  // Edit identity = keyword as currently stored on the backend (rename uses old → new).
+  let editKw = $state<string | null>(null);
+
+  // Form fields
+  let formKw = $state("");
+  let formColor = $state("#FF6B6B");
+  let formEnabled = $state(true);
 
   onMount(refresh);
-  async function refresh() { items = await app.loadHighlights(); }
 
-  async function add() {
-    if (!newKw.trim()) return;
+  async function refresh() {
+    items = await app.loadHighlights();
+  }
+
+  function startAdd() {
+    adding = true;
+    editKw = null;
+    formKw = "";
+    formColor = "#FF6B6B";
+    formEnabled = true;
+  }
+
+  function startEdit(h: HighlightRule) {
+    adding = false;
+    editKw = h.keyword;
+    formKw = h.keyword;
+    formColor = h.color;
+    formEnabled = h.enabled;
+  }
+
+  function cancelForm() {
+    adding = false;
+    editKw = null;
+  }
+
+  async function saveNew() {
+    const kw = formKw.trim();
+    if (!kw) return;
     try {
-      await invoke("add_highlight", { rule: { keyword: newKw.trim(), color: newColor, enabled: true } });
-      newKw = "";
+      await invoke("add_highlight", { rule: { keyword: kw, color: formColor, enabled: formEnabled } });
+      adding = false;
       await refresh();
     } catch (e: any) { toast.error(`${t("toast.error.add")}: ${errMsg(e)}`); }
   }
 
-  async function remove(kw: string) {
-    await invoke("remove_highlight", { keyword: kw });
-    await refresh();
+  async function saveEdit() {
+    if (editKw === null) return;
+    const kw = formKw.trim();
+    if (!kw) return;
+    try {
+      await invoke("update_highlight", {
+        oldKeyword: editKw,
+        rule: { keyword: kw, color: formColor, enabled: formEnabled },
+      });
+      editKw = null;
+      await refresh();
+    } catch (e: any) { toast.error(`${t("toast.error.save")}: ${errMsg(e)}`); }
+  }
+
+  async function remove(keyword: string) {
+    try {
+      await invoke("remove_highlight", { keyword });
+      if (editKw === keyword) editKw = null;
+      await refresh();
+    } catch (e: any) { toast.error(`${t("toast.error.delete")}: ${errMsg(e)}`); }
   }
 
   async function resetDefaults() {
     try {
       await invoke("reset_highlights");
+      cancelForm();
       await refresh();
     } catch (e: any) { toast.error(`${t("toast.error.reset")}: ${errMsg(e)}`); }
   }
 </script>
 
 <div class="page">
-  <div class="add-card neu-raised">
-    <input type="text" bind:value={newKw} placeholder="Enter keyword..."
-      onkeydown={(e) => { if (e.key === "Enter") add(); }} />
-    <div class="color-row">
-      <input type="color" bind:value={newColor} />
-      <span class="color-hex">{newColor}</span>
-    </div>
-    <button class="btn btn-accent btn-sm" onclick={add} disabled={!newKw.trim()}>Add</button>
+  <div class="toolbar">
+    <button class="btn btn-sm" onclick={resetDefaults}>Reset to Defaults</button>
+    <button class="btn btn-accent btn-sm" onclick={startAdd}>+ New Highlight</button>
   </div>
 
-  <div class="rules-list">
-    {#each items as h (h.keyword)}
-      <div class="rule-row surface-raised-sm">
-        <span class="rule-dot" style="background: {h.color};"></span>
-        <span class="rule-kw">{h.keyword}</span>
-        <span class="rule-color">{h.color}</span>
-        <button class="rule-del" onclick={() => remove(h.keyword)}>&times;</button>
+  {#if adding}
+    <div class="card inline-form">
+      <label>Keyword</label>
+      <input type="text" bind:value={formKw} placeholder="ERROR / WARN / your pattern"
+        onkeydown={(e) => { if (e.key === "Enter") saveNew(); }} />
+      <label>Color</label>
+      <div class="color-row">
+        <input type="color" bind:value={formColor} />
+        <span class="color-hex">{formColor}</span>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-accent btn-sm" onclick={saveNew} disabled={!formKw.trim()}>Save</button>
+        <button class="btn btn-sm" onclick={cancelForm}>Cancel</button>
+      </div>
+    </div>
+  {/if}
+
+  {#each items as h (h.keyword)}
+    {#if editKw === h.keyword}
+      <div class="card inline-form">
+        <label>Keyword</label>
+        <input type="text" bind:value={formKw}
+          onkeydown={(e) => { if (e.key === "Enter") saveEdit(); }} />
+        <label>Color</label>
+        <div class="color-row">
+          <input type="color" bind:value={formColor} />
+          <span class="color-hex">{formColor}</span>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-accent btn-sm" onclick={saveEdit} disabled={!formKw.trim()}>Save</button>
+          <button class="btn btn-sm" onclick={cancelForm}>Cancel</button>
+        </div>
       </div>
     {:else}
+      <div class="card item-row">
+        <div class="item-info">
+          <span class="color-swatch" style="background: {h.color}"></span>
+          <div>
+            <div class="item-name">{h.keyword}</div>
+            <div class="item-sub">{h.color}</div>
+          </div>
+        </div>
+        <div class="item-actions">
+          <button class="btn btn-sm" onclick={() => startEdit(h)}>Edit</button>
+          <button class="btn btn-sm btn-danger" onclick={() => remove(h.keyword)}>Delete</button>
+        </div>
+      </div>
+    {/if}
+  {:else}
+    {#if !adding}
       <p class="empty">No highlight rules</p>
-    {/each}
-  </div>
-
-  <button class="btn btn-sm reset-btn" onclick={resetDefaults}>Reset to Defaults</button>
+    {/if}
+  {/each}
 </div>
 
 <style>
-  .page { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+  .page { padding: 24px; }
+  .toolbar { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 16px; }
+  .item-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    gap: 12px;
+  }
+  .item-info { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+  .item-name { font-weight: 600; font-size: 14px; font-family: monospace; }
+  .item-sub { font-size: 12px; color: var(--text-sub); font-family: monospace; }
+  .item-actions { display: flex; gap: 10px; flex-shrink: 0; }
+  .color-swatch {
+    width: 20px; height: 20px; border-radius: 4px; flex-shrink: 0;
+    border: 1px solid var(--divider);
+  }
 
-  .add-card { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .inline-form {
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 14px; margin-bottom: 10px;
+  }
+  .inline-form input[type="text"] {
+    width: 100%; box-sizing: border-box; font: inherit; font-size: 13px;
+  }
   .color-row { display: flex; align-items: center; gap: 10px; }
   .color-row input[type="color"] {
     width: 48px; height: 32px; padding: 2px;
@@ -73,24 +178,7 @@
     cursor: pointer; box-shadow: none;
   }
   .color-hex { font-size: 12px; font-family: monospace; color: var(--text-dim); }
-
-  .rules-list { display: flex; flex-direction: column; gap: 12px; }
-  .rule-row {
-    display: flex; align-items: center; gap: calc(10px * var(--density));
-    padding: calc(10px * var(--density)) calc(14px * var(--density));
-    background: var(--bg);
-    box-shadow: var(--raised-sm);
-    border-radius: var(--radius-sm);
-  }
-  .rule-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
-  .rule-kw { font-weight: 600; font-family: monospace; font-size: 13px; flex: 1; }
-  .rule-color { font-size: 11px; color: var(--text-dim); }
-  .rule-del {
-    background: none; border: none; font-size: 18px; color: var(--text-dim);
-    cursor: pointer; padding: 0 4px; transition: color 0.1s;
-  }
-  .rule-del:hover { color: var(--error); }
+  .form-actions { display: flex; gap: 10px; margin-top: 4px; }
 
   .empty { text-align: center; color: var(--text-dim); padding: 32px; }
-  .reset-btn { align-self: flex-start; }
 </style>

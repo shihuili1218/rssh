@@ -54,6 +54,7 @@ const zh: Messages = {
   "tab.context.copy": "复制",
   "tab.context.paste": "粘贴",
   "tab.context.copy_utc": "复制为 UTC",
+  "tab.context.add_to_snippets": "添加到命令片段",
 
   // ── 设置菜单 ──
   "settings.title": "设置",

@@ -42,6 +42,15 @@ pub fn remove_highlight(state: State<AppState>, keyword: String) -> Result<(), A
 }
 
 #[tauri::command]
+pub fn update_highlight(
+    state: State<AppState>,
+    old_keyword: String,
+    rule: HighlightRule,
+) -> Result<(), AppError> {
+    crate::db::highlight::update(&state.db, &old_keyword, &rule)
+}
+
+#[tauri::command]
 pub fn load_snippets(state: State<AppState>) -> Result<Vec<Snippet>, AppError> {
     crate::db::snippet::load(&state.data_dir)
 }

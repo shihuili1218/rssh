@@ -112,6 +112,7 @@ pub fn run() {
             commands::settings::list_highlights,
             commands::settings::add_highlight,
             commands::settings::remove_highlight,
+            commands::settings::update_highlight,
             commands::settings::load_snippets,
             commands::settings::save_snippets,
             commands::settings::reset_highlights,

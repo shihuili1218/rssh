@@ -52,6 +52,7 @@ const en = {
   "tab.context.copy": "Copy",
   "tab.context.paste": "Paste",
   "tab.context.copy_utc": "UTC",
+  "tab.context.add_to_snippets": "Add to snippets",
 
   // ── Settings menu ──
   "settings.title": "Settings",

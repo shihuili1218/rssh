@@ -561,9 +561,10 @@
         const isSsh = tab.type === "ssh";
         const sections: CtxMenuItem[][] = [];
 
-        // Copy / Paste (+ UTC if selection is a timestamp).
+        // Copy / Paste (+ UTC if selection is a timestamp) / Add-to-Snippets.
         if (isTerminal) {
             const selection = app.terminalGetSelection(tab.id);
+            const trimmed = selection?.trim() ?? "";
             const ts = selection ? tryParseTimestamp(selection) : null;
             const copyPaste: CtxMenuItem[] = [
                 {
@@ -583,6 +584,22 @@
                     onClick: () => { navigator.clipboard.writeText(utc).catch(() => {}); },
                 });
             }
+            // 把选中文本存为命令片段：name = 前 10 字符，command = 整段。
+            // 全空白选择置灰 —— 存一个 10 个空格名字的片段没意义。
+            copyPaste.push({
+                label: t("tab.context.add_to_snippets"),
+                disabled: !trimmed,
+                onClick: async () => {
+                    if (!trimmed) return;
+                    try {
+                        const all = await app.loadSnippets();
+                        all.push({ name: trimmed.slice(0, 10), command: trimmed });
+                        await invoke("save_snippets", { snippets: all });
+                    } catch (e) {
+                        console.error("save snippet failed:", e);
+                    }
+                },
+            });
             sections.push(copyPaste);
         }
 
