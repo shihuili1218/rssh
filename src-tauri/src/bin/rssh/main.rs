@@ -147,9 +147,12 @@ fn main() {
         return;
     }
 
-    let data_dir = rssh_lib::db::data_dir();
+    let data_dir = rssh_lib::db::data_dir().unwrap_or_else(|e| {
+        eprintln!("error: {}", format_lib_error(&e));
+        std::process::exit(1);
+    });
     let db = Arc::new(Db::open(&data_dir).unwrap_or_else(|e| {
-        eprintln!("Failed to open database: {e}");
+        eprintln!("error: {}", format_lib_error(&e));
         std::process::exit(1);
     }));
     let conn = CliCtx {

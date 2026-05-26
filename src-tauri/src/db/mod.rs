@@ -14,7 +14,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use rusqlite::Connection;
 
-use crate::error::{locked, AppResult};
+use crate::error::{locked, AppError, AppResult};
 
 /// 数据库句柄。封装 Mutex<Connection>，对外只暴露领域方法（在子模块里），
 /// `lock()` 仅对 `crate::db` 内部可见，禁止泄漏到 command 层。
@@ -90,11 +90,24 @@ impl Db {
     }
 }
 
-/// 数据目录：桌面用 ~/.rssh，Android 用 app_data_dir
-pub fn data_dir() -> PathBuf {
-    let mut p = dirs::home_dir().expect("home directory unavailable");
+/// Data dir: desktop uses `~/.rssh`, Android uses `app_data_dir` (handled
+/// by the caller via `tauri::path::PathResolver`).
+///
+/// Returns an error (rather than panicking) when `$HOME` is unset — common
+/// in `systemd` units without `User=`, Docker `USER nobody`, or `scratch`
+/// containers. The old `.expect("...")` aborted the process before the
+/// CLI / GUI could surface a useful message.
+pub fn data_dir() -> AppResult<PathBuf> {
+    let mut p = dirs::home_dir().ok_or_else(|| {
+        AppError::config(
+            "no_home_dir",
+            serde_json::json!({
+                "hint": "HOME env var is unset; rssh cannot determine where to place ~/.rssh"
+            }),
+        )
+    })?;
     p.push(".rssh");
-    p
+    Ok(p)
 }
 
 #[cfg(test)]

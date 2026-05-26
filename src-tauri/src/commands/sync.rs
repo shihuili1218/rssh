@@ -1,37 +1,60 @@
 use serde_json::json;
 use tauri::State;
 
+use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::models::Credential;
-use crate::secret::{cred_secret_key, setting_key};
+use crate::secret::{cred_secret_key, setting_key, SecretStore};
 use crate::state::AppState;
+use std::sync::Arc;
 
-// ---------------------------------------------------------------------------
-// 取凭证 secret 用于导出/同步 —— DB 不存 secret，统一走 SecretStore
-// ---------------------------------------------------------------------------
+/// Run a blocking DB closure off the tokio async runtime. The four async
+/// GitHub sync commands all wrap a multi-statement DB step (the worst is
+/// `replace_import`, which runs a full BEGIN IMMEDIATE / clear / re-insert
+/// transaction — can hold the SQLite writer for tens to hundreds of ms).
+/// Without spawn_blocking, the async runtime worker that handled
+/// `github_push` / `github_pull` stalls for that whole window and any
+/// other tab's async command on the same worker stalls with it.
+///
+/// `ssh_connect` and `forward_start` also touch the DB inside an `async fn`,
+/// but each call is a fast SELECT (<1 ms) and the total per-connect run is
+/// ~10 ms — well below the threshold where wrapping pays for the closure
+/// boilerplate. Leave them alone; this helper is targeted at sync's heavy paths.
+async fn run_db_blocking<F, T>(state: &State<'_, AppState>, f: F) -> AppResult<T>
+where
+    F: FnOnce(Arc<Db>, Arc<dyn SecretStore>) -> AppResult<T> + Send + 'static,
+    T: Send + 'static,
+{
+    let db = state.db.clone();
+    let ss = state.secret_store.clone();
+    tauri::async_runtime::spawn_blocking(move || f(db, ss))
+        .await
+        .map_err(|e| AppError::other("blocking_join_failed", json!({ "err": e.to_string() })))?
+}
 
-/// 列出所有 credentials 并把 SecretStore 中的 secret 灌进去。
-fn list_credentials_with_secrets(state: &State<'_, AppState>) -> AppResult<Vec<Credential>> {
-    let mut creds = crate::db::credential::list(&state.db)?;
+fn collect_credentials_with_secrets(db: &Db, ss: &dyn SecretStore) -> AppResult<Vec<Credential>> {
+    let mut creds = crate::db::credential::list(db)?;
     for c in creds.iter_mut() {
-        c.secret = state.secret_store.get(&cred_secret_key(&c.id))?;
+        c.secret = ss.get(&cred_secret_key(&c.id))?;
     }
     Ok(creds)
 }
 
 // ---------------------------------------------------------------------------
-// 本地导入导出（全平台）
+// Local import/export (cross-platform)
 // ---------------------------------------------------------------------------
 
-/// 构造完整 export payload（profiles + credentials + forwards + groups + skills）。
-/// 抽出为私有 helper：`export_config`（CLI / 字符串场景）和 `export_config_to_file`
-/// （GUI / 文件场景）共用，避免两份不一样的 JSON schema 漂移。
-fn build_export_json(state: &State<'_, AppState>) -> AppResult<String> {
-    let profiles = crate::db::profile::list(&state.db)?;
-    let credentials = list_credentials_with_secrets(state)?;
-    let forwards = crate::db::forward::list(&state.db)?;
-    let groups = crate::db::group::list(&state.db)?;
-    let skills = crate::ai::skills::list_user(&state.db)?;
+/// Build the full export payload (profiles + credentials + forwards + groups
+/// + skills). Used by both `export_config` (sync CLI/string path) and
+/// `export_config_to_file` (async GUI path via spawn_blocking) so the JSON
+/// shape can't drift between them. Takes `&Db` / `&dyn SecretStore` instead
+/// of `State` so it works in both contexts.
+fn build_export_json_blocking(db: &Db, ss: &dyn SecretStore) -> AppResult<String> {
+    let profiles = crate::db::profile::list(db)?;
+    let credentials = collect_credentials_with_secrets(db, ss)?;
+    let forwards = crate::db::forward::list(db)?;
+    let groups = crate::db::group::list(db)?;
+    let skills = crate::ai::skills::list_user(db)?;
     serde_json::to_string_pretty(&serde_json::json!({
         "version": 1,
         "exported_at": chrono::Utc::now().to_rfc3339(),
@@ -46,11 +69,16 @@ fn build_export_json(state: &State<'_, AppState>) -> AppResult<String> {
 
 #[tauri::command]
 pub fn export_config(state: State<'_, AppState>) -> AppResult<String> {
-    build_export_json(&state)
+    // Sync command — Tauri runs this on the blocking pool already.
+    build_export_json_blocking(&state.db, state.secret_store.as_ref())
 }
 
-/// 文件 import：增量合并语义。本地已有数据保留；同 id 的实体被覆盖；
-/// 解析或写入失败逐项收集，不影响其他条目。
+/// File import: incremental merge. Local rows survive; same-id rows are
+/// overwritten; parse/write failures are collected per row, not aborting
+/// the whole import.
+///
+/// Sync command — Tauri runs this on the blocking pool, so the multi-table
+/// transaction inside `merge_import` doesn't stall the async runtime.
 #[tauri::command]
 pub fn import_config(state: State<'_, AppState>, json: String) -> AppResult<()> {
     let data: serde_json::Value = serde_json::from_str(&json)
@@ -66,7 +94,11 @@ pub fn import_config(state: State<'_, AppState>, json: String) -> AppResult<()> 
 pub async fn export_config_to_file(
     state: State<'_, AppState>,
 ) -> AppResult<Option<String>> {
-    let payload = build_export_json(&state)?;
+    // Build payload on the blocking pool — same rationale as the GitHub
+    // commands. After this point everything is either user-driven IO
+    // (the native file dialog) or a single file write.
+    let payload =
+        run_db_blocking(&state, |db, ss| build_export_json_blocking(&db, ss.as_ref())).await?;
 
     let default_dir = dirs::document_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     let default_name = format!(
@@ -102,11 +134,19 @@ pub async fn import_config_from_file(
 
     let Some(handle) = pick else { return Ok(None) };
     let path = handle.path().to_path_buf();
-    let json = std::fs::read_to_string(&path)?;
-    let data: serde_json::Value = serde_json::from_str(&json)
-        .map_err(|e| AppError::config("json_parse_failed", json!({ "err": e.to_string() })))?;
-    crate::sync::config::merge_import(&state.db, state.secret_store.as_ref(), &data)?;
-    Ok(Some(path.to_string_lossy().into_owned()))
+    let path_for_return = path.clone();
+
+    // merge_import walks profiles + credentials + forwards + groups + skills
+    // and writes each through a transaction — keep that off the async worker.
+    run_db_blocking(&state, move |db, ss| {
+        let json = std::fs::read_to_string(&path)?;
+        let data: serde_json::Value = serde_json::from_str(&json)
+            .map_err(|e| AppError::config("json_parse_failed", json!({ "err": e.to_string() })))?;
+        crate::sync::config::merge_import(&db, ss.as_ref(), &data)
+    })
+    .await?;
+
+    Ok(Some(path_for_return.to_string_lossy().into_owned()))
 }
 
 // ---------------------------------------------------------------------------
@@ -117,37 +157,45 @@ pub async fn import_config_from_file(
 pub async fn github_push(state: State<'_, AppState>, password: String) -> AppResult<()> {
     use crate::sync::github::GitHubSync;
 
-    let token = state
-        .secret_store
-        .get(&setting_key("github_token"))?
-        .ok_or_else(|| AppError::config("github_token_missing", json!({})))?;
-    let repo = crate::db::settings::get(&state.db, "github_repo")?
-        .ok_or_else(|| AppError::config("github_repo_missing", json!({})))?;
-    let branch = crate::db::settings::get(&state.db, "github_branch")?.unwrap_or("main".into());
+    // Build the full JSON payload off the async runtime — list_*, secret-store
+    // lookups, and serde all run in the blocking pool. See `run_db_blocking`
+    // doc for why this matters for sync but not for ssh_connect.
+    let (token, repo, branch, json) = run_db_blocking(&state, move |db, ss| {
+        let token = ss
+            .get(&setting_key("github_token"))?
+            .ok_or_else(|| AppError::config("github_token_missing", json!({})))?;
+        let repo = crate::db::settings::get(&db, "github_repo")?
+            .ok_or_else(|| AppError::config("github_repo_missing", json!({})))?;
+        let branch =
+            crate::db::settings::get(&db, "github_branch")?.unwrap_or("main".into());
 
-    let profiles = crate::db::profile::list(&state.db)?;
-    let mut credentials = list_credentials_with_secrets(&state)?;
-    let forwards = crate::db::forward::list(&state.db)?;
-    let groups = crate::db::group::list(&state.db)?;
-    let skills = crate::ai::skills::list_user(&state.db)?;
+        let profiles = crate::db::profile::list(&db)?;
+        let mut credentials = collect_credentials_with_secrets(&db, ss.as_ref())?;
+        let forwards = crate::db::forward::list(&db)?;
+        let groups = crate::db::group::list(&db)?;
+        let skills = crate::ai::skills::list_user(&db)?;
 
-    // 尊重 save_to_remote：不同步的凭证清空 secret
-    for c in credentials.iter_mut() {
-        if !c.save_to_remote {
-            c.secret = None;
+        // Honor save_to_remote: scrub secret on credentials marked local-only.
+        for c in credentials.iter_mut() {
+            if !c.save_to_remote {
+                c.secret = None;
+            }
         }
-    }
 
-    let json = serde_json::to_string_pretty(&serde_json::json!({
-        "version": 1,
-        "exported_at": chrono::Utc::now().to_rfc3339(),
-        "profiles": profiles,
-        "credentials": credentials,
-        "forwards": forwards,
-        "groups": groups,
-        "skills": skills,
-    }))
-    .map_err(|e| AppError::other("serde_failed", json!({ "err": e.to_string() })))?;
+        let payload = serde_json::to_string_pretty(&serde_json::json!({
+            "version": 1,
+            "exported_at": chrono::Utc::now().to_rfc3339(),
+            "profiles": profiles,
+            "credentials": credentials,
+            "forwards": forwards,
+            "groups": groups,
+            "skills": skills,
+        }))
+        .map_err(|e| AppError::other("serde_failed", json!({ "err": e.to_string() })))?;
+
+        Ok((token, repo, branch, payload))
+    })
+    .await?;
 
     let encrypted = crate::crypto::encrypt(&json, &password)?;
     let sync = GitHubSync::from_settings(&token, &repo, &branch)?;
@@ -158,20 +206,32 @@ pub async fn github_push(state: State<'_, AppState>, password: String) -> AppRes
 pub async fn github_pull(state: State<'_, AppState>, password: String) -> AppResult<()> {
     use crate::sync::github::GitHubSync;
 
-    let token = state
-        .secret_store
-        .get(&setting_key("github_token"))?
-        .ok_or_else(|| AppError::config("github_token_missing", json!({})))?;
-    let repo = crate::db::settings::get(&state.db, "github_repo")?
-        .ok_or_else(|| AppError::config("github_repo_missing", json!({})))?;
-    let branch = crate::db::settings::get(&state.db, "github_branch")?.unwrap_or("main".into());
+    // Settings reads are cheap; group them with the network-prep step.
+    // The decrypt + replace_import block — `replace_import` runs a
+    // BEGIN IMMEDIATE transaction touching every config table — is the
+    // expensive part and goes to spawn_blocking below.
+    let (token, repo, branch) = run_db_blocking(&state, |db, ss| {
+        let token = ss
+            .get(&setting_key("github_token"))?
+            .ok_or_else(|| AppError::config("github_token_missing", json!({})))?;
+        let repo = crate::db::settings::get(&db, "github_repo")?
+            .ok_or_else(|| AppError::config("github_repo_missing", json!({})))?;
+        let branch =
+            crate::db::settings::get(&db, "github_branch")?.unwrap_or("main".into());
+        Ok((token, repo, branch))
+    })
+    .await?;
 
     let sync = GitHubSync::from_settings(&token, &repo, &branch)?;
     let encrypted = sync.pull().await?;
-    let json = crate::crypto::decrypt(&encrypted, &password)?;
 
-    let data: serde_json::Value = serde_json::from_str(&json)
-        .map_err(|e| AppError::config("json_parse_failed", json!({ "err": e.to_string() })))?;
-    // pull = 全量替换语义：clear+insert 包在事务里，任何失败整体回滚。
-    crate::sync::config::replace_import(&state.db, state.secret_store.as_ref(), &data)
+    // decrypt + JSON parse + full-replace transaction: all blocking work.
+    let password = password;
+    run_db_blocking(&state, move |db, ss| {
+        let json = crate::crypto::decrypt(&encrypted, &password)?;
+        let data: serde_json::Value = serde_json::from_str(&json)
+            .map_err(|e| AppError::config("json_parse_failed", json!({ "err": e.to_string() })))?;
+        crate::sync::config::replace_import(&db, ss.as_ref(), &data)
+    })
+    .await
 }

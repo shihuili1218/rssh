@@ -39,7 +39,7 @@ pub fn run() {
             #[cfg(target_os = "android")]
             let data_dir = app.path().app_data_dir()?;
             #[cfg(not(target_os = "android"))]
-            let data_dir = db::data_dir();
+            let data_dir = db::data_dir()?;
             let db = Arc::new(db::Db::open(&data_dir)?);
             // secret::open 可能失败：sticky backend 标记 keyring 但 keychain 现在
             // 拿不到（系统 keychain 损坏 / D-Bus 挂等）→ 硬 fail 启动。silently

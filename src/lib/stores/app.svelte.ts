@@ -106,6 +106,25 @@ function loadStringArray(key: string): string[] {
     }
 }
 
+/**
+ * Best-effort localStorage write. Symmetric with `loadStringArray` on the
+ * read side. Swallows QuotaExceededError (Safari private mode caps), SecurityError
+ * (enterprise GPO disables storage), and any other DOMException. The state in
+ * memory is already updated by the caller — failing to persist degrades to
+ * "preference resets on next reload", not "UI throws and Promise chain breaks".
+ *
+ * Use for preference-style writes where a lost setting is annoying but not
+ * destructive. NOT for anything where losing the write means losing data.
+ */
+function safeSetItem(key: string, value: string) {
+    try {
+        localStorage.setItem(key, value);
+    } catch (e) {
+        // One warn per failure is enough; don't spam if quota stays exceeded.
+        console.warn(`[app] localStorage setItem(${key}) failed:`, e);
+    }
+}
+
 let _pinnedProfileIds = $state<string[]>(loadStringArray("pinned_profiles"));
 
 /* Terminal title (from remote shell OSC sequence), separate from tab label */
@@ -219,10 +238,10 @@ export function sidebarPosition(): SidebarPosition {
 export function setSidebarPosition(pos: SidebarPosition) {
   if (isMobile) {
     _sidebarPosMobile = pos;
-    localStorage.setItem(_SB_KEY_MOBILE, pos);
+    safeSetItem(_SB_KEY_MOBILE, pos);
   } else {
     _sidebarPosDesktop = pos;
-    localStorage.setItem(_SB_KEY_DESKTOP, pos);
+    safeSetItem(_SB_KEY_DESKTOP, pos);
   }
 }
 
@@ -399,7 +418,7 @@ export function closeSftp() {
 }
 
 /* ─── Pinned profiles ─── */
-function savePins() { localStorage.setItem("pinned_profiles", JSON.stringify(_pinnedProfileIds)); }
+function savePins() { safeSetItem("pinned_profiles", JSON.stringify(_pinnedProfileIds)); }
 export function pinProfile(id: string) {
   if (!_pinnedProfileIds.includes(id)) { _pinnedProfileIds.push(id); savePins(); }
 }

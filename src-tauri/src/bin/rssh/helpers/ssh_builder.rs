@@ -72,20 +72,53 @@ pub fn build_ssh_command(
     Ok(key_files)
 }
 
-/// 把 PEM 写到临时文件并设 0600。返回 NamedTempFile 必须由 caller 持有到
-/// ssh 退出（drop = 删文件）。
+/// Write a PEM to a temp file with 0600 perms (Unix) in a user-private dir.
+/// Caller must hold the returned `NamedTempFile` until ssh exits — drop =
+/// delete.
+///
+/// Two changes vs. the obvious `NamedTempFile::new()` + chmod sequence:
+///
+/// 1. **Atomic 0600**: `Builder::permissions(0o600)` passes the mode to the
+///    OS `open(2)` call, so the file is born 0600. The old "create then
+///    chmod" leaked a window where the PEM bytes existed on disk at 0644
+///    (default umask). Short window, but reproducible on every `rssh open`,
+///    and `/tmp` is world-traversable on shared hosts / CI runners.
+///
+/// 2. **User-private dir** instead of `/tmp`: even with 0600 on the file,
+///    the directory listing on `/tmp` exposes filenames; we also can't
+///    enumerate other users' temp keys from a 0700 dir. Mirrors the
+///    `secret/master_key.rs` "atomic create with mode" pattern.
 pub fn write_temp_key(pem: &str) -> AppResult<tempfile::NamedTempFile> {
-    let mut f = tempfile::NamedTempFile::new()?;
+    let dir = secure_key_tmpdir()?;
+
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("rssh-key-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o600));
+    }
+
+    let mut f = builder.tempfile_in(&dir)?;
     f.write_all(pem.as_bytes())?;
     if !pem.ends_with('\n') {
         f.write_all(b"\n")?;
     }
     f.flush()?;
+    Ok(f)
+}
+
+/// `~/.rssh/tmp/`, ensured to exist with 0700 (Unix). We set perms each
+/// call rather than only on first-create — defends against a user who
+/// chmodded the dir to 0755 thinking it was harmless.
+fn secure_key_tmpdir() -> AppResult<std::path::PathBuf> {
+    let mut dir = rssh_lib::db::data_dir()?;
+    dir.push("tmp");
+    std::fs::create_dir_all(&dir)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        f.as_file()
-            .set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
     }
-    Ok(f)
+    Ok(dir)
 }
