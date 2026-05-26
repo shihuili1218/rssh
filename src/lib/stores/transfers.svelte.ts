@@ -137,7 +137,12 @@ export async function startDownload(args: {
     status: "running",
     startedAt: Date.now(),
   };
-  _list = [t, ..._list];
+  // In-place unshift: Svelte 5's $state proxy picks up the mutation, and we
+  // avoid O(N²) cost when SftpBrowser batches hundreds of transfers (each
+  // [t, ..._list] would clone the full array — 200 starts = 200 array copies
+  // of length 0..200). Also closes a race where two `startX` calls running
+  // concurrently could last-write-wins on the assignment.
+  _list.unshift(t);
   void runTransfer(id);
   return id;
 }
@@ -159,7 +164,12 @@ export async function startUpload(args: {
     status: "running",
     startedAt: Date.now(),
   };
-  _list = [t, ..._list];
+  // In-place unshift: Svelte 5's $state proxy picks up the mutation, and we
+  // avoid O(N²) cost when SftpBrowser batches hundreds of transfers (each
+  // [t, ..._list] would clone the full array — 200 starts = 200 array copies
+  // of length 0..200). Also closes a race where two `startX` calls running
+  // concurrently could last-write-wins on the assignment.
+  _list.unshift(t);
   void runTransfer(id);
   return id;
 }

@@ -2,10 +2,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use russh::Disconnect;
 use serde::Serialize;
 use serde_json::json;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Notify;
 
 use crate::error::{locked, AppError, AppResult};
 use crate::models::Profile;
@@ -15,6 +17,12 @@ use std::sync::Arc as StdArc;
 
 pub struct ForwardHandle {
     abort: tokio::task::AbortHandle,
+    /// Notify-based disconnect signal. `stop()` fires this; the accept-loop
+    /// task `select!`s on it and runs `handle.disconnect(...)` before
+    /// breaking out. Without this, abort()ing the task drops the future
+    /// holding the SSH `Handle` — russh never sends the `SSH_MSG_DISCONNECT`
+    /// and the server leaks a half-open session until TCP keepalive expires.
+    disconnect: Arc<Notify>,
     pub bytes_tx: Arc<AtomicU64>,
     pub bytes_rx: Arc<AtomicU64>,
     pub connections: Arc<AtomicU32>,
@@ -22,7 +30,17 @@ pub struct ForwardHandle {
 
 impl ForwardHandle {
     pub fn stop(&self) {
-        self.abort.abort();
+        self.disconnect.notify_one();
+        // Give the task up to 2 s to send the disconnect message before
+        // we force-abort. Picked over a hard sync-wait so `stop()` stays
+        // non-blocking for the Tauri command thread; picked over no abort
+        // at all so a wedged disconnect await (e.g. dead remote) can't
+        // strand the forward task forever.
+        let abort = self.abort.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            abort.abort();
+        });
     }
 }
 
@@ -97,43 +115,58 @@ pub async fn start_local(
     let tx = bytes_tx.clone();
     let rx = bytes_rx.clone();
     let conns = connections.clone();
+    let disconnect = Arc::new(Notify::new());
+    let disconnect_task = disconnect.clone();
 
     let task = tokio::spawn(async move {
         loop {
-            let (tcp_stream, _) = match listener.accept().await {
-                Ok(s) => s,
-                Err(_) => break,
-            };
+            tokio::select! {
+                _ = disconnect_task.notified() => break,
+                res = listener.accept() => {
+                    let (tcp_stream, _) = match res {
+                        Ok(s) => s,
+                        Err(_) => break,
+                    };
 
-            let rh = remote_host.clone();
-            let channel = match handle
-                .channel_open_direct_tcpip(&rh, remote_port as u32, "127.0.0.1", local_port as u32)
-                .await
-            {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
+                    let rh = remote_host.clone();
+                    let channel = match handle
+                        .channel_open_direct_tcpip(&rh, remote_port as u32, "127.0.0.1", local_port as u32)
+                        .await
+                    {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
 
-            let stream = channel.into_stream();
-            let c_tx = tx.clone();
-            let c_rx = rx.clone();
-            let c_conns = conns.clone();
+                    let stream = channel.into_stream();
+                    let c_tx = tx.clone();
+                    let c_rx = rx.clone();
+                    let c_conns = conns.clone();
 
-            c_conns.fetch_add(1, Ordering::Relaxed);
-            tokio::spawn(async move {
-                let (mut tcp_r, mut tcp_w) = tokio::io::split(tcp_stream);
-                let (mut ssh_r, mut ssh_w) = tokio::io::split(stream);
-                let _ = tokio::join!(
-                    counted_copy(&mut tcp_r, &mut ssh_w, &c_tx),
-                    counted_copy(&mut ssh_r, &mut tcp_w, &c_rx),
-                );
-                c_conns.fetch_sub(1, Ordering::Relaxed);
-            });
+                    c_conns.fetch_add(1, Ordering::Relaxed);
+                    tokio::spawn(async move {
+                        let (mut tcp_r, mut tcp_w) = tokio::io::split(tcp_stream);
+                        let (mut ssh_r, mut ssh_w) = tokio::io::split(stream);
+                        let _ = tokio::join!(
+                            counted_copy(&mut tcp_r, &mut ssh_w, &c_tx),
+                            counted_copy(&mut ssh_r, &mut tcp_w, &c_rx),
+                        );
+                        c_conns.fetch_sub(1, Ordering::Relaxed);
+                    });
+                }
+            }
         }
+        // Tell the server we're done so it can free the session immediately
+        // instead of waiting on TCP keepalive. Errors are deliberately
+        // swallowed — the connection may already be torn down, in which
+        // case the disconnect message is moot.
+        let _ = handle
+            .disconnect(Disconnect::ByApplication, "rssh forward stopped", "")
+            .await;
     });
 
     Ok(ForwardHandle {
         abort: task.abort_handle(),
+        disconnect,
         bytes_tx,
         bytes_rx,
         connections,
@@ -189,39 +222,55 @@ pub async fn start_remote(
     let tx = bytes_tx.clone();
     let rx = bytes_rx.clone();
     let conns = connections.clone();
+    let disconnect = Arc::new(Notify::new());
+    let disconnect_task = disconnect.clone();
 
     let task = tokio::spawn(async move {
-        // Keep handle alive — dropping it kills the SSH connection
-        let _handle = handle;
-        while let Some(channel) = ch_rx.recv().await {
-            let lh = local_host.clone();
-            let c_tx = tx.clone();
-            let c_rx = rx.clone();
-            let c_conns = conns.clone();
+        // Hold `handle` so dropping the future doesn't kill the SSH session
+        // before the disconnect message goes out.
+        let handle = handle;
+        loop {
+            tokio::select! {
+                _ = disconnect_task.notified() => break,
+                msg = ch_rx.recv() => {
+                    let Some(channel) = msg else { break };
+                    let lh = local_host.clone();
+                    let c_tx = tx.clone();
+                    let c_rx = rx.clone();
+                    let c_conns = conns.clone();
 
-            c_conns.fetch_add(1, Ordering::Relaxed);
-            tokio::spawn(async move {
-                let local = match TcpStream::connect(format!("{}:{}", lh, local_port)).await {
-                    Ok(s) => s,
-                    Err(_) => {
+                    c_conns.fetch_add(1, Ordering::Relaxed);
+                    tokio::spawn(async move {
+                        let local = match TcpStream::connect(format!("{}:{}", lh, local_port)).await {
+                            Ok(s) => s,
+                            Err(_) => {
+                                c_conns.fetch_sub(1, Ordering::Relaxed);
+                                return;
+                            }
+                        };
+                        let ssh_stream = channel.into_stream();
+                        let (mut tcp_r, mut tcp_w) = tokio::io::split(local);
+                        let (mut ssh_r, mut ssh_w) = tokio::io::split(ssh_stream);
+                        let _ = tokio::join!(
+                            counted_copy(&mut tcp_r, &mut ssh_w, &c_tx),
+                            counted_copy(&mut ssh_r, &mut tcp_w, &c_rx),
+                        );
                         c_conns.fetch_sub(1, Ordering::Relaxed);
-                        return;
-                    }
-                };
-                let ssh_stream = channel.into_stream();
-                let (mut tcp_r, mut tcp_w) = tokio::io::split(local);
-                let (mut ssh_r, mut ssh_w) = tokio::io::split(ssh_stream);
-                let _ = tokio::join!(
-                    counted_copy(&mut tcp_r, &mut ssh_w, &c_tx),
-                    counted_copy(&mut ssh_r, &mut tcp_w, &c_rx),
-                );
-                c_conns.fetch_sub(1, Ordering::Relaxed);
-            });
+                    });
+                }
+            }
         }
+        // Final disconnect — also tries to cancel the remote port forward.
+        // Server-side: `tcpip_forward` registration is released when the
+        // session ends, so an explicit disconnect is the cleanest signal.
+        let _ = handle
+            .disconnect(Disconnect::ByApplication, "rssh forward stopped", "")
+            .await;
     });
 
     Ok(ForwardHandle {
         abort: task.abort_handle(),
+        disconnect,
         bytes_tx,
         bytes_rx,
         connections,
@@ -358,52 +407,63 @@ pub async fn start_dynamic(
     let c_tx = bytes_tx.clone();
     let c_rx = bytes_rx.clone();
     let c_conns = connections.clone();
+    let disconnect = Arc::new(Notify::new());
+    let disconnect_task = disconnect.clone();
 
     let task = tokio::spawn(async move {
         loop {
-            let (mut tcp_stream, _) = match listener.accept().await {
-                Ok(s) => s,
-                Err(_) => break,
-            };
+            tokio::select! {
+                _ = disconnect_task.notified() => break,
+                res = listener.accept() => {
+                    let (mut tcp_stream, _) = match res {
+                        Ok(s) => s,
+                        Err(_) => break,
+                    };
 
-            let (target_host, target_port) = match socks5_handshake(&mut tcp_stream).await {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
+                    let (target_host, target_port) = match socks5_handshake(&mut tcp_stream).await {
+                        Ok(t) => t,
+                        Err(_) => continue,
+                    };
 
-            let channel = match handle
-                .channel_open_direct_tcpip(
-                    &target_host,
-                    target_port as u32,
-                    "127.0.0.1",
-                    local_port as u32,
-                )
-                .await
-            {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
+                    let channel = match handle
+                        .channel_open_direct_tcpip(
+                            &target_host,
+                            target_port as u32,
+                            "127.0.0.1",
+                            local_port as u32,
+                        )
+                        .await
+                    {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
 
-            let ssh_stream = channel.into_stream();
-            let tx = c_tx.clone();
-            let rx = c_rx.clone();
-            let conns = c_conns.clone();
+                    let ssh_stream = channel.into_stream();
+                    let tx = c_tx.clone();
+                    let rx = c_rx.clone();
+                    let conns = c_conns.clone();
 
-            conns.fetch_add(1, Ordering::Relaxed);
-            tokio::spawn(async move {
-                let (mut tcp_r, mut tcp_w) = tokio::io::split(tcp_stream);
-                let (mut ssh_r, mut ssh_w) = tokio::io::split(ssh_stream);
-                let _ = tokio::join!(
-                    counted_copy(&mut tcp_r, &mut ssh_w, &tx),
-                    counted_copy(&mut ssh_r, &mut tcp_w, &rx),
-                );
-                conns.fetch_sub(1, Ordering::Relaxed);
-            });
+                    conns.fetch_add(1, Ordering::Relaxed);
+                    tokio::spawn(async move {
+                        let (mut tcp_r, mut tcp_w) = tokio::io::split(tcp_stream);
+                        let (mut ssh_r, mut ssh_w) = tokio::io::split(ssh_stream);
+                        let _ = tokio::join!(
+                            counted_copy(&mut tcp_r, &mut ssh_w, &tx),
+                            counted_copy(&mut ssh_r, &mut tcp_w, &rx),
+                        );
+                        conns.fetch_sub(1, Ordering::Relaxed);
+                    });
+                }
+            }
         }
+        let _ = handle
+            .disconnect(Disconnect::ByApplication, "rssh forward stopped", "")
+            .await;
     });
 
     Ok(ForwardHandle {
         abort: task.abort_handle(),
+        disconnect,
         bytes_tx,
         bytes_rx,
         connections,

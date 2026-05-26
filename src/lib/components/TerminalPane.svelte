@@ -33,6 +33,7 @@
 
     let hlRules = $state<HighlightRule[]>([]);
     let hlRegex: RegExp | null = null;
+    let hlEverLoaded = false;
 
     function buildHighlightRegex(rules: HighlightRule[]) {
         const enabled = rules.filter(r => r.enabled && r.keyword);
@@ -40,6 +41,24 @@
         const escaped = enabled.map(r => r.keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
         hlRegex = new RegExp(escaped.join("|"), "gi");
     }
+
+    // React to HighlightManager edits. The store's `highlightsRevision`
+    // counter is bumped on add/remove/reset; we then re-read the rules
+    // and recompile. `hlEverLoaded` skips the very first run — the initial
+    // load happens in onMount so the effect would otherwise double-load.
+    // This must sit at script top-level (not inside the async onMount)
+    // because $effect added after an `await` is not tracked by Svelte 5.
+    $effect(() => {
+        app.highlightsRevision();
+        if (!hlEverLoaded) return;
+        void (async () => {
+            try {
+                hlRules = await app.loadHighlights();
+                buildHighlightRegex(hlRules);
+                paintTick++;
+            } catch { /* DB read failure is non-fatal — old rules stay */ }
+        })();
+    });
 
     function hlReplace(plain: string): string {
         if (!hlRegex) return plain;
@@ -890,6 +909,7 @@
         // the toggle before `connectAndWire` runs avoids a first-frame
         // flash of the bar when the user has it disabled.
         try { hlRules = await app.loadHighlights(); buildHighlightRegex(hlRules); } catch {}
+        hlEverLoaded = true;
         await app.loadCommandBlockBar();
 
         // Connect

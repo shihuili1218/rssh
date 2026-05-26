@@ -171,6 +171,7 @@ impl LlmClient for AnthropicClient {
                     tool_call_id,
                     content,
                     is_error,
+                    ..
                 } => AnthropicMsg {
                     role: "user",
                     content: vec![AnthropicBlock::ToolResult {

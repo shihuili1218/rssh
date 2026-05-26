@@ -158,8 +158,10 @@
         app.addTab({type: "local", id: tabId, label: t("ai.handoff.tab_label"), meta: {}});
         ai.openPanel();
 
-        // 2. 等本地 PTY 就绪（TerminalPane 异步 spawn + setSession）。300ms × 100 = 30s 上限
-        const sid = await waitFor(() => app.sessionIdForTab(tabId), 300, 100);
+        // 2. Wait for the local PTY to register itself. The store fires
+        //    this Promise the moment registerSession runs in TerminalPane —
+        //    no polling. 30 s timeout still covers a stuck spawn.
+        const sid = await app.waitForSession(tabId, 30000);
         if (!sid) {
             console.error("AI handoff: 本地 PTY 30s 内未就绪，放弃");
             return;
@@ -184,15 +186,6 @@
         } catch (e) {
             console.error("AI handoff failed:", e);
         }
-    }
-
-    async function waitFor<T>(probe: () => T | undefined, intervalMs: number, maxTries: number): Promise<T | undefined> {
-        for (let i = 0; i < maxTries; i++) {
-            const v = probe();
-            if (v !== undefined) return v;
-            await new Promise(r => setTimeout(r, intervalMs));
-        }
-        return undefined;
     }
 
     /* Consume window.__rssh_clone injected by open_tab_in_new_window */

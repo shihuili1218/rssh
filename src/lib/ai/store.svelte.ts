@@ -123,9 +123,22 @@ export async function startSession(args: {
 }
 
 export async function stopSession(session_id: string) {
+  // Tear down in-flight executions for this session FIRST. Without this,
+  // the PTY data listener + 60s setTimeout linger after the session is
+  // gone, the buffer keeps appending against a defunct session, and the
+  // eventual ai_command_result invoke targets a session the backend has
+  // already dropped (silent reject).
+  //
+  // Iterate via Array.from so the in-loop `.delete()` inside finish()
+  // doesn't break Map iteration semantics.
+  for (const exec of Array.from(_runningExecutions.values())) {
+    if (exec.sessionId === session_id && !exec.resolved) {
+      await exec.terminate();
+    }
+  }
+
   await invoke("ai_session_stop", { sessionId: session_id });
   detachListeners(session_id);
-  // 清掉对应的 target 索引
   for (const [tid, info] of Object.entries(_sessionByTarget)) {
     if (info.session_id === session_id) {
       delete _sessionByTarget[tid];
@@ -156,18 +169,86 @@ export function isStreaming(session_id: string): boolean {
   return last.kind === "assistant" && last.streaming === true;
 }
 
-/** 在途执行的控制句柄；按 tool_call_id 索引。`terminate` 给 UI 上的"提前终止"按钮用。 */
-const _runningExecutions: Record<string, { terminate: () => Promise<void> }> = {};
+/**
+ * Bounded PTY buffer for one in-flight command.
+ *
+ * Why this exists: `buffer += chunk` is unbounded. Commands like `yes`,
+ * `tail -f /var/log/...`, or `cat /dev/urandom | base64` can pump tens
+ * of MB into the buffer before the sentinel ever appears (timeout path),
+ * which freezes the renderer when `findSentinel` runs a regex over the
+ * whole string on every chunk.
+ *
+ * Strategy: keep a fixed-size HEAD as the real output, a sliding TAIL
+ * window where the sentinel must appear once the command exits. Once
+ * HEAD is full, new chunks only update TAIL. `view()` is what
+ * `findSentinel`/`extractOutput` see — it concatenates HEAD + TAIL,
+ * dropping the middle segment for over-cap runs.
+ *
+ * The sentinel is `__rssh_done_<uuid_simple>:<exit_code>` — ~60 bytes.
+ * TAIL = 4 KB gives a wide margin so a chunk-aligned sentinel can't be
+ * lost across the head/tail seam.
+ */
+const HEAD_CAP = 512 * 1024;
+const TAIL_WIN = 4 * 1024;
+
+class CappedBuffer {
+  private head = "";
+  private tail = "";
+
+  append(chunk: string) {
+    const room = HEAD_CAP - this.head.length;
+    if (room > 0) {
+      if (chunk.length <= room) {
+        this.head += chunk;
+      } else {
+        this.head += chunk.substring(0, room);
+      }
+    }
+    // Always update tail so the sentinel detection window slides forward.
+    // While head is still filling, tail mirrors head's recent suffix;
+    // after head is sealed, only tail moves.
+    this.tail = (this.tail + chunk).slice(-TAIL_WIN);
+  }
+
+  /** Concatenated view used by findSentinel / extractOutput. */
+  view(): string {
+    // While head still has room, the tail is a suffix of the head — no
+    // concat needed (avoids duplicating recent bytes in the matcher).
+    if (this.head.length < HEAD_CAP) return this.head;
+    return this.head + this.tail;
+  }
+}
+
+/** Per-tool-call execution state. Lives in `_runningExecutions` Map. */
+type Execution = {
+  toolCallId: string;
+  sessionId: string;
+  targetSessionId: string;
+  targetKind: "ssh" | "local";
+  buffer: CappedBuffer;
+  resolved: boolean;
+  userInterrupted: boolean;
+  unlisten: UnlistenFn | null;
+  timer: number | null;
+  terminate: () => Promise<void>;
+};
+
+/**
+ * Indexed by tool_call_id. Keyed on the Map (not a Record) so iteration
+ * is O(N) without enumerating prototype noise, and to make the "find all
+ * in-flight execs for a session" sweep in stopSession explicit.
+ */
+const _runningExecutions: Map<string, Execution> = new Map();
 
 export function isCommandRunning(tool_call_id: string): boolean {
-  return tool_call_id in _runningExecutions;
+  return _runningExecutions.has(tool_call_id);
 }
 
 /**
- * 执行 AI 提议的命令：把 `full_cmd`（含 sentinel + exit code 回显）粘到 active terminal
- * 自动回车，监听输出流找 sentinel 拿 exit code，然后把脱敏前的 output 上报后端。
- *
- * 全部在前端完成；后端的 ai 模块不直接执行任何命令。
+ * Execute an AI-proposed command: paste `full_cmd` (with sentinel +
+ * exit-code echo) into the active terminal, watch the PTY stream for
+ * the sentinel, then report output + exit code to the backend. All
+ * front-end; the backend's ai module never executes commands itself.
  */
 export async function executeCommand(
   session_id: string,
@@ -180,31 +261,49 @@ export async function executeCommand(
     ? `ssh:data:${target_session_id}`
     : `pty:data:${target_session_id}`;
 
-  let buffer = "";
-  let resolved = false;
-  let userInterrupted = false;
-  let unlisten: UnlistenFn | null = null;
-  let timer: number | null = null;
-  // 整个函数返回的 Promise 只在 finish() 真正跑完才 resolve——UI 上的 executing
-  // 状态因此能持续覆盖整个执行周期，否则之前 await invoke(writeCmd) 一返回
-  // executing 就被翻回 false，按钮立刻又能点。
+  // Returned Promise resolves only when finish() actually runs, so the
+  // UI's "executing" state can cover the whole execution window — not
+  // just up to the `invoke(writeCmd)` round-trip.
   let resolveDone!: () => void;
   const done = new Promise<void>((r) => { resolveDone = r; });
 
+  const exec: Execution = {
+    toolCallId: proposed.tool_call_id,
+    sessionId: session_id,
+    targetSessionId: target_session_id,
+    targetKind: target_kind,
+    buffer: new CappedBuffer(),
+    resolved: false,
+    userInterrupted: false,
+    unlisten: null,
+    timer: null,
+    terminate: async () => {
+      if (exec.resolved) return;
+      exec.userInterrupted = true;
+      const ctrlC = Array.from(new TextEncoder().encode("\x03"));
+      // Fire-and-forget Ctrl+C — but keep the failure visible. PTY closed
+      // / session lost will reject the invoke; a warn line helps debug the
+      // "I clicked terminate but Ctrl+C never went out" report path.
+      void invoke(writeCmd, { sessionId: target_session_id, data: ctrlC })
+          .catch((err) => console.warn("[ai] terminate Ctrl+C failed:", err));
+      await finish(extractOutput(exec.buffer.view()), -1, false);
+    },
+  };
+
   const finish = async (output: string, exit_code: number, timed_out: boolean) => {
-    if (resolved) return;
-    resolved = true;
-    if (unlisten) unlisten();
-    if (timer != null) clearTimeout(timer);
-    delete _runningExecutions[proposed.tool_call_id];
+    if (exec.resolved) return;
+    exec.resolved = true;
+    if (exec.unlisten) exec.unlisten();
+    if (exec.timer != null) clearTimeout(exec.timer);
+    _runningExecutions.delete(exec.toolCallId);
     try {
       await invoke("ai_command_result", {
         sessionId: session_id,
-        toolCallId: proposed.tool_call_id,
+        toolCallId: exec.toolCallId,
         exitCode: exit_code,
         output,
         timedOut: timed_out,
-        earlyTerminated: userInterrupted,
+        earlyTerminated: exec.userInterrupted,
       });
     } catch (e) {
       console.error("[ai] ai_command_result failed:", e);
@@ -212,36 +311,22 @@ export async function executeCommand(
     resolveDone();
   };
 
-  unlisten = await listen<number[]>(dataEvent, (e) => {
-    if (resolved) return;
+  exec.unlisten = await listen<number[]>(dataEvent, (e) => {
+    if (exec.resolved) return;
     const chunk = new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(e.payload));
-    buffer += chunk;
-    const hit = findSentinel(buffer, proposed.sentinel);
+    exec.buffer.append(chunk);
+    const hit = findSentinel(exec.buffer.view(), proposed.sentinel);
     if (hit) void finish(hit.output, hit.exitCode, false);
   });
 
-  // "提前终止"：用户的诉求是"立刻让我走"，不是"帮我等一个漂亮的退出码"。
-  // Ctrl+C fire-and-forget——shell 能响应就跟着停，不能响应（cat 等 stdin、
-  // 密码 prompt 等吞 SIGINT 的场景）也不扣留用户。立刻 finish，上报
-  // early_terminated=true，LLM 据此知道不该自动重试。
-  _runningExecutions[proposed.tool_call_id] = {
-    terminate: async () => {
-      if (resolved) return;
-      userInterrupted = true;
-      const ctrlC = Array.from(new TextEncoder().encode("\x03"));
-      // fire-and-forget 但不要完全吞错——PTY 已关 / session 失联 时 invoke 会 reject，
-      // 留个 warn 痕迹方便排错"我点了终止但 Ctrl+C 好像没发出去"这类反馈。
-      void invoke(writeCmd, { sessionId: target_session_id, data: ctrlC })
-          .catch((err) => console.warn("[ai] terminate Ctrl+C failed:", err));
-      await finish(extractOutput(buffer), -1, false);
-    },
-  };
+  _runningExecutions.set(exec.toolCallId, exec);
 
-  // 写命令到 PTY；末尾 \r 等价于按下回车，触发 shell 执行。
-  // 不能用 \n：Windows ConPTY/PowerShell 只认 \r，Unix cooked PTY 会把 \r 经 ICRNL 翻成 \n，
-  // 所以 \r 是唯一跨平台正确的"回车"字节，和用户手按 Enter 时 xterm.js 发的字节一致。
-  // 如果 invoke 抛错（session 已关闭等），listener / _runningExecutions 已经登记，
-  // 必须走 finish() 清理一遍，否则会泄漏并让 isCommandRunning() 永远卡 true。
+  // \r (not \n) is the cross-platform Enter byte: ConPTY/PowerShell only
+  // accepts \r; Unix cooked PTY translates \r → \n via ICRNL. Matches the
+  // byte xterm.js sends when the user presses Enter themselves.
+  // If invoke throws (session already closed), listener + execution are
+  // already registered → must funnel through finish() to clean up, else
+  // isCommandRunning() stays true forever.
   const data = Array.from(new TextEncoder().encode(proposed.full_cmd + "\r"));
   try {
     await invoke(writeCmd, { sessionId: target_session_id, data });
@@ -250,17 +335,17 @@ export async function executeCommand(
     throw e;
   }
 
-  timer = window.setTimeout(() => {
-    void finish(extractOutput(buffer), -1, true);
+  exec.timer = window.setTimeout(() => {
+    void finish(extractOutput(exec.buffer.view()), -1, true);
   }, Math.max(1000, proposed.timeout_s * 1000)) as unknown as number;
 
   return done;
 }
 
-/** 提前终止：发 Ctrl+C 到目标终端。finish() 之后的上报会带 early_terminated=true。 */
+/** Early-terminate by tool_call_id: Ctrl+C to target shell + finish(). */
 export async function terminateCommand(tool_call_id: string): Promise<void> {
-  const ctl = _runningExecutions[tool_call_id];
-  if (ctl) await ctl.terminate();
+  const exec = _runningExecutions.get(tool_call_id);
+  if (exec) await exec.terminate();
 }
 
 export async function rejectCommand(session_id: string, tool_call_id: string, reason: string) {
@@ -345,12 +430,16 @@ async function attachListeners(info: AiSessionInfo) {
   }));
 
   u.push(await listen<{ id: string; text: string }>(`ai:assistant_delta:${sid}`, (e) => {
-    const arr = _chatBySession[sid] ?? [];
+    const arr = _chatBySession[sid];
+    if (!arr) return;
+    // Mutate the matching item in place. Svelte 5's $state proxy picks up
+    // field assignments, so we don't need React-style full-array rebuilds
+    // (which were O(N) per token — an 8 000-token streamed reply over a
+    // 100-message chat is 800 000 array clones / 24 MB of GC churn).
     for (let i = arr.length - 1; i >= 0; i--) {
       const item = arr[i];
       if (item.kind === "assistant" && item.id === e.payload.id) {
-        const replaced: ChatItem = { ...item, text: item.text + e.payload.text };
-        _chatBySession[sid] = [...arr.slice(0, i), replaced, ...arr.slice(i + 1)];
+        item.text += e.payload.text;
         return;
       }
     }

@@ -78,7 +78,24 @@ let _editingId = $state<string | null>(null);
 let _sftpOpenByTab = $state<Record<string, boolean>>({});
 /* Background transfers screen — sibling of settings, mutually exclusive */
 let _downloadsActive = $state(false);
-let _pinnedProfileIds = $state<string[]>(JSON.parse(localStorage.getItem("pinned_profiles") ?? "[]"));
+/**
+ * Read a JSON-encoded array of strings from localStorage. Returns [] on any
+ * failure (key missing, value not JSON, value not an array). Module-load
+ * code path — a raw `JSON.parse` would throw and white-screen the app on
+ * any corruption (extension wrote garbage, user fiddled in DevTools).
+ */
+function loadStringArray(key: string): string[] {
+    try {
+        const raw = localStorage.getItem(key);
+        if (raw === null) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed.filter((v) => typeof v === "string") : [];
+    } catch {
+        return [];
+    }
+}
+
+let _pinnedProfileIds = $state<string[]>(loadStringArray("pinned_profiles"));
 
 /* Terminal title (from remote shell OSC sequence), separate from tab label */
 let _terminalTitles = $state<Record<string, string>>({});
@@ -262,11 +279,45 @@ export interface SessionInfo extends SessionEntry {
 }
 let _sessions = $state<SessionEntry[]>([]);
 
+/**
+ * Pending `waitForSession` calls keyed by tabId. A poll-loop in AppShell
+ * used to busy-check `sessionIdForTab` every 300 ms for up to 30 s; we
+ * own the state, so we can just notify when registerSession fires.
+ */
+const _sessionWaiters: Map<string, Array<(sid: string | null) => void>> = new Map();
+
 export function registerSession(info: SessionEntry) {
   _sessions = [..._sessions.filter(s => s.tabId !== info.tabId), info];
+  const waiters = _sessionWaiters.get(info.tabId);
+  if (waiters && waiters.length) {
+    _sessionWaiters.delete(info.tabId);
+    for (const fn of waiters) fn(info.sessionId);
+  }
 }
 export function unregisterSession(tabId: string) {
   _sessions = _sessions.filter(s => s.tabId !== tabId);
+}
+
+/**
+ * Resolve when a session is registered for `tabId`. `null` after `timeoutMs`
+ * if the session never appears (e.g. PTY spawn failure). Replaces a 30s
+ * setInterval poll — the store is the source of truth, no reason to spin.
+ */
+export function waitForSession(tabId: string, timeoutMs = 30000): Promise<string | null> {
+  const existing = sessionIdForTab(tabId);
+  if (existing) return Promise.resolve(existing);
+  return new Promise((resolve) => {
+    let done = false;
+    const fire = (val: string | null) => {
+      if (done) return;
+      done = true;
+      resolve(val);
+    };
+    const arr = _sessionWaiters.get(tabId) ?? [];
+    arr.push(fire);
+    _sessionWaiters.set(tabId, arr);
+    setTimeout(() => fire(null), timeoutMs);
+  });
 }
 export function connectedSessions(): SessionInfo[] {
   return _sessions.map(s => ({
@@ -376,6 +427,22 @@ export async function loadSnippets(): Promise<Snippet[]> {
 export async function loadHighlights(): Promise<HighlightRule[]> {
   return invoke<HighlightRule[]>("list_highlights");
 }
+
+/**
+ * Bumped whenever the user adds/removes/resets a highlight rule via
+ * HighlightManager. TerminalPane reads this in a `$effect` and reloads
+ * its rule cache + recompiles its regex. Without this, every highlight
+ * edit silently fails until the user reconnects the terminal — the kind
+ * of "did this even save?" bug that erodes trust.
+ *
+ * A revision counter (not the full rule list) lives in the store so
+ * consumers can subscribe with a single reactive dep regardless of how
+ * the underlying list mutates, and so we don't double-store the rules
+ * (DB is the source of truth; this is just a "go re-read" signal).
+ */
+let _highlightsRevision = $state(0);
+export function highlightsRevision(): number { return _highlightsRevision; }
+export function bumpHighlights() { _highlightsRevision += 1; }
 export async function loadGroups(): Promise<Group[]> {
   return invoke<Group[]>("list_groups");
 }
