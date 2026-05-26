@@ -5,13 +5,15 @@
 
     let popEl: HTMLDivElement | undefined;
     let list = $derived(transfers.list());
-    /** 跟随 sidebar 位置反向贴边 —— Downloads 入口在哪个 footer，浮窗就从那边弹出。
-     *  - sb-left:   入口在左下 → 浮窗左下
-     *  - sb-right:  入口在右下 → 浮窗右下
-     *  - sb-top:    入口在顶栏右 → 浮窗右上
-     *  - sb-bottom: 入口在底栏右 → 浮窗右下贴底栏 */
+    /** Anchor the popover to the same edge the sidebar's Downloads entry
+     *  lives on, so it pops out from where the user clicked.
+     *  - sb-left:   entry at bottom-left  → popover bottom-left
+     *  - sb-right:  entry at bottom-right → popover bottom-right
+     *  - sb-top:    entry at top bar right → popover top-right
+     *  - sb-bottom: entry at bottom bar right → popover bottom-right above bar */
     const sbPos = $derived(app.sidebarPosition());
-    // "已结束" 不包括 queued/running —— 这俩是未完成工作，clear 按钮不应误清。
+    // "Finished" excludes queued/running — both are pending work that the
+    // Clear button must not sweep away.
     let hasFinished = $derived(list.some(x =>
         x.status === "done" || x.status === "failed" || x.status === "cancelled",
     ));
@@ -32,8 +34,9 @@
         return p.split(/[\\/]/).pop() || p;
     }
 
-    /** 浮窗触发器（侧栏入口 + SFTP toolbar 图标）打上 data-transfers-trigger，
-     *  让 click-outside 排除掉它们，避免"点 trigger 关浮窗 → click 又开浮窗"的回旋。 */
+    /** Trigger elements (sidebar entry, SFTP toolbar icon, etc.) are marked
+     *  with `data-transfers-trigger` so click-outside ignores them. This
+     *  avoids the "click trigger → close popover → click reopens it" loop. */
     function isTrigger(node: Node | null): boolean {
         let el = node instanceof Element ? node : (node?.parentElement ?? null);
         return !!el?.closest("[data-transfers-trigger]");
@@ -43,7 +46,7 @@
         const target = ev.target as Node | null;
         if (!target) return;
         if (popEl?.contains(target)) return;
-        if (isTrigger(target)) return;       // 让 trigger 自己 toggle
+        if (isTrigger(target)) return;       // let the trigger's own click toggle
         app.closeDownloads();
     }
 
@@ -135,8 +138,9 @@
 </div>
 
 <style>
-    /* Popover：max-height 70vh，列表区独立滚动；max-width 460px 让宽屏不至于占太多空间。
-       具体的 top/right/bottom/left 由 .sb-* 子类决定，跟着 sidebar 反向贴边。 */
+    /* Popover: max-height 70vh with an independently scrolling list; max-width
+       460px keeps wide screens from being swallowed. Concrete edge offsets are
+       set by the .sb-* variants below to mirror the sidebar's anchor edge. */
     .downloads {
         position: fixed;
         width: min(460px, calc(100vw - 24px));
@@ -152,25 +156,25 @@
         box-sizing: border-box;
     }
 
-    /* sidebar 占左 40px → 浮窗左下贴边，给 sidebar 让出 8px 间距 */
+    /* Edge offsets follow the --sb-* layout vars set by AppShell on .shell.
+       This keeps popover anchoring in lock-step with the sidebar thickness —
+       if the sidebar resize ever changes, the popover follows automatically.
+       The extra 8px gap separates the popover from the sidebar visually. */
     .downloads.sb-left {
-        left: 48px;
+        left:   calc(var(--sb-left, 0px) + 8px);
         bottom: 12px;
     }
-    /* sidebar 占右 40px → 浮窗右下 */
     .downloads.sb-right {
-        right: 48px;
+        right:  calc(var(--sb-right, 0px) + 8px);
         bottom: 12px;
     }
-    /* sidebar 顶栏 44px → 浮窗右上贴顶栏下边 */
     .downloads.sb-top {
-        top: 52px;
+        top:   calc(var(--sb-top, 0px) + 8px);
         right: 12px;
     }
-    /* sidebar 底栏 44px → 浮窗右下贴底栏上边 */
     .downloads.sb-bottom {
-        bottom: 52px;
-        right: 12px;
+        bottom: calc(var(--sb-bottom, 0px) + 8px);
+        right:  12px;
     }
 
     header {
@@ -225,18 +229,18 @@
         display: flex;
         flex-direction: column;
         gap: 8px;
-        /* 浮窗高度受限，列表区独立滚动 */
+        /* Popover height is bounded, so the list area scrolls independently. */
         flex: 1 1 auto;
         overflow-y: auto;
         min-height: 0;
     }
 
-    /* Popover 永远窄，row 用堆叠布局：
+    /* The popover is always narrow; each row uses a stacked layout:
          line 1: icon | name           | status
          line 2: icon | path           | bytes
          line 3:      | progress (span)
          line 4:      | actions  (span)
-       error 行（仅 failed）插在 progress / actions 之间。 */
+       The error row (failed only) sits between progress and actions. */
     .row {
         background: var(--bg);
         box-shadow: var(--pressed);

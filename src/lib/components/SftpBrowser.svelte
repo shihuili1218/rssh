@@ -6,7 +6,7 @@
     import type {RemoteEntry} from "../stores/app.svelte.ts";
     import { errMsg, t } from "../i18n/index.svelte.ts";
 
-    /** Backend WalkEntry：rel_path 始终以 '/' 分隔。 */
+    /** Mirrors the backend WalkEntry; rel_path is always '/'-separated. */
     interface WalkEntry { rel_path: string; size: number; }
 
     let {meta}: { meta: Record<string, string> } = $props();
@@ -20,9 +20,10 @@
     let error = $state("");
     let notice = $state("");
 
-    /** 当前目录内已选 entry 的 name 集合。换目录即清空（跨目录不保留）。 */
+    /** Names of selected entries in the current directory. Cleared on
+     *  directory change — selections do not persist across directories. */
     let selected = $state(new Set<string>());
-    /** Upload 下拉菜单开关。 */
+    /** Open/close state of the Upload dropdown menu. */
     let uploadMenuOpen = $state(false);
     let uploadWrapEl: HTMLDivElement | undefined;
 
@@ -63,7 +64,7 @@
         error = "";
         try {
             entries = await invoke<RemoteEntry[]>("sftp_list", {sftpId, path});
-            // 换目录立刻清空选中 —— 数据语义跨目录无意义。
+            // Clear selection on directory change — selection has no meaning across directories.
             selected = new Set();
             cwd = path;
             pathInput = path;
@@ -115,7 +116,8 @@
         return p.split(/[\\/]/).pop() || p;
     }
 
-    /** 拼接远端路径：始终 '/' 分隔，过滤空段，根目录特判。 */
+    /** Join a remote path: always '/'-separated, empty segments filtered,
+     *  root directory special-cased. */
     function joinRemote(...parts: string[]): string {
         let acc = "";
         for (const p of parts) {
@@ -126,7 +128,8 @@
         return acc || "/";
     }
 
-    /** 拼接本地路径：分隔符跟 root 看齐（Windows '\\'，Unix '/'）。rel_path 内 '/' 转成平台分隔符。 */
+    /** Join a local path: separator follows root (Windows '\\', Unix '/').
+     *  '/' within rel_path is translated to the platform separator. */
     function joinLocal(root: string, ...rels: string[]): string {
         const sep = root.includes("\\") ? "\\" : "/";
         let acc = root.replace(/[\\/]+$/, "");
@@ -145,7 +148,8 @@
         return `${(bytes / 1073741824).toFixed(1)} G`;
     }
 
-    /** 渲染 mtime：当年用 MM-DD HH:mm，跨年用 YYYY-MM-DD。0 表示服务端未给。 */
+    /** Render mtime: current year as MM-DD HH:mm, otherwise YYYY-MM-DD.
+     *  A value of 0 means the server did not provide an mtime. */
     function formatMtime(secs: number): string {
         if (!secs) return "—";
         const d = new Date(secs * 1000);
@@ -193,13 +197,18 @@
         if (selected.size === 0) return;
         const items = entries.filter(e => selected.has(e.name));
         try {
-            const dir = await invoke<string | null>("sftp_pick_save_dir");
+            const dir = await invoke<string | null>("sftp_pick_folder");
             if (!dir) return;
             let queued = 0;
+            // Accumulate per-tree walk failures so users see every failed dir,
+            // not just the last one.
+            const walkErrors: string[] = [];
             for (const e of items) {
                 const remote = joinRemote(cwd, e.name);
                 if (e.is_dir) {
-                    // 整棵子树展开为 N 条独立 Transfer。Walk 失败仅这棵跳过，不影响其余选中项。
+                    // Expand each subtree into N independent Transfers. A walk
+                    // failure only skips that subtree; other selected entries
+                    // continue to be queued.
                     try {
                         const walked = await invoke<WalkEntry[]>("sftp_walk_remote_dir", {
                             sftpId, remoteRoot: remote,
@@ -214,7 +223,7 @@
                             queued++;
                         }
                     } catch (err) {
-                        error = `Walk failed: ${e.name} — ${errMsg(err)}`;
+                        walkErrors.push(`${e.name}: ${errMsg(err)}`);
                     }
                 } else {
                     await transfers.startDownload({
@@ -226,6 +235,7 @@
                     queued++;
                 }
             }
+            if (walkErrors.length > 0) error = `Walk failed:\n${walkErrors.join("\n")}`;
             if (queued > 0) notice = `Queued ${queued} transfer(s)`;
             selected = new Set();
         } catch (err: any) {
@@ -259,7 +269,7 @@
         notice = "";
         if (!meta.sessionId) { error = "Missing SSH session"; return; }
         try {
-            const dir = await invoke<string | null>("sftp_pick_open_folder");
+            const dir = await invoke<string | null>("sftp_pick_folder");
             if (!dir) return;
             const walked = await invoke<WalkEntry[]>("walk_local_dir", { localRoot: dir });
             if (walked.length === 0) { notice = "Folder has no files"; return; }
@@ -483,6 +493,7 @@
         border-radius: var(--radius-sm);
         margin-bottom: 8px;
         font-size: 12px;
+        white-space: pre-line;
     }
 
     .notice-banner {
@@ -561,7 +572,7 @@
         display: flex;
         align-items: center;
         gap: 6px;
-        min-width: 0; /* 让 file-label 能 ellipsis */
+        min-width: 0; /* let .file-label ellipsis-truncate */
         padding: 0;
     }
     .file-label {
@@ -592,7 +603,8 @@
         white-space: nowrap;
     }
 
-    /* 窄宽度：先隐 mtime 列。size 始终保留 —— 多文件下载用户最关心的还是大小。 */
+    /* Narrow widths: drop the mtime column first. Size always stays — for
+       multi-file downloads users care most about file size. */
     @container (max-width: 360px) {
         .file-row {
             grid-template-columns: 24px 1fr 60px;

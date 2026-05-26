@@ -83,9 +83,11 @@ let _editingId = $state<string | null>(null);
    新开 tab 不自动开 SFTP——每个 tab 手动开。
    (老的全局 _sftpOpen 已废，那是 fullscreen overlay 时代的产物。) */
 let _sftpOpenByTab = $state<Record<string, boolean>>({});
-/* Transfers popover：浮窗，不再是 settings 的 sibling route。
-   状态独立 —— 切 tab / 进 settings 都不关闭，用户必须显式关（点 X / 点外部 / Esc / 再点入口）。
-   变量名沿用 _downloadsActive 是因为 sidebar 入口 id 还是 "downloads"，rename 收益小。 */
+/* Transfers popover: an overlay, no longer a sibling route of Settings.
+   State is independent — switching tabs / opening Settings does not close it;
+   the user must dismiss explicitly (X / click outside / Esc / re-click entry).
+   The variable name keeps `_downloadsActive` because the sidebar entry id is
+   still "downloads" — renaming buys little. */
 let _downloadsActive = $state(false);
 let _pinnedProfileIds = $state<string[]>(JSON.parse(localStorage.getItem("pinned_profiles") ?? "[]"));
 
@@ -114,7 +116,7 @@ export function setActiveTab(id: string) {
   _activeTabId = id;
   _settingsActive = false;
   // SFTP per-tab：切 tab 不动其他 tab 的 SFTP 状态（mirror AI panel 的"跨导航持久"模型）
-  // Transfers 浮窗状态跨 tab 持久；用户显式关闭。
+  // Transfers popover state persists across tab switches; closed only by user.
 }
 
 export function addTab(tab: Tab) {
@@ -162,10 +164,11 @@ export function setTerminalTitle(tabId: string, title: string) {
 export function openSettings() {
   _settingsActive = true;
   // SFTP 不强制关 —— settings 路径下走可见性 derived 隐藏，state 保留
-  // Transfers 浮窗状态独立，不动。
+  // Transfers popover state is independent — leave it untouched here.
 }
 
-/** 打开 transfers 浮窗。状态独立于 settings/tab —— 浮窗本身就是覆盖层。 */
+/** Open the transfers popover. State is independent from settings/tab — the
+ *  popover is itself an overlay. */
 export function openDownloads() { _downloadsActive = true; }
 export function closeDownloads() { _downloadsActive = false; }
 export function toggleDownloads() { _downloadsActive = !_downloadsActive; }

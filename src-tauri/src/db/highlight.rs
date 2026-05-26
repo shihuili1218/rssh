@@ -1,7 +1,7 @@
 use rusqlite::params;
 
 use super::Db;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::models::HighlightRule;
 
 pub fn list(db: &Db) -> AppResult<Vec<HighlightRule>> {
@@ -36,10 +36,25 @@ pub fn delete_by_keyword(db: &Db, keyword: &str) -> AppResult<()> {
 }
 
 /// Update an existing highlight rule, addressed by its current keyword.
-/// Supports renaming (the new keyword may differ from old_keyword); the UNIQUE
-/// constraint on keyword surfaces a conflict if the new name collides.
+/// Supports renaming (the new keyword may differ from old_keyword). The schema
+/// has no UNIQUE constraint on `keyword`, so when renaming we explicitly check
+/// for a collision against any other row and return a business error rather
+/// than silently producing duplicate rows.
 pub fn update(db: &Db, old_keyword: &str, rule: &HighlightRule) -> AppResult<()> {
     let conn = db.lock()?;
+    if rule.keyword != old_keyword {
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM highlights WHERE keyword = ?1",
+            params![rule.keyword],
+            |r| r.get(0),
+        )?;
+        if exists > 0 {
+            return Err(AppError::other(
+                "highlight_keyword_conflict",
+                serde_json::json!({ "keyword": rule.keyword }),
+            ));
+        }
+    }
     conn.execute(
         "UPDATE highlights SET keyword = ?1, color = ?2, enabled = ?3 WHERE keyword = ?4",
         params![rule.keyword, rule.color, rule.enabled, old_keyword],

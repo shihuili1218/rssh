@@ -164,9 +164,7 @@ pub fn run() {
             #[cfg(not(target_os = "android"))]
             commands::sftp::sftp_pick_open_path,
             #[cfg(not(target_os = "android"))]
-            commands::sftp::sftp_pick_save_dir,
-            #[cfg(not(target_os = "android"))]
-            commands::sftp::sftp_pick_open_folder,
+            commands::sftp::sftp_pick_folder,
             #[cfg(not(target_os = "android"))]
             commands::sftp::sftp_pick_open_files,
             #[cfg(not(target_os = "android"))]

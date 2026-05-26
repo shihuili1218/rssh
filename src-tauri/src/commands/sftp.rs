@@ -11,7 +11,7 @@ use crate::models::{Credential, CredentialType};
 use crate::ssh::sftp::{RemoteEntry, SftpHandle, WalkEntry};
 use crate::state::AppState;
 
-/// 本地递归遍历的最大深度。与远端 walker 同样保守。
+/// Maximum recursion depth for the local walker. Mirrors the remote-side cap.
 const LOCAL_WALK_DEPTH_CAP: u32 = 32;
 
 /// RAII：注册 cancel flag 并在 drop 时自动 unregister，无论 streaming 正常返回、
@@ -123,8 +123,10 @@ pub async fn sftp_list(
     h.list_dir(&path).await
 }
 
-/// 递归列出远端目录下所有文件（含 symlink-to-file，跳 symlink-to-dir）。
-/// 前端把展开后的扁平列表逐个排进下载队列；目录概念只在这一步存在。
+/// Recursively list every file under a remote directory (symlink-to-file is
+/// followed, symlink-to-dir is skipped to prevent cycles). The frontend queues
+/// each returned entry as an independent Transfer; the directory abstraction
+/// exists only inside this command.
 #[tauri::command]
 pub async fn sftp_walk_remote_dir(
     state: State<'_, AppState>,
@@ -135,8 +137,9 @@ pub async fn sftp_walk_remote_dir(
     h.walk_files(&remote_root).await
 }
 
-/// 递归列出本地目录下所有文件，对称于 `sftp_walk_remote_dir`。
-/// rel_path 始终用 '/'，前端在重建本地物理路径时按平台替换。
+/// Recursively list every file under a local directory; the local-side
+/// counterpart of `sftp_walk_remote_dir`. `rel_path` always uses '/'; the
+/// frontend swaps the separator when rebuilding the local physical path.
 #[tauri::command]
 pub async fn walk_local_dir(local_root: String) -> AppResult<Vec<WalkEntry>> {
     let root = PathBuf::from(&local_root);
@@ -157,35 +160,39 @@ pub async fn walk_local_dir(local_root: String) -> AppResult<Vec<WalkEntry>> {
         }
         let mut rd = tokio::fs::read_dir(&dir).await?;
         while let Some(entry) = rd.next_entry().await? {
-            let ft = entry.file_type().await?;
+            // `entry.metadata()` does not traverse symlinks — single syscall
+            // covers both type discrimination and size for regular files,
+            // replacing the previous file_type() + metadata() double-stat.
             let path = entry.path();
-            if ft.is_dir() {
+            let meta = entry.metadata().await?;
+            if meta.is_dir() {
                 queue.push_back((path, depth + 1));
-            } else if ft.is_file() {
-                let meta = entry.metadata().await?;
+            } else if meta.is_file() {
                 result.push(WalkEntry {
                     rel_path: rel_unix(&path, &root),
                     size: meta.len(),
                 });
-            } else if ft.is_symlink() {
-                // follow 一次（std/tokio fs::metadata 默认 follow）
-                if let Ok(meta) = tokio::fs::metadata(&path).await {
-                    if meta.is_file() {
+            } else if meta.is_symlink() {
+                // Follow once to learn what the target is. Skip symlink-to-dir
+                // to avoid cycles, and silently skip broken symlinks.
+                if let Ok(target_meta) = tokio::fs::metadata(&path).await {
+                    if target_meta.is_file() {
                         result.push(WalkEntry {
                             rel_path: rel_unix(&path, &root),
-                            size: meta.len(),
+                            size: target_meta.len(),
                         });
                     }
-                    // symlink-to-dir 跳过防环；broken symlink metadata 失败也跳过
                 }
             }
+            // Anything else (block/char/fifo): skip.
         }
     }
     Ok(result)
 }
 
-/// 把 `full` 相对于 `root` 的部分转为 '/' 分隔字符串。
-/// Windows 上 std::path::Component 用 '\'，统一替换；前端 join 时再换回平台分隔符。
+/// Convert the portion of `full` relative to `root` into a '/'-separated string.
+/// On Windows std::path::Component uses '\'; we normalise here and the frontend
+/// converts back to the platform separator when joining.
 fn rel_unix(full: &Path, root: &Path) -> String {
     let stripped = full.strip_prefix(root).unwrap_or(full);
     stripped
@@ -311,23 +318,18 @@ pub async fn sftp_pick_open_path() -> AppResult<Option<String>> {
     Ok(handle.map(|h| h.path().display().to_string()))
 }
 
-/// 选保存目录（多选下载的目标根）。rfd 跨平台用同一个 folder dialog。
+/// Pick a folder via the native dialog. Used both as the destination root
+/// (multi-select download) and the source root (recursive upload) — both
+/// flows want the same rfd `pick_folder()` call, so a single command suffices.
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn sftp_pick_save_dir() -> AppResult<Option<String>> {
+pub async fn sftp_pick_folder() -> AppResult<Option<String>> {
     let handle = rfd::AsyncFileDialog::new().pick_folder().await;
     Ok(handle.map(|h| h.path().display().to_string()))
 }
 
-/// 选要上传的目录（递归上传的源根）。
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn sftp_pick_open_folder() -> AppResult<Option<String>> {
-    let handle = rfd::AsyncFileDialog::new().pick_folder().await;
-    Ok(handle.map(|h| h.path().display().to_string()))
-}
-
-/// 多选上传的源文件（一次选 N 个）。rfd 的 pick_files 跨平台支持 multi。
+/// Pick multiple source files for upload. rfd's `pick_files` supports
+/// multi-selection on every platform we ship to.
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn sftp_pick_open_files() -> AppResult<Option<Vec<String>>> {

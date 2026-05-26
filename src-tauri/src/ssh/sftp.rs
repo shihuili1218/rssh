@@ -11,8 +11,9 @@ use crate::error::{AppError, AppResult};
 use crate::models::Credential;
 use crate::ssh::client;
 
-/// 用户取消时返回的 i18n code。前端 transfers.svelte.ts 通过 `errStr.includes(...)`
-/// 匹配此字面值识别"用户取消"。改名时前后端必须同步。
+/// i18n code returned when the user cancels a transfer. The frontend
+/// (transfers.svelte.ts) matches this literal via `errStr.includes(...)` to
+/// flip the status to "cancelled". Keep the constant in sync across both ends.
 pub const CANCELLED_CODE: &str = "transfer_cancelled";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,22 +22,24 @@ pub struct RemoteEntry {
     pub is_dir: bool,
     pub is_symlink: bool,
     pub size: u64,
-    /// unix epoch seconds; 0 表示服务端未提供 mtime
+    /// unix epoch seconds; 0 means the server did not provide an mtime
     pub mtime: u64,
 }
 
-/// Flat walk 输出：rel_path 总是用 '/' 分隔（即使本地是 Windows），
-/// 由前端在拼接为本地物理路径时按平台替换。
+/// Flat walk output. `rel_path` is always '/'-separated (even when the host is
+/// Windows); the frontend swaps separators when joining the local path.
 #[derive(Debug, Clone, Serialize)]
 pub struct WalkEntry {
     pub rel_path: String,
     pub size: u64,
 }
 
-/// 递归遍历的最大深度（含根目录）。防止 symlink 环 + 服务端误导。
+/// Maximum recursion depth (including the root directory). Guards against
+/// symlink cycles and pathological server-side trees.
 const WALK_DEPTH_CAP: u32 = 32;
 
-/// 拼接远端路径：根 "/" 时特判，避免出现 "//foo"。复刻调用方的现有约定。
+/// Join a remote path segment. Special-cases dir == "/" so the result never
+/// contains "//foo"; matches the convention used by the existing callers.
 fn join_remote(dir: &str, name: &str) -> String {
     if dir == "/" {
         format!("/{}", name)
@@ -157,13 +160,16 @@ impl SftpHandle {
         Ok(result)
     }
 
-    /// 递归列出 `root` 下所有可下载文件，返回 (相对路径, 大小) 列表。
+    /// Recursively list every downloadable file under `root`, returning a flat
+    /// list of (relative path, size).
     ///
-    /// - BFS 遍历，避免深递归栈炸。
-    /// - Symlink-to-file：跟一次得到 size 后当文件下；symlink-to-dir：跳过（防环）。
-    /// - 深度超过 `WALK_DEPTH_CAP` 则整条命令失败（防递归病态）。
-    /// - 中间某个文件失败不在这里处理：每个文件最终独立调度为一条 Transfer，
-    ///   失败由 transfer 自己捕获。这里只负责"造单"。
+    /// - BFS to avoid blowing the stack on deep trees.
+    /// - Symlink-to-file: follow once for size, treat as a regular file.
+    ///   Symlink-to-dir: skipped to prevent loops.
+    /// - Depth exceeding `WALK_DEPTH_CAP` fails the whole command.
+    /// - Per-file failures are not handled here: each file is later dispatched
+    ///   as an independent Transfer, which owns its own retry/cancel surface.
+    ///   This function only builds the work list.
     pub async fn walk_files(&self, root: &str) -> AppResult<Vec<WalkEntry>> {
         let root_norm = root.trim_end_matches('/').to_string();
         let mut queue: VecDeque<(String, u32)> = VecDeque::new();
@@ -200,21 +206,20 @@ impl SftpHandle {
                         size: e.metadata().size.unwrap_or(0),
                     });
                 } else if ft.is_symlink() {
-                    // 跟一次：用 metadata（STAT，follow symlink）拿到目标信息
+                    // Follow once via STAT to learn what the target is.
                     if let Ok(meta) = self.sftp.metadata(&full).await {
-                        if meta.is_dir() {
-                            // skip symlink-to-dir，防环
-                        } else if !meta.file_type().is_other() {
-                            // file / regular / 其它非目录非 other：当文件处理
+                        if meta.file_type().is_file() {
                             result.push(WalkEntry {
                                 rel_path: rel,
                                 size: meta.size.unwrap_or(0),
                             });
                         }
+                        // symlink-to-dir: skip to avoid cycles.
+                        // anything else (block/char/fifo): skip.
                     }
-                    // metadata 失败（broken symlink）静默跳过
+                    // metadata failure (e.g. broken symlink): silently skip.
                 }
-                // Other types (block/char/fifo) 跳过
+                // Other types (block/char/fifo) are skipped.
             }
         }
         Ok(result)
@@ -366,9 +371,10 @@ impl SftpHandle {
             .await
             .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "open", "err": e.to_string() })))?;
 
-        // 多选下载时 local_path 可能位于一个尚未创建的子目录里
-        // （e.g. <pick_dir>/<root>/<subdir>/file.txt）。
-        // 单文件下载时 parent 已存在，create_dir_all 是 no-op，无破坏。
+        // For multi-select downloads, local_path may live inside a subdirectory
+        // we haven't created yet (e.g. <pick_dir>/<root>/<subdir>/file.txt).
+        // For a single-file download the parent already exists, so
+        // create_dir_all is a no-op.
         if let Some(parent) = local_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -376,7 +382,8 @@ impl SftpHandle {
 
         let mut transferred: u64 = 0;
         let mut buf = vec![0u8; 32768];
-        // 事件名每个 chunk emit 一次；预算一次避免循环里反复 String 分配。
+        // Build the event name once; we emit on every chunk and want to avoid
+        // repeated String allocations inside the loop.
         let event = format!("sftp:progress:{transfer_id}");
 
         loop {
@@ -408,27 +415,38 @@ impl SftpHandle {
         Ok(transferred)
     }
 
-    /// 远端 mkdir -p：确保 `path` 的所有祖先目录存在。
-    /// 热路径（dir 已存在）只多 1 次 metadata，无 create_dir 调用。
+    /// Remote `mkdir -p`: ensure every ancestor directory of `path` exists.
+    ///
+    /// Concurrency note: under MAX_CONCURRENT uploads several tasks may race
+    /// to create the same shared subdirectory. We therefore *blindly attempt*
+    /// `create_dir` per segment and, on failure, fall back to a metadata probe.
+    /// If a directory is now present, treat it as success (a peer created it);
+    /// otherwise propagate the original create error. This trades a few extra
+    /// SFTP round-trips on the cold path for race-freeness — `mkdir_p` is
+    /// already off the hot single-file path because callers short-circuit
+    /// when the parent already exists.
     async fn mkdir_p(&self, path: &str) -> AppResult<()> {
         if path.is_empty() || path == "/" {
             return Ok(());
         }
         if self.sftp.metadata(path).await.is_ok() {
-            return Ok(()); // 整段已存在，热路径
+            return Ok(());
         }
-        // 从根逐级建：每段先 stat，不存在才 create_dir。
         let mut current = String::new();
         for part in path.split('/').filter(|s| !s.is_empty()) {
             current.push('/');
             current.push_str(part);
-            if self.sftp.metadata(&current).await.is_err() {
-                self.sftp.create_dir(&current).await.map_err(|e| {
-                    AppError::sftp(
-                        "sftp_io_failed",
-                        json!({ "op": "mkdir_p", "path": &current, "err": e.to_string() }),
-                    )
-                })?;
+            if let Err(create_err) = self.sftp.create_dir(&current).await {
+                // Race-safe fallback: verify a directory now exists.
+                match self.sftp.metadata(&current).await {
+                    Ok(meta) if meta.is_dir() => {} // created by a concurrent peer
+                    _ => {
+                        return Err(AppError::sftp(
+                            "sftp_io_failed",
+                            json!({ "op": "mkdir_p", "path": &current, "err": create_err.to_string() }),
+                        ));
+                    }
+                }
             }
         }
         Ok(())
@@ -450,8 +468,9 @@ impl SftpHandle {
 
         let mut local_file = tokio::fs::File::open(local_path).await?;
 
-        // 多选上传整个文件夹时 remote_path 可能位于尚未创建的远端子目录里。
-        // 单文件上传时 parent 已存在，mkdir_p 走热路径（1 次 metadata），无破坏。
+        // When uploading a folder via multi-select, remote_path may live in a
+        // remote subdirectory we haven't created yet. For a single-file upload
+        // the parent already exists, so mkdir_p hits the hot-path early return.
         if let Some((parent, _)) = remote_path.rsplit_once('/') {
             if !parent.is_empty() {
                 self.mkdir_p(parent).await?;

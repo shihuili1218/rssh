@@ -92,14 +92,18 @@
 
   {#if adding}
     <div class="card inline-form">
-      <label>Keyword</label>
-      <input type="text" bind:value={formKw} placeholder="ERROR / WARN / your pattern"
-        onkeydown={(e) => { if (e.key === "Enter") saveNew(); }} />
-      <label>Color</label>
-      <div class="color-row">
-        <input type="color" bind:value={formColor} />
-        <span class="color-hex">{formColor}</span>
-      </div>
+      <label>
+        <span class="label-text">Keyword</span>
+        <input type="text" bind:value={formKw} placeholder="ERROR / WARN / your pattern"
+          onkeydown={(e) => { if (e.key === "Enter") saveNew(); }} />
+      </label>
+      <label>
+        <span class="label-text">Color</span>
+        <div class="color-row">
+          <input type="color" bind:value={formColor} />
+          <span class="color-hex">{formColor}</span>
+        </div>
+      </label>
       <div class="form-actions">
         <button class="btn btn-accent btn-sm" onclick={saveNew} disabled={!formKw.trim()}>Save</button>
         <button class="btn btn-sm" onclick={cancelForm}>Cancel</button>
@@ -110,14 +114,18 @@
   {#each items as h (h.keyword)}
     {#if editKw === h.keyword}
       <div class="card inline-form">
-        <label>Keyword</label>
-        <input type="text" bind:value={formKw}
-          onkeydown={(e) => { if (e.key === "Enter") saveEdit(); }} />
-        <label>Color</label>
-        <div class="color-row">
-          <input type="color" bind:value={formColor} />
-          <span class="color-hex">{formColor}</span>
-        </div>
+        <label>
+          <span class="label-text">Keyword</span>
+          <input type="text" bind:value={formKw}
+            onkeydown={(e) => { if (e.key === "Enter") saveEdit(); }} />
+        </label>
+        <label>
+          <span class="label-text">Color</span>
+          <div class="color-row">
+            <input type="color" bind:value={formColor} />
+            <span class="color-hex">{formColor}</span>
+          </div>
+        </label>
         <div class="form-actions">
           <button class="btn btn-accent btn-sm" onclick={saveEdit} disabled={!formKw.trim()}>Save</button>
           <button class="btn btn-sm" onclick={cancelForm}>Cancel</button>
@@ -168,6 +176,8 @@
     display: flex; flex-direction: column; gap: 8px;
     padding: 14px; margin-bottom: 10px;
   }
+  .inline-form label { display: flex; flex-direction: column; gap: 4px; }
+  .label-text { font-size: 13px; color: var(--text); }
   .inline-form input[type="text"] {
     width: 100%; box-sizing: border-box; font: inherit; font-size: 13px;
   }

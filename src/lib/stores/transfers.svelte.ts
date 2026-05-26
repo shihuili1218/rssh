@@ -15,8 +15,10 @@ import { errMsg } from "../i18n/index.svelte.ts";
 export type TransferKind = "download" | "upload";
 export type TransferStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 
-/// 全局并发上限：同时最多 N 个 running transfer，超出的留在 queued。
-/// 选这个值的考量：SSH 协议层 channel 数（10-100）+ 单连接带宽分摊 → 10 是务实甜点。
+/// Global concurrency cap: at most N running transfers at a time; the rest
+/// stay queued. Picked at 10 as a pragmatic sweet spot — comfortably within
+/// SSH channel limits (typically 10-100) while keeping per-connection
+/// bandwidth share reasonable.
 const MAX_CONCURRENT = 10;
 
 /// 后端用这个 i18n code 标记"用户主动取消"。errStr 包含 `__rssh_err__|{"code":"transfer_cancelled",...}`
@@ -70,8 +72,10 @@ function runningCount(): number {
   return _list.filter((t) => t.status === "running").length;
 }
 
-/// 把 id 对应的 queued transfer 提升为 running 并发起。已 running/cancelled/done 等
-/// 状态直接返回。容量满则保留在 queued 等下一次 finally 扫描。
+/// Promote the queued transfer matching `id` to running and kick it off.
+/// Returns early when already running/cancelled/done/etc. When the capacity
+/// is full, the entry remains queued and is picked up by the next
+/// `promoteNextQueued()` scan in some other transfer's `finally` block.
 function tryDispatch(id: string): void {
   if (runningCount() >= MAX_CONCURRENT) return;
   const t = find(id);
@@ -81,8 +85,9 @@ function tryDispatch(id: string): void {
   void runTransfer(id);
 }
 
-/// runTransfer finally 结束后扫一遍：找最老的 queued，提升一个。
-/// 用 reverse() 因为 startDownload 是 unshift（新的在前），最老的在末尾。
+/// Called from runTransfer's finally: scan for the oldest queued entry and
+/// promote one. Iterates from the tail because `startDownload` unshifts new
+/// transfers to the front, so the oldest queued entry lives at the end.
 function promoteNextQueued(): void {
   if (runningCount() >= MAX_CONCURRENT) return;
   for (let i = _list.length - 1; i >= 0; i--) {
@@ -207,9 +212,10 @@ export async function retry(id: string): Promise<void> {
   tryDispatch(id);
 }
 
-/** 主动取消传输：
- *  - queued：没在跑，直接标 cancelled，无 IPC。
- *  - running：发后端 cancel flag，状态翻转由 runTransfer 的 catch 分支处理。 */
+/** Cancel a transfer.
+ *  - queued: not running, mark cancelled directly without any IPC.
+ *  - running: raise the backend cancel flag; runTransfer's catch branch will
+ *    flip the status when the streaming loop exits. */
 export async function cancel(id: string): Promise<void> {
   const t = find(id);
   if (!t) return;

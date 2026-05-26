@@ -20,7 +20,8 @@
     import ChatPanel from "../ai/ChatPanel.svelte";
     import * as ai from "../ai/store.svelte.ts";
     import {attachShortcuts, attachKeyup, type Shortcut} from "../keyboard/registry.ts";
-    import {t} from "../i18n/index.svelte.ts";
+    import {t, errMsg} from "../i18n/index.svelte.ts";
+    import {toast} from "../stores/toast.svelte.ts";
 
     let drawerOpen = $state(false);
     let focusIdx = $state(-1);
@@ -234,7 +235,8 @@
         } else {
             getCurrentWindow().setTitle("RSSH");
         }
-        // Transfers 浮窗不改窗口标题 —— 它只是 overlay，不接管路由。
+        // The Transfers popover does not touch the window title — it is an
+        // overlay, not a route.
     });
 
     let pinnedProfiles = $derived(
@@ -253,7 +255,7 @@
         && (aiActiveTab.type === "ssh" || aiActiveTab.type === "local")
         && !!aiSessionId
         && !app.settingsActive()
-        // Transfers 浮窗不影响 AI 面板可见性 —— 浮窗是 overlay
+        // The Transfers popover does not affect AI panel visibility — overlay.
     );
     let xferBadge = $derived.by(() => {
         const n = transfers.activeCount();
@@ -266,7 +268,7 @@
     let sftpTabs = $derived(app.tabsWithSftp());
     let sftpVisible = $derived(
         !app.settingsActive() && app.sftpOpen()
-        // Transfers 浮窗不藏 SFTP —— 浮窗是 overlay
+        // The Transfers popover does not hide SFTP — overlay.
     );
 
     /* ── AI 面板宽度：用户拖拽 → localStorage，覆盖响应式默认值。
@@ -425,8 +427,9 @@
     function isActiveItem(item: NavItem): boolean {
         if (item.kind === "tab") return !app.settingsActive() && item.tab.id === app.activeTabId();
         if (item.kind === "settings") return app.settingsActive();
-        // Downloads 是浮窗、不是路由。"active" 只跟真路由走（home / settings）。
-        // 浮窗是否打开靠 badge 体现，不抢侧栏 active 高亮。
+        // Downloads is a popover, not a route. "active" only tracks real
+        // routes (home / settings). The open/closed state surfaces through
+        // the badge instead of taking sidebar active highlight.
         return false;
     }
 
@@ -507,7 +510,7 @@
     }
 
     function selectDownloads() {
-        // 浮窗：每次点 sidebar 入口都 toggle —— 开了再点关，关了再点开
+        // Popover: every click on the sidebar entry toggles open/closed.
         app.toggleDownloads();
         closeDrawer();
     }
@@ -584,19 +587,22 @@
                     onClick: () => { navigator.clipboard.writeText(utc).catch(() => {}); },
                 });
             }
-            // 把选中文本存为命令片段：name = 前 10 字符，command = 整段。
-            // 全空白选择置灰 —— 存一个 10 个空格名字的片段没意义。
+            // Save the selected text as a command snippet: name = first 10
+            // chars, command = the full selection. All-whitespace selections
+            // are disabled — a 10-space-named snippet has no value.
             copyPaste.push({
                 label: t("tab.context.add_to_snippets"),
                 disabled: !trimmed,
                 onClick: async () => {
                     if (!trimmed) return;
+                    const name = trimmed.slice(0, 10);
                     try {
                         const all = await app.loadSnippets();
-                        all.push({ name: trimmed.slice(0, 10), command: trimmed });
+                        all.push({ name, command: trimmed });
                         await invoke("save_snippets", { snippets: all });
+                        toast.success(`${t("tab.context.add_to_snippets")}: ${name}`);
                     } catch (e) {
-                        console.error("save snippet failed:", e);
+                        toast.error(`${t("toast.error.save")}: ${errMsg(e)}`);
                     }
                 },
             });
@@ -911,11 +917,14 @@
             </aside>
         {/if}
     </div>
-</div>
 
-{#if app.downloadsActive()}
-    <DownloadsScreen/>
-{/if}
+    <!-- Popover lives inside .shell so it inherits the --sb-* layout vars that
+         drive its edge offsets. position:fixed still anchors to the viewport
+         because .shell does not create a fixed-positioning containing block. -->
+    {#if app.downloadsActive()}
+        <DownloadsScreen/>
+    {/if}
+</div>
 
 <style>
     .shell {

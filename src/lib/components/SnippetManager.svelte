@@ -75,10 +75,14 @@
 
   {#if adding}
     <div class="card inline-form">
-      <label>Name</label>
-      <input type="text" bind:value={formName} placeholder="snippet name" />
-      <label>Command</label>
-      <textarea bind:value={formCmd} placeholder="command (multi-line ok)" rows="2"></textarea>
+      <label>
+        <span class="label-text">Name</span>
+        <input type="text" bind:value={formName} placeholder="snippet name" />
+      </label>
+      <label>
+        <span class="label-text">Command</span>
+        <textarea bind:value={formCmd} placeholder="command (multi-line ok)" rows="2"></textarea>
+      </label>
       <div class="form-actions">
         <button class="btn btn-accent btn-sm" onclick={saveNew} disabled={!formName.trim() || !formCmd.trim()}>Save</button>
         <button class="btn btn-sm" onclick={cancelForm}>Cancel</button>
@@ -89,10 +93,14 @@
   {#each snippets as s, i (i)}
     {#if editIdx === i}
       <div class="card inline-form">
-        <label>Name</label>
-        <input type="text" bind:value={formName} />
-        <label>Command</label>
-        <textarea bind:value={formCmd} rows="2"></textarea>
+        <label>
+          <span class="label-text">Name</span>
+          <input type="text" bind:value={formName} />
+        </label>
+        <label>
+          <span class="label-text">Command</span>
+          <textarea bind:value={formCmd} rows="2"></textarea>
+        </label>
         <div class="form-actions">
           <button class="btn btn-accent btn-sm" onclick={saveEdit} disabled={!formName.trim() || !formCmd.trim()}>Save</button>
           <button class="btn btn-sm" onclick={cancelForm}>Cancel</button>
@@ -142,6 +150,8 @@
     display: flex; flex-direction: column; gap: 8px;
     padding: 14px; margin-bottom: 10px;
   }
+  .inline-form label { display: flex; flex-direction: column; gap: 4px; }
+  .label-text { font-size: 13px; color: var(--text); }
   .inline-form input,
   .inline-form textarea {
     width: 100%; box-sizing: border-box; font: inherit; font-size: 13px;
