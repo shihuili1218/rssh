@@ -147,6 +147,7 @@ pub async fn chat(
                 tool_call_id,
                 content,
                 is_error,
+                ..
             } => {
                 let body = if *is_error {
                     format!("[ERROR] {content}")

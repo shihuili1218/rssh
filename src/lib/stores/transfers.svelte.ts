@@ -174,7 +174,7 @@ export async function startDownload(args: {
     status: "queued",
     startedAt: Date.now(),
   };
-  _list = [t, ..._list];
+  _list.unshift(t);
   tryDispatch(id);
   return id;
 }
@@ -196,7 +196,7 @@ export async function startUpload(args: {
     status: "queued",
     startedAt: Date.now(),
   };
-  _list = [t, ..._list];
+  _list.unshift(t);
   tryDispatch(id);
   return id;
 }

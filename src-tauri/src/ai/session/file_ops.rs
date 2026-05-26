@@ -630,24 +630,19 @@ impl Actor {
         }
     }
 
-    pub(super) async fn handle_match_file(&mut self, tc: ToolCall) -> AppResult<()> {
+    pub(super) async fn handle_match_file(&mut self, tc: ToolCall) -> AppResult<ChatMessage> {
         let input: MatchFileInput = match serde_json::from_value(tc.input.clone()) {
             Ok(i) => i,
-            Err(e) => {
-                self.push_tool_error(&tc.id, &format!("Failed to parse input: {e}"));
-                return Ok(());
-            }
+            Err(e) => return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}"))),
         };
         if let Err(e) = validate_path(&input.path) {
-            self.push_tool_error(&tc.id, &format!("match_file: invalid path — {e}"));
-            return Ok(());
+            return Ok(self.make_tool_error(&tc.id, &format!("match_file: invalid path — {e}")));
         }
         if input.find.is_empty() {
-            self.push_tool_error(
+            return Ok(self.make_tool_error(
                 &tc.id,
                 "match_file: `find` must not be empty (it would match the entire file).",
-            );
-            return Ok(());
+            ));
         }
         let before = input
             .before
@@ -662,16 +657,14 @@ impl Actor {
         let interp = match select_interpreter(caps) {
             Some(i) => i,
             None => {
-                self.push_tool_error(
+                return Ok(self.make_tool_error(
                     &tc.id,
                     "match_file: remote system lacks python3 / perl — rssh cannot inspect the file. \
                      Tell the user to install python3 (preferred) or perl.",
-                );
-                return Ok(());
+                ));
             }
         };
 
-        // 单卡片：搜索 path，read-only，回 JSON 给 LLM。kind=match_file 让前端按 auto_match_file 决策。
         let cmd = build_match_cmd(interp, &input.path, &input.find, before, after);
         let outcome = self
             .run_file_op(
@@ -687,11 +680,10 @@ impl Actor {
 
         let (exit_code, output) = match outcome {
             CommandOutcome::Rejected { reason } => {
-                self.push_tool_error(
+                return Ok(self.make_tool_error(
                     &tc.id,
                     &format!("User rejected match_file. Reason: {reason}."),
-                );
-                return Ok(());
+                ));
             }
             CommandOutcome::Result {
                 exit_code, output, ..
@@ -701,27 +693,25 @@ impl Actor {
         let payload = match (exit_code, extract_json_payload(&output)) {
             (0, Some(p)) => p.to_string(),
             _ => {
-                self.push_tool_error(
+                return Ok(self.make_tool_error(
                     &tc.id,
                     &format!(
                         "match_file: remote script failed (exit {exit_code}). Output: {}",
                         output.chars().take(400).collect::<String>()
                     ),
-                );
-                return Ok(());
+                ));
             }
         };
-        // 解析远端 JSON。`{"error": "..."}` 形态（file_not_found / io_error）走 push_tool_error，
-        // 与 patch_file 的错误处理保持一致 —— 不能把 error payload 当成功 ToolResult，否则 LLM
-        // 看不到失败信号会继续往下推（譬如基于 count=0 直接跑 patch_file，又一遍 file_not_found）。
+        // Remote returns `{"error": ...}` for file_not_found / io_error —
+        // bubble those as tool errors so the LLM doesn't treat count=0 as
+        // "no matches" and barrel into a patch_file that also fails.
         let parsed: serde_json::Value = match serde_json::from_str(&payload) {
             Ok(v) => v,
             Err(e) => {
-                self.push_tool_error(
+                return Ok(self.make_tool_error(
                     &tc.id,
                     &format!("match_file: malformed JSON ({e}). Raw: {payload}"),
-                );
-                return Ok(());
+                ));
             }
         };
         if let Some(err) = parsed.get("error").and_then(|e| e.as_str()) {
@@ -734,8 +724,7 @@ impl Actor {
                 ),
                 other => format!("match_file: remote error {other}: {payload}"),
             };
-            self.push_tool_error(&tc.id, &msg);
-            return Ok(());
+            return Ok(self.make_tool_error(&tc.id, &msg));
         }
         let count = parsed.get("count").and_then(|c| c.as_u64());
         let matches_shown = parsed
@@ -748,9 +737,7 @@ impl Actor {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        // matches 截断在**远端脚本**里做（K=50 cap，count 仍记总数，加 truncated: true 字段）——
-        // 见 PYTHON_MATCH_SCRIPT / PERL_MATCH_SCRIPT。这里只把远端结果原样转发，audit 反映是否
-        // 被截断。后端不再二次截断：远端已经 cap 死，再做一遍是死代码。
+        // Remote script caps `matches` at K=50; we forward as-is.
         self.audit_push(AuditKind::Note {
             message: format!(
                 "match_file: {} interp={} count={} matches_shown={}{}",
@@ -761,60 +748,51 @@ impl Actor {
                 if remote_truncated { " (remote-truncated)" } else { "" }
             ),
         });
-        self.history.push(ChatMessage::ToolResult {
-            tool_call_id: tc.id,
-            content: payload,
-            is_error: false,
-        });
-        Ok(())
+        // Redact at the insertion boundary so `redact_message` in dialogue_turn
+        // can skip a second pass on the JSON payload (which would corrupt
+        // structured hashes — sha256/git-oid — inside string fields).
+        let redacted_payload = sanitize::redact(&payload, &self.cfg.redact_rules);
+        Ok(Self::make_tool_result(&tc.id, redacted_payload, true))
     }
 
-    pub(super) async fn handle_patch_file(&mut self, tc: ToolCall) -> AppResult<()> {
+    pub(super) async fn handle_patch_file(&mut self, tc: ToolCall) -> AppResult<ChatMessage> {
         let input: PatchFileInput = match serde_json::from_value(tc.input.clone()) {
             Ok(i) => i,
-            Err(e) => {
-                self.push_tool_error(&tc.id, &format!("Failed to parse input: {e}"));
-                return Ok(());
-            }
+            Err(e) => return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}"))),
         };
         if let Err(e) = validate_path(&input.path) {
-            self.push_tool_error(&tc.id, &format!("patch_file: invalid path — {e}"));
-            return Ok(());
+            return Ok(self.make_tool_error(&tc.id, &format!("patch_file: invalid path — {e}")));
         }
         if input.find.is_empty() {
-            self.push_tool_error(
+            return Ok(self.make_tool_error(
                 &tc.id,
                 "patch_file: `find` must not be empty (use match_file to discover what to change).",
-            );
-            return Ok(());
+            ));
         }
         if input.expected_count == 0 {
-            self.push_tool_error(
+            return Ok(self.make_tool_error(
                 &tc.id,
                 "patch_file: `expected_count` must be >= 1. Use match_file first to discover the actual count, then pass it here.",
-            );
-            return Ok(());
+            ));
         }
 
         let caps = self.ensure_remote_caps().await?;
         let interp = match select_interpreter(caps) {
             Some(i) => i,
             None => {
-                self.push_tool_error(
+                return Ok(self.make_tool_error(
                     &tc.id,
                     "patch_file: remote system lacks python3 / perl — rssh cannot patch the file. \
                      Tell the user to install python3 (preferred) or perl.",
-                );
-                return Ok(());
+                ));
             }
         };
         if !caps.diff {
-            self.push_tool_error(
+            return Ok(self.make_tool_error(
                 &tc.id,
                 "patch_file: remote system lacks `diff` — rssh cannot show the diff for approval. \
                  Tell the user to install diffutils.",
-            );
-            return Ok(());
+            ));
         }
 
         // tmp 与 path 同目录，保证后续 mv 走单 rename(2)（同 filesystem，原子）。
@@ -840,23 +818,21 @@ impl Actor {
             .await?;
         match outcome {
             CommandOutcome::Rejected { reason } => {
-                self.push_tool_error(
+                return Ok(self.make_tool_error(
                     &tc.id,
                     &format!("User rejected step 1/4 (cp). Reason: {reason}."),
-                );
-                return Ok(());
+                ));
             }
             CommandOutcome::Result {
                 exit_code, output, ..
             } if exit_code != 0 => {
-                self.push_tool_error(
+                return Ok(self.make_tool_error(
                     &tc.id,
                     &format!(
                         "patch_file 1/4 (cp) failed (exit {exit_code}). Output: {}",
                         output.chars().take(400).collect::<String>()
                     ),
-                );
-                return Ok(());
+                ));
             }
             _ => {}
         }
@@ -878,49 +854,45 @@ impl Actor {
             .await?;
         let (modify_exit, modify_output) = match outcome {
             CommandOutcome::Rejected { reason } => {
-                self.push_tool_error(
+                return Ok(self.make_tool_error(
                     &tc.id,
                     &format!(
                         "User rejected step 2/4 (modify). Reason: {reason}. Tmp at {tmp_path} (user can inspect / rm)."
                     ),
-                );
-                return Ok(());
+                ));
             }
             CommandOutcome::Result {
                 exit_code, output, ..
             } => (exit_code, output),
         };
         if modify_exit != 0 {
-            self.push_tool_error(
+            return Ok(self.make_tool_error(
                 &tc.id,
                 &format!(
                     "patch_file 2/4 (modify) failed (exit {modify_exit}). Tmp at {tmp_path}. Output: {}",
                     modify_output.chars().take(400).collect::<String>()
                 ),
-            );
-            return Ok(());
+            ));
         }
         let payload = match extract_json_payload(&modify_output) {
             Some(p) => p.to_string(),
             None => {
-                self.push_tool_error(
+                return Ok(self.make_tool_error(
                     &tc.id,
                     &format!(
                         "patch_file 2/4 (modify): no JSON marker in output. Tmp at {tmp_path}. Output: {}",
                         modify_output.chars().take(400).collect::<String>()
                     ),
-                );
-                return Ok(());
+                ));
             }
         };
         let parsed: serde_json::Value = match serde_json::from_str(&payload) {
             Ok(v) => v,
             Err(e) => {
-                self.push_tool_error(
+                return Ok(self.make_tool_error(
                     &tc.id,
                     &format!("patch_file 2/4 (modify): malformed JSON ({e}). Tmp at {tmp_path}. Raw: {payload}"),
-                );
-                return Ok(());
+                ));
             }
         };
         if let Some(err) = parsed.get("error").and_then(|e| e.as_str()) {
@@ -937,8 +909,7 @@ impl Actor {
                 ),
                 other => format!("patch_file: remote error {other}: {payload}"),
             };
-            self.push_tool_error(&tc.id, &msg);
-            return Ok(());
+            return Ok(self.make_tool_error(&tc.id, &msg));
         }
         let count = parsed
             .get("count")
@@ -960,34 +931,32 @@ impl Actor {
             .await?;
         let (diff_exit, diff_raw) = match outcome {
             CommandOutcome::Rejected { reason } => {
-                self.push_tool_error(
+                return Ok(self.make_tool_error(
                     &tc.id,
                     &format!(
                         "User rejected step 3/4 (diff). Reason: {reason}. Tmp at {tmp_path} (user can inspect / rm)."
                     ),
-                );
-                return Ok(());
+                ));
             }
             CommandOutcome::Result {
                 exit_code, output, ..
             } => {
                 if exit_code >= 2 {
-                    self.push_tool_error(
+                    return Ok(self.make_tool_error(
                         &tc.id,
                         &format!(
                             "patch_file 3/4 (diff) failed (exit {exit_code}). Tmp at {tmp_path}. Output: {}",
                             output.chars().take(400).collect::<String>()
                         ),
-                    );
-                    return Ok(());
+                    ));
                 }
                 (exit_code, output)
             }
         };
 
-        // diff exit 0 = 修改后内容与原文件完全一样（modify 步是 no-op）。继续 mv 会
-        // 白改 mtime/inode，给依赖 mtime 的工具（make / 缓存 / 备份）带来误判。
-        // 直接报 no-changes 返回，tmp 留着让用户自行清（同 reject 流程的行为）。
+        // diff exit 0 = modify step was a no-op (replacement equals original).
+        // Skip mv so we don't churn mtime/inode for tools (make / caches / backups)
+        // that key off them. Leave tmp for the user to inspect / rm.
         if diff_exit == 0 {
             self.audit_push(AuditKind::Note {
                 message: format!(
@@ -1003,12 +972,10 @@ impl Actor {
                 "note": format!("patch_file: no-op (replacement matches original; mv skipped). Tmp at {tmp_path}, user may rm if not needed."),
             })
             .to_string();
-            self.history.push(ChatMessage::ToolResult {
-                tool_call_id: tc.id,
-                content: result,
-                is_error: false,
-            });
-            return Ok(());
+            // Redact at insertion boundary, mark pre_redacted so redact_message
+            // doesn't run a second pass on this structured JSON.
+            let redacted = sanitize::redact(&result, &self.cfg.redact_rules);
+            return Ok(Self::make_tool_result(&tc.id, redacted, true));
         }
 
         // diff 走 max_output_bytes 截断 —— 原始 diff 可能很长（大文件差异、二进制差异等），
@@ -1033,25 +1000,23 @@ impl Actor {
             .await?;
         match outcome {
             CommandOutcome::Rejected { reason } => {
-                self.push_tool_error(
+                Ok(self.make_tool_error(
                     &tc.id,
                     &format!(
                         "User rejected step 4/4 (mv). Reason: {reason}. Tmp at {tmp_path} (still staged, user can inspect / rm)."
                     ),
-                );
-                Ok(())
+                ))
             }
             CommandOutcome::Result {
                 exit_code, output, ..
             } if exit_code != 0 => {
-                self.push_tool_error(
+                Ok(self.make_tool_error(
                     &tc.id,
                     &format!(
                         "patch_file 4/4 (mv) failed (exit {exit_code}). Tmp at {tmp_path}. Output: {}",
                         output.chars().take(400).collect::<String>()
                     ),
-                );
-                Ok(())
+                ))
             }
             CommandOutcome::Result { .. } => {
                 self.audit_push(AuditKind::Note {
@@ -1068,12 +1033,11 @@ impl Actor {
                     "changed": count,
                 })
                 .to_string();
-                self.history.push(ChatMessage::ToolResult {
-                    tool_call_id: tc.id,
-                    content: result,
-                    is_error: false,
-                });
-                Ok(())
+                // Redact at insertion boundary, mark pre_redacted to skip
+                // the second pass that would substitute `<REDACTED:hex>`
+                // into sha256/git-oid strings embedded in the diff.
+                let redacted = sanitize::redact(&result, &self.cfg.redact_rules);
+                Ok(Self::make_tool_result(&tc.id, redacted, true))
             }
         }
     }

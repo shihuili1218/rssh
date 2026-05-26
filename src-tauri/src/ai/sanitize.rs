@@ -84,11 +84,25 @@ pub fn redact_message(msg: &ChatMessage, rules: &[RedactRule]) -> ChatMessage {
             tool_call_id,
             content,
             is_error,
-        } => ChatMessage::ToolResult {
-            tool_call_id: tool_call_id.clone(),
-            content: redact(content, rules),
-            is_error: *is_error,
-        },
+            pre_redacted,
+        } => {
+            // Structured payloads (file_ops JSON, etc.) were redacted at the
+            // insertion site against the raw command output. Re-running redact
+            // here on the serialized JSON can substitute `<REDACTED:hex>` into
+            // string fields (file contents containing sha256 / git oid),
+            // corrupting what the LLM sees vs. what the file actually holds.
+            let new_content = if *pre_redacted {
+                content.clone()
+            } else {
+                redact(content, rules)
+            };
+            ChatMessage::ToolResult {
+                tool_call_id: tool_call_id.clone(),
+                content: new_content,
+                is_error: *is_error,
+                pre_redacted: *pre_redacted,
+            }
+        }
     }
 }
 
@@ -900,16 +914,42 @@ mod tests {
             tool_call_id: "tc1".into(),
             content: "Bearer abcdefghijklmnopqrstuvwxyz1234".into(),
             is_error: false,
+            pre_redacted: false,
         };
         match redact_message(&m, &rules) {
             ChatMessage::ToolResult {
                 tool_call_id,
                 content,
                 is_error,
+                ..
             } => {
                 assert_eq!(tool_call_id, "tc1");
                 assert!(content.contains("<REDACTED:bearer>"));
                 assert!(!is_error);
+            }
+            _ => panic!("variant changed"),
+        }
+    }
+
+    /// `pre_redacted=true` means the insertion site already ran redact on
+    /// the raw command output. Re-redacting structured JSON payloads (file
+    /// contents, hashes) can corrupt them — skip the second pass.
+    #[test]
+    fn redact_message_tool_result_pre_redacted_is_skipped() {
+        let rules = default_rules();
+        // A realistic file_ops payload: JSON containing a sha256 hash that
+        // would otherwise be eaten by the long-hex rule on a second pass.
+        let payload =
+            r#"{"context":"hash: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd"}"#;
+        let m = ChatMessage::ToolResult {
+            tool_call_id: "tc1".into(),
+            content: payload.into(),
+            is_error: false,
+            pre_redacted: true,
+        };
+        match redact_message(&m, &rules) {
+            ChatMessage::ToolResult { content, .. } => {
+                assert_eq!(content, payload, "pre-redacted payload must be untouched");
             }
             _ => panic!("variant changed"),
         }

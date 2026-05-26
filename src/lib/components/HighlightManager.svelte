@@ -20,6 +20,11 @@
 
   async function refresh() {
     items = await app.loadHighlights();
+    // Tell open TerminalPanes their highlight regex is stale. Local-only
+    // bump (no backend round-trip) — TerminalPane's $effect re-reads the
+    // DB and recompiles its regex. Without this, edits here only take
+    // effect after the next terminal reconnect.
+    app.bumpHighlights();
   }
 
   function startAdd() {

@@ -344,23 +344,59 @@ impl Actor {
                 tokens_out: resp.tokens_out,
             });
 
-            self.history.push(ChatMessage::Assistant {
+            // Build the turn's history-extension as a single pending vec
+            // and commit it atomically. Two invariants this enforces:
+            //   1. The Assistant message and *all* its ToolResult counterparts
+            //      land in `history` together — partial failure during a
+            //      multi-tool turn never leaves dangling tool_use entries
+            //      (which Anthropic 400-rejects on the next chat call).
+            //   2. Any handler returning `Err(AppError)` is auto-converted
+            //      into a `ToolResult { is_error: true }`, so handlers can
+            //      use `?` for genuine remote-side failures without the
+            //      author having to remember to push an error tool_result.
+            let assistant = ChatMessage::Assistant {
                 content: resp.text.clone(),
                 tool_calls: resp.tool_calls.clone(),
                 reasoning_content: resp.reasoning_content.clone(),
-            });
+            };
 
             if resp.tool_calls.is_empty() {
+                self.history.push(assistant);
                 return Ok(());
             }
 
+            let mut pending: Vec<ChatMessage> = Vec::with_capacity(1 + resp.tool_calls.len());
+            pending.push(assistant);
+
             for tc in resp.tool_calls {
-                self.handle_tool_call(tc).await?;
+                let tc_id = tc.id.clone();
+                let result_msg = match self.handle_tool_call(tc).await {
+                    Ok(msg) => msg,
+                    Err(e) => {
+                        // Convert AppError → ToolResult so the turn closes
+                        // cleanly. The error code/payload is intentionally
+                        // not exposed to the LLM verbatim (may contain
+                        // internal endpoint details); the audit log keeps
+                        // the full error.
+                        self.make_tool_error(
+                            &tc_id,
+                            &format!("internal tool error ({}): {}", e.code(), e),
+                        )
+                    }
+                };
+                pending.push(result_msg);
             }
+
+            self.history.extend(pending);
         }
     }
 
-    async fn handle_tool_call(&mut self, tc: ToolCall) -> AppResult<()> {
+    /// Dispatch a single tool call to its handler. Returns the `ToolResult`
+    /// `ChatMessage` that must be appended to `history` to keep tool_use/
+    /// tool_result paired. Internal errors are mapped to `is_error=true`
+    /// results by the caller (`dialogue_turn`) so handlers can use `?`
+    /// freely for early exit on remote-side errors.
+    async fn handle_tool_call(&mut self, tc: ToolCall) -> AppResult<ChatMessage> {
         match tc.name.as_str() {
             tools::TOOL_RUN_COMMAND => self.handle_run_command(tc).await,
             tools::TOOL_LOAD_SKILL => self.handle_load_skill(tc).await,
@@ -368,10 +404,7 @@ impl Actor {
             tools::TOOL_ANALYZE_LOCALLY => self.handle_analyze_locally(tc).await,
             tools::TOOL_MATCH_FILE => self.handle_match_file(tc).await,
             tools::TOOL_PATCH_FILE => self.handle_patch_file(tc).await,
-            other => {
-                self.push_tool_error(&tc.id, &format!("Unknown tool: {other}"));
-                Ok(())
-            }
+            other => Ok(self.make_tool_error(&tc.id, &format!("Unknown tool: {other}"))),
         }
     }
 
@@ -437,21 +470,17 @@ impl Actor {
         }
     }
 
-    async fn handle_load_skill(&mut self, tc: ToolCall) -> AppResult<()> {
+    async fn handle_load_skill(&mut self, tc: ToolCall) -> AppResult<ChatMessage> {
         let input: LoadSkillInput = match serde_json::from_value(tc.input.clone()) {
             Ok(i) => i,
-            Err(e) => {
-                self.push_tool_error(&tc.id, &format!("Failed to parse input: {e}"));
-                return Ok(());
-            }
+            Err(e) => return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}"))),
         };
-        // 'general' 是内置 builtin，已经直接在 system prompt 里——不可被 load
+        // 'general' is the built-in rule set, already inlined in system prompt.
         if input.id == "general" {
-            self.push_tool_error(
+            return Ok(self.make_tool_error(
                 &tc.id,
                 "'general' is the built-in rule set and is already in the system prompt — no need to load it.",
-            );
-            return Ok(());
+            ));
         }
         let skill = match self.cfg.user_skills_cache.iter().find(|s| s.id == input.id) {
             Some(s) => s.clone(),
@@ -462,43 +491,40 @@ impl Actor {
                     .iter()
                     .map(|s| s.id.as_str())
                     .collect();
-                self.push_tool_error(
+                return Ok(self.make_tool_error(
                     &tc.id,
                     &format!(
                         "Unknown user-skill id: {}. Available user skills: [{}]",
                         input.id,
                         known.join(", ")
                     ),
-                );
-                return Ok(());
+                ));
             }
         };
         self.audit_push(AuditKind::Note {
             message: format!("loaded user-skill: {} ({})", skill.id, skill.name),
         });
-        self.history.push(ChatMessage::ToolResult {
-            tool_call_id: tc.id,
-            content: format!(
+        // Skill content is operator-curated rssh-side text — already trusted
+        // and free of remote secrets. Mark pre_redacted to skip re-scan.
+        Ok(Self::make_tool_result(
+            &tc.id,
+            format!(
                 "# {} (id: {})\n\n_{}_\n\n---\n\n{}",
                 skill.name, skill.id, skill.description, skill.content
             ),
-            is_error: false,
-        });
-        Ok(())
+            true,
+        ))
     }
 
-    async fn handle_download_file(&mut self, tc: ToolCall) -> AppResult<()> {
+    async fn handle_download_file(&mut self, tc: ToolCall) -> AppResult<ChatMessage> {
         let input: DownloadFileInput = match serde_json::from_value(tc.input.clone()) {
             Ok(i) => i,
-            Err(e) => {
-                self.push_tool_error(&tc.id, &format!("Failed to parse input: {e}"));
-                return Ok(());
-            }
+            Err(e) => return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}"))),
         };
 
-        // 100MB 硬上限：拒绝 max_mb 申请就超的请求，免得 SFTP 起头后才 abort
+        // 100MB hard cap. Reject up front so we don't open SFTP only to abort.
         if input.max_mb > MAX_DOWNLOAD_MB {
-            self.push_tool_error(
+            return Ok(self.make_tool_error(
                 &tc.id,
                 &format!(
                     "rssh caps download_file at {MAX_DOWNLOAD_MB} MB (you requested max_mb={}). \
@@ -507,19 +533,17 @@ impl Actor {
                      to their local machine themselves, then call `analyze_locally` on that local path.",
                     input.max_mb, input.remote_path
                 ),
-            );
-            return Ok(());
+            ));
         }
 
-        // 本地 shell target 没必要 SFTP——文件已经在用户本机
+        // Local-shell target: file is already on the user's machine.
         let ssh_handle = match self.cfg.ssh_handle.as_ref() {
             Some(h) => h.clone(),
             None => {
-                self.push_tool_error(
+                return Ok(self.make_tool_error(
                     &tc.id,
                     "This session's target is a local shell, so SFTP isn't needed. Just tell the user the path.",
-                );
-                return Ok(());
+                ));
             }
         };
 
@@ -565,10 +589,8 @@ impl Actor {
                     id: dl_id.clone(),
                     reason: reason.clone(),
                 });
-                // 跟 run_command / file_ops 一致用 command_rejected —— 前端 listener
-                // 清 pending + 把 ChatItem.rejected 填上。之前用 fake command_completed
-                // + exit_code=1 + 中文 "已拒绝" output 是 hack（rejection 被 UI 当成
-                // failed execution，填 result 不是 rejected）。
+                // Unified rejection signal across all tool kinds — front-end
+                // listener clears pending + sets ChatItem.rejected on this event.
                 self.emit(
                     "command_rejected",
                     json!({
@@ -576,11 +598,10 @@ impl Actor {
                         "reason": reason.clone(),
                     }),
                 );
-                self.push_tool_error(
+                return Ok(self.make_tool_error(
                     &tc.id,
                     &format!("User rejected download_file. Reason: {reason}."),
-                );
-                return Ok(());
+                ));
             }
             CommandOutcome::Result { .. } => { /* approved (前端 ack)，继续实际 SFTP */ }
         }
@@ -644,22 +665,23 @@ impl Actor {
                         "duration_ms": started_at.elapsed().as_millis() as u64,
                     }),
                 );
-                self.history.push(ChatMessage::ToolResult {
-                    tool_call_id: tc.id,
-                    content: format!(
+                Ok(Self::make_tool_result(
+                    &tc.id,
+                    format!(
                         "Download complete: {} ({} bytes). The file is now on the user's machine; tell the user the path and let them analyze it with local tools.",
                         local_str, bytes
                     ),
-                    is_error: false,
-                });
+                    true,
+                ))
             }
             Err(e) => {
                 self.audit_push(AuditKind::Note {
                     message: format!("download_file failed: {e}"),
                 });
-                // 卡片 output 是给用户看的文本，不能塞 AppError 的 `__rssh_err__|JSON` 协议串
-                // （那是给前端 errMsg() 翻译用的，渲染到 <pre> 里就是赤裸的协议体）。
-                // 用 code() 给个语义分类 + 远端路径让用户辨识，足以指导下一步动作。
+                // Card text is user-facing — never inline AppError's
+                // `__rssh_err__|JSON` wire format (the front-end errMsg()
+                // helper resolves that, but bare <pre> rendering exposes it).
+                // Use code() to give a semantic bucket + the remote path.
                 let card_msg = match e.code() {
                     "sftp_file_too_large" => format!(
                         "远端文件超出 {MAX_DOWNLOAD_MB} MB 上限：{}",
@@ -697,31 +719,26 @@ impl Actor {
                         input.remote_path
                     )
                 };
-                self.push_tool_error(&tc.id, &msg);
+                Ok(self.make_tool_error(&tc.id, &msg))
             }
         }
-        Ok(())
     }
 
-    async fn handle_analyze_locally(&mut self, tc: ToolCall) -> AppResult<()> {
+    async fn handle_analyze_locally(&mut self, tc: ToolCall) -> AppResult<ChatMessage> {
         let input: AnalyzeLocallyInput = match serde_json::from_value(tc.input.clone()) {
             Ok(i) => i,
-            Err(e) => {
-                self.push_tool_error(&tc.id, &format!("Failed to parse input: {e}"));
-                return Ok(());
-            }
+            Err(e) => return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}"))),
         };
 
-        // 文件必须真存在——LLM 应该先 download_file
+        // File must exist — LLM should have called download_file first.
         if !std::path::Path::new(&input.local_path).exists() {
-            self.push_tool_error(
+            return Ok(self.make_tool_error(
                 &tc.id,
                 &format!(
                     "Local path does not exist: {}. Use download_file first to pull the file to the local machine.",
                     input.local_path
                 ),
-            );
-            return Ok(());
+            ));
         }
 
         // 审批卡片：开新窗口副作用比较大（独立窗口、独立 AI 会话、消耗一次 API 调用），
@@ -748,7 +765,6 @@ impl Actor {
                     id: card_id.clone(),
                     reason: reason.clone(),
                 });
-                // 跟 download_file / run_command / file_ops 统一用 command_rejected
                 self.emit(
                     "command_rejected",
                     json!({
@@ -756,33 +772,29 @@ impl Actor {
                         "reason": reason.clone(),
                     }),
                 );
-                self.push_tool_error(
+                return Ok(self.make_tool_error(
                     &tc.id,
                     &format!("User rejected analyze_locally. Reason: {reason}."),
-                );
-                return Ok(());
+                ));
             }
             CommandOutcome::Result { .. } => { /* approved，继续实际开窗口 */ }
         }
 
-        // 把 handoff 注入到新窗口的 window.__rssh_ai_handoff；
-        // 新窗口的 AppShell 在 onMount 里读它 → 建本地 shell tab → 启动独立 AI 会话 → 发首条消息。
+        // Inject handoff into the new window's `window.__rssh_ai_handoff`;
+        // the new window's AppShell reads it onMount → opens local shell tab
+        // → starts an independent AI session → sends first message.
         let handoff = json!({
             "local_path": input.local_path,
             "task": input.task,
         })
         .to_string();
-        // tool_use 必须有对应 tool_result，否则下一轮 LLM 请求 400（Anthropic 严格）。
-        // 失败一律走 push_tool_error，绝不 `?` 让错误冒到 dialogue_turn 的 for 循环——
-        // 那会让本轮其它已 push 的 tool_result 与未 push 的 tool_use 配对错乱。
         let json_literal = match serde_json::to_string(&handoff) {
             Ok(s) => s,
             Err(e) => {
-                self.push_tool_error(
+                return Ok(self.make_tool_error(
                     &tc.id,
                     &format!("Failed to encode handoff payload: {e}"),
-                );
-                return Ok(());
+                ));
             }
         };
         // 直接把 JSON 字符串赋值为 JS string；前端走 JSON.parse(data) 还原。
@@ -815,7 +827,6 @@ impl Actor {
         #[cfg(desktop)]
         {
             use tauri::{WebviewUrl, WebviewWindowBuilder};
-            // 同上：窗口创建失败也走 push_tool_error，保持 tool_use/tool_result 配对。
             if let Err(e) = WebviewWindowBuilder::new(&self.app, &label, WebviewUrl::App("index.html".into()))
                 .title("RSSH — Local Analysis")
                 .inner_size(1200.0, 800.0)
@@ -823,13 +834,12 @@ impl Actor {
                 .build()
             {
                 emit_done(self, 1, format!("打开分析窗口失败：{e}"));
-                self.push_tool_error(
+                return Ok(self.make_tool_error(
                     &tc.id,
                     &format!(
                         "Failed to open analysis window: {e}. Continue diagnosis in the current session."
                     ),
-                );
-                return Ok(());
+                ));
             }
 
             self.audit_push(AuditKind::Note {
@@ -840,46 +850,40 @@ impl Actor {
             });
 
             emit_done(self, 0, format!("已打开分析窗口：{}", input.local_path));
-            self.history.push(ChatMessage::ToolResult {
-                tool_call_id: tc.id,
-                content: format!(
+            return Ok(Self::make_tool_result(
+                &tc.id,
+                format!(
                     "Opened a new window with a separate AI session to analyze {} (task: {}). \
                      This session will NOT receive the analysis result — continue with the current remote diagnosis. \
                      Once the user has the result in the new window, they'll decide how to bring the conclusion back here.",
                     input.local_path, input.task
                 ),
-                is_error: false,
-            });
+                true,
+            ));
         }
 
         #[cfg(mobile)]
         {
             let _ = (init_script, label);
             emit_done(self, 1, "该功能仅支持桌面端".into());
-            self.push_tool_error(
+            Ok(self.make_tool_error(
                 &tc.id,
                 "analyze_locally is desktop-only: this build cannot spawn additional windows. Continue diagnosis in the current session.",
-            );
+            ))
         }
-
-        Ok(())
     }
 
-    async fn handle_run_command(&mut self, tc: ToolCall) -> AppResult<()> {
+    async fn handle_run_command(&mut self, tc: ToolCall) -> AppResult<ChatMessage> {
         let input: RunCommandInput = match serde_json::from_value(tc.input.clone()) {
             Ok(i) => i,
-            Err(e) => {
-                self.push_tool_error(&tc.id, &format!("Failed to parse input: {e}"));
-                return Ok(());
-            }
+            Err(e) => return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}"))),
         };
 
         if let Err(e) = sanitize::validate(&input.cmd) {
-            self.push_tool_error(
+            return Ok(self.make_tool_error(
                 &tc.id,
                 &format!("rssh refused the command: {e}. Try a compliant rewrite."),
-            );
-            return Ok(());
+            ));
         }
 
         let cmd_id = uuid::Uuid::new_v4().to_string();
@@ -927,8 +931,6 @@ impl Actor {
                         id: cmd_id.clone(),
                         reason: reason.clone(),
                     });
-                    // 前端只在 command_completed/command_rejected 上清 pending；
-                    // 缺这个 emit 会让用户拒绝后命令卡片一直 pending 卡死。
                     self.emit(
                         "command_rejected",
                         json!({
@@ -936,11 +938,10 @@ impl Actor {
                             "reason": reason.clone(),
                         }),
                     );
-                    self.push_tool_error(
+                    return Ok(self.make_tool_error(
                         &tc.id,
                         &format!("User rejected the command. Reason: {reason}. Adjust your plan based on this reason."),
-                    );
-                    return Ok(());
+                    ));
                 }
                 UserAction::CommandResult {
                     tool_call_id,
@@ -979,12 +980,15 @@ impl Actor {
                         "exit={exit_code} timed_out={timed_out} early_terminated={early_terminated}\n--- output ---\n{}",
                         trunc.text
                     );
-                    self.history.push(ChatMessage::ToolResult {
+                    // Output was redacted + truncated above — mark pre_redacted
+                    // so `redact_message` doesn't run regex a second time on
+                    // an already-cleaned payload.
+                    return Ok(ChatMessage::ToolResult {
                         tool_call_id: tc.id,
                         content: tool_payload,
                         is_error: timed_out || early_terminated || exit_code != 0,
+                        pre_redacted: true,
                     });
-                    return Ok(());
                 }
                 UserAction::Stop => return Err(AppError::other("session_stopped_user", json!({}))),
                 // 命令审批期间不能接受新消息：tool_use 必须有对应 tool_result 才能再开下一轮 user。
@@ -1016,15 +1020,45 @@ impl Actor {
         }
     }
 
-    pub(in crate::ai::session) fn push_tool_error(&mut self, tool_call_id: &str, msg: &str) {
-        self.history.push(ChatMessage::ToolResult {
-            tool_call_id: tool_call_id.to_string(),
-            content: msg.to_string(),
-            is_error: true,
-        });
+    /// Build a `ToolResult { is_error: true }` for the given tool call and
+    /// record an audit note. **Does not** mutate `self.history` — the caller
+    /// (either a handler that returns its message, or `dialogue_turn`)
+    /// commits to history once per turn so tool_use/tool_result pairing is
+    /// preserved even when a handler bails out mid-way.
+    ///
+    /// `pre_redacted: true` because errors are rssh-generated strings (no
+    /// sensitive remote content) and double-redacting them is wasted work.
+    pub(in crate::ai::session) fn make_tool_error(
+        &self,
+        tool_call_id: &str,
+        msg: &str,
+    ) -> ChatMessage {
         self.audit_push(AuditKind::Note {
             message: format!("[tool_error {tool_call_id}] {msg}"),
         });
+        ChatMessage::ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            content: msg.to_string(),
+            is_error: true,
+            pre_redacted: true,
+        }
+    }
+
+    /// Convenience wrapper for handler success-path that produces a
+    /// pre-redacted structured payload (file_ops JSON / rssh-side text).
+    /// Content already passed through `sanitize::redact` at the insertion
+    /// site (or doesn't need redaction because it's rssh-generated).
+    pub(in crate::ai::session) fn make_tool_result(
+        tool_call_id: &str,
+        content: String,
+        pre_redacted: bool,
+    ) -> ChatMessage {
+        ChatMessage::ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            content,
+            is_error: false,
+            pre_redacted,
+        }
     }
 
     pub(in crate::ai::session) fn audit_push(&self, kind: AuditKind) {

@@ -42,6 +42,15 @@ pub enum ChatMessage {
         tool_call_id: String,
         content: String,
         is_error: bool,
+        /// Internal flag: content was already redacted at insertion site.
+        /// `redact_message` skips a second pass — important for structured
+        /// JSON payloads (file_ops) where re-redacting hex hashes inside
+        /// `package-lock.json` / git oid would corrupt the LLM's view of
+        /// the file and trigger downstream `count_mismatch` loops.
+        ///
+        /// Skipped during serialization so neither LLM provider sees it.
+        #[serde(skip)]
+        pre_redacted: bool,
     },
 }
 
