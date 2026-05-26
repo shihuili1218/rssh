@@ -355,8 +355,6 @@ impl SftpHandle {
         transfer_id: &str,
         cancel: Arc<AtomicBool>,
     ) -> AppResult<u64> {
-        use tauri::Emitter;
-
         // Get file size for progress
         let meta = self
             .sftp
@@ -378,8 +376,56 @@ impl SftpHandle {
         if let Some(parent) = local_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        let mut local_file = tokio::fs::File::create(local_path).await?;
 
+        // Atomicity: write to `<local_path>.part` first; rename to final name
+        // only on full success. Cancel / read-error / write-error all leave
+        // only a partial `.part` (cleaned up below) — never a truncated file
+        // sitting where users might pick it up. Mirrors `download_to_path`.
+        let file_name = local_path
+            .file_name()
+            .ok_or_else(|| AppError::sftp("sftp_invalid_filename", json!({})))?
+            .to_string_lossy()
+            .into_owned();
+        let tmp_path = local_path.with_file_name(format!("{file_name}.part"));
+
+        let result = self
+            .stream_to_part(&mut remote_file, &tmp_path, total, app, transfer_id, cancel)
+            .await;
+        match result {
+            Ok(transferred) => {
+                // Best-effort: remove any pre-existing destination so rename
+                // doesn't fail on Windows (Unix rename overwrites silently).
+                let _ = tokio::fs::remove_file(local_path).await;
+                tokio::fs::rename(&tmp_path, local_path).await?;
+                let _ = remote_file
+                    .shutdown()
+                    .await
+                    .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "close", "err": e.to_string() })));
+                Ok(transferred)
+            }
+            Err(e) => {
+                // Best-effort cleanup; even if unlink fails we just leak `.part`.
+                let _ = tokio::fs::remove_file(&tmp_path).await;
+                Err(e)
+            }
+        }
+    }
+
+    /// Inner streaming loop for `download_streaming`. Writes to the supplied
+    /// temp path and emits progress events; the caller decides whether to
+    /// promote `.part` to the final name or clean it up.
+    async fn stream_to_part(
+        &self,
+        remote_file: &mut russh_sftp::client::fs::File,
+        tmp_path: &Path,
+        total: u64,
+        app: &tauri::AppHandle,
+        transfer_id: &str,
+        cancel: Arc<AtomicBool>,
+    ) -> AppResult<u64> {
+        use tauri::Emitter;
+
+        let mut local_file = tokio::fs::File::create(tmp_path).await?;
         let mut transferred: u64 = 0;
         let mut buf = vec![0u8; 32768];
         // Build the event name once; we emit on every chunk and want to avoid
@@ -397,21 +443,13 @@ impl SftpHandle {
             if n == 0 {
                 break;
             }
-
             local_file.write_all(&buf[..n]).await?;
             transferred += n as u64;
-
             let _ = app.emit(
                 &event,
                 serde_json::json!({ "transferred": transferred, "total": total }),
             );
         }
-
-        remote_file
-            .shutdown()
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "close", "err": e.to_string() })))?;
-
         Ok(transferred)
     }
 
@@ -429,7 +467,15 @@ impl SftpHandle {
         if path.is_empty() || path == "/" {
             return Ok(());
         }
-        if self.sftp.metadata(path).await.is_ok() {
+        if let Ok(meta) = self.sftp.metadata(path).await {
+            // A non-directory occupying the target path would cause obscure
+            // failures later when the upload tries to write under it.
+            if !meta.is_dir() {
+                return Err(AppError::sftp(
+                    "sftp_io_failed",
+                    json!({ "op": "mkdir_p", "path": path, "err": "path exists but is not a directory" }),
+                ));
+            }
             return Ok(());
         }
         let mut current = String::new();

@@ -3,6 +3,8 @@
   import { invoke } from "@tauri-apps/api/core";
   import type { Snippet } from "../stores/app.svelte.ts";
   import * as app from "../stores/app.svelte.ts";
+  import { toast } from "../stores/toast.svelte.ts";
+  import { t, errMsg } from "../i18n/index.svelte.ts";
 
   let snippets = $state<Snippet[]>([]);
   let adding = $state(false);
@@ -42,9 +44,11 @@
     const cmd = formCmd.trim();
     if (!name || !cmd) return;
     const next = [...snippets, { name, command: cmd }];
-    await invoke("save_snippets", { snippets: next });
-    adding = false;
-    await refresh();
+    try {
+      await invoke("save_snippets", { snippets: next });
+      adding = false;
+      await refresh();
+    } catch (e: any) { toast.error(`${t("toast.error.save")}: ${errMsg(e)}`); }
   }
 
   async function saveEdit() {
@@ -54,17 +58,21 @@
     if (!name || !cmd) return;
     const next = [...snippets];
     next[editIdx] = { name, command: cmd };
-    await invoke("save_snippets", { snippets: next });
-    editIdx = null;
-    await refresh();
+    try {
+      await invoke("save_snippets", { snippets: next });
+      editIdx = null;
+      await refresh();
+    } catch (e: any) { toast.error(`${t("toast.error.save")}: ${errMsg(e)}`); }
   }
 
   async function remove(idx: number) {
     const next = snippets.filter((_, i) => i !== idx);
-    await invoke("save_snippets", { snippets: next });
-    if (editIdx === idx) editIdx = null;
-    else if (editIdx !== null && editIdx > idx) editIdx -= 1;
-    await refresh();
+    try {
+      await invoke("save_snippets", { snippets: next });
+      if (editIdx === idx) editIdx = null;
+      else if (editIdx !== null && editIdx > idx) editIdx -= 1;
+      await refresh();
+    } catch (e: any) { toast.error(`${t("toast.error.delete")}: ${errMsg(e)}`); }
   }
 </script>
 

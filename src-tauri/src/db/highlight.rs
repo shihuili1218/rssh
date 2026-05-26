@@ -55,10 +55,17 @@ pub fn update(db: &Db, old_keyword: &str, rule: &HighlightRule) -> AppResult<()>
             ));
         }
     }
-    conn.execute(
+    let affected = conn.execute(
         "UPDATE highlights SET keyword = ?1, color = ?2, enabled = ?3 WHERE keyword = ?4",
         params![rule.keyword, rule.color, rule.enabled, old_keyword],
     )?;
+    if affected == 0 {
+        // No row matched old_keyword — UI would otherwise show a fake success.
+        return Err(AppError::other(
+            "highlight_not_found",
+            serde_json::json!({ "keyword": old_keyword }),
+        ));
+    }
     Ok(())
 }
 

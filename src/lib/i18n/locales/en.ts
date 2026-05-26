@@ -54,6 +54,25 @@ const en = {
   "tab.context.copy_utc": "UTC",
   "tab.context.add_to_snippets": "Add to snippets",
 
+  // ── SFTP browser ──
+  "sftp.up": "← Up",
+  "sftp.refresh": "Refresh",
+  "sftp.upload": "⬆ Upload",
+  "sftp.upload_files": "Files…",
+  "sftp.upload_folder": "Folder…",
+  "sftp.download": "⬇ Download",
+  "sftp.download_n": "⬇ Download ({n})",
+  "sftp.loading": "Loading…",
+  "sftp.empty_dir": "Empty directory",
+  "sftp.select_all": "Select all",
+  "sftp.select_entry": "Select {name}",
+  "sftp.column.name": "Name",
+  "sftp.column.size": "Size",
+  "sftp.column.modified": "Modified",
+  "sftp.queued_n": "Queued {n} transfer(s)",
+  "sftp.folder_empty": "Folder has no files",
+  "sftp.walk_failed": "Walk failed:",
+
   // ── Settings menu ──
   "settings.title": "Settings",
   "settings.locale.aria": "Language",
@@ -510,6 +529,7 @@ const en = {
   "error.sftp_tree_too_deep": "Remote directory exceeds depth limit ({limit}) at {path}",
   "error.local_tree_too_deep": "Local directory exceeds depth limit ({limit}) at {path}",
   "error.highlight_keyword_conflict": "Highlight keyword \"{keyword}\" already exists",
+  "error.highlight_not_found": "Highlight rule \"{keyword}\" no longer exists",
   "error.pty_op_failed": "PTY operation failed: {err}",
   "error.keyring_failed": "Keyring {op} failed: {err}",
   "error.emit_failed": "Emit event failed ({channel}): {err}",

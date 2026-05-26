@@ -568,7 +568,9 @@
         if (isTerminal) {
             const selection = app.terminalGetSelection(tab.id);
             const trimmed = selection?.trim() ?? "";
-            const ts = selection ? tryParseTimestamp(selection) : null;
+            // Parse the trimmed selection so timestamps with leading/trailing
+            // whitespace still surface the UTC copy action.
+            const ts = trimmed ? tryParseTimestamp(trimmed) : null;
             const copyPaste: CtxMenuItem[] = [
                 {
                     label: t("tab.context.copy"),
@@ -732,6 +734,10 @@
 
     function handleKeydown(e: KeyboardEvent) {
         if (e.key === "Escape") {
+            // The Transfers popover has its own Esc handler. When it's open,
+            // a single Esc should only close the topmost overlay (the popover),
+            // not also collapse SFTP/drawer underneath it.
+            if (app.downloadsActive()) return;
             if (app.sftpOpen()) { app.closeSftp(); e.preventDefault(); }
             else if (drawerOpen) { closeDrawer(); e.preventDefault(); }
         }

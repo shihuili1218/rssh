@@ -26,6 +26,9 @@
     /** Open/close state of the Upload dropdown menu. */
     let uploadMenuOpen = $state(false);
     let uploadWrapEl: HTMLDivElement | undefined;
+    /** "Select all" checkbox — bound so we can drive `indeterminate` from an
+     *  effect; the attribute form does not reliably sync the DOM property. */
+    let selectAllEl: HTMLInputElement | undefined;
 
     const selectedCount = $derived(selected.size);
     const allSelected = $derived(entries.length > 0 && selected.size === entries.length);
@@ -190,6 +193,12 @@
         }
     });
 
+    // `indeterminate` is a DOM property only — Svelte's attribute spread does
+    // not reliably set it. Sync it imperatively whenever the selection changes.
+    $effect(() => {
+        if (selectAllEl) selectAllEl.indeterminate = someSelected;
+    });
+
     async function downloadSelected() {
         error = "";
         notice = "";
@@ -235,8 +244,8 @@
                     queued++;
                 }
             }
-            if (walkErrors.length > 0) error = `Walk failed:\n${walkErrors.join("\n")}`;
-            if (queued > 0) notice = `Queued ${queued} transfer(s)`;
+            if (walkErrors.length > 0) error = `${t("sftp.walk_failed")}\n${walkErrors.join("\n")}`;
+            if (queued > 0) notice = t("sftp.queued_n", { n: queued });
             selected = new Set();
         } catch (err: any) {
             error = errMsg(err);
@@ -258,7 +267,7 @@
                     remotePath: joinRemote(cwd, name),
                 });
             }
-            notice = `Queued ${paths.length} upload(s)`;
+            notice = t("sftp.queued_n", { n: paths.length });
         } catch (err: any) {
             error = errMsg(err);
         }
@@ -272,7 +281,7 @@
             const dir = await invoke<string | null>("sftp_pick_folder");
             if (!dir) return;
             const walked = await invoke<WalkEntry[]>("walk_local_dir", { localRoot: dir });
-            if (walked.length === 0) { notice = "Folder has no files"; return; }
+            if (walked.length === 0) { notice = t("sftp.folder_empty"); return; }
             const folderName = basename(dir);
             for (const w of walked) {
                 await transfers.startUpload({
@@ -281,7 +290,7 @@
                     remotePath: joinRemote(cwd, folderName, w.rel_path),
                 });
             }
-            notice = `Queued ${walked.length} upload(s)`;
+            notice = t("sftp.queued_n", { n: walked.length });
         } catch (err: any) {
             error = errMsg(err);
         }
@@ -296,21 +305,23 @@
         <button type="button" class="btn-icon" onclick={() => app.closeSftp()} aria-label={t("common.close")} title={t("common.close")}>×</button>
     </div>
     <div class="header">
-        <button class="btn btn-sm" onclick={goUp}>← Up</button>
-        <button class="btn btn-sm" onclick={() => listDir(cwd)}>Refresh</button>
+        <button class="btn btn-sm" onclick={goUp}>{t("sftp.up")}</button>
+        <button class="btn btn-sm" onclick={() => listDir(cwd)}>{t("sftp.refresh")}</button>
         <div class="upload-wrap" bind:this={uploadWrapEl}>
-            <button class="btn btn-sm" disabled={!sftpId} onclick={toggleUploadMenu} aria-haspopup="menu" aria-expanded={uploadMenuOpen}>
-                ⬆ Upload <span class="caret">▾</span>
+            <!-- The dialog commands `sftp_pick_*` are not registered on Android
+                 (rfd has no folder/multi-file picker there); gate the entry. -->
+            <button class="btn btn-sm" disabled={!sftpId || app.isMobile} onclick={toggleUploadMenu} aria-haspopup="menu" aria-expanded={uploadMenuOpen}>
+                {t("sftp.upload")} <span class="caret">▾</span>
             </button>
             {#if uploadMenuOpen}
                 <div class="upload-menu" role="menu">
-                    <button role="menuitem" onclick={() => { closeUploadMenu(); uploadFiles(); }}>Files…</button>
-                    <button role="menuitem" onclick={() => { closeUploadMenu(); uploadFolder(); }}>Folder…</button>
+                    <button role="menuitem" onclick={() => { closeUploadMenu(); uploadFiles(); }}>{t("sftp.upload_files")}</button>
+                    <button role="menuitem" onclick={() => { closeUploadMenu(); uploadFolder(); }}>{t("sftp.upload_folder")}</button>
                 </div>
             {/if}
         </div>
-        <button class="btn btn-sm" disabled={selectedCount === 0 || !sftpId} onclick={downloadSelected}>
-            ⬇ Download{selectedCount > 0 ? ` (${selectedCount})` : ""}
+        <button class="btn btn-sm" disabled={selectedCount === 0 || !sftpId || app.isMobile} onclick={downloadSelected}>
+            {selectedCount > 0 ? t("sftp.download_n", { n: selectedCount }) : t("sftp.download")}
         </button>
     </div>
     <input
@@ -333,23 +344,23 @@
     {/if}
 
     {#if loading}
-        <p class="loading">Loading...</p>
+        <p class="loading">{t("sftp.loading")}</p>
     {:else}
         <div class="file-list">
             <div class="file-row file-header">
                 <span class="cell-check">
                     <input
                         type="checkbox"
+                        bind:this={selectAllEl}
                         checked={allSelected}
-                        indeterminate={someSelected}
                         disabled={entries.length === 0}
                         onchange={toggleAll}
-                        aria-label="Select all"
+                        aria-label={t("sftp.select_all")}
                     />
                 </span>
-                <span class="cell-name h-label">Name</span>
-                <span class="cell-size h-label">Size</span>
-                <span class="cell-mtime h-label">Modified</span>
+                <span class="cell-name h-label">{t("sftp.column.name")}</span>
+                <span class="cell-size h-label">{t("sftp.column.size")}</span>
+                <span class="cell-mtime h-label">{t("sftp.column.modified")}</span>
             </div>
             {#each entries as e (e.name)}
                 <div class="file-row" class:dir={e.is_dir} class:selected={selected.has(e.name)}>
@@ -358,7 +369,7 @@
                             type="checkbox"
                             checked={selected.has(e.name)}
                             onchange={() => toggleSelected(e.name)}
-                            aria-label={`Select ${e.name}`}
+                            aria-label={t("sftp.select_entry", { name: e.name })}
                         />
                     </span>
                     <button class="file-name cell-name" onclick={() => openEntry(e)} title={e.name}>
@@ -369,7 +380,7 @@
                     <span class="cell-mtime">{formatMtime(e.mtime)}</span>
                 </div>
             {:else}
-                <p class="empty">Empty directory</p>
+                <p class="empty">{t("sftp.empty_dir")}</p>
             {/each}
         </div>
     {/if}

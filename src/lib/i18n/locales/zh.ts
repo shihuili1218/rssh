@@ -56,6 +56,25 @@ const zh: Messages = {
   "tab.context.copy_utc": "复制为 UTC",
   "tab.context.add_to_snippets": "添加到命令片段",
 
+  // ── SFTP 浏览器 ──
+  "sftp.up": "← 上一级",
+  "sftp.refresh": "刷新",
+  "sftp.upload": "⬆ 上传",
+  "sftp.upload_files": "文件…",
+  "sftp.upload_folder": "文件夹…",
+  "sftp.download": "⬇ 下载",
+  "sftp.download_n": "⬇ 下载（{n}）",
+  "sftp.loading": "加载中…",
+  "sftp.empty_dir": "目录为空",
+  "sftp.select_all": "全选",
+  "sftp.select_entry": "选择 {name}",
+  "sftp.column.name": "名称",
+  "sftp.column.size": "大小",
+  "sftp.column.modified": "修改时间",
+  "sftp.queued_n": "已加入队列：{n} 项",
+  "sftp.folder_empty": "文件夹内没有文件",
+  "sftp.walk_failed": "目录展开失败：",
+
   // ── 设置菜单 ──
   "settings.title": "设置",
   "settings.locale.aria": "语言",
@@ -512,6 +531,7 @@ const zh: Messages = {
   "error.sftp_tree_too_deep": "远端目录层级超过上限（{limit}）：{path}",
   "error.local_tree_too_deep": "本地目录层级超过上限（{limit}）：{path}",
   "error.highlight_keyword_conflict": "高亮关键词「{keyword}」已存在",
+  "error.highlight_not_found": "高亮规则「{keyword}」已不存在",
   "error.pty_op_failed": "PTY 操作失败：{err}",
   "error.keyring_failed": "Keyring {op} 失败：{err}",
   "error.emit_failed": "发送事件失败（{channel}）：{err}",
