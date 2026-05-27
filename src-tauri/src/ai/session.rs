@@ -54,7 +54,9 @@ pub(in crate::ai::session) enum CommandOutcome {
 /// (2) AI 静默把巨型文件拉过来对用户是 hostile —— 让人显式动手。
 const MAX_DOWNLOAD_MB: u32 = 100;
 
-#[derive(Debug)]
+// Debug 不能 derive —— SshHandle 来自 russh，没 impl Debug。手写一个轻量版（不打
+// 不可读字段，只标 variant）就够用了。当前代码里没人真的 fmt UserAction，但 enum
+// 暴露给 mpsc 后将来的诊断很可能需要它，保留有 Debug 比未来出问题再加好。
 pub enum UserAction {
     Message(String),
     RejectCommand {
@@ -70,11 +72,45 @@ pub enum UserAction {
         /// 用户在执行中点了"提前终止"（前端发了 Ctrl+C）。
         early_terminated: bool,
     },
+    /// 清空对话历史（保留 audit log）。actor 不死，下条消息进来时是全新对话。
+    /// 也清掉 remote_caps —— 用户清上下文后再触发 file_ops 应该重新探测远端能力，
+    /// 避免缓存了旧 target 的探测结果。
+    ClearContext,
+    /// SSH 重连或目标切换。actor 不变，只换 target_id + ssh_handle，
+    /// 让后续 file_ops / SFTP 走新连接。remote_caps 也清掉重新探测。
+    RebindTarget {
+        target_id: String,
+        ssh_handle: Option<SshHandle>,
+    },
     Stop,
 }
 
+impl std::fmt::Debug for UserAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UserAction::Message(_) => f.write_str("Message"),
+            UserAction::RejectCommand { tool_call_id, .. } => {
+                write!(f, "RejectCommand({tool_call_id})")
+            }
+            UserAction::CommandResult {
+                tool_call_id,
+                exit_code,
+                ..
+            } => write!(f, "CommandResult({tool_call_id} exit={exit_code})"),
+            UserAction::ClearContext => f.write_str("ClearContext"),
+            UserAction::RebindTarget { target_id, .. } => {
+                write!(f, "RebindTarget({target_id})")
+            }
+            UserAction::Stop => f.write_str("Stop"),
+        }
+    }
+}
+
 pub struct DiagnoseSession {
-    pub session_id: String,
+    /// Tab 身份。actor 跟 tab 生命周期绑定 —— SSH 断了重连 tab_id 不变，
+    /// AI 会话 + 历史也跟着保留。
+    pub tab_id: String,
+    /// 当前绑定的 SSH/PTY session_id（重连时更新）。
     pub target_id: String,
     pub skill: String,
     pub model: String,
@@ -88,7 +124,10 @@ pub struct DiagnoseSession {
 }
 
 pub struct SessionConfig {
-    pub session_id: String,
+    /// 见 DiagnoseSession.tab_id —— 同时也是 ai_sessions HashMap 的 key
+    /// 和事件 topic 的后缀（`ai:<kind>:<tab_id>`）。
+    pub tab_id: String,
+    /// 见 DiagnoseSession.target_id —— RebindTarget 时由 actor 更新。
     pub target_id: String,
     pub skill: String,
     /// system prompt：内置 general 规则集 + user-skill 目录（id + description），
@@ -103,8 +142,9 @@ pub struct SessionConfig {
     pub max_output_bytes: usize,
     /// SSH target 的连接 handle（本地 PTY target 为 None）。
     /// download_file 工具复用这个 handle 起 SFTP 子系统。
+    /// RebindTarget 时由 actor 更新（指向新的 SSH 连接）。
     pub ssh_handle: Option<SshHandle>,
-    /// dump 文件落地目录（实际文件写到 <data_dir>/diagnose/<session_id>/）。
+    /// dump 文件落地目录（实际文件写到 <data_dir>/diagnose/<tab_id>/）。
     pub data_dir: PathBuf,
 }
 
@@ -127,7 +167,7 @@ pub fn start(cfg: SessionConfig, app: AppHandle) -> AppResult<DiagnoseSession> {
 
     let provider = cfg.client.provider().to_string();
     let session = DiagnoseSession {
-        session_id: cfg.session_id.clone(),
+        tab_id: cfg.tab_id.clone(),
         target_id: cfg.target_id.clone(),
         skill: cfg.skill.clone(),
         model: cfg.model.clone(),
@@ -171,7 +211,7 @@ pub(in crate::ai::session) struct Actor {
 impl Actor {
     async fn run(mut self) {
         loop {
-            let action = match self.action_rx.recv().await {
+            let action = match self.recv_action().await {
                 Some(a) => a,
                 None => break,
             };
@@ -189,6 +229,21 @@ impl Actor {
                         self.emit("error", json!({ "message": e.to_string() }));
                     }
                 }
+                UserAction::ClearContext => {
+                    // 清空对话历史。audit log 保留 —— "曾经发生过什么"是审计应当
+                    // 留痕的，用户清的是 LLM 的记忆窗口，不是审计记录。
+                    // remote_caps 一起清掉 —— 假如用户清完后立即触发 file_ops，
+                    // 该重新探测，避免缓存了"用户期望已重置"之外的状态。
+                    let dropped = self.history.len();
+                    self.history.clear();
+                    self.remote_caps = None;
+                    self.audit_push(AuditKind::Note {
+                        message: format!("context cleared by user ({dropped} messages dropped)"),
+                    });
+                    // 前端 listener 收到这个事件后清掉 _chatByTab[tab_id]，把气泡都抹掉。
+                    self.emit("context_cleared", json!({}));
+                }
+                // RebindTarget 由 recv_action 透明吞掉，这里不会落到。
                 _ => {
                     log::warn!("unexpected action outside command dialog");
                 }
@@ -196,6 +251,35 @@ impl Actor {
         }
         self.audit_push(AuditKind::SessionEnded);
         self.emit("session_ended", json!({}));
+    }
+
+    /// recv_action 是 action_rx.recv 的薄封装：把 RebindTarget 这种**生命周期类事件**
+    /// 透明吞掉（更新 cfg + 留 audit Note），让上层 run / dialogue_turn / wait_command_outcome
+    /// 都不用各自处理。返回 None 仅在 channel 关闭时（actor 该退出）。
+    ///
+    /// 为什么 ClearContext 不在这里吞？—— ClearContext 会清空 history，
+    /// 如果在 tool call 中途触发，tool_use 还没对上 tool_result 就被清掉，
+    /// 下一轮 LLM 调用会因 message 顺序失衡而 400。让它走外层 match 在 idle 时处理才安全。
+    /// 用户在 tool call 中按了 clear，UserAction 排队等待外层消费，到达 idle 后清空。
+    pub(in crate::ai::session) async fn recv_action(&mut self) -> Option<UserAction> {
+        loop {
+            let action = self.action_rx.recv().await?;
+            if let UserAction::RebindTarget {
+                target_id,
+                ssh_handle,
+            } = action
+            {
+                self.cfg.target_id = target_id.clone();
+                self.cfg.ssh_handle = ssh_handle;
+                // 新 target 的远端能力跟老的没关系（不同主机的 python3/perl 不一定都在）
+                self.remote_caps = None;
+                self.audit_push(AuditKind::Note {
+                    message: format!("rebound to target {target_id}"),
+                });
+                continue;
+            }
+            return Some(action);
+        }
     }
 
     async fn dialogue_turn(&mut self) -> AppResult<()> {
@@ -232,7 +316,7 @@ impl Actor {
             let msg_id = uuid::Uuid::new_v4().to_string();
 
             let app = self.app.clone();
-            let session_id = self.cfg.session_id.clone();
+            let tab_id = self.cfg.tab_id.clone();
             let sink_msg_id = msg_id.clone();
             // captured：sink 边 emit 边累积文本副本。取消时 chat() future 被 drop，
             // 内部的 text_out 跟着没了，但 captured 还在——拿它写一条 partial assistant
@@ -245,7 +329,7 @@ impl Actor {
                         g.push_str(&t);
                     }
                     let _ = app.emit(
-                        &format!("ai:assistant_delta:{session_id}"),
+                        &format!("ai:assistant_delta:{tab_id}"),
                         json!({ "id": sink_msg_id, "text": t }),
                     );
                 }
@@ -420,7 +504,7 @@ impl Actor {
         tool_call_id: &str,
     ) -> AppResult<CommandOutcome> {
         loop {
-            let action = match self.action_rx.recv().await {
+            let action = match self.recv_action().await {
                 Some(a) => a,
                 None => return Err(AppError::other("session_channel_closed", json!({}))),
             };
@@ -564,7 +648,7 @@ impl Actor {
             .cfg
             .data_dir
             .join("diagnose")
-            .join(&self.cfg.session_id);
+            .join(&self.cfg.tab_id);
         self.emit(
             "command_proposed",
             json!({
@@ -615,7 +699,7 @@ impl Actor {
             .cfg
             .data_dir
             .join("diagnose")
-            .join(&self.cfg.session_id);
+            .join(&self.cfg.tab_id);
         let local_path = local_dir.join(&basename);
         let max_bytes = (input.max_mb as u64).saturating_mul(1024 * 1024);
 
@@ -918,7 +1002,7 @@ impl Actor {
         );
 
         loop {
-            let action = match self.action_rx.recv().await {
+            let action = match self.recv_action().await {
                 Some(a) => a,
                 None => return Err(AppError::other("session_channel_closed", json!({}))),
             };
@@ -1068,7 +1152,7 @@ impl Actor {
     }
 
     pub(in crate::ai::session) fn emit(&self, kind: &str, payload: serde_json::Value) {
-        let event = format!("ai:{kind}:{}", self.cfg.session_id);
+        let event = format!("ai:{kind}:{}", self.cfg.tab_id);
         let _ = self.app.emit(&event, payload);
     }
 }

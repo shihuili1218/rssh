@@ -17,8 +17,8 @@
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import type { AiSettings, CommandKind, CommandProposed, CommandResult } from "./types.ts";
 
-    let { sessionId, targetKind, targetSessionId, cmd, result, rejected } = $props<{
-        sessionId: string;
+    let { tabId, targetKind, targetSessionId, cmd, result, rejected } = $props<{
+        tabId: string;
         targetKind: "ssh" | "local";
         targetSessionId: string;
         cmd: CommandProposed;
@@ -114,7 +114,7 @@
                 _ackedToolCalls.add(cmd.tool_call_id);
                 try {
                     await invoke("ai_command_result", {
-                        sessionId,
+                        tabId,
                         toolCallId: cmd.tool_call_id,
                         exitCode: 0,
                         output: "",
@@ -127,7 +127,7 @@
                 }
                 return;
             }
-            await ai.executeCommand(sessionId, cmd, targetKind, targetSessionId);
+            await ai.executeCommand(tabId, cmd, targetKind, targetSessionId);
         } catch (e) {
             console.error("[ai] execute failed:", e);
             alert(t("ai.cmd.alert.exec_failed", { error: errMsg(e) }));
@@ -149,7 +149,7 @@
         }
         const reason = rejectReason.trim();
         if (!reason) return;
-        await ai.rejectCommand(sessionId, cmd.tool_call_id, reason);
+        await ai.rejectCommand(tabId, cmd.tool_call_id, reason);
         askingReason = false;
         rejectReason = "";
     }

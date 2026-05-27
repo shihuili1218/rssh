@@ -4,9 +4,9 @@
   import { keymap } from "@codemirror/view";
   import { EditorState } from "@codemirror/state";
   import { indentWithTab } from "@codemirror/commands";
-  import { StreamLanguage } from "@codemirror/language";
+  import { HighlightStyle, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
   import { shell } from "@codemirror/legacy-modes/mode/shell";
-  import { oneDark } from "@codemirror/theme-one-dark";
+  import { tags as t } from "@lezer/highlight";
   import * as app from "../stores/app.svelte.ts";
 
   let { tabId }: { tabId: string } = $props();
@@ -39,17 +39,63 @@
     app.broadcastToSessions([...selectedTabIds], text + "\n");
   }
 
-  const appTheme = EditorView.theme({
-    "&": { height: "100%", backgroundColor: "var(--bg)" },
-    ".cm-scroller": { overflow: "auto" },
-    ".cm-gutters": { backgroundColor: "var(--bg)", borderRight: "1px solid var(--divider)" },
-    ".cm-activeLineGutter": { backgroundColor: "var(--surface)" },
-    ".cm-activeLine": { backgroundColor: "var(--surface)" },
-    "&.cm-focused .cm-cursor": { borderLeftColor: "var(--accent)" },
-    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
-      backgroundColor: "color-mix(in srgb, var(--accent) 30%, transparent)",
+  // 主题：背景 / 前景 / 光标 / 选区都走终端配色 CSS 变量 —— 用户在 Appearance 里
+  // 切终端配色，编辑器实时跟着变，零重新挂载。divider/gutter 等次要元素用 color-mix
+  // 从 --term-fg 派生，避免引入 UI palette 的 --bg / --surface（那样会跟编辑区主色冲突）。
+  const editorTheme = EditorView.theme({
+    "&": {
+      height: "100%",
+      backgroundColor: "var(--term-bg)",
+      color: "var(--term-fg)",
     },
-  }, { dark: true });
+    ".cm-scroller": { overflow: "auto", fontFamily: "monospace" },
+    ".cm-content": { caretColor: "var(--term-cursor)" },
+    ".cm-gutters": {
+      backgroundColor: "var(--term-bg)",
+      color: "var(--term-bright-black)",
+      borderRight: "1px solid color-mix(in srgb, var(--term-fg) 12%, transparent)",
+    },
+    ".cm-activeLineGutter": {
+      backgroundColor: "color-mix(in srgb, var(--term-fg) 10%, transparent)",
+      color: "var(--term-fg)",
+    },
+    ".cm-activeLine": {
+      backgroundColor: "color-mix(in srgb, var(--term-fg) 5%, transparent)",
+    },
+    "&.cm-focused .cm-cursor": { borderLeftColor: "var(--term-cursor)" },
+    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection": {
+      backgroundColor: "var(--term-sel)",
+    },
+  });
+
+  // 语法 token 映射到 ANSI 16 色 —— 类比 vim/less 在终端里跑的高亮逻辑，
+  // 选色直接借鉴各家终端约定：comment→灰、string→绿、keyword→紫、number→黄、operator→青。
+  // 这样用户切 Solarized Light 时 token 也跟着变浅 → 浑然一体。
+  const termHighlight = HighlightStyle.define([
+    { tag: t.comment,                       color: "var(--term-bright-black)", fontStyle: "italic" },
+    { tag: t.lineComment,                   color: "var(--term-bright-black)", fontStyle: "italic" },
+    { tag: t.blockComment,                  color: "var(--term-bright-black)", fontStyle: "italic" },
+    { tag: t.docComment,                    color: "var(--term-bright-black)", fontStyle: "italic" },
+    { tag: t.string,                        color: "var(--term-green)" },
+    { tag: t.special(t.string),             color: "var(--term-bright-green)" },
+    { tag: t.regexp,                        color: "var(--term-bright-green)" },
+    { tag: [t.number, t.integer, t.float],  color: "var(--term-yellow)" },
+    { tag: [t.bool, t.null, t.atom],        color: "var(--term-yellow)" },
+    { tag: [t.keyword, t.controlKeyword, t.moduleKeyword, t.modifier],
+                                            color: "var(--term-magenta)", fontWeight: "600" },
+    { tag: t.operator,                      color: "var(--term-cyan)" },
+    { tag: t.punctuation,                   color: "var(--term-fg)" },
+    { tag: t.bracket,                       color: "var(--term-fg)" },
+    { tag: t.variableName,                  color: "var(--term-red)" },
+    { tag: t.definition(t.variableName),    color: "var(--term-red)" },
+    { tag: t.function(t.variableName),      color: "var(--term-blue)" },
+    { tag: t.propertyName,                  color: "var(--term-blue)" },
+    { tag: t.attributeName,                 color: "var(--term-cyan)" },
+    { tag: t.typeName,                      color: "var(--term-bright-yellow)" },
+    { tag: t.namespace,                     color: "var(--term-bright-yellow)" },
+    { tag: t.meta,                          color: "var(--term-bright-black)" },
+    { tag: t.invalid,                       color: "var(--term-bright-red)", fontWeight: "600" },
+  ]);
 
   onMount(() => {
     view = new EditorView({
@@ -59,8 +105,8 @@
           basicSetup,
           keymap.of([indentWithTab]),
           StreamLanguage.define(shell),
-          oneDark,
-          appTheme,
+          syntaxHighlighting(termHighlight),
+          editorTheme,
           EditorView.lineWrapping,
         ],
       }),

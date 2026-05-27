@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import * as ai from "../ai/store.svelte.ts";
 
 /* ═══════════════════════════════════════════════════════
    Platform
@@ -181,6 +182,12 @@ export function closeTab(id: string) {
     const next = { ..._sftpOpenByTab };
     delete next[id];
     _sftpOpenByTab = next;
+  }
+  // AI actor 跟 tab 同寿命。fire-and-forget —— UI 拆完不必等 actor stop ack。
+  // sessionForTab undefined（这个 tab 从没起过 AI）也走 stopSession 没事，
+  // 后端会返回 ai_session_not_found，前端 catch 吞掉。
+  if (ai.sessionForTab(id)) {
+    ai.stopSession(id).catch((e) => console.warn("[ai] stop on tab close:", e));
   }
   if (wasActive) {
     _activeTabId = _tabs[Math.min(idx, _tabs.length - 1)]?.id ?? "home";

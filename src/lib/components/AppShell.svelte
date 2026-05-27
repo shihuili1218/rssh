@@ -176,6 +176,7 @@
                 return;
             }
             const info = await ai.startSession({
+                tabId,
                 targetKind: "local",
                 targetId: sid,
                 skill: "general",
@@ -183,7 +184,7 @@
                 model: settings.model,
             });
             const initialMsg = t("ai.handoff.initial_msg", { path: payload.local_path, task: payload.task });
-            await ai.sendMessage(info.session_id, initialMsg);
+            await ai.sendMessage(info.tab_id, initialMsg);
         } catch (e) {
             console.error("AI handoff failed:", e);
         }

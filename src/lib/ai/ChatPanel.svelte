@@ -7,6 +7,9 @@
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import { onMount } from "svelte";
 
+    // tabId 是 AI 会话身份（actor 跟 tab 同寿命，重连不丢）。
+    // targetId 是当前 SSH/PTY session_id —— 给 executeCommand 路由 ssh_write/pty_write 用。
+    // 重连后 targetId 会换（前端 prop 自动跟随），tabId 不变。
     let { tabId, targetKind, targetId } = $props<{
         tabId: string;
         targetKind: "ssh" | "local";
@@ -20,10 +23,10 @@
     let inputEl = $state<HTMLTextAreaElement | null>(null);
     let chatBoxEl = $state<HTMLDivElement | null>(null);
 
-    let session = $derived(ai.sessionForTarget(targetId));
-    let items: ChatItem[] = $derived(session ? ai.chatItems(session.session_id) : []);
+    let session = $derived(ai.sessionForTab(tabId));
+    let items: ChatItem[] = $derived(ai.chatItems(tabId));
     // 流式响应进行中 —— send 按钮换成"停止"按钮。依赖 items 变化重算（last item 的 streaming flag）。
-    let streaming = $derived(session ? ai.isStreaming(session.session_id) : false);
+    let streaming = $derived(ai.isStreaming(tabId));
     // 危险模式标记 —— 用户在 AI Settings 里切换后，标题旁的红色后缀立刻同步。
     // 走 ai.settings() 读 store 的 $state，自动响应式（不需要手动 loadSettings 触发）。
     let dangerMode = $derived(ai.settings()?.danger_mode === true);
@@ -39,19 +42,18 @@
         }
     });
 
-    /** 没 session 就先启动，然后返回 session_id；启动失败抛错。
+    /** 没 session 就先启动；启动失败抛错。
      *  skill 固定 general —— 用户自定义 skill 已自动拼进 master prompt，让 LLM 自己路由。 */
-    async function ensureSession(): Promise<string> {
-        if (session) return session.session_id;
+    async function ensureSession(): Promise<void> {
+        if (session) return;
         const settings = ai.settings() ?? await ai.loadSettings();
         if (!settings.has_api_key) {
             throw new Error(t("ai.error.no_api_key"));
         }
-        const info = await ai.startSession({
-            targetKind, targetId, skill: "general",
+        await ai.startSession({
+            tabId, targetKind, targetId, skill: "general",
             provider: settings.provider, model: settings.model,
         });
-        return info.session_id;
     }
 
     async function send() {
@@ -60,9 +62,9 @@
         banner = null;
         busy = true;
         try {
-            const sid = await ensureSession();
+            await ensureSession();
             inputText = "";
-            await ai.sendMessage(sid, text);
+            await ai.sendMessage(tabId, text);
         } catch (e: any) {
             console.error("[ai] send failed:", e);
             banner = errMsg(e);
@@ -71,19 +73,33 @@
         }
     }
 
-    /** 关面板 = 停止会话（一个语义比两个简单） */
-    async function closePanel() {
-        if (session) {
-            try { await ai.stopSession(session.session_id); } catch (e) { console.error("[ai] stop:", e); }
-        }
+    /** 关面板 = 仅隐藏 UI。actor 跟 tab 同寿命，下次开面板上下文还在。
+     *  真正销毁 actor 在 app.closeTab() 里挂钩。 */
+    function closePanel() {
         ai.closePanel();
+    }
+
+    /** 手动清理上下文。actor 不死，只把 history 清空 —— 下条消息从头来过。
+     *  二次确认防误点（清完无法撤销）。若正在流式响应，先把流停掉。 */
+    async function clearContext() {
+        if (!session) return;
+        if (!confirm(t("ai.toolbar.clear_confirm"))) return;
+        try {
+            if (streaming) {
+                await ai.cancelStream(tabId);
+            }
+            await ai.clearContext(tabId);
+        } catch (e) {
+            console.error("[ai] clear context:", e);
+            banner = errMsg(e);
+        }
     }
 
     /** 打断当前流式响应；会话上下文保留，用户可立刻发下一条纠正。 */
     async function stopStreaming() {
         if (!session) return;
         try {
-            await ai.cancelStream(session.session_id);
+            await ai.cancelStream(tabId);
         } catch (e) {
             // 不能只 console.error 就完事——失败的话用户还卡在 streaming/disabled 状态，
             // 看不到任何错误反馈。复用 banner 让用户知道"停止没生效，再点一次或刷新"。
@@ -116,7 +132,19 @@
             </button>
         {/if}
         <span class="grow"></span>
-        <button class="btn-icon" onclick={closePanel} title={t("ai.toolbar.close_session")}>×</button>
+        {#if session}
+            <!-- 清理上下文：仅会话存在时露出。SVG 扫帚图标（22×22）跟"×"视觉重心对齐。 -->
+            <button class="btn-icon" onclick={clearContext} title={t("ai.toolbar.clear_context")} aria-label={t("ai.toolbar.clear_context")}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M19.36 2.72l1.42 1.42-5.72 5.71-1.42-1.42 5.72-5.71z"/>
+                    <path d="M14.13 8.05l-6.36 6.36c-.78.78-2.05.78-2.83 0l-.71-.71c-.39-.39-.39-1.02 0-1.41l7.07-7.07c.39-.39 1.02-.39 1.41 0l.71.71c.78.78.78 2.04 0 2.82"/>
+                    <path d="M12 14l-3 7"/>
+                    <path d="M9 14l-1.5 7"/>
+                    <path d="M6 14l0 7"/>
+                </svg>
+            </button>
+        {/if}
+        <button class="btn-icon" onclick={closePanel} title={t("ai.toolbar.close_panel")} aria-label={t("ai.toolbar.close_panel")}>×</button>
     </div>
 
     {#if banner}
@@ -127,7 +155,7 @@
     {/if}
 
     {#if auditOpen && session}
-        <AuditPanel sessionId={session.session_id} />
+        <AuditPanel {tabId} />
     {:else}
         <div class="chat" bind:this={chatBoxEl}>
             {#each items as item, i (i)}
@@ -150,7 +178,7 @@
                         </div>
                     {:else if item.kind === "command" && session}
                         <CommandConfirmDialog
-                            sessionId={session.session_id}
+                            {tabId}
                             targetKind={targetKind}
                             targetSessionId={targetId}
                             cmd={item.cmd}
@@ -242,7 +270,14 @@
     .btn-icon {
         background: transparent; border: none;
         font-size: 18px; cursor: pointer;
-        color: var(--text); padding: 0 6px;
+        color: var(--text); padding: 4px 6px;
+        display: inline-flex; align-items: center; justify-content: center;
+        line-height: 1;
+        border-radius: 4px;
+    }
+    .btn-icon:hover {
+        background: color-mix(in srgb, var(--text) 8%, transparent);
+        color: var(--text);
     }
     .banner {
         display: flex; align-items: center; gap: 8px;

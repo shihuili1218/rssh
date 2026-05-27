@@ -4,7 +4,7 @@
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import type { AuditEntry, AuditLog } from "./types.ts";
 
-    let { sessionId } = $props<{ sessionId: string }>();
+    let { tabId } = $props<{ tabId: string }>();
 
     let log = $state<AuditLog | null>(null);
     let loading = $state(false);
@@ -12,7 +12,7 @@
     async function refresh() {
         loading = true;
         try {
-            log = await ai.getAudit(sessionId);
+            log = await ai.getAudit(tabId);
         } finally {
             loading = false;
         }
@@ -20,7 +20,7 @@
 
     async function saveToFile() {
         try {
-            const path = await ai.saveAuditWithDialog(sessionId);
+            const path = await ai.saveAuditWithDialog(tabId);
             if (path) alert(t("ai.audit.alert.saved", { path }));
         } catch (e) {
             alert(t("ai.audit.alert.save_failed", { error: errMsg(e) }));

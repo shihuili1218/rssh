@@ -1,7 +1,8 @@
 /**
  * AI 排障会话前端状态。
- * - 一个目标（ssh/local tab）至多一个 AI 会话；store 保留所有会话按 target_id 索引
- * - 监听 ai:* 事件填充 chat 时间线
+ * - 一个 tab 至多一个 AI 会话；store 全部按 tab_id 索引
+ *   （actor 跟 tab 同寿命 —— SSH 断了重连 tab_id 不变，AI 会话和历史也保留）
+ * - 监听 ai:*:<tab_id> 事件填充 chat 时间线
  * - keyboard lock 在 AI 命令执行期间生效
  */
 
@@ -36,20 +37,23 @@ function loadPos(): AiPosition {
 
 let _open = $state(false);
 let _position = $state<AiPosition>(loadPos());
-let _activeSessionId = $state<string | null>(null);
-let _sessionByTarget = $state<Record<string, AiSessionInfo>>({});
-let _chatBySession = $state<Record<string, ChatItem[]>>({});
-let _pendingByTarget = $state<Record<string, CommandProposed | null>>({});
-let _keyboardLockedByTarget = $state<Record<string, boolean>>({});
+let _activeTabId = $state<string | null>(null);
+let _sessionByTab = $state<Record<string, AiSessionInfo>>({});
+let _chatByTab = $state<Record<string, ChatItem[]>>({});
+let _pendingByTab = $state<Record<string, CommandProposed | null>>({});
+let _keyboardLockedByTab = $state<Record<string, boolean>>({});
 let _settings = $state<AiSettings | null>(null);
 /**
- * target_id → 终端类型映射。internal_command 自动执行时需要知道走 ssh_write
+ * tab_id → 终端类型映射。internal_command 自动执行时需要知道走 ssh_write
  * 还是 pty_write —— ChatPanel 把 targetKind 作为 prop 传给 dialog，但 store
  * 在 attachListeners 里要独立处理 internal_command 事件，所以单独缓存。
+ *
+ * 按 tab_id 索引（不按 target_id）——重连后 target_id 变了 kind 不变，
+ * 用 tab_id 才能保证 internal_command 路由不丢。
  */
-const _targetKindByTarget: Record<string, "ssh" | "local"> = {};
+const _targetKindByTab: Record<string, "ssh" | "local"> = {};
 
-const _unlisteners: Record<string, UnlistenFn[]> = {};
+const _unlistenersByTab: Record<string, UnlistenFn[]> = {};
 
 export function position() { return _position; }
 export function setPosition(p: AiPosition) {
@@ -66,36 +70,37 @@ export function togglePanel() { _open = !_open; }
 
 // ─── Session ──────────────────────────────────────────────────────
 
-export function activeSessionId() { return _activeSessionId; }
+export function activeTabId() { return _activeTabId; }
 export function activeSession(): AiSessionInfo | null {
-  if (!_activeSessionId) return null;
-  return Object.values(_sessionByTarget).find(s => s.session_id === _activeSessionId) ?? null;
+  if (!_activeTabId) return null;
+  return _sessionByTab[_activeTabId] ?? null;
 }
-export function sessionForTarget(target_id: string): AiSessionInfo | undefined {
-  return _sessionByTarget[target_id];
+export function sessionForTab(tab_id: string): AiSessionInfo | undefined {
+  return _sessionByTab[tab_id];
 }
 export function listAllSessions(): AiSessionInfo[] {
-  return Object.values(_sessionByTarget);
+  return Object.values(_sessionByTab);
 }
 
-export function chatItems(session_id: string): ChatItem[] {
-  return _chatBySession[session_id] ?? [];
+export function chatItems(tab_id: string): ChatItem[] {
+  return _chatByTab[tab_id] ?? [];
 }
-export function pendingCommand(target_id: string): CommandProposed | null {
-  return _pendingByTarget[target_id] ?? null;
+export function pendingCommand(tab_id: string): CommandProposed | null {
+  return _pendingByTab[tab_id] ?? null;
 }
-export function isKeyboardLocked(target_id: string): boolean {
-  return _keyboardLockedByTarget[target_id] === true;
+export function isKeyboardLocked(tab_id: string): boolean {
+  return _keyboardLockedByTab[tab_id] === true;
 }
 
-function pushChat(session_id: string, item: ChatItem) {
-  const arr = _chatBySession[session_id] ?? [];
-  _chatBySession[session_id] = [...arr, item];
+function pushChat(tab_id: string, item: ChatItem) {
+  const arr = _chatByTab[tab_id] ?? [];
+  _chatByTab[tab_id] = [...arr, item];
 }
 
 // ─── Lifecycle ────────────────────────────────────────────────────
 
 export async function startSession(args: {
+  tabId: string;
   targetKind: "ssh" | "local";
   targetId: string;
   skill: string;
@@ -103,6 +108,7 @@ export async function startSession(args: {
   model: string;
 }): Promise<AiSessionInfo> {
   const info = await invoke<AiSessionInfo>("ai_session_start", {
+    tabId: args.tabId,
     targetKind: args.targetKind,
     targetId: args.targetId,
     skill: args.skill,
@@ -110,20 +116,18 @@ export async function startSession(args: {
     model: args.model,
     locale: currentLocale(),
   });
-  // 用 info.target_id 作 key 而非 args.targetId —— attachListeners / internal_command
-  // 读 cache 时用 tid = info.target_id（见 attachListeners）。若两者哪天不一致（后端
-  // normalize 了 target_id），cache miss → internal_command 走 fail-closed 报错。统一用
-  // 后端权威的 info.target_id 消除分裂。
-  _sessionByTarget[info.target_id] = info;
-  _targetKindByTarget[info.target_id] = args.targetKind;
-  _chatBySession[info.session_id] = [];
-  _activeSessionId = info.session_id;
+  // info.tab_id 后端权威 —— 跟 args.tabId 一定一致（后端按入参 insert），但用
+  // 后端返回值就消除"未来后端 normalize tab_id"导致 cache miss 的隐患。
+  _sessionByTab[info.tab_id] = info;
+  _targetKindByTab[info.tab_id] = args.targetKind;
+  _chatByTab[info.tab_id] = [];
+  _activeTabId = info.tab_id;
   await attachListeners(info);
   return info;
 }
 
-export async function stopSession(session_id: string) {
-  // Tear down in-flight executions for this session FIRST. Without this,
+export async function stopSession(tab_id: string) {
+  // Tear down in-flight executions for this tab FIRST. Without this,
   // the PTY data listener + 60s setTimeout linger after the session is
   // gone, the buffer keeps appending against a defunct session, and the
   // eventual ai_command_result invoke targets a session the backend has
@@ -132,38 +136,58 @@ export async function stopSession(session_id: string) {
   // Iterate via Array.from so the in-loop `.delete()` inside finish()
   // doesn't break Map iteration semantics.
   for (const exec of Array.from(_runningExecutions.values())) {
-    if (exec.sessionId === session_id && !exec.resolved) {
+    if (exec.tabId === tab_id && !exec.resolved) {
       await exec.terminate();
     }
   }
 
-  await invoke("ai_session_stop", { sessionId: session_id });
-  detachListeners(session_id);
-  for (const [tid, info] of Object.entries(_sessionByTarget)) {
-    if (info.session_id === session_id) {
-      delete _sessionByTarget[tid];
-      delete _pendingByTarget[tid];
-      delete _keyboardLockedByTarget[tid];
-      delete _targetKindByTarget[tid];
-    }
-  }
-  delete _chatBySession[session_id];
-  if (_activeSessionId === session_id) _activeSessionId = null;
+  await invoke("ai_session_stop", { tabId: tab_id });
+  detachListeners(tab_id);
+  delete _sessionByTab[tab_id];
+  delete _pendingByTab[tab_id];
+  delete _keyboardLockedByTab[tab_id];
+  delete _targetKindByTab[tab_id];
+  delete _chatByTab[tab_id];
+  if (_activeTabId === tab_id) _activeTabId = null;
 }
 
-export async function sendMessage(session_id: string, text: string) {
-  await invoke("ai_user_message", { sessionId: session_id, text });
+export async function sendMessage(tab_id: string, text: string) {
+  await invoke("ai_user_message", { tabId: tab_id, text });
+}
+
+/** 清空 actor 的对话历史（audit log 保留）。actor 不死，下条消息从头来过。 */
+export async function clearContext(tab_id: string): Promise<void> {
+  await invoke("ai_session_clear_context", { tabId: tab_id });
+}
+
+/** SSH 重连后调用：让 actor 内部把 target_id + ssh_handle 切到新 SSH 连接。 */
+export async function rebindTarget(
+  tab_id: string,
+  target_kind: "ssh" | "local",
+  target_id: string,
+): Promise<void> {
+  await invoke("ai_session_rebind_target", {
+    tabId: tab_id,
+    targetKind: target_kind,
+    targetId: target_id,
+  });
+  // 同步前端 cache：AiSessionInfo.target_id 也要换，否则下次 sendMessage 走的
+  // executeCommand 还会用旧 target_session_id 给 ssh_write —— 拿不到新 PTY。
+  const info = _sessionByTab[tab_id];
+  if (info) {
+    _sessionByTab[tab_id] = { ...info, target_id };
+  }
 }
 
 /** 打断 actor 正在跑的 LLM 流式响应。会话上下文（history / pending command / audit）全部保留——
  *  这跟 stopSession（销毁整个会话）是两个语义。actor 不在 chat 时调用是 no-op。 */
-export async function cancelStream(session_id: string): Promise<void> {
-  await invoke("ai_cancel_stream", { sessionId: session_id });
+export async function cancelStream(tab_id: string): Promise<void> {
+  await invoke("ai_cancel_stream", { tabId: tab_id });
 }
 
 /** 当前会话的助手消息是否正在流式输出 —— UI 用它把"发送"按钮切成"停止"。 */
-export function isStreaming(session_id: string): boolean {
-  const arr = _chatBySession[session_id];
+export function isStreaming(tab_id: string): boolean {
+  const arr = _chatByTab[tab_id];
   if (!arr || arr.length === 0) return false;
   const last = arr[arr.length - 1];
   return last.kind === "assistant" && last.streaming === true;
@@ -222,7 +246,7 @@ class CappedBuffer {
 /** Per-tool-call execution state. Lives in `_runningExecutions` Map. */
 type Execution = {
   toolCallId: string;
-  sessionId: string;
+  tabId: string;
   targetSessionId: string;
   targetKind: "ssh" | "local";
   buffer: CappedBuffer;
@@ -236,7 +260,7 @@ type Execution = {
 /**
  * Indexed by tool_call_id. Keyed on the Map (not a Record) so iteration
  * is O(N) without enumerating prototype noise, and to make the "find all
- * in-flight execs for a session" sweep in stopSession explicit.
+ * in-flight execs for a tab" sweep in stopSession explicit.
  */
 const _runningExecutions: Map<string, Execution> = new Map();
 
@@ -251,7 +275,7 @@ export function isCommandRunning(tool_call_id: string): boolean {
  * front-end; the backend's ai module never executes commands itself.
  */
 export async function executeCommand(
-  session_id: string,
+  tab_id: string,
   proposed: CommandProposed,
   target_kind: "ssh" | "local",
   target_session_id: string,
@@ -269,7 +293,7 @@ export async function executeCommand(
 
   const exec: Execution = {
     toolCallId: proposed.tool_call_id,
-    sessionId: session_id,
+    tabId: tab_id,
     targetSessionId: target_session_id,
     targetKind: target_kind,
     buffer: new CappedBuffer(),
@@ -298,7 +322,7 @@ export async function executeCommand(
     _runningExecutions.delete(exec.toolCallId);
     try {
       await invoke("ai_command_result", {
-        sessionId: session_id,
+        tabId: tab_id,
         toolCallId: exec.toolCallId,
         exitCode: exit_code,
         output,
@@ -348,21 +372,21 @@ export async function terminateCommand(tool_call_id: string): Promise<void> {
   if (exec) await exec.terminate();
 }
 
-export async function rejectCommand(session_id: string, tool_call_id: string, reason: string) {
-  await invoke("ai_command_reject", { sessionId: session_id, toolCallId: tool_call_id, reason });
+export async function rejectCommand(tab_id: string, tool_call_id: string, reason: string) {
+  await invoke("ai_command_reject", { tabId: tab_id, toolCallId: tool_call_id, reason });
 }
 
-export async function getAudit(session_id: string): Promise<AuditLog> {
-  return invoke<AuditLog>("ai_audit_get", { sessionId: session_id });
+export async function getAudit(tab_id: string): Promise<AuditLog> {
+  return invoke<AuditLog>("ai_audit_get", { tabId: tab_id });
 }
 
-export async function saveAudit(session_id: string, file_path: string) {
-  return invoke("ai_audit_save", { sessionId: session_id, filePath: file_path });
+export async function saveAudit(tab_id: string, file_path: string) {
+  return invoke("ai_audit_save", { tabId: tab_id, filePath: file_path });
 }
 
 /** Desktop-only：弹原生 Save 对话框选路径并保存。返回路径或 null（用户取消）。 */
-export async function saveAuditWithDialog(session_id: string): Promise<string | null> {
-  return invoke<string | null>("ai_audit_save_pick", { sessionId: session_id });
+export async function saveAuditWithDialog(tab_id: string): Promise<string | null> {
+  return invoke<string | null>("ai_audit_save_pick", { tabId: tab_id });
 }
 
 // ─── Settings ─────────────────────────────────────────────────────
@@ -416,21 +440,23 @@ export async function listModels(
 // ─── 事件监听 ─────────────────────────────────────────────────────
 
 async function attachListeners(info: AiSessionInfo) {
-  const sid = info.session_id;
-  const tid = info.target_id;
+  // tab_id 同时是状态字典 key、事件 topic 后缀、internal_command 路由 key —— 单一坐标。
+  // info.target_id 不在闭包里捕获 —— 重连后 target_id 变了，internal_command 需要走新的，
+  // 闭包里写死会一直发到旧 SSH 会话。运行期通过 _sessionByTab[tab_id].target_id 读最新值。
+  const tab = info.tab_id;
   const u: UnlistenFn[] = [];
 
-  u.push(await listen<{ text: string }>(`ai:user_message:${sid}`, (e) => {
-    pushChat(sid, { kind: "user", text: e.payload.text, at: Date.now() });
+  u.push(await listen<{ text: string }>(`ai:user_message:${tab}`, (e) => {
+    pushChat(tab, { kind: "user", text: e.payload.text, at: Date.now() });
   }));
 
   // 流式：start 创建空气泡，delta append，end 关 streaming 标记
-  u.push(await listen<{ id: string }>(`ai:assistant_message_start:${sid}`, (e) => {
-    pushChat(sid, { kind: "assistant", id: e.payload.id, text: "", at: Date.now(), streaming: true });
+  u.push(await listen<{ id: string }>(`ai:assistant_message_start:${tab}`, (e) => {
+    pushChat(tab, { kind: "assistant", id: e.payload.id, text: "", at: Date.now(), streaming: true });
   }));
 
-  u.push(await listen<{ id: string; text: string }>(`ai:assistant_delta:${sid}`, (e) => {
-    const arr = _chatBySession[sid];
+  u.push(await listen<{ id: string; text: string }>(`ai:assistant_delta:${tab}`, (e) => {
+    const arr = _chatByTab[tab];
     if (!arr) return;
     // Mutate the matching item in place. Svelte 5's $state proxy picks up
     // field assignments, so we don't need React-style full-array rebuilds
@@ -445,8 +471,8 @@ async function attachListeners(info: AiSessionInfo) {
     }
   }));
 
-  u.push(await listen<{ id: string; text: string; cancelled?: boolean }>(`ai:assistant_message_end:${sid}`, (e) => {
-    const arr = _chatBySession[sid] ?? [];
+  u.push(await listen<{ id: string; text: string; cancelled?: boolean }>(`ai:assistant_message_end:${tab}`, (e) => {
+    const arr = _chatByTab[tab] ?? [];
     for (let i = arr.length - 1; i >= 0; i--) {
       const item = arr[i];
       if (item.kind === "assistant" && item.id === e.payload.id) {
@@ -456,7 +482,7 @@ async function attachListeners(info: AiSessionInfo) {
         // 只有"纯 tool_use 轮次"（chat 没产文本只产 tool_calls，cancelled=false）
         // 或 chat 失败（empty + cancelled=false）才移除气泡。
         if (isEmpty && !e.payload.cancelled) {
-          _chatBySession[sid] = [...arr.slice(0, i), ...arr.slice(i + 1)];
+          _chatByTab[tab] = [...arr.slice(0, i), ...arr.slice(i + 1)];
         } else {
           // 防御：cancel emit 的 payload.text = 后端 captured（sink 累积）；前端 item.text =
           // 收到的 delta 累积。两者源头一致，正常情况下相等。但 tauri 事件总线异步——
@@ -470,16 +496,16 @@ async function attachListeners(info: AiSessionInfo) {
             streaming: false,
             cancelled: e.payload.cancelled === true,
           };
-          _chatBySession[sid] = [...arr.slice(0, i), replaced, ...arr.slice(i + 1)];
+          _chatByTab[tab] = [...arr.slice(0, i), replaced, ...arr.slice(i + 1)];
         }
         return;
       }
     }
   }));
 
-  u.push(await listen<CommandProposed>(`ai:command_proposed:${sid}`, (e) => {
-    _pendingByTarget[tid] = e.payload;
-    pushChat(sid, { kind: "command", cmd: e.payload, at: Date.now() });
+  u.push(await listen<CommandProposed>(`ai:command_proposed:${tab}`, (e) => {
+    _pendingByTab[tab] = e.payload;
+    pushChat(tab, { kind: "command", cmd: e.payload, at: Date.now() });
   }));
 
   // internal_command：当前只用于 file_ops 工具的远端能力探测（一行只读 echo "py3=... perl=... diff=..."）。
@@ -491,16 +517,19 @@ async function attachListeners(info: AiSessionInfo) {
     cmd: string;
     full_cmd: string;
     sentinel: string;
-  }>(`ai:internal_command:${sid}`, async (e) => {
-    const kind = _targetKindByTarget[tid];
-    if (!kind) {
+  }>(`ai:internal_command:${tab}`, async (e) => {
+    const kind = _targetKindByTab[tab];
+    // 每次都从 _sessionByTab 读最新 target_id —— 重连后这个值会被 rebindTarget 更新，
+    // 闭包里不能缓存（缓存的话 internal_command 在重连后会粘到旧 SSH 会话）。
+    const currentInfo = _sessionByTab[tab];
+    if (!kind || !currentInfo) {
       // fail-closed：必须给后端回一个 result，否则 wait_command_outcome 永远阻塞，
       // session actor 卡在 file_ops handler 里 await 不出来，整个 AI 会话挂死。
-      const msg = `internal_command without target_kind for ${tid}`;
+      const msg = `internal_command without target binding for tab ${tab}`;
       console.error("[ai]", msg);
       try {
         await invoke("ai_command_result", {
-          sessionId: sid,
+          tabId: tab,
           toolCallId: e.payload.tool_call_id,
           exitCode: -1,
           output: msg,
@@ -508,7 +537,7 @@ async function attachListeners(info: AiSessionInfo) {
           earlyTerminated: false,
         });
       } catch (err) {
-        console.error("[ai] failed to report internal_command target_kind miss:", err);
+        console.error("[ai] failed to report internal_command target miss:", err);
       }
       return;
     }
@@ -523,14 +552,14 @@ async function attachListeners(info: AiSessionInfo) {
       timeout_s: 60,
     };
     try {
-      await executeCommand(sid, proposed, kind, tid);
+      await executeCommand(tab, proposed, kind, currentInfo.target_id);
     } catch (err) {
       // executeCommand 在 PTY listen 失败等情况下可能在自己发 ai_command_result 之前就抛。
       // 不补一个失败 result，wait_command_outcome 会永挂在 Rust 侧。
       console.error("[ai] internal_command exec failed:", err);
       try {
         await invoke("ai_command_result", {
-          sessionId: sid,
+          tabId: tab,
           toolCallId: e.payload.tool_call_id,
           exitCode: -1,
           output: err instanceof Error ? err.message : String(err),
@@ -543,20 +572,20 @@ async function attachListeners(info: AiSessionInfo) {
     }
   }));
 
-  u.push(await listen<{ id: string; lock_keyboard: boolean }>(`ai:command_executing:${sid}`, (e) => {
-    _keyboardLockedByTarget[tid] = !!e.payload.lock_keyboard;
+  u.push(await listen<{ id: string; lock_keyboard: boolean }>(`ai:command_executing:${tab}`, (e) => {
+    _keyboardLockedByTab[tab] = !!e.payload.lock_keyboard;
   }));
 
-  u.push(await listen<CommandResult & { lock_keyboard: boolean }>(`ai:command_completed:${sid}`, (e) => {
-    _keyboardLockedByTarget[tid] = !!e.payload.lock_keyboard;
-    _pendingByTarget[tid] = null;
+  u.push(await listen<CommandResult & { lock_keyboard: boolean }>(`ai:command_completed:${tab}`, (e) => {
+    _keyboardLockedByTab[tab] = !!e.payload.lock_keyboard;
+    _pendingByTab[tab] = null;
     // 给最近一条对应 id 的 command 项填上 result
-    const arr = _chatBySession[sid] ?? [];
+    const arr = _chatByTab[tab] ?? [];
     for (let i = arr.length - 1; i >= 0; i--) {
       const item = arr[i];
       if (item.kind === "command" && item.cmd.id === e.payload.id) {
         const replaced: ChatItem = { ...item, result: e.payload };
-        _chatBySession[sid] = [...arr.slice(0, i), replaced, ...arr.slice(i + 1)];
+        _chatByTab[tab] = [...arr.slice(0, i), replaced, ...arr.slice(i + 1)];
         break;
       }
     }
@@ -565,35 +594,43 @@ async function attachListeners(info: AiSessionInfo) {
   // 拒绝路径单独事件 —— complete 跟 reject 是两种语义，复用 command_completed
   // 加 rejected:true 字段会让 listener 分支模糊。后端 RejectCommand 分支 emit
   // 这个，前端清 pending + 标记 ChatItem.rejected。
-  u.push(await listen<{ id: string; reason: string }>(`ai:command_rejected:${sid}`, (e) => {
-    _pendingByTarget[tid] = null;
-    const arr = _chatBySession[sid] ?? [];
+  u.push(await listen<{ id: string; reason: string }>(`ai:command_rejected:${tab}`, (e) => {
+    _pendingByTab[tab] = null;
+    const arr = _chatByTab[tab] ?? [];
     for (let i = arr.length - 1; i >= 0; i--) {
       const item = arr[i];
       if (item.kind === "command" && item.cmd.id === e.payload.id) {
         const replaced: ChatItem = { ...item, rejected: { reason: e.payload.reason } };
-        _chatBySession[sid] = [...arr.slice(0, i), replaced, ...arr.slice(i + 1)];
+        _chatByTab[tab] = [...arr.slice(0, i), replaced, ...arr.slice(i + 1)];
         break;
       }
     }
   }));
 
-  u.push(await listen<{ message: string }>(`ai:error:${sid}`, (e) => {
-    pushChat(sid, { kind: "error", text: e.payload.message, at: Date.now() });
+  u.push(await listen<{ message: string }>(`ai:error:${tab}`, (e) => {
+    pushChat(tab, { kind: "error", text: e.payload.message, at: Date.now() });
   }));
 
-  u.push(await listen<{}>(`ai:session_ended:${sid}`, () => {
-    pushChat(sid, { kind: "note", text: t("ai.session.ended_note"), at: Date.now() });
+  // 用户按"清理上下文"——后端清完 history 后 emit 这个事件，前端把气泡也抹掉。
+  // pending command / keyboard lock 一并清：清上下文等于把这个 actor 重置回 idle。
+  u.push(await listen<{}>(`ai:context_cleared:${tab}`, () => {
+    _chatByTab[tab] = [];
+    _pendingByTab[tab] = null;
+    _keyboardLockedByTab[tab] = false;
   }));
 
-  _unlisteners[sid] = u;
+  u.push(await listen<{}>(`ai:session_ended:${tab}`, () => {
+    pushChat(tab, { kind: "note", text: t("ai.session.ended_note"), at: Date.now() });
+  }));
+
+  _unlistenersByTab[tab] = u;
 }
 
-function detachListeners(sid: string) {
-  const arr = _unlisteners[sid];
+function detachListeners(tab_id: string) {
+  const arr = _unlistenersByTab[tab_id];
   if (arr) {
     arr.forEach(fn => fn());
-    delete _unlisteners[sid];
+    delete _unlistenersByTab[tab_id];
   }
 }
 

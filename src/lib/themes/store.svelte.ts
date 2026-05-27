@@ -234,6 +234,26 @@ function writeTermVars(): void {
   root.style.setProperty("--term-fg",     t.foreground);
   root.style.setProperty("--term-cursor", t.cursor ?? t.foreground);
   root.style.setProperty("--term-sel",    t.selectionBackground ?? "");
+  // ANSI 16 色 —— 给 CodeMirror / SnippetPicker 等"想跟终端配色走"的组件用。
+  // PaletteTerm 字段全是 optional（custom palette 可能没填），缺省用 fg 兜底
+  // —— 比硬塞个 fallback 颜色（如 "#888"）更可控：用户没配的色不会出现在画面里。
+  const fb = t.foreground;
+  root.style.setProperty("--term-black",          t.black          ?? fb);
+  root.style.setProperty("--term-red",            t.red            ?? fb);
+  root.style.setProperty("--term-green",          t.green          ?? fb);
+  root.style.setProperty("--term-yellow",         t.yellow         ?? fb);
+  root.style.setProperty("--term-blue",           t.blue           ?? fb);
+  root.style.setProperty("--term-magenta",        t.magenta        ?? fb);
+  root.style.setProperty("--term-cyan",           t.cyan           ?? fb);
+  root.style.setProperty("--term-white",          t.white          ?? fb);
+  root.style.setProperty("--term-bright-black",   t.brightBlack    ?? fb);
+  root.style.setProperty("--term-bright-red",     t.brightRed      ?? t.red     ?? fb);
+  root.style.setProperty("--term-bright-green",   t.brightGreen    ?? t.green   ?? fb);
+  root.style.setProperty("--term-bright-yellow",  t.brightYellow   ?? t.yellow  ?? fb);
+  root.style.setProperty("--term-bright-blue",    t.brightBlue     ?? t.blue    ?? fb);
+  root.style.setProperty("--term-bright-magenta", t.brightMagenta  ?? t.magenta ?? fb);
+  root.style.setProperty("--term-bright-cyan",    t.brightCyan     ?? t.cyan    ?? fb);
+  root.style.setProperty("--term-bright-white",   t.brightWhite    ?? t.white   ?? fb);
 }
 
 function notifyXterms(): void {

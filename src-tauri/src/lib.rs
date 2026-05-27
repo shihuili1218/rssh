@@ -200,6 +200,8 @@ pub fn run() {
             ai::commands::ai_delete_skill,
             ai::commands::ai_session_start,
             ai::commands::ai_session_stop,
+            ai::commands::ai_session_clear_context,
+            ai::commands::ai_session_rebind_target,
             ai::commands::ai_cancel_stream,
             ai::commands::ai_user_message,
             ai::commands::ai_command_result,

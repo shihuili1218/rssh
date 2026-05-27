@@ -9,6 +9,7 @@
     import {listen, type UnlistenFn} from "@tauri-apps/api/event";
     import type {HighlightRule} from "../stores/app.svelte.ts";
     import * as app from "../stores/app.svelte.ts";
+    import * as ai from "../ai/store.svelte.ts";
     import * as theme from "../themes/store.svelte.ts";
     import MobileKeybar from "./MobileKeybar.svelte";
     import {registerRsshOscHandlers} from "../osc/handler.ts";
@@ -941,7 +942,18 @@
     $effect(() => {
         if (sessionId && !disconnected) {
             const sid = sessionId;
-            untrack(() => app.registerSession({ tabId, sessionId: sid, type: tabType }));
+            untrack(() => {
+                app.registerSession({ tabId, sessionId: sid, type: tabType });
+                // 若该 tab 有活跃 AI session 且绑的不是新 sid（== 重连后 target_id 换了），
+                // rebind 到新 sid，让 AI actor 后续的 file_ops / SFTP 走新连接。
+                // 首次连接 (sessionForTab 为 undefined) 直接 skip。
+                const aiInfo = ai.sessionForTab(tabId);
+                if (aiInfo && aiInfo.target_id !== sid) {
+                    ai.rebindTarget(tabId, tabType, sid).catch((e) =>
+                        console.warn("[ai] rebind on reconnect:", e),
+                    );
+                }
+            });
         } else {
             untrack(() => app.unregisterSession(tabId));
         }

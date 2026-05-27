@@ -47,7 +47,9 @@ export interface ModelInfo {
 }
 
 export interface AiSessionInfo {
-  session_id: string;
+  /** Tab 身份。actor 跟 tab 同寿命；SSH 断了重连，前端用 tab_id 仍能找到同一个 actor。 */
+  tab_id: string;
+  /** 当前绑定的 SSH/PTY session_id。重连时由 rebindTarget 更新。 */
   target_id: string;
   skill: string;
   model: string;
