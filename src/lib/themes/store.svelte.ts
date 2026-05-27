@@ -246,7 +246,7 @@ function writeTermVars(): void {
   root.style.setProperty("--term-magenta",        t.magenta        ?? fb);
   root.style.setProperty("--term-cyan",           t.cyan           ?? fb);
   root.style.setProperty("--term-white",          t.white          ?? fb);
-  root.style.setProperty("--term-bright-black",   t.brightBlack    ?? fb);
+  root.style.setProperty("--term-bright-black",   t.brightBlack    ?? t.black   ?? fb);
   root.style.setProperty("--term-bright-red",     t.brightRed      ?? t.red     ?? fb);
   root.style.setProperty("--term-bright-green",   t.brightGreen    ?? t.green   ?? fb);
   root.style.setProperty("--term-bright-yellow",  t.brightYellow   ?? t.yellow  ?? fb);

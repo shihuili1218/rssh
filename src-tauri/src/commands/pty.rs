@@ -22,9 +22,14 @@ pub fn pty_spawn(
 #[tauri::command]
 pub fn list_shells() -> Vec<String> {
     pty::available_shells()
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+}
+
+/// Shell 设置页"刷新"按钮触发：用户装了新 shell 后不必重启 app。
+/// 同步重扫一遍（< 1ms），返回最新列表，前端直接覆盖下拉。
+#[tauri::command]
+pub fn refresh_shells() -> Vec<String> {
+    pty::refresh_available_shells();
+    pty::available_shells()
 }
 
 #[tauri::command]

@@ -146,6 +146,7 @@ pub async fn ai_session_start(
         let g = locked(&state.ai_sessions)?;
         // 一个 tab 至多一个 actor。前端 ensureSession 已经做了"有 session 就复用"的判断，
         // 但并发请求还是可能撞同一个 tab_id —— 这里 fail-fast，不静默覆盖。
+        // 注意：此处只是早退化检查；下面有 await 会释放锁，所以 insert 时还要再查一次。
         if g.contains_key(&tab_id) {
             return Err(AppError::other(
                 "session_already_exists",
@@ -215,7 +216,23 @@ pub async fn ai_session_start(
 
     let session = session::start(cfg, app)?;
     let info = AiSessionInfo::from(&session);
-    locked(&state.ai_sessions)?.insert(tab_id, session);
+    // 并发 start 防御：上方的 contains_key 检查跟这里的 insert 之间夹着
+    // 几个 await（api_key / target 校验 / llm client 构造），锁会释放。
+    // 两个并发请求都可能通过第一轮检查；不在 insert 时再查一次，后者就
+    // 会静默覆盖前者，前一个 actor 立刻成孤儿。这里在锁下二次确认，
+    // 输的那一方负责把自己刚 spawn 的 actor 关掉，避免泄漏。
+    {
+        let mut g = locked(&state.ai_sessions)?;
+        if g.contains_key(&tab_id) {
+            drop(g);
+            let _ = session.action_tx.send(UserAction::Stop);
+            return Err(AppError::other(
+                "session_already_exists",
+                json!({ "tab_id": tab_id }),
+            ));
+        }
+        g.insert(tab_id, session);
+    }
     Ok(info)
 }
 
@@ -341,10 +358,17 @@ pub async fn ai_session_rebind_target(
         }
     };
 
-    let tx = locked(&state.ai_sessions)?
-        .get(&tab_id)
-        .map(|s| s.action_tx.clone())
-        .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
+    // 锁里一次完成：拿 action_tx + 同步更新 stored target_id。
+    // 不更新 stored 那一份的话，ai_list_sessions / AiSessionInfo::from 会一直
+    // 报老 target_id；前端 resync 时反向把本地缓存覆盖回旧值。
+    let tx = {
+        let mut g = locked(&state.ai_sessions)?;
+        let s = g
+            .get_mut(&tab_id)
+            .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
+        s.target_id = target_id.clone();
+        s.action_tx.clone()
+    };
     tx.send(UserAction::RebindTarget {
         target_id,
         ssh_handle,

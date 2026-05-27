@@ -142,6 +142,8 @@ pub fn run() {
             #[cfg(not(target_os = "android"))]
             commands::pty::list_shells,
             #[cfg(not(target_os = "android"))]
+            commands::pty::refresh_shells,
+            #[cfg(not(target_os = "android"))]
             commands::pty::pty_spawn,
             #[cfg(not(target_os = "android"))]
             commands::pty::pty_write,

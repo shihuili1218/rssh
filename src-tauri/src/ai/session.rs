@@ -259,8 +259,11 @@ impl Actor {
     ///
     /// 为什么 ClearContext 不在这里吞？—— ClearContext 会清空 history，
     /// 如果在 tool call 中途触发，tool_use 还没对上 tool_result 就被清掉，
-    /// 下一轮 LLM 调用会因 message 顺序失衡而 400。让它走外层 match 在 idle 时处理才安全。
-    /// 用户在 tool call 中按了 clear，UserAction 排队等待外层消费，到达 idle 后清空。
+    /// 下一轮 LLM 调用会因 message 顺序失衡而 400。
+    /// 由各调用方在自己的 match 里显式处理：idle 的 run() 直接清；inner loop
+    /// (wait_command_outcome / handle_run_command) 等待 tool 结果时拒绝并提示
+    /// 用户先批准/拒绝当前命令——跟 UserAction::Message 同处理模式，给反馈而
+    /// 不是默默丢弃。
     pub(in crate::ai::session) async fn recv_action(&mut self) -> Option<UserAction> {
         loop {
             let action = self.action_rx.recv().await?;
@@ -545,6 +548,23 @@ impl Actor {
                         json!({
                             // 统一英文跟 handle_run_command 的"pending approval"错误一致，前端 ai:error 直显，不绕 i18n
                             "message": "Cannot send a new message while a tool call is running. Wait for it to finish, or approve/reject the command card.",
+                        }),
+                    );
+                    continue;
+                }
+                UserAction::ClearContext => {
+                    // 工具调用中 history 含未配对的 tool_use（还没 tool_result），
+                    // 直接清会让下一轮 LLM 调用 400。让用户先等命令走完。
+                    // 给明确反馈而不是静默丢弃，跟 Message 处理一致。
+                    self.audit_push(AuditKind::Note {
+                        message: format!(
+                            "clear context dropped during tool call {tool_call_id}"
+                        ),
+                    });
+                    self.emit(
+                        "error",
+                        json!({
+                            "message": "Cannot clear context while a tool call is running. Wait for it to finish, then clear.",
                         }),
                     );
                     continue;
@@ -1094,6 +1114,23 @@ impl Actor {
                         "error",
                         json!({
                             "message": "Cannot send a new message while a command is pending approval. Approve or reject the command first.",
+                        }),
+                    );
+                    continue;
+                }
+                UserAction::ClearContext => {
+                    // 命令审批期间 history 含未配对的 tool_use，清空会让下一轮 400。
+                    // 拒绝并提示——同 Message 处理模式，给反馈而非静默丢弃。
+                    self.audit_push(AuditKind::Note {
+                        message: format!(
+                            "clear context dropped during command approval (pending tool_call {})",
+                            tc.id
+                        ),
+                    });
+                    self.emit(
+                        "error",
+                        json!({
+                            "message": "Cannot clear context while a command is pending approval. Approve or reject the command first.",
                         }),
                     );
                     continue;

@@ -59,20 +59,57 @@ impl PtyHandle {
 /// 启动本地 shell，返回 (session_id, handle)。
 /// 读取线程通过 Tauri 事件 `pty:data:{id}` 推送数据。
 
-/// 本机实际可用的 shell 路径列表，启动时扫描一次，全程复用。
-/// 用 OnceLock 而不是 LazyLock —— lib.rs 的 setup 会显式调一次预热，
-/// 不到一毫秒（最多 ~50 个路径 metadata 检查），但避开第一次打开 Shell
-/// 设置页面时的"打开瞬间冷启动"延迟。
-static AVAILABLE_SHELLS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+/// 本机实际可用的 shell 路径列表。启动时扫描一次进缓存；
+/// 用户在 Shell 设置页点"刷新"会重扫覆盖（用户 `brew install fish`
+/// 之类的中途变化得有补救手段，否则要 restart app 才看得到）。
+/// RwLock 比 OnceLock 多支持一个 write 路径 —— 读路径几乎没有竞争开销。
+/// `Option<Vec>` 区分"未初始化"和"扫出来空"两种状态：未初始化时 lazy 扫一次。
+static AVAILABLE_SHELLS: std::sync::RwLock<Option<Vec<String>>> =
+    std::sync::RwLock::new(None);
 
-/// 启动时由 lib.rs 调一次，触发扫描 + 缓存。后续 `available_shells()` 直接读缓存。
-/// 重复调用是 no-op（OnceLock 语义）。
+/// 启动时由 lib.rs 调一次预热。重复调跟 refresh 一样语义。
 pub fn init_available_shells() {
-    AVAILABLE_SHELLS.get_or_init(scan_shells);
+    refresh_available_shells();
 }
 
-pub fn available_shells() -> &'static [String] {
-    AVAILABLE_SHELLS.get_or_init(scan_shells)
+/// 重新扫描并覆盖缓存。Shell 设置页"刷新"按钮 / 用户装新 shell 后调。
+pub fn refresh_available_shells() {
+    let scanned = scan_shells();
+    if let Ok(mut g) = AVAILABLE_SHELLS.write() {
+        *g = Some(scanned);
+    }
+}
+
+pub fn available_shells() -> Vec<String> {
+    if let Ok(g) = AVAILABLE_SHELLS.read() {
+        if let Some(v) = g.as_ref() {
+            return v.clone();
+        }
+    }
+    // 还没初始化（lib.rs 没调到 init，或调用方不是桌面端）—— lazy 扫一次。
+    let scanned = scan_shells();
+    if let Ok(mut g) = AVAILABLE_SHELLS.write() {
+        *g = Some(scanned.clone());
+    }
+    scanned
+}
+
+/// 按 canonical path 去重：保留首次出现的字符串路径。
+/// canonicalize 失败时（不存在 / 权限 / NixOS store 之类）回退原路径，
+/// 退化为字符串去重，不丢东西。
+#[cfg(any(unix, windows))]
+fn dedup_by_canonical(paths: Vec<String>) -> Vec<String> {
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut out = Vec::with_capacity(paths.len());
+    for p in paths {
+        let canon = std::fs::canonicalize(&p).unwrap_or_else(|_| PathBuf::from(&p));
+        if seen.insert(canon) {
+            out.push(p);
+        }
+    }
+    out
 }
 
 fn scan_shells() -> Vec<String> {
@@ -92,11 +129,12 @@ fn scan_shells() -> Vec<String> {
 
 #[cfg(unix)]
 fn scan_unix() -> Vec<String> {
-    use std::collections::BTreeSet;
     use std::path::Path;
+    use std::path::PathBuf;
 
-    // BTreeSet：自动去重 + 排序。最终用户偏好 shell（$SHELL）单独捞出来排第一。
-    let mut found: BTreeSet<String> = BTreeSet::new();
+    // 收集所有候选 —— /etc/shells 优先（系统级权威清单）、PATH 扫描补漏、
+    // $SHELL 兜底。中间不去重，最后走 canonical 去重一遍。
+    let mut candidates: Vec<String> = Vec::new();
 
     // 1) /etc/shells —— 系统级权威清单（chsh -a / 包管理装 shell 都会写这里）。
     //    每行可能带 `#` 注释 + 空行 + 不存在路径（清单陈旧），全过滤掉。
@@ -104,7 +142,7 @@ fn scan_unix() -> Vec<String> {
         for line in content.lines() {
             let s = line.split('#').next().unwrap_or("").trim();
             if !s.is_empty() && Path::new(s).exists() {
-                found.insert(s.to_string());
+                candidates.push(s.to_string());
             }
         }
     }
@@ -122,7 +160,7 @@ fn scan_unix() -> Vec<String> {
             for name in KNOWN_UNIX {
                 let candidate = format!("{dir}/{name}");
                 if Path::new(&candidate).exists() {
-                    found.insert(candidate);
+                    candidates.push(candidate);
                 }
             }
         }
@@ -132,33 +170,41 @@ fn scan_unix() -> Vec<String> {
     let preferred = std::env::var("SHELL").ok();
     if let Some(s) = preferred.as_ref() {
         if Path::new(s).exists() {
-            found.insert(s.clone());
+            candidates.push(s.clone());
         }
     }
 
-    // $SHELL 排第一（用户偏好），其它字母序由 BTreeSet 保证。
-    let mut sorted: Vec<String> = found.into_iter().collect();
+    // canonical 去重：macOS 上 /bin/bash 和 /usr/bin/bash 是同一个 inode，
+    // 字符串去重会留两个；canonicalize 之后用真身路径作 set key，只留一个。
+    let mut shells = dedup_by_canonical(candidates);
+    shells.sort();
+
+    // $SHELL 排第一（用户偏好）。可能用户的 $SHELL 是 /bin/bash 但 dedup 留下
+    // 的是 /usr/bin/bash —— 走 canonical 匹配，避免字符串比对漏掉。
     if let Some(pref) = preferred {
-        if let Some(idx) = sorted.iter().position(|s| *s == pref) {
-            let head = sorted.remove(idx);
-            sorted.insert(0, head);
+        let pref_canon =
+            std::fs::canonicalize(&pref).unwrap_or_else(|_| PathBuf::from(&pref));
+        if let Some(idx) = shells.iter().position(|s| {
+            std::fs::canonicalize(s).unwrap_or_else(|_| PathBuf::from(s)) == pref_canon
+        }) {
+            let head = shells.remove(idx);
+            shells.insert(0, head);
         }
     }
-    sorted
+    shells
 }
 
 #[cfg(windows)]
 fn scan_windows() -> Vec<String> {
-    use std::collections::BTreeSet;
     use std::path::Path;
 
-    let mut found: BTreeSet<String> = BTreeSet::new();
+    let mut candidates: Vec<String> = Vec::new();
 
     // 1) 已知绝对路径 —— Windows 没有 /etc/shells 等价物，硬编码常见安装位置 + 验存在。
     //    SystemRoot 通常是 C:\Windows，但企业镜像可能改过，所以读环境变量而不写死。
     let system_root =
         std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
-    let candidates: &[String] = &[
+    let known: &[String] = &[
         format!("{system_root}\\System32\\cmd.exe"),
         format!("{system_root}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"),
         format!("{system_root}\\System32\\wsl.exe"),
@@ -166,9 +212,9 @@ fn scan_windows() -> Vec<String> {
         "C:\\Program Files\\Git\\bin\\bash.exe".to_string(),
         "C:\\Program Files\\Git\\usr\\bin\\bash.exe".to_string(),
     ];
-    for c in candidates {
+    for c in known {
         if Path::new(c).exists() {
-            found.insert(c.clone());
+            candidates.push(c.clone());
         }
     }
 
@@ -181,22 +227,30 @@ fn scan_windows() -> Vec<String> {
             for name in KNOWN_WIN {
                 let candidate = format!("{dir}\\{name}");
                 if Path::new(&candidate).exists() {
-                    found.insert(candidate);
+                    candidates.push(candidate);
                 }
             }
         }
     }
 
-    found.into_iter().collect()
+    // canonical 去重 + 排序。Windows junction point 少，主要是吃掉 PATH 里
+    // 重复目录导致的同一路径多次 push。
+    let mut shells = dedup_by_canonical(candidates);
+    shells.sort();
+    shells
 }
 
 fn default_shell() -> String {
+    // SHELL 仅 Unix 上可信：Windows 下 MSYS/Git Bash 常把 SHELL 设为
+    // /usr/bin/bash 这种 Unix 路径，portable_pty 拿去 spawn 会直接失败。
+    // Windows 走 available_shells() 的扫描结果（System32 / Program Files / PATH）。
+    #[cfg(not(target_os = "windows"))]
     if let Ok(s) = std::env::var("SHELL") {
         return s;
     }
     available_shells()
-        .first()
-        .cloned()
+        .into_iter()
+        .next()
         .unwrap_or_else(|| {
             // 完全扫不到本机任何 shell —— 极端情况（容器最小镜像？）。
             // 给一个保底，至少 spawn 出去能报"找不到"而不是空字符串。
