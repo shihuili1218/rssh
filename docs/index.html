@@ -3,13 +3,65 @@
 <head>
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <title>RSSH - SSH Connection Manager</title>
+    <title>RSSH - SSH Connection Manager with AI Ops Diagnose</title>
     <meta name="description"
-          content="SSH connection manager with desktop GUI and CLI. Command block colors, AI-assisted ops diagnose with click-to-approve, keychain security, multi-platform sync. macOS, Windows, Linux, Android."/>
-    <meta property="og:title" content="RSSH - SSH Connection Manager"/>
-    <meta property="og:description" content="SSH connection manager with AI ops diagnose, command block colors, keychain security, and multi-platform sync."/>
+          content="Cross-platform SSH client with AI-assisted ops diagnose, command block colors, keychain-backed credential security, and multi-device sync. Desktop GUI + CLI for macOS, Windows, Linux, Android."/>
+    <meta name="keywords" content="ssh client, ssh manager, ai ops, sftp client, terminal, command blocks, ssh gui, ssh keychain, ssh sync"/>
+    <meta name="author" content="ofcoder"/>
+    <meta name="theme-color" content="#0f1117"/>
+
+    <!-- Canonical: avoid duplicate-content penalties from www. / trailing slash / query variants. -->
+    <link rel="canonical" href="https://rssh.ofcoder.com/"/>
+
+    <!-- Search engine directives —— allow everything; rely on sitemap.xml for discovery. -->
+    <meta name="robots" content="index, follow, max-image-preview:large"/>
+
+    <!-- Open Graph: social link unfurl. og:image must be an absolute URL; relative paths
+         fail in most social platforms (Slack/Telegram/LinkedIn rewriters fetch on their
+         servers without the page's base). 1200×630 is the de-facto target size. -->
+    <meta property="og:site_name" content="RSSH"/>
+    <meta property="og:title" content="RSSH - SSH Connection Manager with AI Ops Diagnose"/>
+    <meta property="og:description" content="Cross-platform SSH client with AI-assisted ops diagnose, command block colors, keychain-backed credential security, and multi-device sync."/>
     <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://rssh.ofcoder.com/"/>
+    <meta property="og:image" content="https://rssh.ofcoder.com/img.png"/>
+    <meta property="og:image:alt" content="RSSH application screenshot"/>
+    <meta property="og:locale" content="en_US"/>
+    <meta property="og:locale:alternate" content="zh_CN"/>
+
+    <!-- Twitter / X card -->
     <meta name="twitter:card" content="summary_large_image"/>
+    <meta name="twitter:title" content="RSSH - SSH Connection Manager with AI Ops Diagnose"/>
+    <meta name="twitter:description" content="Cross-platform SSH client with AI-assisted ops diagnose, command block colors, keychain-backed credential security, and multi-device sync."/>
+    <meta name="twitter:image" content="https://rssh.ofcoder.com/img.png"/>
+
+    <!-- JSON-LD: SoftwareApplication —— gives Google the option to show a rich
+         result card (rating / OS / download). offers.price=0 because rssh is free OSS;
+         omitting offers entirely causes Google to skip the card. -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "RSSH",
+      "description": "Cross-platform SSH connection manager with AI-assisted ops diagnose, command block colors, keychain credential security, and multi-device sync.",
+      "url": "https://rssh.ofcoder.com/",
+      "image": "https://rssh.ofcoder.com/img.png",
+      "applicationCategory": "DeveloperApplication",
+      "applicationSubCategory": "SSH Client",
+      "operatingSystem": "macOS, Windows, Linux, Android",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "softwareVersion": "0.0.1",
+      "author": {
+        "@type": "Organization",
+        "name": "ofcoder",
+        "url": "https://rssh.ofcoder.com/"
+      }
+    }
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {

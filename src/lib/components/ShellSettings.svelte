@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
+  import * as transfers from "../stores/transfers.svelte.ts";
   import { t } from "../i18n/index.svelte.ts";
 
   let shells = $state<string[]>([]);
@@ -14,6 +15,10 @@
   let verboseLog = $state(true);
   let connectTimeout = $state(10);
   let commandBlockBar = $state(true);
+  /** SFTP 并发上限。main.ts 启动时 loadMaxConcurrent 已写过 store，
+   *  这里 onMount 再读一次显示当前值。 */
+  let sftpMaxConcurrent = $state(transfers.maxConcurrent());
+  const sftpBounds = transfers.maxConcurrentBounds();
 
   /** 用户当前选中的是 Custom 还是某个内置 shell。
    *  pendingCustom（点了 Custom 没填）或 selectedShell 不在 shells 里都算 custom。 */
@@ -29,6 +34,10 @@
     const ts = await invoke<string | null>("get_setting", { key: "connect_timeout" });
     if (ts) connectTimeout = parseInt(ts, 10) || 10;
     commandBlockBar = await app.loadCommandBlockBar();
+    // SFTP 并发上限：main.ts 启动时已读过持久值进 store，但用户可能在打开 Settings 前
+    // 还没 await 完。再读一次确保 input 显示真实当前值。
+    await transfers.loadMaxConcurrent();
+    sftpMaxConcurrent = transfers.maxConcurrent();
   });
 
   async function saveShell() {
@@ -75,6 +84,12 @@
 
   async function saveCommandBlockBar() {
     await app.setCommandBlockBar(commandBlockBar);
+  }
+
+  async function saveSftpMaxConcurrent() {
+    const clamped = Math.max(sftpBounds.min, Math.min(sftpBounds.max, sftpMaxConcurrent | 0));
+    sftpMaxConcurrent = clamped;
+    await transfers.setMaxConcurrent(clamped);
   }
 </script>
 
@@ -126,6 +141,18 @@
     <input type="number" bind:value={connectTimeout} min="1" max="300" onblur={saveTimeout}
       onkeydown={(e) => { if (e.key === "Enter") saveTimeout(); }} />
     <span class="timeout-hint">1–300s, default 10s</span>
+  </div>
+
+  <div class="section-label">{t("settings.shell.sftp_concurrent")}</div>
+  <div class="timeout-row">
+    <label>{t("settings.shell.sftp_concurrent_label")}</label>
+    <input type="number" bind:value={sftpMaxConcurrent}
+      min={sftpBounds.min} max={sftpBounds.max}
+      onblur={saveSftpMaxConcurrent}
+      onkeydown={(e) => { if (e.key === "Enter") saveSftpMaxConcurrent(); }} />
+    <span class="timeout-hint">{t("settings.shell.sftp_concurrent_hint", {
+      min: sftpBounds.min, max: sftpBounds.max, def: sftpBounds.def,
+    })}</span>
   </div>
 
   <div class="section-label">CONNECTION LOGGING</div>

@@ -16,10 +16,51 @@ export type TransferKind = "download" | "upload";
 export type TransferStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 
 /// Global concurrency cap: at most N running transfers at a time; the rest
-/// stay queued. Picked at 10 as a pragmatic sweet spot — comfortably within
+/// stay queued. Default 10 is a pragmatic sweet spot — comfortably within
 /// SSH channel limits (typically 10-100) while keeping per-connection
-/// bandwidth share reasonable.
-const MAX_CONCURRENT = 10;
+/// bandwidth share reasonable. User-overridable in Shell settings, bounded
+/// [MIN, MAX] —— 太低用户搬大量小文件慢得难受；太高撞 SSH 服务端 channel 限或
+/// 把单条 SSH 连接带宽切成碎片。
+const DEFAULT_MAX_CONCURRENT = 10;
+const MIN_MAX_CONCURRENT = 1;
+const MAX_MAX_CONCURRENT = 20;
+const SETTING_KEY_MAX_CONCURRENT = "sftp_max_concurrent";
+
+let _maxConcurrent = $state(DEFAULT_MAX_CONCURRENT);
+
+export function maxConcurrent(): number { return _maxConcurrent; }
+export function maxConcurrentBounds(): { min: number; max: number; def: number } {
+  return { min: MIN_MAX_CONCURRENT, max: MAX_MAX_CONCURRENT, def: DEFAULT_MAX_CONCURRENT };
+}
+
+/** App 启动时调一次 —— 从 DB 拉持久化值覆盖默认。失败保留默认值，不阻塞。 */
+export async function loadMaxConcurrent(): Promise<void> {
+  try {
+    const v = await invoke<string | null>("get_setting", { key: SETTING_KEY_MAX_CONCURRENT });
+    if (v) {
+      const n = parseInt(v, 10);
+      if (Number.isFinite(n) && n >= MIN_MAX_CONCURRENT && n <= MAX_MAX_CONCURRENT) {
+        _maxConcurrent = n;
+      }
+    }
+  } catch {
+    // setting backend 没就绪等情况：留默认 10 即可
+  }
+}
+
+/** ShellSettings 改值时调。clamp 到 [MIN, MAX]，写 DB，最后 kick 一下队列
+ *  —— 用户调大并发数后立刻让被卡住的 queued transfer 跑起来。 */
+export async function setMaxConcurrent(n: number): Promise<void> {
+  const clamped = Math.max(MIN_MAX_CONCURRENT, Math.min(MAX_MAX_CONCURRENT, Math.floor(n)));
+  _maxConcurrent = clamped;
+  await invoke("set_setting", { key: SETTING_KEY_MAX_CONCURRENT, value: String(clamped) });
+  // 调大后多出来的额度立刻消化掉 queued 项；调小不主动 cancel 正在跑的 —— 等它们自然结束。
+  while (runningCount() < _maxConcurrent) {
+    const before = runningCount();
+    promoteNextQueued();
+    if (runningCount() === before) break; // 没 queued 了
+  }
+}
 
 /// 后端用这个 i18n code 标记"用户主动取消"。errStr 包含 `__rssh_err__|{"code":"transfer_cancelled",...}`
 /// 时识别为 cancelled。对应 src-tauri/src/ssh/sftp.rs::CANCELLED_CODE，前后端必须保持一致。
@@ -77,7 +118,7 @@ function runningCount(): number {
 /// is full, the entry remains queued and is picked up by the next
 /// `promoteNextQueued()` scan in some other transfer's `finally` block.
 function tryDispatch(id: string): void {
-  if (runningCount() >= MAX_CONCURRENT) return;
+  if (runningCount() >= _maxConcurrent) return;
   const t = find(id);
   if (!t || t.status !== "queued") return;
   t.status = "running";
@@ -89,7 +130,7 @@ function tryDispatch(id: string): void {
 /// promote one. Iterates from the tail because `startDownload` unshifts new
 /// transfers to the front, so the oldest queued entry lives at the end.
 function promoteNextQueued(): void {
-  if (runningCount() >= MAX_CONCURRENT) return;
+  if (runningCount() >= _maxConcurrent) return;
   for (let i = _list.length - 1; i >= 0; i--) {
     if (_list[i].status === "queued") {
       tryDispatch(_list[i].id);
