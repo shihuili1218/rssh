@@ -58,19 +58,154 @@ impl PtyHandle {
 
 /// 启动本地 shell，返回 (session_id, handle)。
 /// 读取线程通过 Tauri 事件 `pty:data:{id}` 推送数据。
-/// Platform default shells.
-pub fn available_shells() -> Vec<&'static str> {
-    if cfg!(target_os = "windows") {
-        vec!["powershell.exe", "cmd.exe", "wsl.exe", "bash.exe"]
-    } else if cfg!(target_os = "macos") {
-        vec!["/bin/zsh", "/bin/bash", "/bin/sh"]
-    } else {
-        vec!["/bin/bash", "/bin/zsh", "/bin/sh", "/usr/bin/fish"]
+
+/// 本机实际可用的 shell 路径列表，启动时扫描一次，全程复用。
+/// 用 OnceLock 而不是 LazyLock —— lib.rs 的 setup 会显式调一次预热，
+/// 不到一毫秒（最多 ~50 个路径 metadata 检查），但避开第一次打开 Shell
+/// 设置页面时的"打开瞬间冷启动"延迟。
+static AVAILABLE_SHELLS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+/// 启动时由 lib.rs 调一次，触发扫描 + 缓存。后续 `available_shells()` 直接读缓存。
+/// 重复调用是 no-op（OnceLock 语义）。
+pub fn init_available_shells() {
+    AVAILABLE_SHELLS.get_or_init(scan_shells);
+}
+
+pub fn available_shells() -> &'static [String] {
+    AVAILABLE_SHELLS.get_or_init(scan_shells)
+}
+
+fn scan_shells() -> Vec<String> {
+    #[cfg(unix)]
+    {
+        scan_unix()
+    }
+    #[cfg(windows)]
+    {
+        scan_windows()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Vec::new()
     }
 }
 
+#[cfg(unix)]
+fn scan_unix() -> Vec<String> {
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    // BTreeSet：自动去重 + 排序。最终用户偏好 shell（$SHELL）单独捞出来排第一。
+    let mut found: BTreeSet<String> = BTreeSet::new();
+
+    // 1) /etc/shells —— 系统级权威清单（chsh -a / 包管理装 shell 都会写这里）。
+    //    每行可能带 `#` 注释 + 空行 + 不存在路径（清单陈旧），全过滤掉。
+    if let Ok(content) = std::fs::read_to_string("/etc/shells") {
+        for line in content.lines() {
+            let s = line.split('#').next().unwrap_or("").trim();
+            if !s.is_empty() && Path::new(s).exists() {
+                found.insert(s.to_string());
+            }
+        }
+    }
+
+    // 2) 在 PATH 里 which 一组已知 shell 名，捞漏。覆盖 `/etc/shells` 没注册的：
+    //    - 用户 `cargo install nu` 没 `chsh -a`
+    //    - Homebrew 装 fish 在 `/opt/homebrew/bin/fish`、`/usr/local/bin/fish`
+    //    - 类 Termux / NixOS 这种 `/etc/shells` 不完整或不存在的环境
+    const KNOWN_UNIX: &[&str] = &[
+        "bash", "zsh", "fish", "dash", "sh", "ksh", "tcsh", "csh",
+        "nu", "xonsh", "elvish", "ion", "pwsh",
+    ];
+    if let Ok(path_env) = std::env::var("PATH") {
+        for dir in path_env.split(':').filter(|d| !d.is_empty()) {
+            for name in KNOWN_UNIX {
+                let candidate = format!("{dir}/{name}");
+                if Path::new(&candidate).exists() {
+                    found.insert(candidate);
+                }
+            }
+        }
+    }
+
+    // 3) $SHELL 兜底 —— 上面两步可能都漏了用户自己手编译塞到 ~/bin 的 shell。
+    let preferred = std::env::var("SHELL").ok();
+    if let Some(s) = preferred.as_ref() {
+        if Path::new(s).exists() {
+            found.insert(s.clone());
+        }
+    }
+
+    // $SHELL 排第一（用户偏好），其它字母序由 BTreeSet 保证。
+    let mut sorted: Vec<String> = found.into_iter().collect();
+    if let Some(pref) = preferred {
+        if let Some(idx) = sorted.iter().position(|s| *s == pref) {
+            let head = sorted.remove(idx);
+            sorted.insert(0, head);
+        }
+    }
+    sorted
+}
+
+#[cfg(windows)]
+fn scan_windows() -> Vec<String> {
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    let mut found: BTreeSet<String> = BTreeSet::new();
+
+    // 1) 已知绝对路径 —— Windows 没有 /etc/shells 等价物，硬编码常见安装位置 + 验存在。
+    //    SystemRoot 通常是 C:\Windows，但企业镜像可能改过，所以读环境变量而不写死。
+    let system_root =
+        std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+    let candidates: &[String] = &[
+        format!("{system_root}\\System32\\cmd.exe"),
+        format!("{system_root}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"),
+        format!("{system_root}\\System32\\wsl.exe"),
+        "C:\\Program Files\\PowerShell\\7\\pwsh.exe".to_string(),
+        "C:\\Program Files\\Git\\bin\\bash.exe".to_string(),
+        "C:\\Program Files\\Git\\usr\\bin\\bash.exe".to_string(),
+    ];
+    for c in candidates {
+        if Path::new(c).exists() {
+            found.insert(c.clone());
+        }
+    }
+
+    // 2) PATH 扫已知名字 —— 捞 winget/scoop 装的 pwsh / nu / fish 等。
+    const KNOWN_WIN: &[&str] = &[
+        "pwsh.exe", "bash.exe", "nu.exe", "fish.exe", "elvish.exe", "xonsh.exe",
+    ];
+    if let Ok(path_env) = std::env::var("PATH") {
+        for dir in path_env.split(';').filter(|d| !d.is_empty()) {
+            for name in KNOWN_WIN {
+                let candidate = format!("{dir}\\{name}");
+                if Path::new(&candidate).exists() {
+                    found.insert(candidate);
+                }
+            }
+        }
+    }
+
+    found.into_iter().collect()
+}
+
 fn default_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| available_shells()[0].to_string())
+    if let Ok(s) = std::env::var("SHELL") {
+        return s;
+    }
+    available_shells()
+        .first()
+        .cloned()
+        .unwrap_or_else(|| {
+            // 完全扫不到本机任何 shell —— 极端情况（容器最小镜像？）。
+            // 给一个保底，至少 spawn 出去能报"找不到"而不是空字符串。
+            if cfg!(target_os = "windows") {
+                "cmd.exe".to_string()
+            } else {
+                "/bin/sh".to_string()
+            }
+        })
 }
 
 pub fn spawn(

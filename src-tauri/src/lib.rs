@@ -40,6 +40,12 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             #[cfg(not(target_os = "android"))]
             let data_dir = db::data_dir()?;
+
+            // 启动时扫一次本机可用 shell，结果缓存到进程退出。
+            // 用户在 Shell 设置页打开时直接读缓存，没冷启动开销。
+            // PTY 模块本身就是桌面端独占（android 上没有 portable_pty）。
+            #[cfg(not(target_os = "android"))]
+            terminal::pty::init_available_shells();
             let db = Arc::new(db::Db::open(&data_dir)?);
             // secret::open 可能失败：sticky backend 标记 keyring 但 keychain 现在
             // 拿不到（系统 keychain 损坏 / D-Bus 挂等）→ 硬 fail 启动。silently
