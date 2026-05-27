@@ -27,16 +27,22 @@ const MAX_MAX_CONCURRENT = 20;
 const SETTING_KEY_MAX_CONCURRENT = "sftp_max_concurrent";
 
 let _maxConcurrent = $state(DEFAULT_MAX_CONCURRENT);
+/// 标记"本地已经显式 set 过"。loadMaxConcurrent 是 fire-and-forget，可能晚于
+/// 用户在 Settings 里的保存才解出 DB 旧值——那次旧值不能反过来盖掉刚 save 的
+/// 新值。set 之后置 true，后续 load 看到 true 就跳过覆盖。
+let _setLocally = false;
 
 export function maxConcurrent(): number { return _maxConcurrent; }
 export function maxConcurrentBounds(): { min: number; max: number; def: number } {
   return { min: MIN_MAX_CONCURRENT, max: MAX_MAX_CONCURRENT, def: DEFAULT_MAX_CONCURRENT };
 }
 
-/** App 启动时调一次 —— 从 DB 拉持久化值覆盖默认。失败保留默认值，不阻塞。 */
+/** App 启动时调一次 —— 从 DB 拉持久化值覆盖默认。失败保留默认值，不阻塞。
+ *  若期间用户已经手动 set 过（_setLocally==true），就别用 DB 旧值反向覆盖。 */
 export async function loadMaxConcurrent(): Promise<void> {
   try {
     const v = await invoke<string | null>("get_setting", { key: SETTING_KEY_MAX_CONCURRENT });
+    if (_setLocally) return;
     if (v) {
       const n = parseInt(v, 10);
       if (Number.isFinite(n) && n >= MIN_MAX_CONCURRENT && n <= MAX_MAX_CONCURRENT) {
@@ -48,13 +54,14 @@ export async function loadMaxConcurrent(): Promise<void> {
   }
 }
 
-/** ShellSettings 改值时调。clamp 到 [MIN, MAX]，写 DB，最后 kick 一下队列
- *  —— 用户调大并发数后立刻让被卡住的 queued transfer 跑起来。 */
+/** ShellSettings 改值时调。clamp 到 [MIN, MAX]，先写 DB 成功再改 runtime
+ *  —— DB 失败时 runtime 不动，避免重启后两者不一致。最后 kick 一下队列让
+ *  调大后多出来的额度立刻消化掉 queued 项；调小不主动 cancel 正在跑的。 */
 export async function setMaxConcurrent(n: number): Promise<void> {
   const clamped = Math.max(MIN_MAX_CONCURRENT, Math.min(MAX_MAX_CONCURRENT, Math.floor(n)));
-  _maxConcurrent = clamped;
   await invoke("set_setting", { key: SETTING_KEY_MAX_CONCURRENT, value: String(clamped) });
-  // 调大后多出来的额度立刻消化掉 queued 项；调小不主动 cancel 正在跑的 —— 等它们自然结束。
+  _maxConcurrent = clamped;
+  _setLocally = true;
   while (runningCount() < _maxConcurrent) {
     const before = runningCount();
     promoteNextQueued();

@@ -19,17 +19,21 @@ pub fn pty_spawn(
     Ok(id)
 }
 
+// list_shells / refresh_shells 当前没有可失败的内部操作（lock poison 在
+// pty 模块内部静默回退到现场扫描），返 AppResult 是为了遵循项目"所有 tauri
+// command 走 AppResult"的统一约定 —— 将来要往里塞会失败的扫描器时，签名
+// 不用动，前端 error 处理路径已通。
 #[tauri::command]
-pub fn list_shells() -> Vec<String> {
-    pty::available_shells()
+pub fn list_shells() -> AppResult<Vec<String>> {
+    Ok(pty::available_shells())
 }
 
 /// Shell 设置页"刷新"按钮触发：用户装了新 shell 后不必重启 app。
 /// 同步重扫一遍（< 1ms），返回最新列表，前端直接覆盖下拉。
 #[tauri::command]
-pub fn refresh_shells() -> Vec<String> {
+pub fn refresh_shells() -> AppResult<Vec<String>> {
     pty::refresh_available_shells();
-    pty::available_shells()
+    Ok(pty::available_shells())
 }
 
 #[tauri::command]

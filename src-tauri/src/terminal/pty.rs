@@ -94,6 +94,24 @@ pub fn available_shells() -> Vec<String> {
     scanned
 }
 
+/// 真正的"shell 候选"判据：必须是普通文件 + Unix 上有执行位。
+/// 比 `Path::exists()` 严：能挡掉 `/etc/shells` / PATH 里的目录、破损 symlink、
+/// 纯数据文件等乱入，避免最后 spawn 报"not executable"。
+#[cfg(unix)]
+fn is_shell_candidate(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|m| m.is_file() && (m.permissions().mode() & 0o111) != 0)
+        .unwrap_or(false)
+}
+
+/// Windows 没有 POSIX 执行位，靠扩展名 + is_file。我们 KNOWN 列表里全是
+/// `.exe` 后缀，普通文件即可。
+#[cfg(windows)]
+fn is_shell_candidate(path: &std::path::Path) -> bool {
+    path.is_file()
+}
+
 /// 按 canonical path 去重：保留首次出现的字符串路径。
 /// canonicalize 失败时（不存在 / 权限 / NixOS store 之类）回退原路径，
 /// 退化为字符串去重，不丢东西。
@@ -141,7 +159,7 @@ fn scan_unix() -> Vec<String> {
     if let Ok(content) = std::fs::read_to_string("/etc/shells") {
         for line in content.lines() {
             let s = line.split('#').next().unwrap_or("").trim();
-            if !s.is_empty() && Path::new(s).exists() {
+            if !s.is_empty() && is_shell_candidate(Path::new(s)) {
                 candidates.push(s.to_string());
             }
         }
@@ -159,7 +177,7 @@ fn scan_unix() -> Vec<String> {
         for dir in path_env.split(':').filter(|d| !d.is_empty()) {
             for name in KNOWN_UNIX {
                 let candidate = format!("{dir}/{name}");
-                if Path::new(&candidate).exists() {
+                if is_shell_candidate(Path::new(&candidate)) {
                     candidates.push(candidate);
                 }
             }
@@ -169,7 +187,7 @@ fn scan_unix() -> Vec<String> {
     // 3) $SHELL 兜底 —— 上面两步可能都漏了用户自己手编译塞到 ~/bin 的 shell。
     let preferred = std::env::var("SHELL").ok();
     if let Some(s) = preferred.as_ref() {
-        if Path::new(s).exists() {
+        if is_shell_candidate(Path::new(s)) {
             candidates.push(s.clone());
         }
     }
@@ -213,7 +231,7 @@ fn scan_windows() -> Vec<String> {
         "C:\\Program Files\\Git\\usr\\bin\\bash.exe".to_string(),
     ];
     for c in known {
-        if Path::new(c).exists() {
+        if is_shell_candidate(Path::new(c)) {
             candidates.push(c.clone());
         }
     }
@@ -226,7 +244,7 @@ fn scan_windows() -> Vec<String> {
         for dir in path_env.split(';').filter(|d| !d.is_empty()) {
             for name in KNOWN_WIN {
                 let candidate = format!("{dir}\\{name}");
-                if Path::new(&candidate).exists() {
+                if is_shell_candidate(Path::new(&candidate)) {
                     candidates.push(candidate);
                 }
             }
@@ -244,22 +262,36 @@ fn default_shell() -> String {
     // SHELL 仅 Unix 上可信：Windows 下 MSYS/Git Bash 常把 SHELL 设为
     // /usr/bin/bash 这种 Unix 路径，portable_pty 拿去 spawn 会直接失败。
     // Windows 走 available_shells() 的扫描结果（System32 / Program Files / PATH）。
+    // 即便在 Unix，也得校验 SHELL 真有效（trim + is_shell_candidate）—— 空串、
+    // 卸载残留的旧路径、user 手改坏的值都得过滤，避免拿垃圾路径去 spawn。
     #[cfg(not(target_os = "windows"))]
-    if let Ok(s) = std::env::var("SHELL") {
-        return s;
-    }
-    available_shells()
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| {
-            // 完全扫不到本机任何 shell —— 极端情况（容器最小镜像？）。
-            // 给一个保底，至少 spawn 出去能报"找不到"而不是空字符串。
-            if cfg!(target_os = "windows") {
-                "cmd.exe".to_string()
-            } else {
-                "/bin/sh".to_string()
+    {
+        if let Ok(s) = std::env::var("SHELL") {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() && is_shell_candidate(std::path::Path::new(trimmed)) {
+                return trimmed.to_string();
             }
-        })
+        }
+        available_shells()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "/bin/sh".to_string())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Windows 没有 $SHELL 等价物 —— available_shells() 是字典序排好的，
+        // 直接拿 first 会让 `C:\Program Files\Git\bin\bash.exe` 这种偏门项目
+        // 在 `C:\Windows\System32\cmd.exe` 之前。显式按偏好（cmd > pwsh >
+        // powershell）挑，挑不到再退到字典序首位。
+        let shells = available_shells();
+        const PREF_SUFFIXES: &[&str] = &["\\cmd.exe", "\\pwsh.exe", "\\powershell.exe"];
+        for suf in PREF_SUFFIXES {
+            if let Some(s) = shells.iter().find(|s| s.to_lowercase().ends_with(suf)) {
+                return s.clone();
+            }
+        }
+        shells.into_iter().next().unwrap_or_else(|| "cmd.exe".to_string())
+    }
 }
 
 pub fn spawn(

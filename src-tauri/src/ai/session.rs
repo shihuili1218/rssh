@@ -148,7 +148,43 @@ pub struct SessionConfig {
     pub data_dir: PathBuf,
 }
 
-pub fn start(cfg: SessionConfig, app: AppHandle) -> AppResult<DiagnoseSession> {
+/// `build()` 构造出来的"待启动"会话：拿到了 DiagnoseSession（含 action_tx），
+/// 但 actor task 还没 spawn —— 调用方决定要不要 launch。
+///
+/// 这层间接是给"并发 ai_session_start 撞同 tab_id"准备的：拿到 mutex 后再决定
+/// launch；输的那一方直接 drop 整个 PendingSession，actor 从未运行过、零事件
+/// 副作用（不会 emit `ai:session_ended:<tab_id>` 干扰已经赢得 slot 的 session）。
+pub struct PendingSession {
+    session: DiagnoseSession,
+    actor: Actor,
+}
+
+impl PendingSession {
+    pub fn info(&self) -> &DiagnoseSession {
+        &self.session
+    }
+
+    /// spawn actor，返回最终的 DiagnoseSession。consume self 防止漏 launch。
+    pub fn launch(self) -> DiagnoseSession {
+        tauri::async_runtime::spawn(self.actor.run());
+        self.session
+    }
+}
+
+/// 构造一个待启动的 AI 会话。完成 system_prompt 脱敏、channel 建立、audit 初始化、
+/// Actor 结构组装；唯独**不 spawn** —— spawn 由 `PendingSession::launch()` 显式触发。
+///
+/// 调用方典型用法：
+/// ```ignore
+/// let pending = session::start(cfg, app)?;
+/// let info = AiSessionInfo::from(pending.info());
+/// {
+///     let mut g = locked(&state.ai_sessions)?;
+///     if g.contains_key(&tab_id) { return Err(..); } // pending 在此被 drop, 0 副作用
+///     g.insert(tab_id, pending.launch());
+/// }
+/// ```
+pub fn start(cfg: SessionConfig, app: AppHandle) -> AppResult<PendingSession> {
     // system_prompt 是静态文本（rules + user-skill catalog + locale + 平台），
     // 整段不含运行期数据 —— 启动期一次性脱敏并缓存，避免每个 dialogue turn
     // 重跑一遍 regex。redact_rules 在会话生命周期内不变，所以安全。
@@ -187,9 +223,8 @@ pub fn start(cfg: SessionConfig, app: AppHandle) -> AppResult<DiagnoseSession> {
         cancel_slot,
         remote_caps: None,
     };
-    tauri::async_runtime::spawn(actor.run());
 
-    Ok(session)
+    Ok(PendingSession { session, actor })
 }
 
 pub(in crate::ai::session) struct Actor {

@@ -214,24 +214,24 @@ pub async fn ai_session_start(
         data_dir: state.data_dir.clone(),
     };
 
-    let session = session::start(cfg, app)?;
-    let info = AiSessionInfo::from(&session);
-    // 并发 start 防御：上方的 contains_key 检查跟这里的 insert 之间夹着
-    // 几个 await（api_key / target 校验 / llm client 构造），锁会释放。
-    // 两个并发请求都可能通过第一轮检查；不在 insert 时再查一次，后者就
-    // 会静默覆盖前者，前一个 actor 立刻成孤儿。这里在锁下二次确认，
-    // 输的那一方负责把自己刚 spawn 的 actor 关掉，避免泄漏。
+    // 并发 start 防御：上方的 contains_key 检查到这里的 insert 之间夹着
+    // 几个 await（api_key / target 校验 / llm client 构造），锁会释放，两个
+    // 并发请求都可能通过第一轮检查。
+    //
+    // `session::start` 现在返回 `PendingSession`（actor **未 spawn**）—— 在
+    // 锁下再查一遍，撞了直接 return Err，PendingSession 就地 drop，actor
+    // 从未运行过、不会 emit `ai:session_ended:<tab_id>` 污染赢家的事件流。
+    let pending = session::start(cfg, app)?;
+    let info = AiSessionInfo::from(pending.info());
     {
         let mut g = locked(&state.ai_sessions)?;
         if g.contains_key(&tab_id) {
-            drop(g);
-            let _ = session.action_tx.send(UserAction::Stop);
             return Err(AppError::other(
                 "session_already_exists",
                 json!({ "tab_id": tab_id }),
             ));
         }
-        g.insert(tab_id, session);
+        g.insert(tab_id, pending.launch());
     }
     Ok(info)
 }
