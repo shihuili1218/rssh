@@ -32,8 +32,30 @@
     // 走 ai.settings() 读 store 的 $state，自动响应式（不需要手动 loadSettings 触发）。
     let dangerMode = $derived(ai.settings()?.danger_mode === true);
 
-    onMount(() => {
-        if (!ai.settings()) ai.loadSettings().catch(() => {});
+    onMount(async () => {
+        // 先把 settings 拉回来（提示词标题用的 danger 旗，profile 探测开关都要它）。
+        if (!ai.settings()) {
+            try { await ai.loadSettings(); } catch { /* 静默 */ }
+        }
+        // 远端 SSH + auto_detect on + 还没 session + 已配 API key →
+        // 主动启动 session 触发探测。这是用户开 toggle 的代价：
+        // 开 panel 就启 actor 跑一行 echo 探针，识别 cmd / PowerShell。
+        // 无 API key 时启动必失败，跳过避免每次开 panel 都弹错误。
+        const s = ai.settings();
+        if (
+            !session
+            && targetKind === "ssh"
+            && s?.auto_detect_remote_shell
+            && s?.has_api_key
+        ) {
+            try {
+                await ensureSession();
+            } catch (e) {
+                // fire-and-forget：探测预热失败不打扰用户。真正发消息时 send()
+                // 会再走一次 ensureSession 把错误塞到 banner。
+                console.warn("[ai] auto-probe session start failed:", e);
+            }
+        }
     });
 
     $effect(() => {
