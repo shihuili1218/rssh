@@ -75,8 +75,6 @@
     function applyHighlights(text: string): string {
         if (!hlRegex || !hlRules.length) return text;
         // DCS (\x1bP, sixel) / APC (\x1b_) 数据段不能被高亮替换碰，会撕碎图像帧。
-        // 简单短路覆盖单 chunk 含完整或起始 DCS 的常见情况；跨 chunk 的中段
-        // 仍可能被命中高亮 —— 等出问题再上状态机。
         if (text.indexOf('\x1bP') >= 0 || text.indexOf('\x1b_') >= 0) return text;
         const escRe = /\x1b(?:\[[0-9;?]*[A-Za-z@`]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[^\[\]])/g;
         let out = '', pos = 0, m;
