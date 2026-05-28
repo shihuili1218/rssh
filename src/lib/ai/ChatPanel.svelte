@@ -22,6 +22,7 @@
     let banner = $state<string | null>(null);
     let inputEl = $state<HTMLTextAreaElement | null>(null);
     let chatBoxEl = $state<HTMLDivElement | null>(null);
+    let showClearDialog = $state(false);
 
     let session = $derived(ai.sessionForTab(tabId));
     let items: ChatItem[] = $derived(ai.chatItems(tabId));
@@ -79,11 +80,17 @@
         ai.closePanel();
     }
 
-    /** 手动清理上下文。actor 不死，只把 history 清空 —— 下条消息从头来过。
-     *  二次确认防误点（清完无法撤销）。若正在流式响应，先把流停掉。 */
-    async function clearContext() {
+    /** 点扫帚按钮：开二次确认模态。actor 不在就不弹（清个空气没意义）。 */
+    function openClearDialog() {
         if (!session) return;
-        if (!confirm(t("ai.toolbar.clear_confirm"))) return;
+        showClearDialog = true;
+    }
+
+    /** 用户在模态里点"清空"：actor 不死，只把 history 清空 —— 下条消息从头来过。
+     *  若正在流式响应，先把流停掉，避免 in-flight delta 落到已清空的气泡数组。 */
+    async function clearContext() {
+        showClearDialog = false;
+        if (!session) return;
         try {
             if (streaming) {
                 await ai.cancelStream(tabId);
@@ -134,7 +141,7 @@
         <span class="grow"></span>
         {#if session}
             <!-- 清理上下文：仅会话存在时露出。SVG 扫帚图标（22×22）跟"×"视觉重心对齐。 -->
-            <button class="btn-icon" onclick={clearContext} title={t("ai.toolbar.clear_context")} aria-label={t("ai.toolbar.clear_context")}>
+            <button class="btn-icon" onclick={openClearDialog} title={t("ai.toolbar.clear_context")} aria-label={t("ai.toolbar.clear_context")}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M19.36 2.72l1.42 1.42-5.72 5.71-1.42-1.42 5.72-5.71z"/>
                     <path d="M14.13 8.05l-6.36 6.36c-.78.78-2.05.78-2.83 0l-.71-.71c-.39-.39-.39-1.02 0-1.41l7.07-7.07c.39-.39 1.02-.39 1.41 0l.71.71c.78.78.78 2.04 0 2.82"/>
@@ -222,6 +229,28 @@
         </div>
     {/if}
 </div>
+
+<!-- Clear-context confirmation. Tauri webview drops native confirm() silently,
+     so we use the same custom modal pattern as AiSettings' danger-mode dialog. -->
+{#if showClearDialog}
+    <div class="dialog-backdrop" onclick={() => (showClearDialog = false)} role="presentation">
+        <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()}
+             role="dialog" aria-modal="true"
+             aria-labelledby="clear-dialog-title"
+             aria-describedby="clear-dialog-body">
+            <h3 id="clear-dialog-title" class="dialog-title">{t("ai.toolbar.clear_confirm_title")}</h3>
+            <div id="clear-dialog-body" class="dialog-body">{t("ai.toolbar.clear_confirm")}</div>
+            <div class="btn-row">
+                <button class="btn btn-sm" onclick={() => (showClearDialog = false)}>
+                    {t("common.cancel")}
+                </button>
+                <button class="btn btn-sm btn-primary" onclick={clearContext}>
+                    {t("ai.toolbar.clear_confirm_action")}
+                </button>
+            </div>
+        </div>
+    </div>
+{/if}
 
 <style>
     .ai-panel {
@@ -422,5 +451,43 @@
         padding: 6px 8px; border: 1px solid var(--divider);
         border-radius: 4px; background: var(--bg); color: var(--text);
         font-family: inherit; font-size: 13px;
+    }
+
+    /* Clear-context confirmation modal — mirrors AiSettings' danger-mode dialog. */
+    .dialog-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 500;
+        background: var(--overlay-strong);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .dialog {
+        background: var(--bg);
+        box-shadow: var(--raised);
+        border-radius: var(--radius);
+        padding: calc(24px * var(--density));
+        max-width: 420px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+    .dialog-title {
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--text);
+    }
+    .dialog-body {
+        font-size: 13px;
+        color: var(--text);
+        line-height: 1.55;
+        white-space: pre-line;
+    }
+    .btn-row {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        margin-top: 4px;
     }
 </style>
