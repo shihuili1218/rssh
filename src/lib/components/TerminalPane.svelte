@@ -5,6 +5,7 @@
     import {FitAddon} from "@xterm/addon-fit";
     import {SearchAddon} from "@xterm/addon-search";
     import {Unicode11Addon} from "@xterm/addon-unicode11";
+    import {ImageAddon} from "@xterm/addon-image";
     import {invoke} from "@tauri-apps/api/core";
     import {listen, type UnlistenFn} from "@tauri-apps/api/event";
     import type {HighlightRule} from "../stores/app.svelte.ts";
@@ -73,6 +74,8 @@
 
     function applyHighlights(text: string): string {
         if (!hlRegex || !hlRules.length) return text;
+        // DCS (\x1bP, sixel) / APC (\x1b_) 数据段不能被高亮替换碰，会撕碎图像帧。
+        if (text.indexOf('\x1bP') >= 0 || text.indexOf('\x1b_') >= 0) return text;
         const escRe = /\x1b(?:\[[0-9;?]*[A-Za-z@`]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[^\[\]])/g;
         let out = '', pos = 0, m;
         while ((m = escRe.exec(text)) !== null) {
@@ -833,6 +836,14 @@
         terminal.loadAddon(fitAddon);
         terminal.loadAddon(searchAddon);
         terminal.loadAddon(new Unicode11Addon());
+        // SIXEL / iTerm IIP 图片协议。移动端把内存上限压一半。
+        terminal.loadAddon(new ImageAddon({
+            sixelSupport: true,
+            sixelScrolling: true,
+            iipSupport: true,
+            storageLimit: app.isMobile ? 32 : 128,
+            pixelLimit: app.isMobile ? 4_000_000 : 16_000_000,
+        }));
         terminal.open(containerEl);
         terminal.unicode.activeVersion = "11";
         fitAddon.fit();
