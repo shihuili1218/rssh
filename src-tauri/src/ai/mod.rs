@@ -16,5 +16,6 @@ pub mod llm;
 pub mod prompts;
 pub mod sanitize;
 pub mod session;
+pub mod shell;
 pub mod skills;
 pub mod tools;

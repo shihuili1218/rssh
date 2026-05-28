@@ -56,6 +56,13 @@ fn key_danger_mode() -> String {
 fn key_auto(name: &str) -> String {
     format!("ai_auto_{name}")
 }
+/// 远端 shell 自动探测开关。off（默认）时远端 shell 假设 POSIX（覆盖 ~99% Linux/macOS
+/// 远端，零探测开销保留现有行为）；on 时 AI panel 打开后台发一行 echo 探针，靠
+/// `$PSEdition`/`$$` 解析结果在三类 shell（POSIX / cmd.exe / PowerShell）间分类。
+/// 跟 per-tool `auto_*`（自动批准）语义不同，独立 key。
+fn key_auto_detect_remote_shell() -> String {
+    "ai_auto_detect_remote_shell".into()
+}
 
 // ─── 命令 ──────────────────────────────────────────────────────────
 
@@ -69,6 +76,10 @@ pub struct AiSessionInfo {
     pub skill: String,
     pub model: String,
     pub provider: String,
+    /// 启动时一次性信号：前端是否需要发 shell 探测命令到 PTY。
+    /// 仅当 target=ssh + auto_detect_remote_shell=on + profile_id cache miss 时为 true。
+    /// `ai_list_sessions` 复用 From 时永远 false（list 不触发探测，那是启动期才做的事）。
+    pub probe_required: bool,
 }
 
 impl From<&DiagnoseSession> for AiSessionInfo {
@@ -79,6 +90,7 @@ impl From<&DiagnoseSession> for AiSessionInfo {
             skill: s.skill.clone(),
             model: s.model.clone(),
             provider: s.provider.clone(),
+            probe_required: false,
         }
     }
 }
@@ -162,20 +174,47 @@ pub async fn ai_session_start(
         .ok_or_else(|| AppError::config("api_key_missing", json!({ "provider": provider })))?;
     let endpoint = crate::db::settings::get(&state.db, &key_endpoint(&provider))?;
 
-    // 2. 校验 target 存在 + 抓 SSH handle 给 download_file 工具复用
+    // 2. 校验 target 存在 + 抓 SSH handle（给 download_file 工具复用）+ 推断初始 shell。
+    //
+    // Shell 决策 3 路径：
+    //   - local PTY: PtyHandle 记得用户选的 shell path → 映射 ShellKind，零探测。
+    //   - remote SSH + auto_detect off: POSIX 兜底（保护 99% Linux/macOS 现状）。
+    //   - remote SSH + auto_detect on:
+    //       cache 命中（同 profile 之前探测过）→ 用缓存值。
+    //       cache 未命中 → POSIX 占位 + probe_required=true，由前端跑探测后调 set_shell。
+    let auto_detect = crate::db::settings::get(&state.db, &key_auto_detect_remote_shell())?
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    let mut initial_shell = super::shell::ShellKind::default();
+    let mut probe_required = false;
     let ssh_handle = match target_kind.as_str() {
         "ssh" => {
-            let g = locked(&state.sessions)?;
-            let h = g
-                .get(&target_id)
-                .ok_or_else(|| AppError::not_found("ssh_session_not_found", json!({})))?;
-            Some(h.ssh_handle().clone())
+            let (handle, profile_id) = {
+                let g = locked(&state.sessions)?;
+                let h = g
+                    .get(&target_id)
+                    .ok_or_else(|| AppError::not_found("ssh_session_not_found", json!({})))?;
+                (h.ssh_handle().clone(), h.profile_id().to_string())
+            };
+            if auto_detect {
+                let cached = locked(&state.ai_remote_shell_cache)?
+                    .get(&profile_id)
+                    .copied();
+                match cached {
+                    Some(k) => initial_shell = k,         // cache 命中：直接用
+                    None => probe_required = true,       // cache 未命中：让前端跑探测
+                }
+            }
+            // auto_detect=off 时 initial_shell 保持 POSIX 默认，probe_required=false。
+            Some(handle)
         }
         #[cfg(not(target_os = "android"))]
         "local" => {
-            if !locked(&state.pty_sessions)?.contains_key(&target_id) {
-                return Err(AppError::not_found("local_pty_not_found", json!({})));
-            }
+            let g = locked(&state.pty_sessions)?;
+            let pty = g
+                .get(&target_id)
+                .ok_or_else(|| AppError::not_found("local_pty_not_found", json!({})))?;
+            initial_shell = super::shell::ShellKind::from_local_path(pty.shell_path());
             None
         }
         _ => {
@@ -212,6 +251,9 @@ pub async fn ai_session_start(
         max_output_bytes: sanitize::DEFAULT_MAX_OUTPUT_BYTES,
         ssh_handle,
         data_dir: state.data_dir.clone(),
+        // 本地 PTY: 上面从 PtyHandle.shell_path 推断（确定值）；
+        // 远端 SSH: POSIX 默认，等 Phase 4 探测命中后由 set_shell 更新。
+        shell_kind: initial_shell,
     };
 
     // 并发 start 防御：上方的 contains_key 检查到这里的 insert 之间夹着
@@ -222,7 +264,8 @@ pub async fn ai_session_start(
     // 锁下再查一遍，撞了直接 return Err，PendingSession 就地 drop，actor
     // 从未运行过、不会 emit `ai:session_ended:<tab_id>` 污染赢家的事件流。
     let pending = session::start(cfg, app)?;
-    let info = AiSessionInfo::from(pending.info());
+    let mut info = AiSessionInfo::from(pending.info());
+    info.probe_required = probe_required;
     {
         let mut g = locked(&state.ai_sessions)?;
         if g.contains_key(&tab_id) {
@@ -318,6 +361,39 @@ pub async fn ai_session_clear_context(
         .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
     tx.send(UserAction::ClearContext)
         .map_err(|_| AppError::other("ai_session_stopped", json!({})))?;
+    Ok(())
+}
+
+/// 前端探测远端 shell 后回传结果。actor 切换 cfg.shell_kind；同时若 target 是 SSH，
+/// 把结果写入进程级 cache（key=profile_id），同 profile 的下一次 AI session 直接命中。
+///
+/// 错误模型：找不到 ai session 时 not_found；找不到对应 SSH session 时静默跳过 cache
+/// 写入（actor 已经更新了——AI 行为正确，只是没缓存复用机会）。
+#[tauri::command]
+pub async fn ai_session_set_shell(
+    state: State<'_, AppState>,
+    tab_id: String,
+    shell: super::shell::ShellKind,
+) -> AppResult<()> {
+    // 1. 推到 actor —— SetShell 在 recv_action 透明处理，inner loop 期间也能安全应用。
+    let (tx, target_id) = {
+        let g = locked(&state.ai_sessions)?;
+        let s = g
+            .get(&tab_id)
+            .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
+        (s.action_tx.clone(), s.target_id.clone())
+    };
+    tx.send(UserAction::SetShell(shell))
+        .map_err(|_| AppError::other("ai_session_stopped", json!({})))?;
+
+    // 2. 远端 SSH 时同步写进程缓存。本地 PTY 不进 cache —— 每个 PTY tab 起始 shell 由
+    //    PtyHandle.shell_path 唯一决定，没有"探测后缓存"的语义。
+    if let Some(profile_id) = locked(&state.sessions)?
+        .get(&target_id)
+        .map(|h| h.profile_id().to_string())
+    {
+        locked(&state.ai_remote_shell_cache)?.insert(profile_id, shell);
+    }
     Ok(())
 }
 
@@ -497,6 +573,9 @@ pub struct AiSettings {
     pub auto_patch_modify: bool,
     pub auto_patch_diff: bool,
     pub auto_patch_mv: bool,
+    /// 远端 shell 自动探测：off 时远端假设 POSIX；on 时 AI panel 打开后跑探针。
+    /// 详见 `key_auto_detect_remote_shell` 注释。
+    pub auto_detect_remote_shell: bool,
 }
 
 /// per-tool auto-approve 字段的默认值 —— 在 ai_settings_get / ai_settings_set 间共享。
@@ -534,6 +613,10 @@ pub async fn ai_settings_get(
     let danger_mode = crate::db::settings::get(&state.db, &key_danger_mode())?
         .map(|v| v == "1")
         .unwrap_or(false);
+    let auto_detect_remote_shell =
+        crate::db::settings::get(&state.db, &key_auto_detect_remote_shell())?
+            .map(|v| v == "1")
+            .unwrap_or(false);
     Ok(AiSettings {
         provider,
         model,
@@ -548,6 +631,7 @@ pub async fn ai_settings_get(
         auto_patch_modify: read_auto(&state, "patch_modify")?,
         auto_patch_diff: read_auto(&state, "patch_diff")?,
         auto_patch_mv: read_auto(&state, "patch_mv")?,
+        auto_detect_remote_shell,
     })
 }
 
@@ -597,6 +681,7 @@ pub async fn ai_settings_set(
     auto_patch_modify: Option<bool>,
     auto_patch_diff: Option<bool>,
     auto_patch_mv: Option<bool>,
+    auto_detect_remote_shell: Option<bool>,
 ) -> AppResult<()> {
     if let Some(p) = provider.as_ref() {
         crate::db::settings::set(&state.db, &key_provider(), p)?;
@@ -639,6 +724,13 @@ pub async fn ai_settings_set(
         if let Some(on) = val {
             crate::db::settings::set(&state.db, &key_auto(name), if *on { "1" } else { "0" })?;
         }
+    }
+    if let Some(on) = auto_detect_remote_shell {
+        crate::db::settings::set(
+            &state.db,
+            &key_auto_detect_remote_shell(),
+            if on { "1" } else { "0" },
+        )?;
     }
     Ok(())
 }

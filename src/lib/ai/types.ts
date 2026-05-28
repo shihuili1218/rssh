@@ -28,6 +28,8 @@ export interface AiSettings {
   auto_patch_modify: boolean;
   auto_patch_diff: boolean;
   auto_patch_mv: boolean;
+  /** 远端 shell 自动探测：off 时远端假设 POSIX；on 时 AI panel 打开时发探针。默认 off。 */
+  auto_detect_remote_shell: boolean;
 }
 
 /** AI 工具卡片 kind —— 后端 emit command_proposed 时打的 tag；前端按它查 auto_* 设置。 */
@@ -54,7 +56,13 @@ export interface AiSessionInfo {
   skill: string;
   model: string;
   provider: LlmProvider;
+  /** 启动时的一次性信号：true → 前端需要发 shell 探测命令到 PTY，结果回传 set_shell。
+   *  仅当 target=ssh + 设置里 auto_detect_remote_shell=on + 同 profile 进程缓存未命中时为 true。 */
+  probe_required: boolean;
 }
+
+/** 远端 shell 三家族 —— 跟 Rust 端 ShellKind 一对一镜像（lowercase wire format）。 */
+export type ShellKind = "posix" | "cmd" | "powershell";
 
 /** 一条对话消息（前端展示用） */
 export type ChatItem =

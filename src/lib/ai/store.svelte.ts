@@ -19,6 +19,7 @@ import type {
   CommandResult,
   LlmProvider,
   ModelInfo,
+  ShellKind,
   SkillRecord,
 } from "./types.ts";
 
@@ -183,6 +184,74 @@ export async function rebindTarget(
  *  这跟 stopSession（销毁整个会话）是两个语义。actor 不在 chat 时调用是 no-op。 */
 export async function cancelStream(tab_id: string): Promise<void> {
   await invoke("ai_cancel_stream", { tabId: tab_id });
+}
+
+/** 探测远端 shell：发一行 `echo P=$PSEdition=$$=E` 到 PTY，listen 1.5s 解析输出。
+ *
+ *  返回 true = 探测成功并已 invoke ai_session_set_shell（后端 cache + actor 都更新）。
+ *  返回 false = 超时或无法识别 → 保持后端 POSIX 兜底（不调 set_shell）。
+ *
+ *  时机：ChatPanel ensureSession 之后，当 info.probe_required=true 且 target=ssh 时调用。
+ *  视觉代价：用户会看到一行 echo 命令滚过终端。这是把 toggle 开开的代价。
+ *
+ *  正则反查表：
+ *    P=Desktop=*=E   → powershell (PS 5.1 / Win PS 7 Desktop edition)
+ *    P=Core=*=E      → powershell (PS 7 Core edition, 跨平台)
+ *    P=$PSEdition=$$=E → cmd.exe (`$` 系变量全不展开)
+ *    P==<数字>=E     → posix      (bash/zsh/sh/dash/ksh/csh/tcsh: $PSEdition 空, $$ 是 PID)
+ *    其他 / 超时     → 不调 set_shell（兜底 POSIX 保留）
+ */
+export async function probeRemoteShell(
+  tab_id: string,
+  target_kind: "ssh" | "local",
+  target_id: string,
+): Promise<boolean> {
+  if (target_kind !== "ssh") return false; // local 已知，无需探测
+  const writeCmd = "ssh_write";
+  const dataEvent = `ssh:data:${target_id}`;
+  const PROBE = "echo P=$PSEdition=$$=E";
+  const RE = /P=([^=]*)=([^=]*)=E/;
+
+  let buffer = "";
+  const unlisten = await listen<number[]>(dataEvent, (e) => {
+    buffer += new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(e.payload));
+  });
+  try {
+    await invoke(writeCmd, {
+      sessionId: target_id,
+      data: Array.from(new TextEncoder().encode(PROBE + "\r")),
+    });
+    // 1.5s deadline：远端通常 100-300ms 内回响，给 5x 头量容忍慢链路。
+    const deadline = Date.now() + 1500;
+    while (Date.now() < deadline) {
+      const m = buffer.match(RE);
+      if (m) {
+        const kind = classifyShell(m[1], m[2]);
+        await invoke("ai_session_set_shell", { tabId: tab_id, shell: kind });
+        return true;
+      }
+      await new Promise((r) => setTimeout(r, 80));
+    }
+    console.warn("[ai] shell probe timed out — keeping POSIX fallback");
+    return false;
+  } catch (e) {
+    console.error("[ai] shell probe failed:", e);
+    return false;
+  } finally {
+    unlisten();
+  }
+}
+
+/** 反查表实现：参考 store.probeRemoteShell 顶部的对照表。 */
+function classifyShell(psed: string, dollar: string): ShellKind {
+  // PS 5+ 内置 $PSEdition 是 'Desktop' (Win PS) 或 'Core' (PS 7 Core)
+  if (psed === "Desktop" || psed === "Core") return "powershell";
+  // cmd.exe 完全不识别 `$`-style 变量，全字面输出
+  if (psed === "$PSEdition" && dollar === "$$") return "cmd";
+  // POSIX: $PSEdition 未定义展开为空，$$ 是 shell PID（数字）
+  if (psed === "" && /^\d+$/.test(dollar)) return "posix";
+  // 兜底：PS 4.x 等 $PSEdition 不存在的老 PS，或 fish 等 $$ 报错的情况
+  return "posix";
 }
 
 /** 当前会话的助手消息是否正在流式输出 —— UI 用它把"发送"按钮切成"停止"。 */
@@ -415,6 +484,7 @@ export async function saveSettings(s: Partial<{
   autoPatchModify: boolean;
   autoPatchDiff: boolean;
   autoPatchMv: boolean;
+  autoDetectRemoteShell: boolean;
 }>) {
   await invoke("ai_settings_set", s);
   await loadSettings();

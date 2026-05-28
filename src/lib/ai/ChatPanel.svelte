@@ -44,17 +44,23 @@
     });
 
     /** 没 session 就先启动；启动失败抛错。
-     *  skill 固定 general —— 用户自定义 skill 已自动拼进 master prompt，让 LLM 自己路由。 */
+     *  skill 固定 general —— 用户自定义 skill 已自动拼进 master prompt，让 LLM 自己路由。
+     *  启动成功后，如果 info.probe_required（远端 SSH + auto_detect on + cache miss），
+     *  fire-and-forget 跑一次 shell 探测：用户看到一行 echo 滚过去，后台解析后调 set_shell。 */
     async function ensureSession(): Promise<void> {
         if (session) return;
         const settings = ai.settings() ?? await ai.loadSettings();
         if (!settings.has_api_key) {
             throw new Error(t("ai.error.no_api_key"));
         }
-        await ai.startSession({
+        const info = await ai.startSession({
             tabId, targetKind, targetId, skill: "general",
             provider: settings.provider, model: settings.model,
         });
+        if (info.probe_required) {
+            // 失败也不阻塞 AI 启动 —— 后端 cfg.shell_kind 默认 POSIX 兜底。
+            void ai.probeRemoteShell(tabId, targetKind, targetId);
+        }
     }
 
     async function send() {

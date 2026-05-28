@@ -82,6 +82,10 @@ pub enum UserAction {
         target_id: String,
         ssh_handle: Option<SshHandle>,
     },
+    /// 前端探测远端 shell 后回传结果。actor 把 cfg.shell_kind 切换到新值 ——
+    /// 后续 run_command / file_ops 都按新模板拼 sentinel。跟 RebindTarget 同档次的
+    /// "生命周期类事件"，在 recv_action 里透明吞掉，不进 run / inner-loop 的 match。
+    SetShell(super::shell::ShellKind),
     Stop,
 }
 
@@ -101,6 +105,7 @@ impl std::fmt::Debug for UserAction {
             UserAction::RebindTarget { target_id, .. } => {
                 write!(f, "RebindTarget({target_id})")
             }
+            UserAction::SetShell(s) => write!(f, "SetShell({s:?})"),
             UserAction::Stop => f.write_str("Stop"),
         }
     }
@@ -146,6 +151,13 @@ pub struct SessionConfig {
     pub ssh_handle: Option<SshHandle>,
     /// dump 文件落地目录（实际文件写到 <data_dir>/diagnose/<tab_id>/）。
     pub data_dir: PathBuf,
+    /// Target shell family — drives sentinel template selection in
+    /// `handle_run_command` and `ensure_remote_caps` / `run_file_op`.
+    /// Default Posix is the safe fallback (Linux/macOS remotes, ~99% case).
+    /// Local PTY: derived from PtyHandle.shell_path at start.
+    /// Remote SSH: probed via PTY echo when auto-detect is on, else Posix.
+    /// `SetShell` action updates it after a successful probe.
+    pub shell_kind: super::shell::ShellKind,
 }
 
 /// `build()` 构造出来的"待启动"会话：拿到了 DiagnoseSession（含 action_tx），
@@ -302,21 +314,31 @@ impl Actor {
     pub(in crate::ai::session) async fn recv_action(&mut self) -> Option<UserAction> {
         loop {
             let action = self.action_rx.recv().await?;
-            if let UserAction::RebindTarget {
-                target_id,
-                ssh_handle,
-            } = action
-            {
-                self.cfg.target_id = target_id.clone();
-                self.cfg.ssh_handle = ssh_handle;
-                // 新 target 的远端能力跟老的没关系（不同主机的 python3/perl 不一定都在）
-                self.remote_caps = None;
-                self.audit_push(AuditKind::Note {
-                    message: format!("rebound to target {target_id}"),
-                });
-                continue;
+            match action {
+                UserAction::RebindTarget {
+                    target_id,
+                    ssh_handle,
+                } => {
+                    self.cfg.target_id = target_id.clone();
+                    self.cfg.ssh_handle = ssh_handle;
+                    // 新 target 的远端能力跟老的没关系（不同主机的 python3/perl 不一定都在）
+                    self.remote_caps = None;
+                    self.audit_push(AuditKind::Note {
+                        message: format!("rebound to target {target_id}"),
+                    });
+                }
+                UserAction::SetShell(s) => {
+                    // 不受 inner loop（命令审批中）干扰：跟 RebindTarget 同档次透明吞掉。
+                    // SetShell 不动 history（不像 ClearContext 会拆未配对 tool_use/result），
+                    // 命令审批中也能安全应用 —— 下次 sentinel 拼接就按新 shell 走。
+                    let prev = self.cfg.shell_kind;
+                    self.cfg.shell_kind = s;
+                    self.audit_push(AuditKind::Note {
+                        message: format!("shell_kind: {prev:?} → {s:?}"),
+                    });
+                }
+                other => return Some(other),
             }
-            return Some(action);
         }
     }
 
@@ -334,8 +356,17 @@ impl Actor {
                 .map(|m| sanitize::redact_message(m, rules))
                 .collect();
 
+            // Shell section 在每轮重拼 —— SetShell（远端探测命中）之后下一轮 LLM 调用
+            // 自动看到新 shell 介绍，无需重建 self.system_prompt。section 是 rssh 自己生成
+            // 的静态字符串，不含敏感信息，不需要过 redact。
+            let system_prompt = format!(
+                "{}{}",
+                self.system_prompt,
+                self.cfg.shell_kind.prompt_section()
+            );
+
             let req = ChatRequest {
-                system_prompt: self.system_prompt.clone(),
+                system_prompt,
                 messages: redacted_history.clone(),
                 tools: tools::all_tools(),
                 model: self.cfg.model.clone(),
@@ -1026,10 +1057,10 @@ impl Actor {
         }
 
         let cmd_id = uuid::Uuid::new_v4().to_string();
-        let sentinel = format!("__rssh_done_{}", uuid::Uuid::new_v4().simple());
         let timeout_s = input.timeout_s.unwrap_or(60).clamp(1, 300);
-        // 前端实际粘贴这个完整命令（含 sentinel + exit code 回显）
-        let full_cmd = format!("{}; echo \"{}:$?\"", input.cmd, sentinel);
+        // (sentinel marker, full_cmd to paste). 模板按 cfg.shell_kind 选 ——
+        // POSIX `;$?` / cmd `&%errorlevel%` / PS `;$LASTEXITCODE`. 两个值必须配对生成。
+        let (sentinel, full_cmd) = self.cfg.shell_kind.sentinel_command(&input.cmd);
 
         self.audit_push(AuditKind::CommandProposed {
             id: cmd_id.clone(),

@@ -49,6 +49,28 @@
     let autoPatchMv = $state(false);
     let savingAuto = $state(false);
 
+    // ─── 远端 shell 自动探测（与 danger_mode 解耦的独立开关）─────────
+    // 默认 off：99% Linux/macOS 远端假设 POSIX 即正确，零探测开销保持现状。
+    // 用户连 Windows / 改了 DefaultShell 的远端时手动开启，让 AI panel 打开时跑
+    // 一行 echo 探针自动定位 cmd.exe / PowerShell。
+    let autoDetectRemoteShell = $state(false);
+    let savingShellDetect = $state(false);
+    let shellDetectNote = $state<string | null>(null);
+
+    async function persistAutoDetectShell(next: boolean) {
+        savingShellDetect = true;
+        shellDetectNote = null;
+        try {
+            await ai.saveSettings({ autoDetectRemoteShell: next });
+        } catch (err) {
+            // 失败回滚 UI 状态，保持跟后端单一真相
+            autoDetectRemoteShell = !next;
+            shellDetectNote = t("ai.settings.shell_detect.save_failed", { error: errMsg(err) });
+        } finally {
+            savingShellDetect = false;
+        }
+    }
+
     /** onclick + preventDefault：Tauri webview 不支持原生 confirm()，且依赖 checkbox
      *  默认 toggle 会导致 cancel 后 DOM 与 Svelte state 错位。这里手动接管：
      *  开启时弹自定义模态等用户确认；关闭直接 save（关 = 回到安全默认，不拦）。 */
@@ -215,6 +237,7 @@
         autoPatchModify = s.auto_patch_modify;
         autoPatchDiff = s.auto_patch_diff;
         autoPatchMv = s.auto_patch_mv;
+        autoDetectRemoteShell = s.auto_detect_remote_shell;
         if (hasKey) void autoLoadModels();
         await refreshSkills();
     });
@@ -467,6 +490,31 @@
                        disabled={!dangerMode || savingAuto}
                        onchange={(e) => persistAuto("autoPatchMv", (e.target as HTMLInputElement).checked)}/>
                 <span>{t("ai.settings.danger.auto.patch_mv")}</span>
+            </label>
+        </div>
+    </div>
+
+    <!-- 远端 shell 自动探测 —— 独立卡片，跟 danger_mode 解耦。
+         off（默认）：远端假设 POSIX，保持 99% 用户零开销。
+         on：AI panel 打开时跑一行 echo 探针，定位 cmd.exe / PowerShell。 -->
+    <div class="card surface-raised">
+        <div class="danger-head">
+            <div class="danger-head-body">
+                <div id="shell-detect-title" class="danger-title">
+                    {t("ai.settings.shell_detect.label")}
+                </div>
+                <div id="shell-detect-desc" class="danger-desc">{t("ai.settings.shell_detect.desc")}</div>
+                {#if shellDetectNote}
+                    <div class="danger-err">{shellDetectNote}</div>
+                {/if}
+            </div>
+            <label class="switch">
+                <input type="checkbox" bind:checked={autoDetectRemoteShell}
+                       disabled={savingShellDetect}
+                       onchange={(e) => persistAutoDetectShell((e.target as HTMLInputElement).checked)}
+                       aria-labelledby="shell-detect-title"
+                       aria-describedby="shell-detect-desc"/>
+                <span class="slider"></span>
             </label>
         </div>
     </div>

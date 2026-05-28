@@ -478,8 +478,10 @@ impl Actor {
         }
         let probe_tc_id = uuid::Uuid::new_v4().to_string();
         let cmd_id = uuid::Uuid::new_v4().to_string();
-        let sentinel = format!("__rssh_done_{}", uuid::Uuid::new_v4().simple());
-        let full_cmd = format!("{}; echo \"{}:$?\"", PROBE_CMD, sentinel);
+        // PROBE_CMD is a POSIX-only shell script (python3/perl/diff `which` probes).
+        // On Windows targets the probe itself can't succeed, but the sentinel
+        // template still has to match shell_kind so the front-end finds the marker.
+        let (sentinel, full_cmd) = self.cfg.shell_kind.sentinel_command(PROBE_CMD);
 
         self.audit_push(AuditKind::Note {
             message: "file_ops: probing remote capabilities (python3 / perl / diff)".into(),
@@ -541,8 +543,7 @@ impl Actor {
         diff: Option<&str>,
     ) -> AppResult<CommandOutcome> {
         let cmd_id = uuid::Uuid::new_v4().to_string();
-        let sentinel = format!("__rssh_done_{}", uuid::Uuid::new_v4().simple());
-        let full_cmd = format!("{}; echo \"{}:$?\"", cmd, sentinel);
+        let (sentinel, full_cmd) = self.cfg.shell_kind.sentinel_command(&cmd);
 
         self.audit_push(AuditKind::CommandProposed {
             id: cmd_id.clone(),

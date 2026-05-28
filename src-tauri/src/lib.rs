@@ -78,6 +78,7 @@ pub fn run() {
                 passphrase_cache: Mutex::new(HashMap::new()),
                 window_sessions: Mutex::new(HashMap::new()),
                 ai_sessions: Mutex::new(HashMap::new()),
+                ai_remote_shell_cache: Mutex::new(HashMap::new()),
                 data_dir,
             });
             Ok(())
@@ -210,6 +211,7 @@ pub fn run() {
             ai::commands::ai_session_stop,
             ai::commands::ai_session_clear_context,
             ai::commands::ai_session_rebind_target,
+            ai::commands::ai_session_set_shell,
             ai::commands::ai_cancel_stream,
             ai::commands::ai_user_message,
             ai::commands::ai_command_result,

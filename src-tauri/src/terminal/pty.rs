@@ -30,10 +30,13 @@ impl Drop for ChildReaper {
 
 /// 本地 PTY 会话句柄，Clone + Send + Sync。
 /// `_reaper` 跟着 PtyHandle 走，最后一份 clone 消失时回收子进程。
+/// `shell_path` 是 spawn 时实际使用的 shell 二进制路径——AI session 用它
+/// 推断 ShellKind（无需探测，因为本地 shell 是用户在 UI 里显式选的）。
 #[derive(Clone)]
 pub struct PtyHandle {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    shell_path: Arc<str>,
     _reaper: Arc<ChildReaper>,
 }
 
@@ -53,6 +56,12 @@ impl PtyHandle {
                 pixel_height: 0,
             })
             .map_err(|e| AppError::pty("pty_op_failed", serde_json::json!({ "err": e.to_string() })))
+    }
+
+    /// spawn 时实际使用的 shell 路径（用户在 UI 选的，或 default_shell 兜底）。
+    /// AI 模块用这个判定本地 PTY 的 ShellKind，无需探测。
+    pub fn shell_path(&self) -> &str {
+        &self.shell_path
     }
 }
 
@@ -340,6 +349,7 @@ pub fn spawn(
     let handle = PtyHandle {
         writer: Arc::new(Mutex::new(writer)),
         master: Arc::new(Mutex::new(pair.master)),
+        shell_path: Arc::from(shell.as_str()),
         _reaper: Arc::new(ChildReaper {
             child: Mutex::new(Some(child)),
         }),

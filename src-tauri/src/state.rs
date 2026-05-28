@@ -39,5 +39,10 @@ pub struct AppState {
     pub window_sessions: Mutex<HashMap<String, HashSet<String>>>,
     /// AI 排障会话表（ai_session_id → DiagnoseSession）
     pub ai_sessions: Mutex<HashMap<String, DiagnoseSession>>,
+    /// 远端 shell 探测结果缓存：profile_id → ShellKind。
+    /// 进程级（不落盘）—— 同一 profile 重连/多次开 AI panel 复用结果。
+    /// 命中即用，不重发探针；用户切了远端 DefaultShell 注册表后需要重启 app
+    /// 才能让 rssh 重新探测（可接受 —— 这是罕见的运维变更）。
+    pub ai_remote_shell_cache: Mutex<HashMap<String, crate::ai::shell::ShellKind>>,
     pub data_dir: PathBuf,
 }

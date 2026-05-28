@@ -692,6 +692,9 @@ pub enum SessionCmd {
 pub struct SessionHandle {
     tx: mpsc::UnboundedSender<SessionCmd>,
     ssh_handle: SshHandle,
+    /// 本次连接对应的 Profile.id。AI 模块用它作 remote_shell_cache 的 key ——
+    /// 同一 profile 多次重连共享一份探测结果，不重发 probe。
+    profile_id: String,
 }
 
 impl SessionHandle {
@@ -707,6 +710,9 @@ impl SessionHandle {
     }
     pub fn ssh_handle(&self) -> &SshHandle {
         &self.ssh_handle
+    }
+    pub fn profile_id(&self) -> &str {
+        &self.profile_id
     }
 
     /// 强制断开整条 SSH 连接 —— 不只是 shell channel，连 TCP 一起切。
@@ -842,7 +848,11 @@ pub async fn connect(
 
     Ok(ConnectResult {
         session_id,
-        handle: SessionHandle { tx, ssh_handle },
+        handle: SessionHandle {
+            tx,
+            ssh_handle,
+            profile_id: profile.id.clone(),
+        },
     })
 }
 
