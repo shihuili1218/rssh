@@ -74,8 +74,15 @@ impl ShellKind {
             // can't leak into a later cmdlet), then coalesce to a digit — use the
             // native exit code when one exists, else the cmdlet success boolean
             // `$?` (0 = ok, 1 = failed). The field is therefore always numeric.
+            //
+            // `$?` is captured into `$ok` *immediately* after `{cmd}`: `$?`
+            // reflects the most recently executed pipeline, and the intervening
+            // `$null -ne $LASTEXITCODE` comparison can overwrite it (true) before
+            // the `elseif` reads it — older PowerShell (5.1 / Desktop, which we
+            // detect and support) is especially loose here — so a FAILED cmdlet
+            // could be misreported as `0`. Snapshotting removes that ambiguity.
             Self::Powershell => format!(
-                "$LASTEXITCODE=$null; {cmd}; Write-Output \"{marker}:$(if ($null -ne $LASTEXITCODE) {{$LASTEXITCODE}} elseif ($?) {{0}} else {{1}})\""
+                "$LASTEXITCODE=$null; {cmd}; $ok=$?; Write-Output \"{marker}:$(if ($null -ne $LASTEXITCODE) {{$LASTEXITCODE}} elseif ($ok) {{0}} else {{1}})\""
             ),
         }
     }
@@ -194,14 +201,15 @@ mod tests {
         // which interpolates to an empty exit-code field — the front-end sentinel
         // regex `:(-?\d+)` then never matches and the command false-times-out after
         // 60s. The template must (a) reset $LASTEXITCODE so a prior native command's
-        // code can't leak into a later cmdlet, and (b) coalesce to a digit via the
-        // $? success boolean so the field is always numeric.
+        // code can't leak into a later cmdlet, (b) snapshot the cmdlet success flag
+        // into $ok *right after* the command (before the `$null -ne` comparison can
+        // clobber $?), and (c) coalesce to a digit so the field is always numeric.
         let got = ShellKind::Powershell.format_sentinel("Get-Process", "__rssh_done_abc");
         assert!(got.starts_with("$LASTEXITCODE=$null;"), "got: {got}");
-        assert!(got.contains("Get-Process"));
+        assert!(got.contains("Get-Process; $ok=$?;"), "must snapshot $? right after cmd: {got}");
         assert!(got.contains("__rssh_done_abc:"));
         assert!(got.contains("$LASTEXITCODE")); // native exit code when one exists
-        assert!(got.contains("$?")); // fallback so the field is always a digit
+        assert!(got.contains("elseif ($ok)"), "elseif must read the snapshot, not raw $?: {got}");
     }
 
     #[test]
