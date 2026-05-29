@@ -94,10 +94,10 @@
 </script>
 
 <div class="page">
-  <div class="section-label" id="local-shell-label">LOCAL SHELL</div>
+  <div class="section-label" id="local-shell-label">{t("settings.shell.local_shell")}</div>
   <div class="card surface-raised shell-card">
     <div class="shell-hint">
-      Pick a shell to use for new local terminals, or choose Custom and type your own path.
+      {t("settings.shell.pick_hint")}
     </div>
     <div class="radio-group" role="radiogroup" aria-labelledby="local-shell-label">
       {#each shells as sh, i}
@@ -123,10 +123,10 @@
         <label for="shell-r-custom" class="radio-label">
           <span class="shell-radio-indicator" aria-hidden="true"></span>
           <span class="info">
-            <span class="name">CUSTOM</span>
+            <span class="name">{t("settings.shell.custom")}</span>
             <input class="custom-input" type="text"
                    bind:value={customPath}
-                   placeholder="/usr/local/bin/fish"
+                   placeholder={t("settings.shell.custom_placeholder")}
                    onfocus={() => pickCustom()}
                    onblur={onCustomBlur} />
           </span>
@@ -135,12 +135,12 @@
     </div>
   </div>
 
-  <div class="section-label">CONNECTION TIMEOUT</div>
+  <div class="section-label">{t("settings.shell.connection_timeout")}</div>
   <div class="timeout-row">
-    <label>Timeout (seconds)</label>
+    <label>{t("settings.shell.timeout_label")}</label>
     <input type="number" bind:value={connectTimeout} min="1" max="300" onblur={saveTimeout}
       onkeydown={(e) => { if (e.key === "Enter") saveTimeout(); }} />
-    <span class="timeout-hint">1–300s, default 10s</span>
+    <span class="timeout-hint">{t("settings.shell.timeout_hint")}</span>
   </div>
 
   <div class="section-label">{t("settings.shell.sftp_concurrent")}</div>
@@ -155,11 +155,11 @@
     })}</span>
   </div>
 
-  <div class="section-label">CONNECTION LOGGING</div>
+  <div class="section-label">{t("settings.shell.connection_logging")}</div>
   <div class="switch-card">
     <div class="switch-card-body">
-      <div class="switch-card-title" class:on={verboseLog} class:off={!verboseLog}>VERBOSE LOG</div>
-      <div class="switch-card-desc">Show detailed SSH handshake and authentication messages in terminal.</div>
+      <div class="switch-card-title" class:on={verboseLog} class:off={!verboseLog}>{t("settings.shell.verbose_log")}</div>
+      <div class="switch-card-desc">{t("settings.shell.verbose_log_desc")}</div>
     </div>
     <label class="switch">
       <input type="checkbox" bind:checked={verboseLog} onchange={saveVerbose} />

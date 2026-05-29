@@ -1,7 +1,7 @@
 <script lang="ts">
     import {onMount} from "svelte";
     import {invoke} from "@tauri-apps/api/core";
-    import { errMsg } from "../i18n/index.svelte.ts";
+    import { t, errMsg } from "../i18n/index.svelte.ts";
 
     let status = $state<{ installed: boolean; path: string; bundled: boolean } | null>(null);
     let installing = $state(false);
@@ -18,7 +18,7 @@
         msg = "";
         try {
             const path = await invoke<string>("cli_install");
-            msg = `Installed to ${path}`;
+            msg = t("settings.cli.installed_to", { path });
             await refresh();
         } catch (e: any) {
             msg = errMsg(e);
@@ -29,26 +29,26 @@
 </script>
 
 <div class="page">
-    <h3>CLI Tool</h3>
+    <h3>{t("settings.section.cli")}</h3>
 
     <div class="status-card">
         {#if status === null}
-            <p>Loading...</p>
+            <p>{t("common.loading")}</p>
         {:else if status.installed}
-            <div class="badge installed">Installed</div>
+            <div class="badge installed">{t("settings.cli.installed")}</div>
             <p class="path">{status.path}</p>
             <button class="btn btn-sm" onclick={install} disabled={installing || !status.bundled}>
-                {installing ? "Reinstalling..." : "Reinstall / Update"}
+                {installing ? t("settings.cli.reinstalling") : t("settings.cli.reinstall")}
             </button>
         {:else}
-            <div class="badge not-installed">Not installed</div>
+            <div class="badge not-installed">{t("settings.cli.not_installed")}</div>
             {#if status.bundled}
-                <p class="hint">Click to install <code>rssh</code> to your system PATH. Admin password required.</p>
+                <p class="hint">{t("settings.cli.install_hint")}</p>
                 <button class="btn btn-accent btn-sm" onclick={install} disabled={installing}>
-                    {installing ? "Installing..." : "Install CLI"}
+                    {installing ? t("settings.cli.installing") : t("settings.cli.install")}
                 </button>
             {:else}
-                <p class="hint">CLI binary not bundled in dev build. Build manually:</p>
+                <p class="hint">{t("settings.cli.dev_hint")}</p>
                 <pre class="code-block">cargo build --release --features cli --bin rssh-cli</pre>
             {/if}
         {/if}
@@ -57,41 +57,41 @@
         {/if}
     </div>
 
-    <h3>Shell Completions</h3>
-    <p class="hint">Completions are auto-configured during install. To manually set up for a different shell:</p>
+    <h3>{t("settings.cli.completions")}</h3>
+    <p class="hint">{t("settings.cli.completions_hint")}</p>
     <pre class="code-block">rssh completions zsh &gt; ~/.zsh/completions/_rssh
 rssh completions bash &gt;&gt; ~/.bashrc
 rssh completions fish &gt; ~/.config/fish/completions/rssh.fish
 rssh completions powershell  # paste into $PROFILE</pre>
 
-    <h3>Commands</h3>
+    <h3>{t("settings.cli.commands")}</h3>
     <table class="cmd-table">
         <tbody>
-        <tr><td class="cmd">rssh</td><td>List all profiles (default)</td></tr>
-        <tr><td class="cmd">rssh ls [query]</td><td>Search profiles by name/host</td></tr>
-        <tr><td class="cmd">rssh ls cred</td><td>List credentials</td></tr>
-        <tr><td class="cmd">rssh ls fwd</td><td>List port forwards</td></tr>
+        <tr><td class="cmd">rssh</td><td>{t("settings.cli.cmd.list")}</td></tr>
+        <tr><td class="cmd">rssh ls [query]</td><td>{t("settings.cli.cmd.ls_query")}</td></tr>
+        <tr><td class="cmd">rssh ls cred</td><td>{t("settings.cli.cmd.ls_cred")}</td></tr>
+        <tr><td class="cmd">rssh ls fwd</td><td>{t("settings.cli.cmd.ls_fwd")}</td></tr>
         <tr class="sep"><td></td><td></td></tr>
-        <tr><td class="cmd">rssh open &lt;name&gt;</td><td>SSH connect to a profile</td></tr>
-        <tr><td class="cmd">rssh open fwd &lt;name&gt;</td><td>Start a port forward</td></tr>
+        <tr><td class="cmd">rssh open &lt;name&gt;</td><td>{t("settings.cli.cmd.open")}</td></tr>
+        <tr><td class="cmd">rssh open fwd &lt;name&gt;</td><td>{t("settings.cli.cmd.open_fwd")}</td></tr>
         <tr class="sep"><td></td><td></td></tr>
-        <tr><td class="cmd">rssh add profile</td><td>Create profile (interactive)</td></tr>
-        <tr><td class="cmd">rssh add cred</td><td>Create credential (interactive)</td></tr>
-        <tr><td class="cmd">rssh add fwd</td><td>Create forward (interactive)</td></tr>
+        <tr><td class="cmd">rssh add profile</td><td>{t("settings.cli.cmd.add_profile")}</td></tr>
+        <tr><td class="cmd">rssh add cred</td><td>{t("settings.cli.cmd.add_cred")}</td></tr>
+        <tr><td class="cmd">rssh add fwd</td><td>{t("settings.cli.cmd.add_fwd")}</td></tr>
         <tr class="sep"><td></td><td></td></tr>
-        <tr><td class="cmd">rssh edit profile &lt;name&gt;</td><td>Edit profile</td></tr>
-        <tr><td class="cmd">rssh edit cred &lt;name&gt;</td><td>Edit credential</td></tr>
-        <tr><td class="cmd">rssh edit fwd &lt;name&gt;</td><td>Edit forward</td></tr>
+        <tr><td class="cmd">rssh edit profile &lt;name&gt;</td><td>{t("settings.cli.cmd.edit_profile")}</td></tr>
+        <tr><td class="cmd">rssh edit cred &lt;name&gt;</td><td>{t("settings.cli.cmd.edit_cred")}</td></tr>
+        <tr><td class="cmd">rssh edit fwd &lt;name&gt;</td><td>{t("settings.cli.cmd.edit_fwd")}</td></tr>
         <tr class="sep"><td></td><td></td></tr>
-        <tr><td class="cmd">rssh rm profile &lt;name&gt;</td><td>Delete profile</td></tr>
-        <tr><td class="cmd">rssh rm cred &lt;name&gt;</td><td>Delete credential</td></tr>
-        <tr><td class="cmd">rssh rm fwd &lt;name&gt;</td><td>Delete forward</td></tr>
+        <tr><td class="cmd">rssh rm profile &lt;name&gt;</td><td>{t("settings.cli.cmd.rm_profile")}</td></tr>
+        <tr><td class="cmd">rssh rm cred &lt;name&gt;</td><td>{t("settings.cli.cmd.rm_cred")}</td></tr>
+        <tr><td class="cmd">rssh rm fwd &lt;name&gt;</td><td>{t("settings.cli.cmd.rm_fwd")}</td></tr>
         <tr class="sep"><td></td><td></td></tr>
-        <tr><td class="cmd">rssh config export &lt;file&gt;</td><td>Encrypted backup to file</td></tr>
-        <tr><td class="cmd">rssh config import &lt;file&gt;</td><td>Restore from encrypted file</td></tr>
-        <tr><td class="cmd">rssh config set</td><td>Configure GitHub sync</td></tr>
-        <tr><td class="cmd">rssh config push</td><td>Push config to GitHub</td></tr>
-        <tr><td class="cmd">rssh config pull</td><td>Pull config from GitHub</td></tr>
+        <tr><td class="cmd">rssh config export &lt;file&gt;</td><td>{t("settings.cli.cmd.export")}</td></tr>
+        <tr><td class="cmd">rssh config import &lt;file&gt;</td><td>{t("settings.cli.cmd.import")}</td></tr>
+        <tr><td class="cmd">rssh config set</td><td>{t("settings.cli.cmd.config_set")}</td></tr>
+        <tr><td class="cmd">rssh config push</td><td>{t("settings.cli.cmd.config_push")}</td></tr>
+        <tr><td class="cmd">rssh config pull</td><td>{t("settings.cli.cmd.config_pull")}</td></tr>
         </tbody>
     </table>
 </div>

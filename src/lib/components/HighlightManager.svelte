@@ -91,27 +91,27 @@
 
 <div class="page">
   <div class="toolbar">
-    <button class="btn btn-sm" onclick={resetDefaults}>Reset to Defaults</button>
-    <button class="btn btn-accent btn-sm" onclick={startAdd}>+ New Highlight</button>
+    <button class="btn btn-sm" onclick={resetDefaults}>{t("highlight.reset_defaults")}</button>
+    <button class="btn btn-accent btn-sm" onclick={startAdd}>{t("highlight.new")}</button>
   </div>
 
   {#if adding}
     <div class="card inline-form">
       <label>
-        <span class="label-text">Keyword</span>
-        <input type="text" bind:value={formKw} placeholder="ERROR / WARN / your pattern"
+        <span class="label-text">{t("highlight.keyword")}</span>
+        <input type="text" bind:value={formKw} placeholder={t("highlight.keyword_placeholder")}
           onkeydown={(e) => { if (e.key === "Enter") saveNew(); }} />
       </label>
       <label>
-        <span class="label-text">Color</span>
+        <span class="label-text">{t("common.color")}</span>
         <div class="color-row">
           <input type="color" bind:value={formColor} />
           <span class="color-hex">{formColor}</span>
         </div>
       </label>
       <div class="form-actions">
-        <button class="btn btn-accent btn-sm" onclick={saveNew} disabled={!formKw.trim()}>Save</button>
-        <button class="btn btn-sm" onclick={cancelForm}>Cancel</button>
+        <button class="btn btn-accent btn-sm" onclick={saveNew} disabled={!formKw.trim()}>{t("common.save")}</button>
+        <button class="btn btn-sm" onclick={cancelForm}>{t("common.cancel")}</button>
       </div>
     </div>
   {/if}
@@ -120,20 +120,20 @@
     {#if editKw === h.keyword}
       <div class="card inline-form">
         <label>
-          <span class="label-text">Keyword</span>
+          <span class="label-text">{t("highlight.keyword")}</span>
           <input type="text" bind:value={formKw}
             onkeydown={(e) => { if (e.key === "Enter") saveEdit(); }} />
         </label>
         <label>
-          <span class="label-text">Color</span>
+          <span class="label-text">{t("common.color")}</span>
           <div class="color-row">
             <input type="color" bind:value={formColor} />
             <span class="color-hex">{formColor}</span>
           </div>
         </label>
         <div class="form-actions">
-          <button class="btn btn-accent btn-sm" onclick={saveEdit} disabled={!formKw.trim()}>Save</button>
-          <button class="btn btn-sm" onclick={cancelForm}>Cancel</button>
+          <button class="btn btn-accent btn-sm" onclick={saveEdit} disabled={!formKw.trim()}>{t("common.save")}</button>
+          <button class="btn btn-sm" onclick={cancelForm}>{t("common.cancel")}</button>
         </div>
       </div>
     {:else}
@@ -146,14 +146,14 @@
           </div>
         </div>
         <div class="item-actions">
-          <button class="btn btn-sm" onclick={() => startEdit(h)}>Edit</button>
-          <button class="btn btn-sm btn-danger" onclick={() => remove(h.keyword)}>Delete</button>
+          <button class="btn btn-sm" onclick={() => startEdit(h)}>{t("common.edit")}</button>
+          <button class="btn btn-sm btn-danger" onclick={() => remove(h.keyword)}>{t("common.delete")}</button>
         </div>
       </div>
     {/if}
   {:else}
     {#if !adding}
-      <p class="empty">No highlight rules</p>
+      <p class="empty">{t("highlight.empty")}</p>
     {/if}
   {/each}
 </div>

@@ -1,42 +1,44 @@
 <script lang="ts">
+  import { t } from "../i18n/index.svelte.ts";
+
   const isMac = navigator.platform?.startsWith("Mac");
   const mod = isMac ? "⌘" : "Ctrl";
 
-  const sections = [
+  let sections = $derived([
     {
-      title: "Global",
+      title: t("shortcuts.section.global"),
       keys: [
-        ["Ctrl+Tab", "Switch to next tab"],
-        ["Ctrl+Shift+Tab", "Switch to previous tab"],
-        [`${mod}+W`, "Close current tab"],
-        [`${mod}+Shift+D`, "Clone current tab"],
-        [`${mod}+Shift+N`, "Open current tab in new window"],
-        ["Esc", "Close sidebar / search bar / SFTP"],
+        ["Ctrl+Tab", t("shortcuts.next_tab")],
+        ["Ctrl+Shift+Tab", t("shortcuts.prev_tab")],
+        [`${mod}+W`, t("shortcuts.close_tab")],
+        [`${mod}+Shift+D`, t("shortcuts.clone_tab")],
+        [`${mod}+Shift+N`, t("shortcuts.open_new_window")],
+        ["Esc", t("shortcuts.close_overlay")],
       ],
     },
     {
-      title: "Home",
+      title: t("shortcuts.section.home"),
       keys: [
-        ["↑ ↓ ← →", "Select Profile / Forward card"],
-        ["Enter", "Connect selected Profile or open Forward"],
+        ["↑ ↓ ← →", t("shortcuts.select_card")],
+        ["Enter", t("shortcuts.connect_card")],
       ],
     },
     {
-      title: "Terminal",
+      title: t("shortcuts.section.terminal"),
       keys: [
-        [`${mod}+F`, "Search"],
-        [`${mod}+S`, "Command Snippet (send to terminal)"],
-        [`${mod}+O`, "Open SFTP (SSH session)"],
-        ["Any key", "Reconnect after disconnect"],
+        [`${mod}+F`, t("shortcuts.search")],
+        [`${mod}+S`, t("shortcuts.snippet")],
+        [`${mod}+O`, t("shortcuts.open_sftp")],
+        ["Any key", t("shortcuts.reconnect_disconnect")],
       ],
     },
     {
-      title: "Port Forward",
+      title: t("shortcuts.section.port_forward"),
       keys: [
-        ["Any key", "Reconnect after error/stop"],
+        ["Any key", t("shortcuts.reconnect_error")],
       ],
     },
-  ];
+  ]);
 </script>
 
 <div class="page">

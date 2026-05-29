@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
+  import { t } from "../i18n/index.svelte.ts";
 
   let enabled = $state(false);
   let saveDir = $state("");
@@ -32,8 +33,8 @@
 <div class="page">
   <div class="switch-card">
     <div class="switch-card-body">
-      <div class="switch-card-title" class:on={enabled} class:off={!enabled}>ENABLE RECORDING</div>
-      <div class="switch-card-desc">Automatically record SSH sessions as Asciinema v2 (.cast) files.</div>
+      <div class="switch-card-title" class:on={enabled} class:off={!enabled}>{t("recording.enable")}</div>
+      <div class="switch-card-desc">{t("recording.enable_desc")}</div>
     </div>
     <label class="switch">
       <input type="checkbox" bind:checked={enabled} onchange={saveSettings} />
@@ -42,17 +43,17 @@
   </div>
 
   <div class="field-group">
-    <label>Save Directory</label>
+    <label>{t("recording.save_dir")}</label>
     <input type="text" bind:value={saveDir} placeholder="~/Documents/rssh-recordings" onblur={saveSettings} />
-    <p class="hint">Leave empty to use the default directory</p>
+    <p class="hint">{t("recording.save_dir_hint")}</p>
   </div>
 
   {#if recordings.length > 0}
-    <div class="section-label">Recordings</div>
+    <div class="section-label">{t("recording.list_title")}</div>
     {#each recordings as rec}
       <div class="rec-row neu-sm">
         <span class="rec-name">{rec}</span>
-        <button class="btn btn-sm" onclick={() => playRecording(rec)}>▶ Playback</button>
+        <button class="btn btn-sm" onclick={() => playRecording(rec)}>▶ {t("recording.playback")}</button>
       </div>
     {/each}
   {/if}

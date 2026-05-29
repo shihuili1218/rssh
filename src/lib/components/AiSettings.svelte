@@ -551,22 +551,22 @@
     {:else}
         <div class="form">
             <div class="row">
-                <label for="sk-id">ID</label>
+                <label for="sk-id">{t("ai.settings.skills.label.id")}</label>
                 <input id="sk-id" type="text" bind:value={editing.id}
                        disabled={!isNew || editing.builtin}/>
             </div>
             <div class="row">
-                <label for="sk-name">NAME</label>
+                <label for="sk-name">{t("ai.settings.skills.label.name")}</label>
                 <input id="sk-name" type="text" bind:value={editing.name} disabled={editing.builtin}
                        placeholder={t("ai.settings.skills.placeholder.name")}/>
             </div>
             <div class="row">
-                <label for="sk-desc">DESCRIPTION</label>
+                <label for="sk-desc">{t("ai.settings.skills.label.description")}</label>
                 <input id="sk-desc" type="text" bind:value={editing.description} disabled={editing.builtin}
                        placeholder={t("ai.settings.skills.placeholder.desc")}/>
             </div>
             <div class="row">
-                <label for="sk-content">SYSTEM PROMPT</label>
+                <label for="sk-content">{t("ai.settings.skills.label.system_prompt")}</label>
                 <textarea id="sk-content" bind:value={editing.content} disabled={editing.builtin}
                           rows="20"
                           placeholder={t("ai.settings.skills.placeholder.content")}></textarea>

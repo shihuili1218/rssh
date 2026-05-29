@@ -5,6 +5,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
   import * as theme from "../themes/store.svelte.ts";
+  import { t, errMsg } from "../i18n/index.svelte.ts";
 
   let containerEl: HTMLDivElement;
   let terminal: Terminal;
@@ -74,7 +75,7 @@
       }
       totalDuration = events.length > 0 ? events[events.length - 1][0] : 0;
     } catch (e: any) {
-      terminal.write(`\x1b[31mFailed to load recording: ${e}\x1b[0m\r\n`);
+      terminal.write(`\x1b[31m${t("playback.load_failed", { error: errMsg(e) })}\x1b[0m\r\n`);
     }
   }
 
@@ -129,15 +130,15 @@
 
 <div class="playback">
   <div class="controls">
-    <button class="btn btn-sm" onclick={() => app.settingsNavigate("recording-settings")}>← Recordings</button>
+    <button class="btn btn-sm" onclick={() => app.settingsNavigate("recording-settings")}>{t("playback.back")}</button>
     <span class="file-name">{fileName}</span>
     <div class="spacer"></div>
     {#if playing}
-      <button class="btn btn-sm" onclick={pause}>Pause</button>
+      <button class="btn btn-sm" onclick={pause}>{t("common.pause")}</button>
     {:else}
-      <button class="btn btn-accent btn-sm" onclick={play}>Play</button>
+      <button class="btn btn-accent btn-sm" onclick={play}>{t("common.play")}</button>
     {/if}
-    <button class="btn btn-sm" onclick={stop}>Reset</button>
+    <button class="btn btn-sm" onclick={stop}>{t("common.reset")}</button>
     <div class="speed-group">
       {#each [1, 2, 4, 8] as s}
         <button class="speed-btn" class:active={speed === s} onclick={() => setSpeed(s)}>{s}x</button>

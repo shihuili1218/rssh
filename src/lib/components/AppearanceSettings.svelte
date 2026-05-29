@@ -340,7 +340,7 @@
         <div class="dialog-hint">
             {t("settings.appearance.term.import_hint")}
             <button class="link-btn" type="button" onclick={openSchemesUrl}>
-                iTerm2-Color-Schemes (windowsterminal folder)
+                {t("settings.appearance.term.import_link")}
             </button>
         </div>
         <textarea

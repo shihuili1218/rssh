@@ -87,20 +87,20 @@
 
 <div class="page">
   <div class="toolbar">
-    <button class="btn btn-accent btn-sm" onclick={startAdd}>+ New Group</button>
+    <button class="btn btn-accent btn-sm" onclick={startAdd}>{t("group.new")}</button>
   </div>
 
   {#if adding}
     <div class="card inline-form">
-      <label>Name</label>
-      <input type="text" bind:value={formName} placeholder="Group name" />
-      <label>Color</label>
+      <label>{t("common.name")}</label>
+      <input type="text" bind:value={formName} placeholder={t("group.name_placeholder")} />
+      <label>{t("common.color")}</label>
       <input type="color" bind:value={formColor} />
-      <label>Sort Order</label>
+      <label>{t("group.sort_order")}</label>
       <input type="number" bind:value={formOrder} min="0" />
       <div class="form-actions">
-        <button class="btn btn-accent btn-sm" onclick={saveNew} disabled={!formName.trim()}>Save</button>
-        <button class="btn btn-sm" onclick={cancelForm}>Cancel</button>
+        <button class="btn btn-accent btn-sm" onclick={saveNew} disabled={!formName.trim()}>{t("common.save")}</button>
+        <button class="btn btn-sm" onclick={cancelForm}>{t("common.cancel")}</button>
       </div>
     </div>
   {/if}
@@ -108,15 +108,15 @@
   {#each groups as g (g.id)}
     {#if editId === g.id}
       <div class="card inline-form">
-        <label>Name</label>
-        <input type="text" bind:value={formName} placeholder="Group name" />
-        <label>Color</label>
+        <label>{t("common.name")}</label>
+        <input type="text" bind:value={formName} placeholder={t("group.name_placeholder")} />
+        <label>{t("common.color")}</label>
         <input type="color" bind:value={formColor} />
-        <label>Sort Order</label>
+        <label>{t("group.sort_order")}</label>
         <input type="number" bind:value={formOrder} min="0" />
         <div class="form-actions">
-          <button class="btn btn-accent btn-sm" onclick={saveEdit} disabled={!formName.trim()}>Save</button>
-          <button class="btn btn-sm" onclick={cancelForm}>Cancel</button>
+          <button class="btn btn-accent btn-sm" onclick={saveEdit} disabled={!formName.trim()}>{t("common.save")}</button>
+          <button class="btn btn-sm" onclick={cancelForm}>{t("common.cancel")}</button>
         </div>
       </div>
     {:else}
@@ -125,20 +125,20 @@
           <span class="color-swatch" style="background: {g.color}"></span>
           <div>
             <div class="item-name">{g.name}</div>
-            <div class="item-sub">order: {g.sort_order}</div>
+            <div class="item-sub">{t("group.order", { n: g.sort_order })}</div>
           </div>
         </div>
         <div class="item-actions">
-          <button class="btn btn-sm" onclick={() => startEdit(g)}>Edit</button>
+          <button class="btn btn-sm" onclick={() => startEdit(g)}>{t("common.edit")}</button>
           <button class="btn btn-sm btn-danger" onclick={() => remove(g.id)} disabled={deleting === g.id}>
-            {deleting === g.id ? "..." : "Delete"}
+            {deleting === g.id ? "..." : t("common.delete")}
           </button>
         </div>
       </div>
     {/if}
   {:else}
     {#if !adding}
-      <p class="empty">No groups yet</p>
+      <p class="empty">{t("group.empty")}</p>
     {/if}
   {/each}
 </div>

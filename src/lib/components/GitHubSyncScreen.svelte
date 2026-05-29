@@ -1,7 +1,7 @@
 <script lang="ts">
     import {onMount} from "svelte";
     import {invoke} from "@tauri-apps/api/core";
-    import { errMsg } from "../i18n/index.svelte.ts";
+    import { t, errMsg } from "../i18n/index.svelte.ts";
 
     let githubToken = $state("");
     let githubRepo = $state("");
@@ -26,7 +26,7 @@
         await invoke("set_setting", {key: "github_token", value: githubToken});
         await invoke("set_setting", {key: "github_repo", value: githubRepo});
         await invoke("set_setting", {key: "github_branch", value: githubBranch});
-        msg = "Settings saved";
+        msg = t("github.saved");
         setTimeout(() => msg = "", 2000);
     }
 
@@ -40,11 +40,11 @@
 
     async function confirmPassword() {
         if (!pw1) {
-            pwError = "Password cannot be empty";
+            pwError = t("github.password_empty");
             return;
         }
         if (pwMode === "push" && pw1 !== pw2) {
-            pwError = "Passwords do not match";
+            pwError = t("github.password_mismatch");
             return;
         }
 
@@ -54,13 +54,13 @@
         try {
             if (pwMode === "push") {
                 await invoke("github_push", {password: pw1});
-                msg = "Push successful";
+                msg = t("github.push_ok");
             } else {
                 await invoke("github_pull", {password: pw1});
-                msg = "Pull successful";
+                msg = t("github.pull_ok");
             }
         } catch (e: any) {
-            msg = "Failed: " + errMsg(e);
+            msg = t("github.failed", { error: errMsg(e) });
         } finally {
             syncing = false;
         }
@@ -72,31 +72,31 @@
          背景用项目现成的 .surface-raised，避免新加自定义视觉令牌。 -->
     <div class="card surface-raised">
         <p class="pat-hint">
-            Create a PAT at github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens.<br/>
-            Repository access: Select "Only select repositories" (instead of "All repositories")<br/>
-            with "Contents" read &amp; write permission.
+            {t("github.pat_hint1")}<br/>
+            {t("github.pat_hint2")}<br/>
+            {t("github.pat_hint3")}
         </p>
 
         <div class="field">
-            <label for="gh-token">Personal Access Token</label>
+            <label for="gh-token">{t("github.token")}</label>
             <input id="gh-token" type="password" bind:value={githubToken} placeholder="ghp_xxxx"/>
         </div>
         <div class="field">
-            <label for="gh-repo">Repository (owner/repo)</label>
+            <label for="gh-repo">{t("github.repo")}</label>
             <input id="gh-repo" type="text" bind:value={githubRepo} placeholder="user/rssh-config"/>
         </div>
         <div class="field">
-            <label for="gh-branch">Branch</label>
+            <label for="gh-branch">{t("github.branch")}</label>
             <input id="gh-branch" type="text" bind:value={githubBranch} placeholder="main"/>
         </div>
 
         <!-- Save 跟 Push 同属"主操作"，用同样的 btn-accent 样式。
              Pull 用默认 btn（secondary）跟 sshell buildSecondaryButton 对齐。 -->
-        <button class="btn btn-accent btn-sm save-btn" onclick={saveSettings}>⛰ Save</button>
+        <button class="btn btn-accent btn-sm save-btn" onclick={saveSettings}>⛰ {t("common.save")}</button>
 
         <div class="btn-row">
-            <button class="btn btn-accent btn-sm" onclick={() => askPassword("push")} disabled={syncing}>𓍼 ོ☁︎ Push to GitHub</button>
-            <button class="btn btn-sm" onclick={() => askPassword("pull")} disabled={syncing}>༄ Pull from GitHub</button>
+            <button class="btn btn-accent btn-sm" onclick={() => askPassword("push")} disabled={syncing}>𓍼 ོ☁︎ {t("github.push")}</button>
+            <button class="btn btn-sm" onclick={() => askPassword("pull")} disabled={syncing}>༄ {t("github.pull")}</button>
         </div>
 
         {#if msg}
@@ -110,19 +110,19 @@
     <div class="dialog-backdrop" onclick={() => showPwDialog = false} role="presentation">
         <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()}
              role="dialog" aria-modal="true" aria-labelledby="gh-pw-title">
-            <h3 id="gh-pw-title">{pwMode === "push" ? "Set Encryption Password" : "Enter Decryption Password"}</h3>
-            <input type="password" bind:value={pw1} placeholder="Password"
+            <h3 id="gh-pw-title">{pwMode === "push" ? t("github.set_password") : t("github.enter_password")}</h3>
+            <input type="password" bind:value={pw1} placeholder={t("github.password")}
                    onkeydown={(e) => { if (e.key === "Enter") confirmPassword(); }}/>
             {#if pwMode === "push"}
-                <input type="password" bind:value={pw2} placeholder="Confirm Password"
+                <input type="password" bind:value={pw2} placeholder={t("github.confirm_password")}
                        onkeydown={(e) => { if (e.key === "Enter") confirmPassword(); }}/>
             {/if}
             {#if pwError}
                 <div class="pw-error">{pwError}</div>
             {/if}
             <div class="btn-row">
-                <button class="btn btn-sm" onclick={() => showPwDialog = false}>Cancel</button>
-                <button class="btn btn-accent btn-sm" onclick={confirmPassword}>Confirm</button>
+                <button class="btn btn-sm" onclick={() => showPwDialog = false}>{t("common.cancel")}</button>
+                <button class="btn btn-accent btn-sm" onclick={confirmPassword}>{t("common.confirm")}</button>
             </div>
         </div>
     </div>

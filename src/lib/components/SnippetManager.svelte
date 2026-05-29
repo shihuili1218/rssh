@@ -78,22 +78,22 @@
 
 <div class="page">
   <div class="toolbar">
-    <button class="btn btn-accent btn-sm" onclick={startAdd}>+ New Snippet</button>
+    <button class="btn btn-accent btn-sm" onclick={startAdd}>{t("snippet.new")}</button>
   </div>
 
   {#if adding}
     <div class="card inline-form">
       <label>
-        <span class="label-text">Name</span>
-        <input type="text" bind:value={formName} placeholder="snippet name" />
+        <span class="label-text">{t("common.name")}</span>
+        <input type="text" bind:value={formName} placeholder={t("snippet.name_placeholder")} />
       </label>
       <label>
-        <span class="label-text">Command</span>
-        <textarea bind:value={formCmd} placeholder="command (multi-line ok)" rows="2"></textarea>
+        <span class="label-text">{t("snippet.command")}</span>
+        <textarea bind:value={formCmd} placeholder={t("snippet.command_placeholder")} rows="2"></textarea>
       </label>
       <div class="form-actions">
-        <button class="btn btn-accent btn-sm" onclick={saveNew} disabled={!formName.trim() || !formCmd.trim()}>Save</button>
-        <button class="btn btn-sm" onclick={cancelForm}>Cancel</button>
+        <button class="btn btn-accent btn-sm" onclick={saveNew} disabled={!formName.trim() || !formCmd.trim()}>{t("common.save")}</button>
+        <button class="btn btn-sm" onclick={cancelForm}>{t("common.cancel")}</button>
       </div>
     </div>
   {/if}
@@ -102,16 +102,16 @@
     {#if editIdx === i}
       <div class="card inline-form">
         <label>
-          <span class="label-text">Name</span>
+          <span class="label-text">{t("common.name")}</span>
           <input type="text" bind:value={formName} />
         </label>
         <label>
-          <span class="label-text">Command</span>
+          <span class="label-text">{t("snippet.command")}</span>
           <textarea bind:value={formCmd} rows="2"></textarea>
         </label>
         <div class="form-actions">
-          <button class="btn btn-accent btn-sm" onclick={saveEdit} disabled={!formName.trim() || !formCmd.trim()}>Save</button>
-          <button class="btn btn-sm" onclick={cancelForm}>Cancel</button>
+          <button class="btn btn-accent btn-sm" onclick={saveEdit} disabled={!formName.trim() || !formCmd.trim()}>{t("common.save")}</button>
+          <button class="btn btn-sm" onclick={cancelForm}>{t("common.cancel")}</button>
         </div>
       </div>
     {:else}
@@ -121,14 +121,14 @@
           <div class="item-sub">{s.command}</div>
         </div>
         <div class="item-actions">
-          <button class="btn btn-sm" onclick={() => startEdit(i)}>Edit</button>
-          <button class="btn btn-sm btn-danger" onclick={() => remove(i)}>Delete</button>
+          <button class="btn btn-sm" onclick={() => startEdit(i)}>{t("common.edit")}</button>
+          <button class="btn btn-sm btn-danger" onclick={() => remove(i)}>{t("common.delete")}</button>
         </div>
       </div>
     {/if}
   {:else}
     {#if !adding}
-      <p class="empty">No command snippets</p>
+      <p class="empty">{t("snippet.empty")}</p>
     {/if}
   {/each}
 </div>

@@ -16,11 +16,11 @@
   let saving = $state(false);
 
   let profileOptions = $derived(profiles.map((p) => ({ value: p.id, label: p.name })));
-  const forwardTypeOptions = [
-    { value: "local",   label: "Local Forward" },
-    { value: "remote",  label: "Remote Forward" },
-    { value: "dynamic", label: "Dynamic (SOCKS5)" },
-  ];
+  let forwardTypeOptions = $derived([
+    { value: "local",   label: t("forward.type.local") },
+    { value: "remote",  label: t("forward.type.remote") },
+    { value: "dynamic", label: t("forward.type.dynamic") },
+  ]);
 
   onMount(async () => {
     profiles = await app.loadProfiles();
@@ -56,23 +56,23 @@
 
 <div class="page">
   <div class="form">
-    <label>Name</label>
-    <input type="text" bind:value={name} placeholder="Web Forward" />
-    <label>Profile</label>
-    <Select bind:value={profileId} options={profileOptions} placeholder="-- Select --" />
-    <label>Type</label>
+    <label>{t("common.name")}</label>
+    <input type="text" bind:value={name} placeholder={t("forward.name_placeholder")} />
+    <label>{t("forward.profile")}</label>
+    <Select bind:value={profileId} options={profileOptions} placeholder={t("forward.select")} />
+    <label>{t("forward.type")}</label>
     <Select bind:value={forwardType} options={forwardTypeOptions} />
     {#if forwardType === "dynamic"}
-      <div class="field"><label>Local Port (SOCKS5 proxy)</label><input type="number" bind:value={localPort} /></div>
+      <div class="field"><label>{t("forward.local_port_socks5")}</label><input type="number" bind:value={localPort} /></div>
     {:else}
       <div class="row3">
-        <div class="field"><label>Local Port</label><input type="number" bind:value={localPort} /></div>
-        <div class="field"><label>Remote Host</label><input type="text" bind:value={remoteHost} /></div>
-        <div class="field"><label>Remote Port</label><input type="number" bind:value={remotePort} /></div>
+        <div class="field"><label>{t("forward.local_port")}</label><input type="number" bind:value={localPort} /></div>
+        <div class="field"><label>{t("forward.remote_host")}</label><input type="text" bind:value={remoteHost} /></div>
+        <div class="field"><label>{t("forward.remote_port")}</label><input type="number" bind:value={remotePort} /></div>
       </div>
     {/if}
     <button class="btn btn-accent" onclick={save} disabled={saving || !name || !profileId}>
-      {saving ? "Saving..." : "Save"}
+      {saving ? t("common.saving") : t("common.save")}
     </button>
   </div>
 </div>

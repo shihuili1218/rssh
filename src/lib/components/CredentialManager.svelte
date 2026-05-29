@@ -21,7 +21,7 @@
 
 <div class="page">
   <div class="toolbar">
-    <button class="btn btn-accent btn-sm" onclick={() => app.navigate("credential-edit")}>+ New</button>
+    <button class="btn btn-accent btn-sm" onclick={() => app.navigate("credential-edit")}>{t("credential.new")}</button>
   </div>
   {#each items as c (c.id)}
     <div class="card item-row">
@@ -30,14 +30,14 @@
         <div class="item-sub">{c.username} · {c.type}</div>
       </div>
       <div class="item-actions">
-        <button class="btn btn-sm" onclick={() => app.navigate("credential-edit", c.id)}>Edit</button>
+        <button class="btn btn-sm" onclick={() => app.navigate("credential-edit", c.id)}>{t("common.edit")}</button>
         <button class="btn btn-sm btn-danger" onclick={() => remove(c.id)} disabled={deleting === c.id}>
-          {deleting === c.id ? "..." : "Delete"}
+          {deleting === c.id ? "..." : t("common.delete")}
         </button>
       </div>
     </div>
   {:else}
-    <p class="empty">No credentials</p>
+    <p class="empty">{t("credential.empty")}</p>
   {/each}
 </div>
 

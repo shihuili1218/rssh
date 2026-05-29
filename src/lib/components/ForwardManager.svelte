@@ -30,7 +30,7 @@
 
 <div class="page">
   <div class="toolbar">
-    <button class="btn btn-accent btn-sm" onclick={() => app.navigate("forward-edit")}>+ New</button>
+    <button class="btn btn-accent btn-sm" onclick={() => app.navigate("forward-edit")}>{t("forward.new")}</button>
   </div>
   {#each items as f (f.id)}
     <div class="card item-row">
@@ -42,14 +42,14 @@
         </div>
       </div>
       <div class="item-actions">
-        <button class="btn btn-sm" onclick={() => app.navigate("forward-edit", f.id)}>Edit</button>
+        <button class="btn btn-sm" onclick={() => app.navigate("forward-edit", f.id)}>{t("common.edit")}</button>
         <button class="btn btn-sm btn-danger" onclick={() => remove(f.id)} disabled={deleting === f.id}>
-          {deleting === f.id ? "..." : "Delete"}
+          {deleting === f.id ? "..." : t("common.delete")}
         </button>
       </div>
     </div>
   {:else}
-    <p class="empty">No port forward rules</p>
+    <p class="empty">{t("forward.empty")}</p>
   {/each}
 </div>
 

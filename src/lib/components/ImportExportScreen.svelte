@@ -15,7 +15,7 @@
   async function doExport() {
     try {
       const path = await invoke<string | null>("export_config_to_file");
-      msg = path ? `Exported to ${path}` : "";
+      msg = path ? t("import_export.exported_to", { path }) : "";
     } catch (e: any) { msg = `${t("toast.error.export")}: ${errMsg(e)}`; }
     clearMsgLater();
   }
@@ -24,7 +24,7 @@
     importing = true;
     try {
       const path = await invoke<string | null>("import_config_from_file");
-      msg = path ? `Imported from ${path}` : "";
+      msg = path ? t("import_export.imported_from", { path }) : "";
     } catch (e: any) { msg = `${t("toast.error.import")}: ${errMsg(e)}`; }
     finally { importing = false; }
     clearMsgLater();
@@ -42,28 +42,28 @@
 
   <div class="action-card surface-raised">
     <div class="action-info">
-      <div class="action-title">Export Config</div>
-      <div class="action-desc">Save all Profiles, Credentials, and Port Forwards to a JSON file</div>
+      <div class="action-title">{t("import_export.export_title")}</div>
+      <div class="action-desc">{t("import_export.export_desc")}</div>
     </div>
-    <button class="btn btn-accent btn-sm" onclick={doExport}>Export</button>
+    <button class="btn btn-accent btn-sm" onclick={doExport}>{t("common.export")}</button>
   </div>
 
   <div class="action-card surface-raised">
     <div class="action-info">
-      <div class="action-title">Import Config</div>
-      <div class="action-desc">Load a previously exported JSON file. Merges into local config: matching entries (by id) are overwritten, others stay.</div>
+      <div class="action-title">{t("import_export.import_title")}</div>
+      <div class="action-desc">{t("import_export.import_desc")}</div>
     </div>
     <button class="btn btn-sm" onclick={doImport} disabled={importing}>
-      {importing ? "Importing..." : "Import"}
+      {importing ? t("common.importing") : t("common.import")}
     </button>
   </div>
 
   <div class="action-card surface-raised">
     <div class="action-info">
-      <div class="action-title">Import SSH Config</div>
-      <div class="action-desc">Read ~/.ssh/config and pick which Host entries to import as Profiles</div>
+      <div class="action-title">{t("import_export.ssh_title")}</div>
+      <div class="action-desc">{t("import_export.ssh_desc")}</div>
     </div>
-    <button class="btn btn-sm" onclick={gotoSshImport}>Open</button>
+    <button class="btn btn-sm" onclick={gotoSshImport}>{t("common.open")}</button>
   </div>
 </div>
 

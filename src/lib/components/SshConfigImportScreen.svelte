@@ -72,9 +72,9 @@
       const result = await invoke<SshImportResult>("import_ssh_entries", { entries: picked });
       lastResult = result;
       if (result.errors.length === 0) {
-        toast.success(`Imported ${result.profiles_created} profile(s), ${result.credentials_created} credential(s)`);
+        toast.success(t("ssh_config.imported", { profiles: result.profiles_created, credentials: result.credentials_created }));
       } else {
-        toast.error(`Imported with ${result.errors.length} error(s)`);
+        toast.error(t("ssh_config.imported_errors", { n: result.errors.length }));
       }
     } catch (e: any) {
       toast.error(`${t("toast.error.import")}: ${errMsg(e)}`);
@@ -87,18 +87,18 @@
 <div class="page">
   <div class="header">
     <button class="btn btn-sm" onclick={() => app.settingsNavigate("import-export")}>← {t("common.back")}</button>
-    <h2>Import SSH Config</h2>
+    <h2>{t("import_export.ssh_title")}</h2>
   </div>
 
   {#if loading}
-    <p class="empty">Loading ~/.ssh/config...</p>
+    <p class="empty">{t("ssh_config.loading")}</p>
   {:else if entries.length === 0}
-    <p class="empty">No Host entries found in ~/.ssh/config</p>
+    <p class="empty">{t("ssh_config.no_entries")}</p>
   {:else}
     <div class="toolbar">
-      <span class="count">{selected.size} / {entries.length} selected</span>
+      <span class="count">{t("ssh_config.selected", { sel: selected.size, total: entries.length })}</span>
       <button class="btn btn-accent btn-sm" onclick={doImport} disabled={importing || selected.size === 0}>
-        {importing ? "Importing..." : "Import Selected"}
+        {importing ? t("common.importing") : t("ssh_config.import_selected")}
       </button>
     </div>
 
@@ -112,10 +112,10 @@
             onchange={toggleAll}
           />
         </div>
-        <div class="cell-host">Host</div>
-        <div class="cell-target">HostName:Port</div>
-        <div class="cell-user">User</div>
-        <div class="cell-key">IdentityFile</div>
+        <div class="cell-host">{t("ssh_config.col_host")}</div>
+        <div class="cell-target">{t("ssh_config.col_hostname_port")}</div>
+        <div class="cell-user">{t("ssh_config.col_user")}</div>
+        <div class="cell-key">{t("ssh_config.col_identity")}</div>
       </div>
       {#each entries as e, i (i)}
         <label class="row" class:selected={selected.has(i)}>
@@ -132,7 +132,7 @@
 
     {#if lastResult && lastResult.errors.length > 0}
       <div class="error-list surface-raised">
-        <div class="error-title">Errors</div>
+        <div class="error-title">{t("common.errors")}</div>
         {#each lastResult.errors as err}
           <div class="error-row">
             <span class="error-host">{err.host_alias}</span>
