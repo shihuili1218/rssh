@@ -848,6 +848,93 @@
         terminal.unicode.activeVersion = "11";
         fitAddon.fit();
 
+        // ─── xterm.js 5.5.0 bug workaround: 快速连续输入丢第二字符 ─────────────
+        //
+        // 上游 issue: https://github.com/xtermjs/xterm.js/issues/5887
+        // 受影响版本: 5.5.0 / 6.0.0 / 6.1.0-beta.219 表现一致（_inputEvent 条件未改）
+        //
+        // 触发条件：macOS + 永久声称"IME pending"的输入法（如豆包英文模式、百度
+        // 输入法部分模式）。这类输入法对每个按键都让浏览器把 KeyboardEvent.keyCode
+        // 报成 229，但实际不走 compositionstart/end 通道。搜狗在英文模式下不这么干，
+        // 所以不复现。
+        //
+        // 上游 bug 链：xterm 见 keyCode=229 走两条兜底路径，**两条都漏第二字符**：
+        //   1. CompositionHelper.keydown → _handleAnyTextareaChanges → setTimeout(0)
+        //      读 textarea.value 算 diff。第二字符的 oldValue 已被前一字符的 input
+        //      事件污染（"m" → "mo"），diff 算空，emit 漏。
+        //      （Terminal.ts:1012 → CompositionHelper.ts:111,180）
+        //   2. _inputEvent 的 emit 条件 `(!ev.composed || !_keyDownSeen)`：豆包事件
+        //      顺序是 input 先于 keydown，首字符 _keyDownSeen=false 能 emit，
+        //      第二字符 _keyDownSeen=true（前次 keydown 残留）→ skip。
+        //      （Terminal.ts:1196）
+        //
+        // 本地修法：接管 _inputEvent，对所有 insertText 数据无条件 triggerDataEvent，
+        // 并清空 textarea 切断 xterm 内部 setTimeout 兜底的 diff 计算。
+        //   - 搜狗英文：_keyDown 走正常路径 + preventDefault，input 事件不触发，本
+        //     patch 不被调用，无影响。
+        //   - 真中文输入：inputType="insertCompositionText"（≠ insertText），落到原
+        //     _inputEvent。
+        //   - 组合中（_isComposing=true）或 compositionend 后兜底窗口
+        //     （_isSendingComposition=true）短路给原生 CompositionHelper 处理。
+        //
+        // 移除时机：上游若改 _inputEvent 那条 emit 守卫（grep `_keyDownSeen`），回滚 patch。
+        {
+            // xterm 公共 Terminal 是 TerminalCore 的薄包装（public/Terminal.ts），
+            // 所有内部字段（含 _compositionHelper / _inputEvent）都挂在 ._core 上。
+            type XtermCore = {
+                _inputEvent: (ev: InputEvent) => boolean;
+                _compositionHelper?: { _isComposing: boolean; _isSendingComposition: boolean };
+                _keyPressHandled: boolean;
+                _unprocessedDeadKey: boolean;
+                coreService: { triggerDataEvent: (data: string, wasUserInput: boolean) => void };
+                optionsService: { rawOptions: { screenReaderMode: boolean } };
+                textarea?: HTMLTextAreaElement;
+                cancel: (ev: Event, force?: boolean) => boolean | undefined;
+            };
+            const core = (terminal as unknown as { _core?: XtermCore })._core;
+            if (core && typeof core._inputEvent === "function") {
+                const origInputEvent = core._inputEvent.bind(core);
+                core._inputEvent = function (ev: InputEvent): boolean {
+                    // Fail-open：访问的私有字段未来若被 xterm 改名/删除，立即回退到原版
+                    // _inputEvent，保证输入管道不被本 patch 炸断。
+                    try {
+                        if (
+                            !core.coreService ||
+                            typeof core.coreService.triggerDataEvent !== "function" ||
+                            !core.optionsService?.rawOptions ||
+                            typeof core.cancel !== "function"
+                        ) {
+                            return origInputEvent(ev);
+                        }
+                    } catch {
+                        return origInputEvent(ev);
+                    }
+                    const ch = core._compositionHelper;
+                    if (
+                        ev.data &&
+                        ev.inputType === "insertText" &&
+                        !ev.isComposing &&
+                        !(ch && (ch._isComposing || ch._isSendingComposition)) &&
+                        !core.optionsService.rawOptions.screenReaderMode
+                    ) {
+                        if (core._keyPressHandled) return false;
+                        core._unprocessedDeadKey = false;
+                        try {
+                            core.coreService.triggerDataEvent(ev.data, true);
+                            // 清空 textarea：阻止 xterm 内部 _handleAnyTextareaChanges
+                            // 的 setTimeout 兜底再 emit 一次相同数据
+                            if (core.textarea) core.textarea.value = "";
+                            core.cancel(ev);
+                        } catch {
+                            return origInputEvent(ev);
+                        }
+                        return true;
+                    }
+                    return origInputEvent(ev);
+                };
+            }
+        }
+
         // 移动端：xterm 的 helper-textarea 一旦 focus 就会召系统键盘，
         // 而长按选择需要避开这个 focus。短按终端时解锁并 focus；长按、
         // 拖选或 contextmenu 时立刻锁回去。
