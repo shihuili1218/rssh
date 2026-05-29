@@ -61,13 +61,22 @@ impl ShellKind {
             // `&` is the unconditional separator (analogue of POSIX `;`).
             // `&&` would short-circuit on first failure, hiding the exit code.
             Self::Cmd => format!("{cmd} & echo {marker}:%errorlevel%"),
-            // PS 5+: `;` separates, `Write-Output` is the canonical way to
-            // emit a string. `$LASTEXITCODE` is the exit code of the last
-            // *native* command (the `cmd` part); `$?` in PS is boolean and
-            // would output `True`/`False` — front-end regex wouldn't match.
-            Self::Powershell => {
-                format!("{cmd}; Write-Output \"{marker}:$LASTEXITCODE\"")
-            }
+            // PS 5+: `;` separates, `Write-Output` emits the string.
+            // `$LASTEXITCODE` is set ONLY by *native* (external) programs; after
+            // a pure cmdlet (Get-X / Set-X — exactly what `prompt_section` steers
+            // the LLM toward) it is left untouched, and on a fresh session it is
+            // `$null`. `$null` interpolates to empty, so the naive
+            // `marker:$LASTEXITCODE` yields `marker:` (no digit) → the front-end
+            // sentinel regex `:(-?\d+)` never matches → the command false-times-out
+            // after 60s even though it succeeded.
+            //
+            // Fix: reset `$LASTEXITCODE` first (so a prior native command's code
+            // can't leak into a later cmdlet), then coalesce to a digit — use the
+            // native exit code when one exists, else the cmdlet success boolean
+            // `$?` (0 = ok, 1 = failed). The field is therefore always numeric.
+            Self::Powershell => format!(
+                "$LASTEXITCODE=$null; {cmd}; Write-Output \"{marker}:$(if ($null -ne $LASTEXITCODE) {{$LASTEXITCODE}} elseif ($?) {{0}} else {{1}})\""
+            ),
         }
     }
 
@@ -180,14 +189,19 @@ mod tests {
     }
 
     #[test]
-    fn format_sentinel_powershell_uses_lastexitcode() {
-        // `$?` in PS is boolean (True/False) — front-end regex `:(-?\d+)`
-        // wouldn't match. Must use `$LASTEXITCODE`.
+    fn format_sentinel_powershell_guards_null_lastexitcode() {
+        // Regression: a pure cmdlet (Get-Process) leaves $LASTEXITCODE at $null,
+        // which interpolates to an empty exit-code field — the front-end sentinel
+        // regex `:(-?\d+)` then never matches and the command false-times-out after
+        // 60s. The template must (a) reset $LASTEXITCODE so a prior native command's
+        // code can't leak into a later cmdlet, and (b) coalesce to a digit via the
+        // $? success boolean so the field is always numeric.
         let got = ShellKind::Powershell.format_sentinel("Get-Process", "__rssh_done_abc");
-        assert_eq!(
-            got,
-            "Get-Process; Write-Output \"__rssh_done_abc:$LASTEXITCODE\""
-        );
+        assert!(got.starts_with("$LASTEXITCODE=$null;"), "got: {got}");
+        assert!(got.contains("Get-Process"));
+        assert!(got.contains("__rssh_done_abc:"));
+        assert!(got.contains("$LASTEXITCODE")); // native exit code when one exists
+        assert!(got.contains("$?")); // fallback so the field is always a digit
     }
 
     #[test]
