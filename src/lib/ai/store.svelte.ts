@@ -211,11 +211,15 @@ export async function remoteShellProbeNeeded(target_id: string): Promise<boolean
  *    P==<数字>=E        → posix      (bash/zsh/sh/dash/ksh/csh/tcsh: $PSEdition 空, $$ 是 PID)
  *    其他               → null（不写 cache，下次重探）
  *
- *  PTY echo 坑：SSH 远端 PTY 默认 ECHO=on，会把我们粘进去的 `echo P=$PSEdition=$$=E`
- *  原样回响一遍。所以 buffer 通常有两处 marker 匹配——**第一处是 echo 回显**（POSIX/PS
- *  里 group1=`$PSEdition`），**第二处才是 shell 解析后的真实输出**。直接 `.match()` 会
- *  命中 echo 行把 POSIX/PS 误判为 cmd（Copilot PR review 指出的 bug）。
- *  → 用 `matchAll` 取末匹配。罕见 stty -echo 远端会只有 1 个匹配 → 超时兜底 POSIX。
+ *  PTY echo 坑：SSH 远端 PTY 默认 ECHO=on，会把粘进去的 `echo P=$PSEdition=$$=E` 原样
+ *  回响一遍。这行回显的签名（group1=`$PSEdition`, group2=`$$`）跟**真 cmd.exe 的求值
+ *  输出一模一样** —— 当场无法区分。所以不能凭 cmd 签名短路，否则 ECHO=on 的 POSIX/PS
+ *  远端在「回显先到、求值输出还没到」那一瞬被采样，就会被误判成 cmd（毒化缓存，整条
+ *  profile 的 AI 命令全挂）。分类规则：
+ *    - powershell / posix 是**无歧义的已求值**签名（回显绝不会产生）→ 一见即定。
+ *    - cmd 签名先记下、继续轮询；只有等到 1.5s 全程都没出现 powershell/posix 求值行，
+ *      才判定为真 cmd（POSIX/PS 一定会产出一条不同于回显的求值行）。
+ *  这样 ECHO=on 回显抢先、ECHO=off（stty -echo）只有一行，两种情况都不会误判。
  */
 export async function probeRemoteShell(target_id: string): Promise<boolean> {
   const dataEvent = `ssh:data:${target_id}`;
@@ -233,31 +237,28 @@ export async function probeRemoteShell(target_id: string): Promise<boolean> {
     });
     // 1.5s deadline：远端通常 100-300ms 内回响，给 5x 头量容忍慢链路。
     const deadline = Date.now() + 1500;
+    let sawCmdSignature = false;
     while (Date.now() < deadline) {
-      const matches = [...buffer.matchAll(RE_GLOBAL)];
-      // 取**最后一处**匹配 —— 兼顾两种 PTY 模式：
-      //   ECHO=on（默认）：[echo 回显, shell 输出] → last = shell 输出 ✓
-      //   ECHO=off（stty -echo 罕见）: [shell 输出] → last = shell 输出 ✓
-      // Copilot PR review 的优化：之前 hard-require >=2 会让 ECHO=off 远端永远超时。
-      if (matches.length >= 1) {
-        const [, psed, dollar] = matches[matches.length - 1];
+      // 扫描全部匹配，找一条无歧义的「已求值」输出行。cmd 签名（== 回显签名）不短路，
+      // 只记下——见顶部 doc 对 ECHO=on 回显抢先竞态的说明。
+      for (const [, psed, dollar] of buffer.matchAll(RE_GLOBAL)) {
         const kind = classifyShell(psed, dollar);
-        if (kind === null) {
-          // 命中但 classify 模糊（如 PS 4.x：$PSEdition 不存在，$$ 是脏值）。
-          // 不写 cache —— 让下次连接还能再试，避免锁错 shell。
-          console.warn(
-            "[ai] shell probe matched ambiguous signature, keeping POSIX fallback (not cached):",
-            { group1: psed, group2: dollar },
-          );
-          return false;
+        if (kind === "powershell" || kind === "posix") {
+          await invoke("ai_cache_remote_shell", {
+            targetId: target_id, // 后端按 target_id 查 profile_id 写缓存；target 已断则静默跳过
+            shell: kind,
+          });
+          return true;
         }
-        await invoke("ai_cache_remote_shell", {
-          targetId: target_id, // 后端按 target_id 查 profile_id 写缓存；target 已断则静默跳过
-          shell: kind,
-        });
-        return true;
+        if (kind === "cmd") sawCmdSignature = true;
+        // kind === null：模糊签名（如 PS 4.x：$PSEdition 不存在），忽略，继续等更明确的行。
       }
       await new Promise((r) => setTimeout(r, 80));
+    }
+    if (sawCmdSignature) {
+      // 1.5s 内从未出现 powershell/posix 的求值行，全程只见过 cmd 签名 → 判定真 cmd.exe。
+      await invoke("ai_cache_remote_shell", { targetId: target_id, shell: "cmd" });
+      return true;
     }
     console.warn("[ai] shell probe timed out — keeping POSIX fallback");
     return false;

@@ -51,8 +51,8 @@
 
     // ─── 远端 shell 自动探测（与 danger_mode 解耦的独立开关）─────────
     // 默认 off：99% Linux/macOS 远端假设 POSIX 即正确，零探测开销保持现状。
-    // 用户连 Windows / 改了 DefaultShell 的远端时手动开启，让 AI panel 打开时跑
-    // 一行 echo 探针自动定位 cmd.exe / PowerShell。
+    // 用户连 Windows / 改了 DefaultShell 的远端时手动开启，每次 SSH 连接成功后跑
+    // 一行 echo 探针自动定位 cmd.exe / PowerShell（对已连接会话开启需重连生效）。
     let autoDetectRemoteShell = $state(false);
     let savingShellDetect = $state(false);
     let shellDetectNote = $state<string | null>(null);
@@ -496,7 +496,7 @@
 
     <!-- 远端 shell 自动探测 —— 独立卡片，跟 danger_mode 解耦。
          off（默认）：远端假设 POSIX，保持 99% 用户零开销。
-         on：AI panel 打开时跑一行 echo 探针，定位 cmd.exe / PowerShell。 -->
+         on：SSH 连接成功后跑一行 echo 探针，定位 cmd.exe / PowerShell。 -->
     <div class="card surface-raised">
         <div class="danger-head">
             <div class="danger-head-body">

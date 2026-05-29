@@ -416,7 +416,7 @@ const zh: Messages = {
   "ai.settings.danger.auto.patch_diff": "patch_file 3/4 diff（生成审批用 diff，只读）",
   "ai.settings.danger.auto.patch_mv": "patch_file 4/4 mv（原子覆盖原文件）",
   "ai.settings.shell_detect.label": "自动探测远端 shell（含 Windows cmd / PowerShell）",
-  "ai.settings.shell_detect.desc": "关闭（默认）时远端假设 POSIX（bash / zsh），命令模板用 `; echo \"...:$?\"`——覆盖 Linux / macOS 远端。开启后，打开 AI 面板时在终端跑一行 echo 探针，自动识别远端是 cmd.exe / PowerShell 还是 POSIX，并按对应 shell 拼接命令。探针对同一 profile 缓存到进程结束。",
+  "ai.settings.shell_detect.desc": "关闭（默认）时远端假设 POSIX（bash / zsh），命令模板用 `; echo \"...:$?\"`——覆盖 Linux / macOS 远端。开启后，每次 SSH（重）连接时在终端跑一行 echo 探针，自动识别远端是 cmd.exe / PowerShell 还是 POSIX，并按对应 shell 拼接命令。对已连接的会话开启需重连后生效。探针对同一 profile 缓存到进程结束。",
   "ai.settings.shell_detect.save_failed": "保存 shell 探测开关失败: {error}",
   "ai.settings.section.skills": "SKILLS",
   "ai.settings.skills.new": "+ 新建",
