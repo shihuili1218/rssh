@@ -68,4 +68,18 @@ describe("classifyProbeBuffer", () => {
     const buf = "P=$PSEdition=$$=E\r\nP==999=E\r\n";
     expect(classifyProbeBuffer(buf)).toEqual({ kind: "posix", cmd: false });
   });
+
+  it("ignores a P=...=E that is not at line start (mid-line noise)", () => {
+    // Only column-0 evaluated lines are ours; mid-line coincidences must not match.
+    // This is why PROBE_RE uses a `^` anchor rather than a `(?<!echo )` lookbehind.
+    expect(classifyProbeBuffer("here is P==5=E inline\r\n")).toEqual({ kind: null, cmd: false });
+    expect(classifyProbeBuffer("noise P=$PSEdition=$$=E noise\r\n")).toEqual({ kind: null, cmd: false });
+  });
+
+  it("matches both LF-only and CRLF line endings", () => {
+    // Guards against re-introducing a `$` end-anchor, which would not match the
+    // `\r` in CRLF output and would silently break POSIX/PowerShell detection.
+    expect(classifyProbeBuffer("P==7=E\n")).toEqual({ kind: "posix", cmd: false });
+    expect(classifyProbeBuffer("P==7=E\r\n")).toEqual({ kind: "posix", cmd: false });
+  });
 });

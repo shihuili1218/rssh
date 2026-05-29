@@ -11,8 +11,9 @@
  * line lands after the deadline) we'd cache cmd permanently (per-profile, whole
  * process lifetime), breaking every later AI command on that profile.
  *
- * Fix: drop the echoed command line via a `(?<!echo )` lookbehind, so ONLY
- * evaluated output lines are classified:
+ * Fix: anchor matches to line start (`^…` with the `m` flag) so ONLY standalone
+ * EVALUATED output lines are classified — the echoed input line carries `echo `
+ * (or a shell prompt) before `P=`, so `P=` is never line-initial there:
  *   - POSIX:      `$PSEdition` empty, `$$` = PID  → `P==<pid>=E`        → posix
  *   - PowerShell: `$PSEdition` = Desktop/Core      → `P=Desktop=...=E`   → powershell
  *   - cmd.exe:    nothing expands                  → `P=$PSEdition=$$=E` → cmd
@@ -27,9 +28,14 @@ import type { ShellKind } from "./types.ts";
  *  sync. */
 export const PROBE_COMMAND = "echo P=$PSEdition=$$=E";
 
-// `(?<!echo )` drops the echoed command line (`...echo P=$PSEdition=$$=E`);
-// only standalone evaluated output (`P=...=E` at line start) is matched.
-const PROBE_RE = /(?<!echo )P=([^=]*)=([^=]*)=E/g;
+// Anchor to line start (`^` + `m` flag): the echoed input line carries `echo `
+// (or a shell prompt) before `P=`, so `P=` is never line-initial there — only
+// standalone EVALUATED output lines (`P=...=E` at column 0) match. `[^=\r\n]`
+// stops a capture from spanning a line / CRLF boundary; no end-anchor because
+// `$` wouldn't match before the `\r` in CRLF output. Deliberately NOT a
+// `(?<!echo )` lookbehind — older WebKit / WKWebView (macOS < 13.3) rejects
+// lookbehind at parse time, which would throw on module load and break the app.
+const PROBE_RE = /^P=([^=\r\n]*)=([^=\r\n]*)=E/gm;
 
 /** Map one evaluated output line's two captured groups to a shell family.
  *  null = ambiguous (e.g. PS 4.x without $PSEdition) → caller doesn't cache. */

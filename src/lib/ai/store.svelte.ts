@@ -216,9 +216,20 @@ export async function probeRemoteShell(target_id: string): Promise<boolean> {
     // 后端按 target_id 查 profile_id 写缓存；target 已断则静默跳过。
     invoke("ai_cache_remote_shell", { targetId: target_id, shell });
 
+  // Tail-bounded buffer: the probe echo + its evaluated output land at the END
+  // of the stream (after any MOTD / init_command noise), so only the recent tail
+  // matters. Cap it so a chatty connect can't grow an unbounded string that
+  // classifyProbeBuffer re-scans every 80ms. Trim on a newline boundary so a cut
+  // can never open a line mid-token and let `^P=` false-match a sliced echo line.
+  const TAIL_CAP = 16 * 1024;
   let buffer = "";
   const unlisten = await listen<number[]>(dataEvent, (e) => {
     buffer += new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(e.payload));
+    if (buffer.length > TAIL_CAP) {
+      const tail = buffer.slice(-TAIL_CAP);
+      const nl = tail.indexOf("\n");
+      buffer = nl >= 0 ? tail.slice(nl + 1) : tail;
+    }
   });
   try {
     await invoke("ssh_write", {
