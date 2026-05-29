@@ -40,7 +40,7 @@
     [credentials, profiles, groups] = await Promise.all([app.loadCredentials(), app.loadProfiles(), app.loadGroups()]);
     // Edit loads by `id` (Save updates that row). Copy loads from the store's
     // copy source while `id` stays null (Save creates a new row) and appends
-    // " copy" to the name. Same fill path, one branch — the only differences
+    // "_copy" to the name. Same fill path, one branch — the only differences
     // are the source id and the name suffix.
     const sourceId = id ?? app.copyFromProfileId();
     if (sourceId) {
