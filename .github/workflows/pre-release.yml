@@ -157,6 +157,38 @@ jobs:
           for f in "${BUNDLE}"/nsis/*-setup.exe;      do [ -f "$f" ] && cp "$f" "dist/${PREFIX}-setup.exe"; done
           ls -lh dist/
 
+      # 解压即可用版：跟 release.yml 同一步，pre-release 也产出免安装 zip。
+      # 唯一差异是版本号来源（steps.ver.outputs.v，而非 release 的 tag）。
+      # 文件名用 matrix.name（windows-x86_64）跟上面 Rename 一致，产出
+      # rssh-<ver>-windows-x86_64-portable.zip，与正式 release 完全同名。
+      - name: Build Windows portable zip
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          VERSION="${{ steps.ver.outputs.v }}"
+          PORTABLE="rssh-${VERSION}-${{ matrix.name }}-portable"
+          REL="src-tauri/target/${{ matrix.target }}/release"
+          mkdir -p "${PORTABLE}"
+          cp "${REL}/rssh.exe" "${PORTABLE}/"
+          cp "${REL}/rssh-cli.exe" "${PORTABLE}/"
+          cat > "${PORTABLE}/README.txt" <<'EOF'
+          RSSH portable for Windows x86_64
+          --------------------------------
+          Just unzip and run rssh.exe — no installation needed.
+          rssh-cli.exe is the CLI binary; add this folder to PATH if you want
+          to use `rssh` from any terminal.
+
+          WebView2 Runtime requirement:
+            - Windows 11 / Windows 10 1803+ : built-in, ready to go.
+            - Older / stripped Windows      : install WebView2 Runtime first:
+              https://developer.microsoft.com/microsoft-edge/webview2/
+
+          User data is stored under %USERPROFILE%\.rssh (same as installed
+          builds — portable here means "no installer", not "fully isolated").
+          EOF
+          7z a "dist/${PORTABLE}.zip" "${PORTABLE}/"
+          ls -lh dist/
+
       # 走 Release Assets（Fastly）而不是 Actions Artifacts（Azure Blob + zip
       # 包装），下载速度差一个数量级。draft + prerelease 跟 release.yml 一致：
       # 自动上传到 draft release，由人工 publish。多个 job 共享同一 tag，
