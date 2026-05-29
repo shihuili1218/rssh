@@ -367,29 +367,49 @@ pub async fn ai_session_clear_context(
 /// 前端探测远端 shell 后回传结果。actor 切换 cfg.shell_kind；同时若 target 是 SSH，
 /// 把结果写入进程级 cache（key=profile_id），同 profile 的下一次 AI session 直接命中。
 ///
-/// 错误模型：找不到 ai session 时 not_found；找不到对应 SSH session 时静默跳过 cache
-/// 写入（actor 已经更新了——AI 行为正确，只是没缓存复用机会）。
+/// `target_id` 是前端**发起探测时**绑定的 SSH session_id，跟 ai session 当前的
+/// `cfg.target_id` 比对——不一致说明探测期间发生了 rebind（重连切到新 session_id），
+/// stale 结果不能应用。fail-fast 让前端知道这次探测白跑了，但不破坏新连接的 shell 状态。
+///
+/// 错误模型：
+/// - ai session 不存在 → not_found
+/// - target_id mismatch → stale_probe（前端可静默丢弃，下次开 panel 会重探）
+/// - 找不到对应 SSH session（极少：探测刚回来 SSH 就断了）→ 静默跳过 cache 写入
+///   （actor 已经更新了；session 都断了 cache 反正派不上用场）。
 #[tauri::command]
 pub async fn ai_session_set_shell(
     state: State<'_, AppState>,
     tab_id: String,
+    target_id: String,
     shell: super::shell::ShellKind,
 ) -> AppResult<()> {
-    // 1. 推到 actor —— SetShell 在 recv_action 透明处理，inner loop 期间也能安全应用。
-    let (tx, target_id) = {
+    // 1. 读当前 session 的 target_id 比对入参——防探测延迟回来时 target 已经换了。
+    let (tx, current_target_id) = {
         let g = locked(&state.ai_sessions)?;
         let s = g
             .get(&tab_id)
             .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
         (s.action_tx.clone(), s.target_id.clone())
     };
+    if target_id != current_target_id {
+        return Err(AppError::other(
+            "ai_session_target_mismatch",
+            json!({
+                "tab_id": tab_id,
+                "expected": current_target_id,
+                "got": target_id,
+            }),
+        ));
+    }
+
+    // 2. 推到 actor —— SetShell 在 recv_action 透明处理，inner loop 期间也能安全应用。
     tx.send(UserAction::SetShell(shell))
         .map_err(|_| AppError::other("ai_session_stopped", json!({})))?;
 
-    // 2. 远端 SSH 时同步写进程缓存。本地 PTY 不进 cache —— 每个 PTY tab 起始 shell 由
+    // 3. 远端 SSH 时同步写进程缓存。本地 PTY 不进 cache —— 每个 PTY tab 起始 shell 由
     //    PtyHandle.shell_path 唯一决定，没有"探测后缓存"的语义。
     if let Some(profile_id) = locked(&state.sessions)?
-        .get(&target_id)
+        .get(&current_target_id)
         .map(|h| h.profile_id().to_string())
     {
         locked(&state.ai_remote_shell_cache)?.insert(profile_id, shell);
