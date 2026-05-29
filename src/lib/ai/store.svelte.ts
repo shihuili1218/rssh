@@ -231,9 +231,12 @@ export async function probeRemoteShell(
     const deadline = Date.now() + 1500;
     while (Date.now() < deadline) {
       const matches = [...buffer.matchAll(RE_GLOBAL)];
-      // 必须 >=2 个匹配 —— 第 1 个是 PTY echo 回显（一定有），第 2 个是 shell 真实输出。
-      if (matches.length >= 2) {
-        const [, psed, dollar] = matches[1];
+      // 取**最后一处**匹配 —— 兼顾两种 PTY 模式：
+      //   ECHO=on（默认）：[echo 回显, shell 输出] → last = shell 输出 ✓
+      //   ECHO=off（stty -echo 罕见）: [shell 输出] → last = shell 输出 ✓
+      // Copilot PR review 的优化：之前 hard-require >=2 会让 ECHO=off 远端永远超时。
+      if (matches.length >= 1) {
+        const [, psed, dollar] = matches[matches.length - 1];
         const kind = classifyShell(psed, dollar);
         if (kind === null) {
           // 命中但 classify 模糊（如 PS 4.x：$PSEdition 不存在，$$ 是脏值）。

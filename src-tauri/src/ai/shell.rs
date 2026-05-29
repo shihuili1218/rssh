@@ -71,8 +71,9 @@ impl ShellKind {
         }
     }
 
-    /// Stable identifier used both in audit logs and in the system-prompt
-    /// "# Target shell" section title. Keep lowercase + ASCII for greppability.
+    /// Short ASCII label used in audit logs and the system-prompt "# Target
+    /// shell" section. Natural casing — POSIX is the canonical acronym,
+    /// PowerShell is the product name — both are grep-stable so don't lowercase.
     pub fn name(self) -> &'static str {
         match self {
             Self::Posix => "POSIX (bash / zsh / sh)",

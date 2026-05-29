@@ -372,8 +372,8 @@ pub async fn ai_session_clear_context(
 /// stale 结果不能应用。fail-fast 让前端知道这次探测白跑了，但不破坏新连接的 shell 状态。
 ///
 /// 错误模型：
-/// - ai session 不存在 → not_found
-/// - target_id mismatch → stale_probe（前端可静默丢弃，下次开 panel 会重探）
+/// - ai session 不存在 → `ai_session_not_found`
+/// - target_id mismatch → `ai_session_target_mismatch`（前端可静默丢弃，下次开 panel 会重探）
 /// - 找不到对应 SSH session（极少：探测刚回来 SSH 就断了）→ 静默跳过 cache 写入
 ///   （actor 已经更新了；session 都断了 cache 反正派不上用场）。
 #[tauri::command]
