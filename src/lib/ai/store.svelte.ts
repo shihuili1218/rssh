@@ -10,6 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { t, locale as currentLocale } from "../i18n/index.svelte.ts";
 import { extractOutput, findSentinel } from "./pty-output.ts";
+import { PROBE_COMMAND, classifyProbeBuffer } from "./shell-probe.ts";
 import type {
   AiSessionInfo,
   AiSettings,
@@ -204,27 +205,16 @@ export async function remoteShellProbeNeeded(target_id: string): Promise<boolean
  *  init_command 已由后端在 ssh_connect 返回前写入 PTY，探针排在其后执行。
  *  视觉代价：用户看到一行 echo 滚过终端 —— 每个 profile 每进程仅一次（缓存门控）。
  *
- *  正则反查表（基于 *输出行* 的 group1/group2）：
- *    P=Desktop=*=E      → powershell (PS 5.1 Win / PS 7 Desktop edition)
- *    P=Core=*=E         → powershell (PS 7 Core edition, 跨平台)
- *    P=$PSEdition=$$=E  → cmd.exe (`$` 系变量全不展开)
- *    P==<数字>=E        → posix      (bash/zsh/sh/dash/ksh/csh/tcsh: $PSEdition 空, $$ 是 PID)
- *    其他               → null（不写 cache，下次重探）
- *
- *  PTY echo 坑：SSH 远端 PTY 默认 ECHO=on，会把粘进去的 `echo P=$PSEdition=$$=E` 原样
- *  回响一遍。这行回显的签名（group1=`$PSEdition`, group2=`$$`）跟**真 cmd.exe 的求值
- *  输出一模一样** —— 当场无法区分。所以不能凭 cmd 签名短路，否则 ECHO=on 的 POSIX/PS
- *  远端在「回显先到、求值输出还没到」那一瞬被采样，就会被误判成 cmd（毒化缓存，整条
- *  profile 的 AI 命令全挂）。分类规则：
- *    - powershell / posix 是**无歧义的已求值**签名（回显绝不会产生）→ 一见即定。
- *    - cmd 签名先记下、继续轮询；只有等到 1.5s 全程都没出现 powershell/posix 求值行，
- *      才判定为真 cmd（POSIX/PS 一定会产出一条不同于回显的求值行）。
- *  这样 ECHO=on 回显抢先、ECHO=off（stty -echo）只有一行，两种情况都不会误判。
+ *  分类规则（见 shell-probe.ts，纯逻辑 + 单测）：回显行被 `(?<!echo )` lookbehind 排除，
+ *  只认求值输出。powershell/posix 的求值签名一见即定；cmd 签名（== 被排除的回显签名）
+ *  只可能来自真 cmd.exe 的求值输出，且只在 deadline 才采纳——给 posix/ps 求值行先到的机会，
+ *  慢链路下求值行整个没到 → 不写缓存，POSIX 兜底重探（不会误缓存 cmd）。
  */
 export async function probeRemoteShell(target_id: string): Promise<boolean> {
   const dataEvent = `ssh:data:${target_id}`;
-  const PROBE = "echo P=$PSEdition=$$=E";
-  const RE_GLOBAL = /P=([^=]*)=([^=]*)=E/g;
+  const cache = (shell: ShellKind) =>
+    // 后端按 target_id 查 profile_id 写缓存；target 已断则静默跳过。
+    invoke("ai_cache_remote_shell", { targetId: target_id, shell });
 
   let buffer = "";
   const unlisten = await listen<number[]>(dataEvent, (e) => {
@@ -233,31 +223,22 @@ export async function probeRemoteShell(target_id: string): Promise<boolean> {
   try {
     await invoke("ssh_write", {
       sessionId: target_id,
-      data: Array.from(new TextEncoder().encode(PROBE + "\r")),
+      data: Array.from(new TextEncoder().encode(PROBE_COMMAND + "\r")),
     });
     // 1.5s deadline：远端通常 100-300ms 内回响，给 5x 头量容忍慢链路。
     const deadline = Date.now() + 1500;
-    let sawCmdSignature = false;
     while (Date.now() < deadline) {
-      // 扫描全部匹配，找一条无歧义的「已求值」输出行。cmd 签名（== 回显签名）不短路，
-      // 只记下——见顶部 doc 对 ECHO=on 回显抢先竞态的说明。
-      for (const [, psed, dollar] of buffer.matchAll(RE_GLOBAL)) {
-        const kind = classifyShell(psed, dollar);
-        if (kind === "powershell" || kind === "posix") {
-          await invoke("ai_cache_remote_shell", {
-            targetId: target_id, // 后端按 target_id 查 profile_id 写缓存；target 已断则静默跳过
-            shell: kind,
-          });
-          return true;
-        }
-        if (kind === "cmd") sawCmdSignature = true;
-        // kind === null：模糊签名（如 PS 4.x：$PSEdition 不存在），忽略，继续等更明确的行。
+      const { kind } = classifyProbeBuffer(buffer);
+      if (kind) {
+        await cache(kind); // posix/powershell 的求值行无歧义，立即定夺
+        return true;
       }
       await new Promise((r) => setTimeout(r, 80));
     }
-    if (sawCmdSignature) {
-      // 1.5s 内从未出现 powershell/posix 的求值行，全程只见过 cmd 签名 → 判定真 cmd.exe。
-      await invoke("ai_cache_remote_shell", { targetId: target_id, shell: "cmd" });
+    // 超时：没等到 posix/powershell 求值行。若 buffer 里有（非回显的）cmd 求值签名 → 真 cmd.exe；
+    // 慢链路下求值行整个没到（只有被 lookbehind 排除的回显）→ cmd=false → 不写缓存，POSIX 兜底。
+    if (classifyProbeBuffer(buffer).cmd) {
+      await cache("cmd");
       return true;
     }
     console.warn("[ai] shell probe timed out — keeping POSIX fallback");
@@ -268,19 +249,6 @@ export async function probeRemoteShell(target_id: string): Promise<boolean> {
   } finally {
     unlisten();
   }
-}
-
-/** 反查表：未识别返回 null（不写 cache，下次重探）。参考 probeRemoteShell 顶部对照表。 */
-function classifyShell(psed: string, dollar: string): ShellKind | null {
-  // PS 5+ 内置 $PSEdition 是 'Desktop' (Win PS) 或 'Core' (PS 7 Core)
-  if (psed === "Desktop" || psed === "Core") return "powershell";
-  // cmd.exe 完全不识别 `$`-style 变量，全字面输出
-  if (psed === "$PSEdition" && dollar === "$$") return "cmd";
-  // POSIX: $PSEdition 未定义展开为空，$$ 是 shell PID（数字）
-  if (psed === "" && /^\d+$/.test(dollar)) return "posix";
-  // 模糊：PS 4.x（$PSEdition 不存在）/ fish $$ 报错残留 / 自定义 prompt 干扰
-  // 不强行猜——返回 null，调用方走"不写 cache 不锁"分支，下次能重探。
-  return null;
 }
 
 /** 当前会话的助手消息是否正在流式输出 —— UI 用它把"发送"按钮切成"停止"。 */
