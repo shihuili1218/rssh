@@ -28,23 +28,31 @@
     credentials.map((c) => ({ value: c.id, label: `${c.name} (${c.username})` })),
   );
   let bastionOptions = $derived([
-    { value: null, label: "-- None --" },
+    { value: null, label: t("profile.none") },
     ...bastionProfiles.map((p) => ({ value: p.id, label: `${p.name} (${p.host}:${p.port})` })),
   ]);
   let groupOptions = $derived([
-    { value: null, label: "-- None --" },
+    { value: null, label: t("profile.none") },
     ...groups.map((g) => ({ value: g.id, label: g.name })),
   ]);
 
   onMount(async () => {
     [credentials, profiles, groups] = await Promise.all([app.loadCredentials(), app.loadProfiles(), app.loadGroups()]);
-    if (id) {
-      const p = await invoke<any>("get_profile", { id });
-      name = p.name; host = p.host; port = p.port;
+    // Edit loads by `id` (Save updates that row). Copy loads from the store's
+    // copy source while `id` stays null (Save creates a new row) and appends
+    // " copy" to the name. Same fill path, one branch — the only differences
+    // are the source id and the name suffix.
+    const sourceId = id ?? app.copyFromProfileId();
+    if (sourceId) {
+      const p = await invoke<any>("get_profile", { id: sourceId });
+      name = id ? p.name : `${p.name}_copy`;
+      host = p.host; port = p.port;
       credentialId = p.credential_id ?? ""; bastionId = p.bastion_profile_id;
       shellCommand = p.init_command ?? "";
       groupId = p.group_id ?? null;
     }
+    // Consume once: a later "+ New" must start blank.
+    app.clearCopyFromProfile();
   });
 
   async function save() {
@@ -68,22 +76,22 @@
 
 <div class="page">
   <div class="form">
-    <label>Name</label>
-    <input type="text" bind:value={name} placeholder="My Server" />
-    <label>Host</label>
-    <input type="text" bind:value={host} placeholder="192.168.1.1" />
-    <label>Port</label>
+    <label>{t("profile.name")}</label>
+    <input type="text" bind:value={name} placeholder={t("profile.placeholder.name")} />
+    <label>{t("profile.host")}</label>
+    <input type="text" bind:value={host} placeholder={t("profile.placeholder.host")} />
+    <label>{t("profile.port")}</label>
     <input type="number" bind:value={port} min="1" max="65535" />
-    <label>Credential</label>
-    <Select bind:value={credentialId} options={credentialOptions} placeholder="-- Select Credential --" />
-    <label>Bastion Host (optional)</label>
+    <label>{t("profile.credential")}</label>
+    <Select bind:value={credentialId} options={credentialOptions} placeholder={t("profile.select_credential")} />
+    <label>{t("profile.bastion")} {t("common.optional")}</label>
     <Select bind:value={bastionId} options={bastionOptions} />
-    <label>Group (optional)</label>
+    <label>{t("profile.group")} {t("common.optional")}</label>
     <Select bind:value={groupId} options={groupOptions} />
-    <label>Init Command (optional)</label>
-    <input type="text" bind:value={shellCommand} placeholder="cd /app && ls" />
+    <label>{t("profile.init_command")} {t("common.optional")}</label>
+    <input type="text" bind:value={shellCommand} placeholder={t("profile.placeholder.init")} />
     <button class="btn btn-accent" onclick={save} disabled={saving || !name || !host || !credentialId}>
-      {saving ? "Saving..." : "Save"}
+      {saving ? t("common.saving") : t("common.save")}
     </button>
   </div>
 </div>

@@ -22,6 +22,7 @@ const en = {
   "common.paste": "Paste",
   "common.search": "Search",
   "common.resize_hint": "Drag to resize · double-click to reset",
+  "common.optional": "(optional)",
 
   // ── Sidebar / Tabs ──
   "tab.home": "Home",
@@ -252,6 +253,14 @@ const en = {
   "profile.init_command": "Init command",
   "profile.group": "Group",
   "profile.none": "(none)",
+  // ── Profile manager (list) ──
+  "profile.new": "+ New",
+  "profile.empty": "No profiles",
+  "profile.ungrouped": "Ungrouped",
+  "profile.select_credential": "-- Select Credential --",
+  "profile.placeholder.name": "My Server",
+  "profile.placeholder.host": "192.168.1.1",
+  "profile.placeholder.init": "ssh user@hostname",
 
   // ── Credential editor ──
   "credential.name": "Name",

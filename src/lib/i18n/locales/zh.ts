@@ -24,6 +24,7 @@ const zh: Messages = {
   "common.paste": "粘贴",
   "common.search": "搜索",
   "common.resize_hint": "拖拽改宽 · 双击重置",
+  "common.optional": "（可选）",
 
   // ── 侧边栏 / 标签页 ──
   "tab.home": "首页",
@@ -254,6 +255,14 @@ const zh: Messages = {
   "profile.init_command": "登录后初始命令",
   "profile.group": "分组",
   "profile.none": "（无）",
+  // ── Profile 管理（列表）──
+  "profile.new": "+ 新建",
+  "profile.empty": "暂无 Profile",
+  "profile.ungrouped": "未分组",
+  "profile.select_credential": "-- 选择凭证 --",
+  "profile.placeholder.name": "My Server",
+  "profile.placeholder.host": "192.168.1.1",
+  "profile.placeholder.init": "ssh user@hostname",
 
   // ── 凭证编辑器 ──
   "credential.name": "名称",
