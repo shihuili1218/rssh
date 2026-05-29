@@ -76,7 +76,6 @@
   .group-head {
     display: flex; align-items: center; gap: 8px;
     margin: 20px 0 10px; padding-bottom: 6px;
-    border-bottom: 1px solid var(--divider);
   }
   .group-head:first-of-type { margin-top: 0; }
   .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
