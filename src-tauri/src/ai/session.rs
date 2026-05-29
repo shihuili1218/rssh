@@ -82,10 +82,6 @@ pub enum UserAction {
         target_id: String,
         ssh_handle: Option<SshHandle>,
     },
-    /// 前端探测远端 shell 后回传结果。actor 把 cfg.shell_kind 切换到新值 ——
-    /// 后续 run_command / file_ops 都按新模板拼 sentinel。跟 RebindTarget 同档次的
-    /// "生命周期类事件"，在 recv_action 里透明吞掉，不进 run / inner-loop 的 match。
-    SetShell(super::shell::ShellKind),
     Stop,
 }
 
@@ -105,7 +101,6 @@ impl std::fmt::Debug for UserAction {
             UserAction::RebindTarget { target_id, .. } => {
                 write!(f, "RebindTarget({target_id})")
             }
-            UserAction::SetShell(s) => write!(f, "SetShell({s:?})"),
             UserAction::Stop => f.write_str("Stop"),
         }
     }
@@ -153,10 +148,11 @@ pub struct SessionConfig {
     pub data_dir: PathBuf,
     /// Target shell family — drives sentinel template selection in
     /// `handle_run_command` and `ensure_remote_caps` / `run_file_op`.
+    /// Set once at construction (`ai_session_start`); never mutated afterwards.
     /// Default Posix is the safe fallback (Linux/macOS remotes, ~99% case).
-    /// Local PTY: derived from PtyHandle.shell_path at start.
-    /// Remote SSH: probed via PTY echo when auto-detect is on, else Posix.
-    /// `SetShell` action updates it after a successful probe.
+    /// Local PTY: derived from PtyHandle.shell_path.
+    /// Remote SSH: the profile-level cache value if a connect-time probe hit
+    /// (auto-detect on), else Posix.
     pub shell_kind: super::shell::ShellKind,
 }
 
@@ -327,16 +323,6 @@ impl Actor {
                         message: format!("rebound to target {target_id}"),
                     });
                 }
-                UserAction::SetShell(s) => {
-                    // 不受 inner loop（命令审批中）干扰：跟 RebindTarget 同档次透明吞掉。
-                    // SetShell 不动 history（不像 ClearContext 会拆未配对 tool_use/result），
-                    // 命令审批中也能安全应用 —— 下次 sentinel 拼接就按新 shell 走。
-                    let prev = self.cfg.shell_kind;
-                    self.cfg.shell_kind = s;
-                    self.audit_push(AuditKind::Note {
-                        message: format!("shell_kind: {prev:?} → {s:?}"),
-                    });
-                }
                 other => return Some(other),
             }
         }
@@ -356,9 +342,9 @@ impl Actor {
                 .map(|m| sanitize::redact_message(m, rules))
                 .collect();
 
-            // Shell section 在每轮重拼 —— SetShell（远端探测命中）之后下一轮 LLM 调用
-            // 自动看到新 shell 介绍，无需重建 self.system_prompt。section 是 rssh 自己生成
-            // 的静态字符串，不含敏感信息，不需要过 redact。
+            // Shell section 跟 system_prompt 拼在一起喂 LLM。shell_kind 启动时定死，
+            // 不再变，这里拼是为了不把 section 烤进 self.system_prompt（保持其干净）。
+            // section 是 rssh 自己生成的静态字符串，不含敏感信息，不需要过 redact。
             let system_prompt = format!(
                 "{}{}",
                 self.system_prompt,

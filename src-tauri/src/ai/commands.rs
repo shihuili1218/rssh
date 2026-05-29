@@ -76,10 +76,6 @@ pub struct AiSessionInfo {
     pub skill: String,
     pub model: String,
     pub provider: String,
-    /// 启动时一次性信号：前端是否需要发 shell 探测命令到 PTY。
-    /// 仅当 target=ssh + auto_detect_remote_shell=on + profile_id cache miss 时为 true。
-    /// `ai_list_sessions` 复用 From 时永远 false（list 不触发探测，那是启动期才做的事）。
-    pub probe_required: bool,
 }
 
 impl From<&DiagnoseSession> for AiSessionInfo {
@@ -90,7 +86,6 @@ impl From<&DiagnoseSession> for AiSessionInfo {
             skill: s.skill.clone(),
             model: s.model.clone(),
             provider: s.provider.clone(),
-            probe_required: false,
         }
     }
 }
@@ -180,13 +175,14 @@ pub async fn ai_session_start(
     //   - local PTY: PtyHandle 记得用户选的 shell path → 映射 ShellKind，零探测。
     //   - remote SSH + auto_detect off: POSIX 兜底（保护 99% Linux/macOS 现状）。
     //   - remote SSH + auto_detect on:
-    //       cache 命中（同 profile 之前探测过）→ 用缓存值。
-    //       cache 未命中 → POSIX 占位 + probe_required=true，由前端跑探测后调 set_shell。
+    //       cache 命中（连接时探测已写入）→ 用缓存值。
+    //       cache 未命中（探测未完成 / 失败 / 未开 auto_detect）→ POSIX 兜底。
+    //   探测本身在 SSH 连接成功后跑（见前端 TerminalPane + ai_remote_shell_probe_needed /
+    //   ai_cache_remote_shell），结果只落 profile 缓存，与 AI 会话生命周期解耦。
     let auto_detect = crate::db::settings::get(&state.db, &key_auto_detect_remote_shell())?
         .map(|v| v == "1")
         .unwrap_or(false);
     let mut initial_shell = super::shell::ShellKind::default();
-    let mut probe_required = false;
     let ssh_handle = match target_kind.as_str() {
         "ssh" => {
             let (handle, profile_id) = {
@@ -197,15 +193,11 @@ pub async fn ai_session_start(
                 (h.ssh_handle().clone(), h.profile_id().to_string())
             };
             if auto_detect {
-                let cached = locked(&state.ai_remote_shell_cache)?
-                    .get(&profile_id)
-                    .copied();
-                match cached {
-                    Some(k) => initial_shell = k,         // cache 命中：直接用
-                    None => probe_required = true,       // cache 未命中：让前端跑探测
+                if let Some(k) = locked(&state.ai_remote_shell_cache)?.get(&profile_id).copied() {
+                    initial_shell = k; // cache 命中：用连接时探测的结果
                 }
+                // cache 未命中：保持 POSIX 兜底（探测还没跑完或失败，不阻塞启动）。
             }
-            // auto_detect=off 时 initial_shell 保持 POSIX 默认，probe_required=false。
             Some(handle)
         }
         #[cfg(not(target_os = "android"))]
@@ -252,7 +244,7 @@ pub async fn ai_session_start(
         ssh_handle,
         data_dir: state.data_dir.clone(),
         // 本地 PTY: 上面从 PtyHandle.shell_path 推断（确定值）；
-        // 远端 SSH: POSIX 默认，等 Phase 4 探测命中后由 set_shell 更新。
+        // 远端 SSH: 连接时探测命中过则用缓存值，否则 POSIX 默认（写一次，会话期不变）。
         shell_kind: initial_shell,
     };
 
@@ -264,8 +256,7 @@ pub async fn ai_session_start(
     // 锁下再查一遍，撞了直接 return Err，PendingSession 就地 drop，actor
     // 从未运行过、不会 emit `ai:session_ended:<tab_id>` 污染赢家的事件流。
     let pending = session::start(cfg, app)?;
-    let mut info = AiSessionInfo::from(pending.info());
-    info.probe_required = probe_required;
+    let info = AiSessionInfo::from(pending.info());
     {
         let mut g = locked(&state.ai_sessions)?;
         if g.contains_key(&tab_id) {
@@ -364,52 +355,45 @@ pub async fn ai_session_clear_context(
     Ok(())
 }
 
-/// 前端探测远端 shell 后回传结果。actor 切换 cfg.shell_kind；同时若 target 是 SSH，
-/// 把结果写入进程级 cache（key=profile_id），同 profile 的下一次 AI session 直接命中。
+/// 连接时探测前的门控查询：这个 target 现在需要跑 shell 探测吗？
 ///
-/// `target_id` 是前端**发起探测时**绑定的 SSH session_id，跟 ai session 当前的
-/// `cfg.target_id` 比对——不一致说明探测期间发生了 rebind（重连切到新 session_id），
-/// stale 结果不能应用。fail-fast 让前端知道这次探测白跑了，但不破坏新连接的 shell 状态。
-///
-/// 错误模型：
-/// - ai session 不存在 → `ai_session_not_found`
-/// - target_id mismatch → `ai_session_target_mismatch`（前端可静默丢弃，下次开 panel 会重探）
-/// - 找不到对应 SSH session（极少：探测刚回来 SSH 就断了）→ 静默跳过 cache 写入
-///   （actor 已经更新了；session 都断了 cache 反正派不上用场）。
+/// true 仅当三条同时成立：auto_detect 开 + target 是已知 SSH 会话 + 该 profile 进程
+/// 缓存未命中。缓存命中（同 profile 之前探过）或 auto_detect 关 → false，于是连接 /
+/// 重连都不会重复刷探针。本地 PTY 的 session_id 不在 `state.sessions` 里 → 自然返回
+/// false（本地 shell 已知，无需探测）。
 #[tauri::command]
-pub async fn ai_session_set_shell(
+pub async fn ai_remote_shell_probe_needed(
     state: State<'_, AppState>,
-    tab_id: String,
+    target_id: String,
+) -> AppResult<bool> {
+    let auto_detect = crate::db::settings::get(&state.db, &key_auto_detect_remote_shell())?
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    if !auto_detect {
+        return Ok(false);
+    }
+    let profile_id = match locked(&state.sessions)?.get(&target_id) {
+        Some(h) => h.profile_id().to_string(),
+        None => return Ok(false), // 本地 PTY 或会话已断：不探
+    };
+    Ok(!locked(&state.ai_remote_shell_cache)?.contains_key(&profile_id))
+}
+
+/// 前端在 SSH 连接成功后探测远端 shell，把结果写进程级 cache（key=profile_id）。
+///
+/// 不需要 AI 会话 —— shell 种类是 profile 级事实，AI session 启动时（ai_session_start）
+/// 从这个缓存读初始 shell。同 profile 的下一次连接 / AI 会话直接命中，不再重探。
+///
+/// `target_id` 是发起探测时的 SSH session_id；探针刚回来 SSH 就断（极少）→ 查不到
+/// profile_id，静默跳过写入（下次连接会重探），不当错误抛。
+#[tauri::command]
+pub async fn ai_cache_remote_shell(
+    state: State<'_, AppState>,
     target_id: String,
     shell: super::shell::ShellKind,
 ) -> AppResult<()> {
-    // 1. 读当前 session 的 target_id 比对入参——防探测延迟回来时 target 已经换了。
-    let (tx, current_target_id) = {
-        let g = locked(&state.ai_sessions)?;
-        let s = g
-            .get(&tab_id)
-            .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
-        (s.action_tx.clone(), s.target_id.clone())
-    };
-    if target_id != current_target_id {
-        return Err(AppError::other(
-            "ai_session_target_mismatch",
-            json!({
-                "tab_id": tab_id,
-                "expected": current_target_id,
-                "got": target_id,
-            }),
-        ));
-    }
-
-    // 2. 推到 actor —— SetShell 在 recv_action 透明处理，inner loop 期间也能安全应用。
-    tx.send(UserAction::SetShell(shell))
-        .map_err(|_| AppError::other("ai_session_stopped", json!({})))?;
-
-    // 3. 远端 SSH 时同步写进程缓存。本地 PTY 不进 cache —— 每个 PTY tab 起始 shell 由
-    //    PtyHandle.shell_path 唯一决定，没有"探测后缓存"的语义。
     if let Some(profile_id) = locked(&state.sessions)?
-        .get(&current_target_id)
+        .get(&target_id)
         .map(|h| h.profile_id().to_string())
     {
         locked(&state.ai_remote_shell_cache)?.insert(profile_id, shell);

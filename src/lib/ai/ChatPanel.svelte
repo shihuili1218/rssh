@@ -33,28 +33,11 @@
     let dangerMode = $derived(ai.settings()?.danger_mode === true);
 
     onMount(async () => {
-        // 先把 settings 拉回来（提示词标题用的 danger 旗，profile 探测开关都要它）。
+        // 只拉 settings（提示词标题的 danger 旗等要它）。不在这里预启 session ——
+        // shell 探测已移到 SSH 连接成功时跑（TerminalPane），开 panel 不再为探测拉
+        // 起 actor。会话改为首次发消息时（send → ensureSession）惰性启动。
         if (!ai.settings()) {
             try { await ai.loadSettings(); } catch { /* 静默 */ }
-        }
-        // 远端 SSH + auto_detect on + 还没 session + 已配 API key →
-        // 主动启动 session 触发探测。这是用户开 toggle 的代价：
-        // 开 panel 就启 actor 跑一行 echo 探针，识别 cmd / PowerShell。
-        // 无 API key 时启动必失败，跳过避免每次开 panel 都弹错误。
-        const s = ai.settings();
-        if (
-            !session
-            && targetKind === "ssh"
-            && s?.auto_detect_remote_shell
-            && s?.has_api_key
-        ) {
-            try {
-                await ensureSession();
-            } catch (e) {
-                // fire-and-forget：探测预热失败不打扰用户。真正发消息时 send()
-                // 会再走一次 ensureSession 把错误塞到 banner。
-                console.warn("[ai] auto-probe session start failed:", e);
-            }
         }
     });
 
@@ -72,8 +55,8 @@
 
     /** 没 session 就先启动；启动失败抛错。
      *  skill 固定 general —— 用户自定义 skill 已自动拼进 master prompt，让 LLM 自己路由。
-     *  启动成功后，如果 info.probe_required（远端 SSH + auto_detect on + cache miss），
-     *  fire-and-forget 跑一次 shell 探测：用户看到一行 echo 滚过去，后台解析后调 set_shell。 */
+     *  远端 shell 探测不在这里 —— 它在 SSH 连接时已跑过并写进 profile 缓存，
+     *  startSession 从缓存读初始 shell（缓存 miss 则 POSIX 兜底）。 */
     async function ensureSession(): Promise<void> {
         if (session) return;
         if (ensureInFlight) return ensureInFlight;
@@ -82,14 +65,10 @@
             if (!settings.has_api_key) {
                 throw new Error(t("ai.error.no_api_key"));
             }
-            const info = await ai.startSession({
+            await ai.startSession({
                 tabId, targetKind, targetId, skill: "general",
                 provider: settings.provider, model: settings.model,
             });
-            if (info.probe_required) {
-                // 失败也不阻塞 AI 启动 —— 后端 cfg.shell_kind 默认 POSIX 兜底。
-                void ai.probeRemoteShell(tabId, targetKind, targetId);
-            }
         })();
         try {
             await ensureInFlight;

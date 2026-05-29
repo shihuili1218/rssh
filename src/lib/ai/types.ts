@@ -56,9 +56,6 @@ export interface AiSessionInfo {
   skill: string;
   model: string;
   provider: LlmProvider;
-  /** 启动时的一次性信号：true → 前端需要发 shell 探测命令到 PTY，结果回传 set_shell。
-   *  仅当 target=ssh + 设置里 auto_detect_remote_shell=on + 同 profile 进程缓存未命中时为 true。 */
-  probe_required: boolean;
 }
 
 /** 远端 shell 三家族 —— 跟 Rust 端 ShellKind 一对一镜像（lowercase wire format）。 */

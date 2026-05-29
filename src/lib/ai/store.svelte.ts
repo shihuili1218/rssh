@@ -186,13 +186,23 @@ export async function cancelStream(tab_id: string): Promise<void> {
   await invoke("ai_cancel_stream", { tabId: tab_id });
 }
 
-/** 探测远端 shell：发一行 `echo P=$PSEdition=$$=E` 到 PTY，listen 1.5s 解析输出。
+/** 连接时探测的门控：这个 SSH target 现在需要探测吗？
+ *  后端判定 auto_detect on + 会话存在 + 该 profile 缓存 miss。命中缓存或开关关 →
+ *  false，于是连接 / 重连都不会重复刷探针。本地 PTY 的 target_id 不在后端 sessions 里
+ *  → 自然 false。 */
+export async function remoteShellProbeNeeded(target_id: string): Promise<boolean> {
+  return invoke<boolean>("ai_remote_shell_probe_needed", { targetId: target_id });
+}
+
+/** SSH 连接成功后探测远端 shell：粘一行 `echo P=$PSEdition=$$=E` 到 PTY，listen 1.5s
+ *  解析输出，分类后写进程级缓存（ai_cache_remote_shell，key=profile_id）。AI session
+ *  启动时从缓存读初始 shell —— 探测与 AI 会话生命周期解耦，无需 tab_id / actor。
  *
- *  返回 true = 探测成功并已 invoke ai_session_set_shell（后端 cache + actor 都更新）。
- *  返回 false = 超时 / classify 模糊 → 保持后端 POSIX 兜底，**不写 cache**（下次开 panel 可重探）。
+ *  返回 true = 探测成功并已写缓存。false = 超时 / classify 模糊（不写缓存，下次连接重探）。
  *
- *  时机：ChatPanel onMount / ensureSession 时，当 target=ssh + toggle on + cache miss。
- *  视觉代价：用户会看到一行 echo 命令滚过终端。这是把 toggle 开开的代价。
+ *  时机：TerminalPane.connectAndWire 的 SSH 成功分支，且 remoteShellProbeNeeded 为真。
+ *  init_command 已由后端在 ssh_connect 返回前写入 PTY，探针排在其后执行。
+ *  视觉代价：用户看到一行 echo 滚过终端 —— 每个 profile 每进程仅一次（缓存门控）。
  *
  *  正则反查表（基于 *输出行* 的 group1/group2）：
  *    P=Desktop=*=E      → powershell (PS 5.1 Win / PS 7 Desktop edition)
@@ -205,15 +215,9 @@ export async function cancelStream(tab_id: string): Promise<void> {
  *  原样回响一遍。所以 buffer 通常有两处 marker 匹配——**第一处是 echo 回显**（POSIX/PS
  *  里 group1=`$PSEdition`），**第二处才是 shell 解析后的真实输出**。直接 `.match()` 会
  *  命中 echo 行把 POSIX/PS 误判为 cmd（Copilot PR review 指出的 bug）。
- *  → 用 `matchAll` 取第 2 个匹配。罕见 stty -echo 远端会只有 1 个匹配 → 超时兜底 POSIX。
+ *  → 用 `matchAll` 取末匹配。罕见 stty -echo 远端会只有 1 个匹配 → 超时兜底 POSIX。
  */
-export async function probeRemoteShell(
-  tab_id: string,
-  target_kind: "ssh" | "local",
-  target_id: string,
-): Promise<boolean> {
-  if (target_kind !== "ssh") return false; // local 已知，无需探测
-  const writeCmd = "ssh_write";
+export async function probeRemoteShell(target_id: string): Promise<boolean> {
   const dataEvent = `ssh:data:${target_id}`;
   const PROBE = "echo P=$PSEdition=$$=E";
   const RE_GLOBAL = /P=([^=]*)=([^=]*)=E/g;
@@ -223,7 +227,7 @@ export async function probeRemoteShell(
     buffer += new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(e.payload));
   });
   try {
-    await invoke(writeCmd, {
+    await invoke("ssh_write", {
       sessionId: target_id,
       data: Array.from(new TextEncoder().encode(PROBE + "\r")),
     });
@@ -240,16 +244,15 @@ export async function probeRemoteShell(
         const kind = classifyShell(psed, dollar);
         if (kind === null) {
           // 命中但 classify 模糊（如 PS 4.x：$PSEdition 不存在，$$ 是脏值）。
-          // 不调 set_shell 不写 cache —— 让下次开 panel 还能再试，避免锁错 shell。
+          // 不写 cache —— 让下次连接还能再试，避免锁错 shell。
           console.warn(
             "[ai] shell probe matched ambiguous signature, keeping POSIX fallback (not cached):",
             { group1: psed, group2: dollar },
           );
           return false;
         }
-        await invoke("ai_session_set_shell", {
-          tabId: tab_id,
-          targetId: target_id, // 让后端校验 target 没变（防 rebind/重连期间 stale probe）
+        await invoke("ai_cache_remote_shell", {
+          targetId: target_id, // 后端按 target_id 查 profile_id 写缓存；target 已断则静默跳过
           shell: kind,
         });
         return true;
