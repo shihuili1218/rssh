@@ -279,6 +279,7 @@ export function sendArrow(dir: ArrowDir, mod: number) { _terminalArrowSender?.(d
 interface TerminalControls {
   getSelection(): string;
   paste(text: string): void;
+  focus(): void;
 }
 const _terminalControls = new Map<string, TerminalControls>();
 export function registerTerminalControls(tabId: string, controls: TerminalControls) {
@@ -292,6 +293,12 @@ export function terminalGetSelection(tabId: string): string {
 }
 export function terminalPaste(tabId: string, text: string) {
   _terminalControls.get(tabId)?.paste(text);
+}
+/** Return keyboard focus to a tab's terminal — used by modals (snippet picker,
+ *  search) that steal focus and must hand it back on close, else focus falls
+ *  to document.body and the user can't type until they click the terminal. */
+export function terminalFocus(tabId: string) {
+  _terminalControls.get(tabId)?.focus();
 }
 
 /** Read system clipboard. On desktop, goes through Rust to bypass

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import * as app from "../stores/app.svelte.ts";
   import type { Snippet } from "../stores/app.svelte.ts";
 
@@ -18,6 +18,11 @@
     snippets = await app.loadSnippets();
     requestAnimationFrame(() => inputEl?.focus());
   });
+
+  // 单一关闭出口：选中 / Esc / 点背景三条路径都让 modal 卸载，统一在这里把焦点
+  // 还给活动终端。否则搜索框随 modal 消失，焦点掉回 document.body，用户必须点一下
+  // 终端才能继续输入。跟 TerminalPane 的 closeSearch() 同样的归还逻辑。
+  onDestroy(() => app.terminalFocus(app.activeTabId()));
 
   function select(s: Snippet) {
     app.sendToTerminal(s.command);

@@ -861,6 +861,7 @@
         app.registerTerminalControls(tabId, {
             getSelection: () => terminal.getSelection(),
             paste: pasteText,
+            focus: () => terminal.focus(),
         });
 
         // Intercept Ctrl/Cmd+F for search, Ctrl/Cmd+O for SFTP, Ctrl/Cmd+S for snippets

@@ -46,7 +46,7 @@ const zh: Messages = {
   "downloads.status.failed": "失败",
   "downloads.status.cancelled": "已取消",
   "tab.context.search": "搜索",
-  "tab.context.snippets": "片段",
+  "tab.context.snippets": "命令片段",
   "tab.context.sftp": "SFTP 文件浏览",
   "tab.context.clone": "克隆 Tab",
   "tab.context.close": "关闭 Tab",
