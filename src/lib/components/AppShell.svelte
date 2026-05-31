@@ -220,9 +220,13 @@
         delete window.__rssh_clone;
     }
 
-    function openInNewWindow(tab: Tab) {
+    type SplitDir = "up" | "down" | "left" | "right";
+
+    // split === undefined → plain new window (OS-positioned). A direction tiles
+    // the current window into one half and opens the new one in the other.
+    function openInNewWindow(tab: Tab, split?: SplitDir) {
         const payload = {type: tab.type, label: tab.label, meta: tab.meta};
-        invoke("open_tab_in_new_window", {clone: JSON.stringify(payload)})
+        invoke("open_tab_in_new_window", {clone: JSON.stringify(payload), split: split ?? null})
             .catch(e => console.error("open_tab_in_new_window failed:", e));
     }
 
@@ -670,7 +674,17 @@
         // Multi-window requires Tauri WebviewWindowBuilder — desktop only.
         if (isTerminal && !app.isMobile) {
             sections.push([
-                {label: t("tab.context.open_new_window"), shortcut: "⌘⇧N", onClick: () => openInNewWindow(tab)},
+                {
+                    label: t("tab.context.open_new_window"),
+                    shortcut: "⌘⇧N",
+                    onClick: () => openInNewWindow(tab),
+                    submenu: [
+                        {label: t("tab.context.open_new_window.up"), onClick: () => openInNewWindow(tab, "up")},
+                        {label: t("tab.context.open_new_window.down"), onClick: () => openInNewWindow(tab, "down")},
+                        {label: t("tab.context.open_new_window.left"), onClick: () => openInNewWindow(tab, "left")},
+                        {label: t("tab.context.open_new_window.right"), onClick: () => openInNewWindow(tab, "right")},
+                    ],
+                },
             ]);
         }
 
