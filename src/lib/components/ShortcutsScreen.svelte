@@ -117,26 +117,34 @@
     <div class="key-list">
       {#each actionsBySurface(g.surface) as a (a.id)}
         {@const partner = conflictPartner(a.id)}
+        {@const recording = recordingId === a.id}
         <div class="key-row">
           <div class="row-main">
-            <kbd class="kbd surface-pressed" class:conflict={!!partner}>{keymap.format(a.id)}</kbd>
+            <!-- The shortcut itself is the control: click to record, click again (or Esc) to cancel. -->
+            <button
+              type="button"
+              class="kbd kbd-btn surface-pressed"
+              class:recording
+              class:conflict={!!partner && !recording}
+              title={t("shortcuts.customize.record")}
+              aria-label={`${t(a.labelKey)} — ${recording ? t("shortcuts.customize.recording") : keymap.format(a.id)}`}
+              onclick={() => (recording ? stopRecord() : startRecord(a.id))}
+            >{recording ? (recordError ?? t("shortcuts.customize.recording")) : keymap.format(a.id)}</button>
             <span class="key-desc">{t(a.labelKey)}</span>
-          </div>
-          <div class="row-actions">
-            {#if recordingId === a.id}
-              <span class="recording">{recordError ?? t("shortcuts.customize.recording")}</span>
-            {:else}
-              {#if rowError?.id === a.id}
-                <span class="conflict-text">{rowError.msg}</span>
-              {:else if partner}
-                <span class="conflict-text">{t("shortcuts.customize.conflict", { name: labelOf(partner) })}</span>
-              {/if}
-              {#if keymap.isOverridden(a.id)}
-                <button class="btn btn-sm" onclick={() => tryReset(a.id)}>{t("shortcuts.customize.reset")}</button>
-              {/if}
-              <button class="btn btn-sm btn-accent" onclick={() => startRecord(a.id)}>{t("shortcuts.customize.record")}</button>
+            {#if keymap.isOverridden(a.id) && !recording}
+              <div title={t("shortcuts.customize.reset")}
+                aria-label={t("shortcuts.customize.reset")}
+                onclick={() => tryReset(a.id)}
+              >𖦹</div>
             {/if}
           </div>
+          {#if !recording}
+            {#if rowError?.id === a.id}
+              <span class="conflict-text">{rowError.msg}</span>
+            {:else if partner}
+              <span class="conflict-text">{t("shortcuts.customize.conflict", { name: labelOf(partner) })}</span>
+            {/if}
+          {/if}
         </div>
       {/each}
     </div>
@@ -157,18 +165,13 @@
 
 <style>
   .page { padding: 24px; display: flex; flex-direction: column; gap: 4px; }
-  .section-label {
-    font-size: 12px; font-weight: 600; color: var(--text-sub);
-    text-transform: uppercase; letter-spacing: 0.04em;
-    margin-top: 18px; margin-bottom: 4px;
-  }
+  .toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
   .key-list { display: flex; flex-direction: column; gap: 2px; }
   .key-row {
     display: flex; align-items: center; justify-content: space-between;
     gap: 12px; padding: 8px 0; min-height: 34px;
   }
-  .row-main { display: flex; align-items: center; gap: 12px; min-width: 0; }
-  .row-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+  .row-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
   .kbd {
     display: inline-block;
     min-width: 80px;
@@ -181,8 +184,12 @@
     color: var(--text);
     text-align: center;
   }
-  .kbd.conflict { color: var(--danger, #e05252); box-shadow: inset 0 0 0 1px var(--danger, #e05252); }
+  .kbd.conflict { color: var(--error); box-shadow: inset 0 0 0 1px var(--error); }
+  /* Clickable shortcut cell — interaction mirrors .btn (lift on hover, press on active). */
+  .kbd-btn { cursor: pointer; border: none; }
+  .kbd-btn:hover { box-shadow: var(--raised); }
+  .kbd-btn:active { box-shadow: var(--pressed); transform: scale(0.98); }
+  .kbd-btn.recording { color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
   .key-desc { font-size: 13px; color: var(--text-sub); }
-  .recording { font-size: 12px; color: var(--accent, var(--text)); font-style: italic; }
-  .conflict-text { font-size: 12px; color: var(--danger, #e05252); }
+  .conflict-text { font-size: 12px; color: var(--error); flex-shrink: 0; }
 </style>
