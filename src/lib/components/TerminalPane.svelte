@@ -19,6 +19,8 @@
     import {extractBlocksText} from "../terminal/block-content.ts";
     import {renderBlocksToBlob} from "../terminal/block-to-image.ts";
     import {t} from "../i18n/index.svelte.ts";
+    import {ACTIONS, matchBinding, type ActionId} from "../keyboard/keymap.ts";
+    import * as keymap from "../stores/keymap.svelte.ts";
     import BlockContextMenu, {type MenuItem} from "./BlockContextMenu.svelte";
 
     const RST = "\x1b[0m";
@@ -927,23 +929,32 @@
         containerEl.addEventListener("mouseup", onSelectMouseUp);
         containerEl.addEventListener("contextmenu", onTerminalContextMenu, { capture: true });
 
-        // Intercept Ctrl/Cmd+F for search, Ctrl/Cmd+O for SFTP, Ctrl/Cmd+S for snippets
+        // App-level terminal shortcuts (search / SFTP / snippet / copy / paste).
+        // Bindings are user-customizable (lib/keyboard/keymap.ts); read live so a
+        // rebind takes effect immediately. We intercept a matched combo before xterm
+        // forwards it to the PTY; everything else passes through to the shell.
+        function runTerminalShortcut(id: ActionId) {
+            switch (id) {
+                case "term.search": openSearch(); break;
+                case "term.sftp": app.navigate("sftp"); break;
+                case "term.snippet": app.openSnippetPicker(); break;
+                case "term.paste": app.readClipboard().then(pasteText); break;
+                case "term.copy": {
+                    const sel = terminal.getSelection();
+                    if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+                    break;
+                }
+            }
+        }
         terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
             if (e.type !== "keydown") return true;
-            const mod = e.metaKey || e.ctrlKey;
-            if (mod && e.key === "f") { e.preventDefault(); openSearch(); return false; }
-            if (mod && e.key === "o" && !isLocal && !app.isMobile) { e.preventDefault(); app.navigate("sftp"); return false; }
-            if (mod && e.key === "s") { e.preventDefault(); app.openSnippetPicker(); return false; }
-            // Ctrl+Shift+V → paste, Ctrl+Shift+C → copy (Linux terminal convention)
-            if (e.ctrlKey && e.shiftKey && e.key === "V") {
+            for (const a of ACTIONS) {
+                if (a.surface !== "terminal") continue;
+                if (!matchBinding(e, keymap.binding(a.id))) continue;
+                // SFTP only applies to remote sessions on desktop; elsewhere let the shell have the key.
+                if (a.id === "term.sftp" && (isLocal || app.isMobile)) return true;
                 e.preventDefault();
-                app.readClipboard().then(pasteText);
-                return false;
-            }
-            if (e.ctrlKey && e.shiftKey && e.key === "C") {
-                e.preventDefault();
-                const sel = terminal.getSelection();
-                if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+                runTerminalShortcut(a.id);
                 return false;
             }
             return true;
