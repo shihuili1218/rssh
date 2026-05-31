@@ -446,6 +446,8 @@ const zh: Messages = {
   "shortcut.tab.cycle": "在 Tab 之间循环切换",
   "shortcut.tab.exit_cycle": "退出 Tab 切换模式",
   "shortcut.ai.toggle": "切换 AI 面板",
+  "shortcut.term.copy": "复制选区",
+  "shortcut.term.paste": "粘贴",
 
   // ── 后端错误（按错误码翻译） ──
   "error.unknown": "{message}",
@@ -669,6 +671,14 @@ const zh: Messages = {
   "shortcuts.toggle_ai": "切换 AI 面板",
   "shortcuts.reconnect_disconnect": "断开后重连",
   "shortcuts.reconnect_error": "出错 / 停止后重连",
+  // 快捷键自定义
+  "shortcuts.customize.fixed": "固定（不可修改）",
+  "shortcuts.customize.record": "修改",
+  "shortcuts.customize.recording": "按下快捷键…（Esc 取消）",
+  "shortcuts.customize.reset": "重置",
+  "shortcuts.customize.reset_all": "全部重置",
+  "shortcuts.customize.need_modifier": "必须包含 ⌘ / Ctrl / Alt",
+  "shortcuts.customize.conflict": "与「{name}」冲突",
   // GitHub 同步
   "github.pat_hint1": "在 github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens 创建一个 PAT。",
   "github.pat_hint2": "仓库访问：选择 “Only select repositories”（而非 “All repositories”）",

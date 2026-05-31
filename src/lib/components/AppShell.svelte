@@ -20,6 +20,8 @@
     import ChatPanel from "../ai/ChatPanel.svelte";
     import * as ai from "../ai/store.svelte.ts";
     import {attachShortcuts, attachKeyup, type Shortcut} from "../keyboard/registry.ts";
+    import {matchBinding, TAB_CYCLE} from "../keyboard/keymap.ts";
+    import * as keymap from "../stores/keymap.svelte.ts";
     import {t, errMsg} from "../i18n/index.svelte.ts";
     import {toast} from "../stores/toast.svelte.ts";
 
@@ -49,10 +51,10 @@
     function shortcutsTable(): Shortcut[] {
         return [
             {
-                display: "⌘W / Ctrl+W",
+                display: keymap.format("tab.close"),
                 description: t("shortcut.tab.close"),
                 skipInSettings: true,
-                match: e => (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key === "w",
+                match: e => matchBinding(e, keymap.binding("tab.close")),
                 handler: () => {
                     const id = app.activeTabId();
                     if (id === "home") return false;
@@ -60,10 +62,10 @@
                 },
             },
             {
-                display: "⌘⇧D / Ctrl+Shift+D",
+                display: keymap.format("tab.clone"),
                 description: t("shortcut.tab.clone"),
                 skipInSettings: true,
-                match: e => (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "d",
+                match: e => matchBinding(e, keymap.binding("tab.clone")),
                 handler: () => {
                     const tab = app.activeTab();
                     if (!tab || tab.type === "home") return false;
@@ -71,10 +73,10 @@
                 },
             },
             {
-                display: "⌘⇧N / Ctrl+Shift+N",
+                display: keymap.format("tab.openNewWindow"),
                 description: t("shortcut.tab.open_new_window"),
                 skipInSettings: true,
-                match: e => (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "n",
+                match: e => matchBinding(e, keymap.binding("tab.openNewWindow")),
                 handler: () => {
                     const tab = app.activeTab();
                     if (!tab || (tab.type !== "ssh" && tab.type !== "local") || app.isMobile) return false;
@@ -82,10 +84,10 @@
                 },
             },
             {
-                display: "⌘⇧A / Ctrl+Shift+A",
+                display: keymap.format("ai.toggle"),
                 description: t("shortcut.ai.toggle"),
                 skipInSettings: true,
-                match: e => (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "a",
+                match: e => matchBinding(e, keymap.binding("ai.toggle")),
                 handler: () => {
                     // Close always works; open only on a connected terminal tab
                     // (mirrors MobileKeybar's canOpenAi guard).
@@ -99,8 +101,12 @@
             {
                 display: "Ctrl+Tab / Ctrl+Shift+Tab",
                 description: t("shortcut.tab.cycle"),
-                match: e => e.ctrlKey && e.key === "Tab",
+                // Exact match (excludes Ctrl+Alt/Meta+Tab) via the same data that
+                // backs RESERVED, so the reserved set and this predicate can't drift.
+                match: e => TAB_CYCLE.some(b => matchBinding(e, b)),
                 handler: e => {
+                    // Don't hijack keys while the user is recording a new binding.
+                    if (keymap.recording()) return false;
                     const dir = e.shiftKey ? -1 : 1;
                     if (!tabCycling) {
                         tabCycling = true;
@@ -126,6 +132,7 @@
     }
 
     onMount(() => {
+        keymap.init();
         app.loadProfiles().then(p => profiles = p);
         app.loadGroups().then(g => groups = g);
         // Crash recovery: reconcile with empty list tells the backend
@@ -624,12 +631,12 @@
             const items: CtxMenuItem[] = [
                 {
                     label: t("tab.context.search"),
-                    shortcut: "⌘F",
+                    shortcut: keymap.format("term.search"),
                     onClick: () => { app.setActiveTab(tab.id); app.requestSearch(tab.id); },
                 },
                 {
                     label: t("tab.context.snippets"),
-                    shortcut: "⌘S",
+                    shortcut: keymap.format("term.snippet"),
                     onClick: () => { app.setActiveTab(tab.id); app.openSnippetPicker(); },
                 },
             ];
@@ -637,7 +644,7 @@
             if (!app.isMobile) {
                 items.push({
                     label: t("tab.context.sftp"),
-                    shortcut: "⌘O",
+                    shortcut: keymap.format("term.sftp"),
                     disabled: !isSsh,
                     onClick: () => { app.setActiveTab(tab.id); app.openSftp(); },
                 });
@@ -648,11 +655,11 @@
         sections.push([
             {
                 label: t("tab.context.clone"),
-                shortcut: tab.type === "home" ? undefined : "⌘⇧D",
+                shortcut: tab.type === "home" ? undefined : keymap.format("tab.clone"),
                 disabled: tab.type === "home",
                 onClick: () => cloneTab(tab),
             },
-            {label: t("tab.context.close"), shortcut: "⌘W", onClick: () => app.closeTab(tab.id)},
+            {label: t("tab.context.close"), shortcut: keymap.format("tab.close"), onClick: () => app.closeTab(tab.id)},
         ]);
 
         // AI 排障入口（ssh/local tab 才有，且需要已经连上 = 有 sessionId）
@@ -670,7 +677,7 @@
         // Multi-window requires Tauri WebviewWindowBuilder — desktop only.
         if (isTerminal && !app.isMobile) {
             sections.push([
-                {label: t("tab.context.open_new_window"), shortcut: "⌘⇧N", onClick: () => openInNewWindow(tab)},
+                {label: t("tab.context.open_new_window"), shortcut: keymap.format("tab.openNewWindow"), onClick: () => openInNewWindow(tab)},
             ]);
         }
 

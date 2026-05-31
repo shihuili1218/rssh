@@ -444,6 +444,8 @@ const en = {
   "shortcut.tab.cycle": "Cycle through Tabs",
   "shortcut.tab.exit_cycle": "Exit Tab cycling mode",
   "shortcut.ai.toggle": "Toggle AI panel",
+  "shortcut.term.copy": "Copy selection",
+  "shortcut.term.paste": "Paste",
 
   // ── Backend errors (translated by error code) ──
   "error.unknown": "{message}",
@@ -667,6 +669,14 @@ const en = {
   "shortcuts.toggle_ai": "Toggle AI panel",
   "shortcuts.reconnect_disconnect": "Reconnect after disconnect",
   "shortcuts.reconnect_error": "Reconnect after error/stop",
+  // Shortcut customization
+  "shortcuts.customize.fixed": "Fixed (not customizable)",
+  "shortcuts.customize.record": "Change",
+  "shortcuts.customize.recording": "Press a shortcut… (Esc to cancel)",
+  "shortcuts.customize.reset": "Reset",
+  "shortcuts.customize.reset_all": "Reset all",
+  "shortcuts.customize.need_modifier": "Must include ⌘ / Ctrl / Alt",
+  "shortcuts.customize.conflict": "Conflicts with {name}",
   // GitHub sync
   "github.pat_hint1": "Create a PAT at github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens.",
   "github.pat_hint2": "Repository access: Select \"Only select repositories\" (instead of \"All repositories\")",
