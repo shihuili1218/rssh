@@ -125,12 +125,24 @@ export function bindingKey(b: KeyBinding): string {
   return `${b.meta ? 1 : 0}${b.ctrl ? 1 : 0}${b.alt ? 1 : 0}${b.shift ? 1 : 0}:${b.key.toLowerCase()}`;
 }
 
+const MODIFIER_KEYS = new Set(["control", "shift", "alt", "meta"]);
+
 /**
- * A customizable binding MUST carry a real modifier (⌘/Ctrl/Alt). A bare or
- * shift-only key would silently eat shell input — the "never break userspace"
- * guard for terminal shortcuts.
+ * True if `key` is a modifier key pressed on its own (Control/Shift/Alt/Meta),
+ * case-insensitive. Single source for "not a usable binding key" — the recorder
+ * ignores these while capturing, and validateBinding rejects them on load.
  */
-export function validateBinding(b: KeyBinding): { ok: boolean; reason?: "no-modifier" } {
+export function isModifierKey(key: string): boolean {
+  return MODIFIER_KEYS.has(key.toLowerCase());
+}
+
+/**
+ * A customizable binding MUST carry a real modifier (⌘/Ctrl/Alt) and MUST NOT be
+ * a lone modifier key. A bare/shift-only key would silently eat shell input; a
+ * modifier-key binding (e.g. {key:"Control"}) would fire on every Control press.
+ */
+export function validateBinding(b: KeyBinding): { ok: boolean; reason?: "no-modifier" | "modifier-key" } {
+  if (isModifierKey(b.key)) return { ok: false, reason: "modifier-key" };
   if (b.meta || b.ctrl || b.alt) return { ok: true };
   return { ok: false, reason: "no-modifier" };
 }

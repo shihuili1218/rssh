@@ -47,8 +47,18 @@ export async function init(): Promise<void> {
   }
 }
 
+// Serialize writes through a chain so rapid edits (e.g. reset then re-bind) land
+// in call order — otherwise two fire-and-forget invokes could complete reversed
+// and persist the older value last, reverting the change on reload. The value is
+// snapshotted at call time; each write runs whether the previous one resolved or
+// rejected (best-effort, like before).
+let _persistChain: Promise<unknown> = Promise.resolve();
+
 function persist(): void {
-  invoke("set_setting", { key: SETTING_KEY, value: serializeOverrides(_overrides) }).catch(() => {});
+  const value = serializeOverrides(_overrides);
+  const write = () => invoke("set_setting", { key: SETTING_KEY, value });
+  _persistChain = _persistChain.then(write, write);
+  _persistChain.catch(() => {});
 }
 
 /** Effective binding for an action (override if present, else platform default). */

@@ -10,6 +10,7 @@ import {
   findConflicts,
   formatBinding,
   isDefaultBinding,
+  isModifierKey,
   matchBinding,
   parseOverrides,
   reservedConflict,
@@ -121,6 +122,22 @@ describe("validateBinding — the shell-input guard", () => {
     expect(validateBinding({ key: "k", meta: true }).ok).toBe(true);
     expect(validateBinding({ key: "k", alt: true }).ok).toBe(true);
   });
+
+  it("rejects a modifier key as the binding key (else bare Control would fire it)", () => {
+    expect(validateBinding({ key: "Control", ctrl: true }).ok).toBe(false);
+    expect(validateBinding({ key: "control", ctrl: true }).ok).toBe(false);
+    expect(validateBinding({ key: "Shift", ctrl: true, shift: true }).ok).toBe(false);
+  });
+});
+
+describe("isModifierKey", () => {
+  it("matches the four modifier names case-insensitively, nothing else", () => {
+    for (const k of ["Control", "Shift", "Alt", "Meta", "control", "META"]) {
+      expect(isModifierKey(k)).toBe(true);
+    }
+    expect(isModifierKey("w")).toBe(false);
+    expect(isModifierKey("Tab")).toBe(false);
+  });
 });
 
 describe("isDefaultBinding", () => {
@@ -206,6 +223,8 @@ describe("serialize / parse overrides", () => {
     expect(parseOverrides(JSON.stringify({ "tab.close": { key: "w" } }))).toEqual({});
     // Reserved fixed combo — would be swallowed by the tab cycler.
     expect(parseOverrides(JSON.stringify({ "tab.close": { key: "Tab", ctrl: true } }))).toEqual({});
+    // Modifier key as the bound key — would fire when the user merely presses Control.
+    expect(parseOverrides(JSON.stringify({ "tab.close": { key: "Control", ctrl: true } }))).toEqual({});
   });
 });
 

@@ -6,6 +6,7 @@
     collidingAction,
     defaultBinding,
     eventToBinding,
+    isModifierKey,
     reservedConflict,
     validateBinding,
     type ActionId,
@@ -67,7 +68,7 @@
     keymap.setRecording(true);
     const onKey = (e: KeyboardEvent) => {
       // Wait for a real key — ignore lone modifier presses.
-      if (e.key === "Control" || e.key === "Shift" || e.key === "Alt" || e.key === "Meta") return;
+      if (isModifierKey(e.key)) return;
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
