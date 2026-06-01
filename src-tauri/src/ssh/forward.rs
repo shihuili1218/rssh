@@ -60,9 +60,12 @@ async fn bind_loopback(port: u16) -> AppResult<(TcpListener, Option<TcpListener>
         AppError::ssh("ssh_port_bind_failed", json!({ "port": port, "err": e.to_string() }))
     })?;
     // Bind v6 to v4's *actual* port so an ephemeral request (port 0) lands on
-    // the same port for both families instead of two random ones.
-    let bound = v4.local_addr().map(|a| a.port()).unwrap_or(port);
-    let v6 = TcpListener::bind(("::1", bound)).await.ok();
+    // the same port for both families. If v4's port can't be read, skip v6
+    // rather than risk binding it to a different (e.g. random) port.
+    let v6 = match v4.local_addr() {
+        Ok(a) => TcpListener::bind(("::1", a.port())).await.ok(),
+        Err(_) => None,
+    };
     Ok((v4, v6))
 }
 
