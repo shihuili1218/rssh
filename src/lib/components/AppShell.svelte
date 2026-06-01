@@ -683,7 +683,7 @@
             sections.push([
                 {
                     label: t("tab.context.open_new_window"),
-                    shortcut: keymap.format("tab.openNewWindow",
+                    shortcut: keymap.format("tab.openNewWindow"),
                     onClick: () => openInNewWindow(tab),
                     submenu: [
                         {label: t("tab.context.open_new_window.up"), onClick: () => openInNewWindow(tab, "up")},
