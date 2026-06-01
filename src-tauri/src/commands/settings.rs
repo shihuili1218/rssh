@@ -87,19 +87,28 @@ pub struct FontInfo {
 /// state, no persistence. WKWebView has no Local Font Access API, so font
 /// enumeration must happen here in Rust rather than in the webview.
 #[tauri::command]
-pub fn list_fonts() -> Vec<FontInfo> {
-    let mut db = fontdb::Database::new();
-    db.load_system_fonts();
-    let mut families: std::collections::BTreeMap<String, bool> = std::collections::BTreeMap::new();
-    for face in db.faces() {
-        if let Some((name, _)) = face.families.first() {
-            *families.entry(name.clone()).or_insert(false) |= face.monospaced;
+pub async fn list_fonts() -> Vec<FontInfo> {
+    // Enumeration scans the system font dirs and parses face headers — blocking
+    // work, so run it off the async runtime's worker threads (keeps other
+    // commands responsive). Sync Tauri commands already run off the UI thread,
+    // so this is correctness/tidiness, not a UI-freeze fix.
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        let mut families: std::collections::BTreeMap<String, bool> =
+            std::collections::BTreeMap::new();
+        for face in db.faces() {
+            if let Some((name, _)) = face.families.first() {
+                *families.entry(name.clone()).or_insert(false) |= face.monospaced;
+            }
         }
-    }
-    families
-        .into_iter()
-        .map(|(family, monospaced)| FontInfo { family, monospaced })
-        .collect()
+        families
+            .into_iter()
+            .map(|(family, monospaced)| FontInfo { family, monospaced })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[tauri::command]

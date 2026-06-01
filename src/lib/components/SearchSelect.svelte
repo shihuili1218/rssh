@@ -115,15 +115,35 @@
         close();
     }
 
+    function onWindowKeydown(e: KeyboardEvent) {
+        if (open && e.key === "Escape") { close(); triggerEl?.focus(); }
+    }
+
+    // Close when keyboard focus leaves the control entirely (Tab-out), so an
+    // open panel is not left orphaned on screen.
+    function onFocusOut(e: FocusEvent) {
+        if (!open) return;
+        const next = e.relatedTarget as Node | null;
+        if (next && (triggerEl?.contains(next) || panelEl?.contains(next))) return;
+        close();
+    }
+
     onMount(() => {
+        // Reposition on scroll AND resize while open (mirrors Select.svelte) —
+        // otherwise a resize/orientation change misplaces the panel until the
+        // next scroll.
         window.addEventListener("scroll", pickPlacement, true);
-        return () => window.removeEventListener("scroll", pickPlacement, true);
+        window.addEventListener("resize", pickPlacement);
+        return () => {
+            window.removeEventListener("scroll", pickPlacement, true);
+            window.removeEventListener("resize", pickPlacement);
+        };
     });
 </script>
 
-<svelte:window onclick={onWindowClick} />
+<svelte:window onclick={onWindowClick} onkeydown={onWindowKeydown} />
 
-<div class="search-select" class:open class:drop-up={dropUp}>
+<div class="search-select" class:open class:drop-up={dropUp} onfocusout={onFocusOut}>
     <button
         {id}
         type="button"
@@ -139,7 +159,7 @@
     </button>
 
     {#if open}
-        <div class="search-select-panel" bind:this={panelEl}>
+        <div class="search-select-panel surface-raised" bind:this={panelEl}>
             <div class="search-select-head">
                 <input
                     class="search-select-search"

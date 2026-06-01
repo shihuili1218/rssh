@@ -30,5 +30,7 @@ export const BASE_FONT_STACK =
  */
 export function composeTermFontStack(chosen: string): string {
   const name = chosen.trim();
-  return name ? `"${name}", ${BASE_FONT_STACK}` : BASE_FONT_STACK;
+  // JSON.stringify yields a correctly escaped, quoted string token, so a family
+  // name containing a double-quote or backslash can't produce invalid CSS.
+  return name ? `${JSON.stringify(name)}, ${BASE_FONT_STACK}` : BASE_FONT_STACK;
 }

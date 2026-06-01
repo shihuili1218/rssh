@@ -25,4 +25,9 @@ describe("composeTermFontStack", () => {
       expect(composeTermFontStack(choice).endsWith(BASE_FONT_STACK)).toBe(true);
     }
   });
+
+  it("escapes quotes/backslashes in the family name (valid CSS token)", () => {
+    expect(composeTermFontStack('Ev"il')).toBe(`"Ev\\"il", ${BASE_FONT_STACK}`);
+    expect(composeTermFontStack("Menlo")).toBe(`"Menlo", ${BASE_FONT_STACK}`);
+  });
 });
