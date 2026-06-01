@@ -126,6 +126,7 @@ pub fn run() {
             commands::settings::list_recordings,
             commands::settings::read_recording,
             commands::settings::secret_backend,
+            commands::settings::list_fonts,
             // SSH session
             commands::session::ssh_connect,
             commands::session::ssh_write,

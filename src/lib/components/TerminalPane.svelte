@@ -876,12 +876,13 @@
     }
 
     let unsubscribeTheme: (() => void) | null = null;
+    let unsubscribeFont: (() => void) | null = null;
 
     onMount(async () => {
         terminal = new Terminal({
             cursorBlink: true,
             fontSize: 13,
-            fontFamily: "'JetBrainsMono Nerd Font', 'FiraCode Nerd Font', 'Hack Nerd Font', 'MesloLGS NF', 'Symbols Nerd Font Mono', Menlo, Monaco, 'Apple Color Emoji', 'Apple Symbols', 'PingFang SC', 'Courier New', monospace",
+            fontFamily: theme.currentTermFontStack(),
             allowProposedApi: true,
             theme: theme.currentTermTheme(),
         });
@@ -906,6 +907,16 @@
         terminal.open(containerEl);
         terminal.unicode.activeVersion = "11";
         fitAddon.fit();
+
+        // Terminal font: prepend the user's chosen family to the base stack.
+        // Registered after open()+fit() because the immediate callback refits,
+        // which needs fitAddon to exist. Font changes alter cell metrics, so
+        // (unlike theme) we must refit after applying.
+        unsubscribeFont = theme.registerXtermFontListener((stack) => {
+            if (!terminal) return;
+            terminal.options.fontFamily = stack;
+            fitAddon?.fit();
+        });
 
         // 移动端：xterm 的 helper-textarea 一旦 focus 就会召系统键盘，
         // 而长按选择需要避开这个 focus。短按终端时解锁并 focus；长按、
@@ -1085,6 +1096,7 @@
 
     onDestroy(() => {
         unsubscribeTheme?.();
+        unsubscribeFont?.();
         window.removeEventListener("mousedown", onWindowMouseDown);
         window.removeEventListener("keydown", onWindowKeyDown);
         containerEl?.removeEventListener("mouseup", onSelectMouseUp);

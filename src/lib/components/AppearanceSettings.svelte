@@ -6,6 +6,8 @@
     import * as theme from "../themes/store.svelte.ts";
     import type { PaletteId } from "../themes/palettes.ts";
     import { parseCustomTermJson, type TermPaletteRef } from "../themes/term-palettes.ts";
+    import { composeTermFontStack, type FontInfo } from "../themes/term-font.ts";
+    import FontSelect from "./FontSelect.svelte";
     import { t } from "../i18n/index.svelte.ts";
 
     const SCHEMES_URL = "https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/windowsterminal";
@@ -115,6 +117,24 @@
             customError = e.message || String(e);
         }
     }
+
+    // ─── Theme: terminal font ────────────────────────────────────────
+    // Fonts come from the system (Rust list_fonts); the chosen family is
+    // prepended to the base stack. Search + the monospace filter live inside
+    // FontSelect; here we just hold the list, the current choice, and persist.
+    let fonts = $state<FontInfo[]>([]);
+    let fontChoice = $state<string>(theme.termFont());
+    async function pickFont(name: string) {
+        fontChoice = name;
+        await theme.setTermFont(name);
+    }
+    onMount(async () => {
+        try {
+            fonts = await invoke<FontInfo[]>("list_fonts");
+        } catch (e) {
+            console.error("list_fonts failed:", e);
+        }
+    });
 </script>
 
 <div class="page">
@@ -147,20 +167,41 @@
     </div>
 
     <div class="section-label">{t("settings.appearance.terminal_palette")}</div>
-    <div class="switch-card">
-        <div class="switch-card-body">
-            <div class="switch-card-title"
-                 class:on={termBgFollow} class:off={!termBgFollow}>
-                {t("settings.appearance.term.bg_follow")}
+    <!-- Background-follow toggle + terminal font in one card — "main row +
+         divider + second row", mirroring the shell page's Selection & Mouse. -->
+    <div class="card surface-raised term-card">
+        <div class="term-row">
+            <div class="switch-card-body">
+                <div class="switch-card-title"
+                     class:on={termBgFollow} class:off={!termBgFollow}>
+                    {t("settings.appearance.term.bg_follow")}
+                </div>
+                <div class="switch-card-desc">{t("settings.appearance.term.bg_follow_desc")}</div>
             </div>
-            <div class="switch-card-desc">{t("settings.appearance.term.bg_follow_desc")}</div>
+            <label class="switch">
+                <input type="checkbox" bind:checked={termBgFollow} onchange={saveTermBgFollow} />
+                <span class="slider"></span>
+            </label>
         </div>
-        <label class="switch">
-            <input type="checkbox" bind:checked={termBgFollow} onchange={saveTermBgFollow} />
-            <span class="slider"></span>
-        </label>
+
+        <div class="term-divider"></div>
+
+        <div class="term-row">
+            <div class="switch-card-body">
+                <div class="switch-card-title">{t("settings.appearance.terminal_font")}</div>
+                <div class="switch-card-desc">{t("settings.appearance.font.row_desc")}</div>
+            </div>
+            <div class="term-font-control">
+                <FontSelect
+                    bind:value={fontChoice}
+                    fonts={fonts}
+                    onchange={pickFont}
+                    ariaLabel={t("settings.appearance.terminal_font")}
+                />
+            </div>
+        </div>
     </div>
-    <div class="layout-grid">
+    <div class="layout-grid" style="--preview-font: {composeTermFontStack(fontChoice)};">
         <!-- Inherit: follow the UI palette -->
         <button
             class="layout-card"
@@ -668,7 +709,7 @@
         justify-content: center;
         gap: 4px;
         padding: 10px 12px;
-        font-family: 'JetBrainsMono Nerd Font', Menlo, Monaco, monospace;
+        font-family: var(--preview-font, 'JetBrainsMono Nerd Font', Menlo, Monaco, monospace);
         font-size: 11px;
         line-height: 1.3;
     }
@@ -773,5 +814,30 @@
         justify-content: flex-end;
         gap: 8px;
         margin-top: 4px;
+    }
+
+    /* ── Terminal palette + font card (Selection & Mouse pattern) ── */
+    .term-card {
+        padding: 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+    }
+    .term-row {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
+    }
+    .term-divider {
+        height: 1px;
+        background: var(--divider);
+    }
+    /* Font picker sits on the right of its row, like the shell page's
+       right-click Select (.rca-select). */
+    .term-font-control {
+        width: 260px;
+        max-width: 100%;
+        flex-shrink: 0;
     }
 </style>

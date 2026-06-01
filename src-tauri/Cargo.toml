@@ -63,6 +63,7 @@ rpassword = { version = "7", optional = true }
 tempfile = { version = "3", optional = true }
 tree-sitter = "0.26.9"
 tree-sitter-bash = "0.25.1"
+fontdb = "0.23.0"
 
 # PTY & native file dialogs & clipboard — 桌面平台专用
 [target.'cfg(not(target_os = "android"))'.dependencies]

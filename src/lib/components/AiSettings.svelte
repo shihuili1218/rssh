@@ -5,6 +5,7 @@
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import type { LlmProvider, ModelInfo, SkillRecord } from "../ai/types.ts";
     import Select from "./Select.svelte";
+    import SearchSelect from "./SearchSelect.svelte";
 
     /** Provider 下拉选项 —— OpenAI 那项的翻译用 $derived 跟着 locale 自动重算。 */
     let providerOptions = $derived([
@@ -124,6 +125,10 @@
         }
     }
     let modelOptions = $state<ModelInfo[]>([]);
+    /** Model dropdown options — id as value, display name (or id) as label. */
+    let modelSelectOptions = $derived(
+        modelOptions.map((m) => ({ value: m.id, label: m.display_name ?? m.id })),
+    );
     let loadingModels = $state(false);
     /** byokNote 自清 timer 句柄，避免后续动作被旧 timer 误清。 */
     let byokNoteTimer: number | null = null;
@@ -388,20 +393,19 @@
         <div class="row">
             <label for="ai-model">{t("ai.settings.label.model")}</label>
             <div class="model-row">
-                <input id="ai-model" type="text" list="ai-model-options"
-                       bind:value={model} placeholder={t("ai.settings.placeholder.model")} required/>
+                <SearchSelect id="ai-model"
+                              bind:value={model}
+                              options={modelSelectOptions}
+                              allowCustom
+                              ariaLabel={t("ai.settings.label.model")}
+                              placeholder={t("ai.settings.placeholder.model")}
+                              searchPlaceholder={t("ai.settings.placeholder.model")}
+                              emptyText={t("ai.settings.model.empty")} />
                 <button type="button" class="btn btn-sm" onclick={loadModels}
                         disabled={loadingModels}>
                     {loadingModels ? t("ai.settings.btn.loading_models") : t("ai.settings.btn.load_models")}
                 </button>
             </div>
-            {#if modelOptions.length > 0}
-                <datalist id="ai-model-options">
-                    {#each modelOptions as m (m.id)}
-                        <option value={m.id}>{m.display_name ?? m.id}</option>
-                    {/each}
-                </datalist>
-            {/if}
         </div>
         <div class="actions">
             <button class="btn btn-accent btn-sm" onclick={saveByok}
@@ -665,7 +669,7 @@
         gap: 8px;
         align-items: stretch;
     }
-    .model-row input { flex: 1; }
+    .model-row :global(.search-select) { flex: 1; min-width: 0; }
 
     .actions {
         display: flex;

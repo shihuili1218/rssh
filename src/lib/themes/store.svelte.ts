@@ -30,12 +30,14 @@ import {
   termPresetById,
   type TermPaletteRef,
 } from "./term-palettes.ts";
+import { composeTermFontStack } from "./term-font.ts";
 
 const SETTING_KEY_PALETTE        = "theme.palette";
 const SETTING_KEY_SHAPE          = "theme.shape";
 const SETTING_KEY_DENSITY        = "theme.density";
 const SETTING_KEY_TERM           = "theme.term-palette";
 const SETTING_KEY_TERM_BG_FOLLOW = "theme.term-bg-follow";
+const SETTING_KEY_TERM_FONT      = "theme.term-font";
 
 let _paletteId = $state<PaletteId>(DEFAULT_PALETTE_ID);
 
@@ -195,6 +197,47 @@ export function registerXtermThemeListener(fn: XtermThemeListener): () => void {
 }
 
 /* ───────────────────────────────────────────────────────────────
+   Terminal font — the user picks one installed family; it is
+   prepended to BASE_FONT_STACK (see term-font.ts). Stored value is
+   just the family name; empty = base stack = historical default.
+   Independent of palette: own listener set, notified on change.
+   ─────────────────────────────────────────────────────────────── */
+
+let _termFont = $state<string>("");
+
+export function termFont(): string { return _termFont; }
+export function currentTermFontStack(): string { return composeTermFontStack(_termFont); }
+
+export async function setTermFont(name: string): Promise<void> {
+  _termFont = name;
+  notifyXtermFonts();
+  try {
+    await invoke("set_setting", { key: SETTING_KEY_TERM_FONT, value: name });
+  } catch {
+    // Persistence failure is non-fatal.
+  }
+}
+
+type XtermFontListener = (stack: string) => void;
+const _xtermFontListeners = new Set<XtermFontListener>();
+
+/**
+ * Register a callback that receives the composed xterm font stack now and on
+ * every font change. Returns an unregister function. Mirrors
+ * registerXtermThemeListener; the payload is the full fontFamily string.
+ */
+export function registerXtermFontListener(fn: XtermFontListener): () => void {
+  _xtermFontListeners.add(fn);
+  fn(currentTermFontStack());
+  return () => { _xtermFontListeners.delete(fn); };
+}
+
+function notifyXtermFonts(): void {
+  const stack = currentTermFontStack();
+  for (const fn of _xtermFontListeners) fn(stack);
+}
+
+/* ───────────────────────────────────────────────────────────────
    Apply: write palette → :root CSS variables + notify xterm.
    ─────────────────────────────────────────────────────────────── */
 
@@ -297,12 +340,13 @@ function isShapeId(v: string | null | undefined): v is ShapeId {
  * Loads palette + shape + density in parallel — all are independent.
  */
 export async function init(): Promise<void> {
-  const [palette, shape, density, termRaw, termBgFollow] = await Promise.all([
+  const [palette, shape, density, termRaw, termBgFollow, termFontRaw] = await Promise.all([
     invoke<string | null>("get_setting", { key: SETTING_KEY_PALETTE        }).catch(() => null),
     invoke<string | null>("get_setting", { key: SETTING_KEY_SHAPE          }).catch(() => null),
     invoke<string | null>("get_setting", { key: SETTING_KEY_DENSITY        }).catch(() => null),
     invoke<string | null>("get_setting", { key: SETTING_KEY_TERM           }).catch(() => null),
     invoke<string | null>("get_setting", { key: SETTING_KEY_TERM_BG_FOLLOW }).catch(() => null),
+    invoke<string | null>("get_setting", { key: SETTING_KEY_TERM_FONT      }).catch(() => null),
   ]);
   if (palette && PALETTES.some((p) => p.id === palette)) {
     _paletteId = palette as PaletteId;
@@ -325,7 +369,13 @@ export async function init(): Promise<void> {
   // for users who haven't touched the new toggle. Only an explicit "false"
   // string opts out.
   if (termBgFollow === "false") _termBgFollowsTheme = false;
+  if (termFontRaw) _termFont = termFontRaw;
   apply(paletteById(_paletteId));
   applyShape(_shapeId);
   applyDensity(_densityId);
+  // init() is not awaited before mount (see main.ts), so a terminal may
+  // register its font listener before this resolves — with the default stack.
+  // Notify now so any already-mounted terminal picks up the persisted font.
+  // Mirrors apply()'s notifyXterms() for the palette.
+  notifyXtermFonts();
 }
