@@ -51,6 +51,32 @@ pub struct ForwardStats {
     pub connections: u32,
 }
 
+/// Bind a local-forward listener on loopback for both families. IPv4
+/// (127.0.0.1) is required; IPv6 (::1) is best-effort and simply skipped on
+/// hosts without an IPv6 stack. Both stay loopback-only — a local forward is
+/// never exposed to the network.
+async fn bind_loopback(port: u16) -> AppResult<(TcpListener, Option<TcpListener>)> {
+    let v4 = TcpListener::bind(("127.0.0.1", port)).await.map_err(|e| {
+        AppError::ssh("ssh_port_bind_failed", json!({ "port": port, "err": e.to_string() }))
+    })?;
+    // Bind v6 to v4's *actual* port so an ephemeral request (port 0) lands on
+    // the same port for both families instead of two random ones.
+    let bound = v4.local_addr().map(|a| a.port()).unwrap_or(port);
+    let v6 = TcpListener::bind(("::1", bound)).await.ok();
+    Ok((v4, v6))
+}
+
+/// `accept()` on an optional listener; pends forever when the listener is
+/// absent so it can sit in a `select!` arm that never fires.
+async fn accept_opt(
+    listener: &Option<TcpListener>,
+) -> std::io::Result<(TcpStream, std::net::SocketAddr)> {
+    match listener {
+        Some(l) => l.accept().await,
+        None => std::future::pending().await,
+    }
+}
+
 impl ForwardHandle {
     pub fn stats(&self) -> ForwardStats {
         ForwardStats {
@@ -104,9 +130,7 @@ pub async fn start_local(
     let remote_port = forward.remote_port;
     let local_port = forward.local_port;
 
-    let listener = TcpListener::bind(format!("127.0.0.1:{local_port}"))
-        .await
-        .map_err(|e| AppError::ssh("ssh_port_bind_failed", json!({ "port": local_port, "err": e.to_string() })))?;
+    let (listener, listener6) = bind_loopback(local_port).await?;
 
     let bytes_tx = Arc::new(AtomicU64::new(0));
     let bytes_rx = Arc::new(AtomicU64::new(0));
@@ -120,40 +144,37 @@ pub async fn start_local(
 
     let task = tokio::spawn(async move {
         loop {
-            tokio::select! {
+            // Accept from either loopback family; handling is identical.
+            let tcp_stream = tokio::select! {
                 _ = disconnect_task.notified() => break,
-                res = listener.accept() => {
-                    let (tcp_stream, _) = match res {
-                        Ok(s) => s,
-                        Err(_) => break,
-                    };
+                res = listener.accept() => match res { Ok((s, _)) => s, Err(_) => break },
+                res = accept_opt(&listener6) => match res { Ok((s, _)) => s, Err(_) => break },
+            };
 
-                    let rh = remote_host.clone();
-                    let channel = match handle
-                        .channel_open_direct_tcpip(&rh, remote_port as u32, "127.0.0.1", local_port as u32)
-                        .await
-                    {
-                        Ok(c) => c,
-                        Err(_) => continue,
-                    };
+            let rh = remote_host.clone();
+            let channel = match handle
+                .channel_open_direct_tcpip(&rh, remote_port as u32, "127.0.0.1", local_port as u32)
+                .await
+            {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
 
-                    let stream = channel.into_stream();
-                    let c_tx = tx.clone();
-                    let c_rx = rx.clone();
-                    let c_conns = conns.clone();
+            let stream = channel.into_stream();
+            let c_tx = tx.clone();
+            let c_rx = rx.clone();
+            let c_conns = conns.clone();
 
-                    c_conns.fetch_add(1, Ordering::Relaxed);
-                    tokio::spawn(async move {
-                        let (mut tcp_r, mut tcp_w) = tokio::io::split(tcp_stream);
-                        let (mut ssh_r, mut ssh_w) = tokio::io::split(stream);
-                        let _ = tokio::join!(
-                            counted_copy(&mut tcp_r, &mut ssh_w, &c_tx),
-                            counted_copy(&mut ssh_r, &mut tcp_w, &c_rx),
-                        );
-                        c_conns.fetch_sub(1, Ordering::Relaxed);
-                    });
-                }
-            }
+            c_conns.fetch_add(1, Ordering::Relaxed);
+            tokio::spawn(async move {
+                let (mut tcp_r, mut tcp_w) = tokio::io::split(tcp_stream);
+                let (mut ssh_r, mut ssh_w) = tokio::io::split(stream);
+                let _ = tokio::join!(
+                    counted_copy(&mut tcp_r, &mut ssh_w, &c_tx),
+                    counted_copy(&mut ssh_r, &mut tcp_w, &c_rx),
+                );
+                c_conns.fetch_sub(1, Ordering::Relaxed);
+            });
         }
         // Tell the server we're done so it can free the session immediately
         // instead of waiting on TCP keepalive. Errors are deliberately
@@ -206,9 +227,11 @@ pub async fn start_remote(
         *guard = Some(ch_tx);
     }
 
-    // Ask server to listen on remote_port
+    // Ask the server to listen on remote_port. Empty bind address = all
+    // address families (RFC 4254 §7.1), so the forward is reachable over both
+    // IPv4 and IPv6 (subject to the server's GatewayPorts policy).
     let _bound_port = handle
-        .tcpip_forward("0.0.0.0", forward.remote_port as u32)
+        .tcpip_forward("", forward.remote_port as u32)
         .await
         .map_err(|e| AppError::ssh("ssh_tcpip_forward_failed", json!({ "err": e.to_string() })))?;
 
@@ -241,7 +264,7 @@ pub async fn start_remote(
 
                     c_conns.fetch_add(1, Ordering::Relaxed);
                     tokio::spawn(async move {
-                        let local = match TcpStream::connect(format!("{}:{}", lh, local_port)).await {
+                        let local = match TcpStream::connect((lh.as_str(), local_port)).await {
                             Ok(s) => s,
                             Err(_) => {
                                 c_conns.fetch_sub(1, Ordering::Relaxed);
@@ -396,9 +419,7 @@ pub async fn start_dynamic(
 
     let local_port = forward.local_port;
 
-    let listener = TcpListener::bind(format!("127.0.0.1:{local_port}"))
-        .await
-        .map_err(|e| AppError::ssh("ssh_port_bind_failed", json!({ "port": local_port, "err": e.to_string() })))?;
+    let (listener, listener6) = bind_loopback(local_port).await?;
 
     let bytes_tx = Arc::new(AtomicU64::new(0));
     let bytes_rx = Arc::new(AtomicU64::new(0));
@@ -412,49 +433,46 @@ pub async fn start_dynamic(
 
     let task = tokio::spawn(async move {
         loop {
-            tokio::select! {
+            // Accept from either loopback family; handling is identical.
+            let mut tcp_stream = tokio::select! {
                 _ = disconnect_task.notified() => break,
-                res = listener.accept() => {
-                    let (mut tcp_stream, _) = match res {
-                        Ok(s) => s,
-                        Err(_) => break,
-                    };
+                res = listener.accept() => match res { Ok((s, _)) => s, Err(_) => break },
+                res = accept_opt(&listener6) => match res { Ok((s, _)) => s, Err(_) => break },
+            };
 
-                    let (target_host, target_port) = match socks5_handshake(&mut tcp_stream).await {
-                        Ok(t) => t,
-                        Err(_) => continue,
-                    };
+            let (target_host, target_port) = match socks5_handshake(&mut tcp_stream).await {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
 
-                    let channel = match handle
-                        .channel_open_direct_tcpip(
-                            &target_host,
-                            target_port as u32,
-                            "127.0.0.1",
-                            local_port as u32,
-                        )
-                        .await
-                    {
-                        Ok(c) => c,
-                        Err(_) => continue,
-                    };
+            let channel = match handle
+                .channel_open_direct_tcpip(
+                    &target_host,
+                    target_port as u32,
+                    "127.0.0.1",
+                    local_port as u32,
+                )
+                .await
+            {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
 
-                    let ssh_stream = channel.into_stream();
-                    let tx = c_tx.clone();
-                    let rx = c_rx.clone();
-                    let conns = c_conns.clone();
+            let ssh_stream = channel.into_stream();
+            let tx = c_tx.clone();
+            let rx = c_rx.clone();
+            let conns = c_conns.clone();
 
-                    conns.fetch_add(1, Ordering::Relaxed);
-                    tokio::spawn(async move {
-                        let (mut tcp_r, mut tcp_w) = tokio::io::split(tcp_stream);
-                        let (mut ssh_r, mut ssh_w) = tokio::io::split(ssh_stream);
-                        let _ = tokio::join!(
-                            counted_copy(&mut tcp_r, &mut ssh_w, &tx),
-                            counted_copy(&mut ssh_r, &mut tcp_w, &rx),
-                        );
-                        conns.fetch_sub(1, Ordering::Relaxed);
-                    });
-                }
-            }
+            conns.fetch_add(1, Ordering::Relaxed);
+            tokio::spawn(async move {
+                let (mut tcp_r, mut tcp_w) = tokio::io::split(tcp_stream);
+                let (mut ssh_r, mut ssh_w) = tokio::io::split(ssh_stream);
+                let _ = tokio::join!(
+                    counted_copy(&mut tcp_r, &mut ssh_w, &tx),
+                    counted_copy(&mut ssh_r, &mut tcp_w, &rx),
+                );
+                conns.fetch_sub(1, Ordering::Relaxed);
+            });
         }
         let _ = handle
             .disconnect(Disconnect::ByApplication, "rssh forward stopped", "")
