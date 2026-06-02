@@ -1,4 +1,4 @@
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::error::{locked, AppError, AppResult};
 use crate::state::AppState;
@@ -13,7 +13,17 @@ pub fn pty_spawn(
     rows: u16,
 ) -> AppResult<String> {
     let shell = crate::db::settings::get(&state.db, "local_shell")?.filter(|s| !s.is_empty());
-    let (id, handle) = pty::spawn(cols, rows, app, shell)?;
+    // Turn transport-agnostic PTY output into Tauri events. The headless ws
+    // server builds a different sink over the same `pty::spawn`.
+    let sink: pty::PtySink = std::sync::Arc::new(move |id: &str, out: pty::PtyOut| match out {
+        pty::PtyOut::Data(b) => {
+            let _ = app.emit(&format!("pty:data:{id}"), b);
+        }
+        pty::PtyOut::Close => {
+            let _ = app.emit(&format!("pty:close:{id}"), ());
+        }
+    });
+    let (id, handle) = pty::spawn(cols, rows, sink, shell)?;
     locked(&state.pty_sessions)?.insert(id.clone(), handle);
     crate::commands::lifecycle::register_window_session(&state, window.label(), &id);
     Ok(id)

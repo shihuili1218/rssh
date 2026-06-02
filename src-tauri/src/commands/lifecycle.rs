@@ -13,6 +13,14 @@ use crate::state::AppState;
 /// UUID 不会撞）。返回被清理的总数。
 #[tauri::command]
 pub fn reconcile_sessions(state: State<'_, AppState>, active_ids: Vec<String>) -> AppResult<usize> {
+    reconcile_sessions_impl(&state, active_ids)
+}
+
+/// Transport-agnostic body shared by the Tauri command and the headless server.
+/// Headless needs this too: the server process outlives a browser/JCEF reload, so
+/// the reloaded page's mount calls this to reap orphan sessions from before the
+/// reload (events from those would otherwise fire into a dead socket).
+pub fn reconcile_sessions_impl(state: &AppState, active_ids: Vec<String>) -> AppResult<usize> {
     let alive: HashSet<String> = active_ids.into_iter().collect();
     let mut closed = 0;
 
@@ -75,6 +83,20 @@ pub fn reconcile_sessions(state: State<'_, AppState>, active_ids: Vec<String>) -
         let before = pty.len();
         pty.retain(|k, _| alive.contains(k));
         closed += before - pty.len();
+    }
+
+    // AI 排障会话：key 也是 tab_id（与其他 session 同处 alive 集合）。不在 alive 里的
+    // 先发 Stop 让 actor 退出（同 ai_session_stop），再移除——否则重载后 actor 带着
+    // 死事件 sink 残留到进程退出。
+    {
+        let mut ai = locked(&state.ai_sessions)?;
+        let stale: Vec<String> = ai.keys().filter(|k| !alive.contains(*k)).cloned().collect();
+        for k in stale {
+            if let Some(s) = ai.remove(&k) {
+                let _ = s.action_tx.send(crate::ai::session::UserAction::Stop);
+                closed += 1;
+            }
+        }
     }
 
     Ok(closed)

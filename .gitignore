@@ -20,3 +20,7 @@
 *.swo
 
 .claude/
+idea-plugin/build/
+idea-plugin/.gradle/
+idea-plugin/.intellijPlatform
+idea-plugin/.kotlin

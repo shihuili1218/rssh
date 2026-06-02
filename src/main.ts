@@ -1,3 +1,6 @@
+// MUST be first — installs the IPC shim before any store/component module
+// evaluates and touches invoke/listen (no-op inside the real Tauri webview).
+import "./lib/ipc-boot.ts";
 import App from "./App.svelte";
 import { mount } from "svelte";
 import * as theme from "./lib/themes/store.svelte.ts";

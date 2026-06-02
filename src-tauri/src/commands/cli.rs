@@ -102,6 +102,19 @@ pub fn cli_status(app: AppHandle) -> CliStatus {
     }
 }
 
+/// Headless CLI status: PATH-based install check only. The bundled-resource
+/// probe needs a Tauri `AppHandle`, which the headless server doesn't have;
+/// the embedded server prepends its own dir to the shell PATH instead, so it
+/// reports `bundled: false` and leaves install to the host (IDEA plugin / app).
+pub fn cli_status_headless() -> CliStatus {
+    let installed = find_installed();
+    CliStatus {
+        installed: installed.is_some(),
+        path: installed.map(|p| p.display().to_string()).unwrap_or_default(),
+        bundled: false,
+    }
+}
+
 #[tauri::command]
 pub fn cli_install(app: AppHandle) -> AppResult<String> {
     let src = find_bundled(&app)

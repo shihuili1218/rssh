@@ -11,15 +11,13 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use serde_json::json;
-use tauri::Emitter;
 use tokio::sync::oneshot;
 
 use crate::error::{locked, AppError, AppResult};
-use crate::state::AppState;
 
 #[derive(Clone)]
 pub struct AuthCtx {
-    pub app: tauri::AppHandle,
+    pub app: crate::emitter::Host,
     pub tab_id: String,
 }
 
@@ -44,7 +42,7 @@ impl Drop for WaiterGuard<'_> {
 /// passphrase / host_key 等 xterm 内交互都走这条路；差异只在 waiters / 事件名 / payload。
 pub(crate) async fn prompt_oneshot(
     waiters: &Mutex<HashMap<String, oneshot::Sender<String>>>,
-    app: &tauri::AppHandle,
+    app: &crate::emitter::Host,
     tab_id: &str,
     event_prefix: &str,
     payload: serde_json::Value,
@@ -73,8 +71,7 @@ pub(crate) async fn prompt_oneshot(
 
 /// 向终端弹一次 passphrase 提示，等用户输完回车。
 pub(crate) async fn prompt_passphrase(ctx: &AuthCtx, prompt: &str) -> AppResult<String> {
-    use tauri::Manager;
-    let state = ctx.app.state::<AppState>();
+    let state = ctx.app.state();
     prompt_oneshot(
         &state.passphrase_waiters,
         &ctx.app,
@@ -89,8 +86,7 @@ pub(crate) async fn prompt_passphrase(ctx: &AuthCtx, prompt: &str) -> AppResult<
 /// 向终端弹一次主机密钥 TOFU 确认，等用户输入 yes / no / 指纹。
 /// 调用方负责按返回字符串决定是否信任。
 pub(crate) async fn prompt_host_key(ctx: &AuthCtx, banner: &str) -> AppResult<String> {
-    use tauri::Manager;
-    let state = ctx.app.state::<AppState>();
+    let state = ctx.app.state();
     prompt_oneshot(
         &state.host_key_waiters,
         &ctx.app,

@@ -111,6 +111,60 @@ npx tauri android build --apk
 
 The release APK requires a signing keystore. See `src-tauri/gen/android/key.properties`.
 
+## Running outside Tauri (headless server + IDEA plugin)
+
+The frontend can run **outside** the Tauri desktop shell — in a plain browser, or
+inside IntelliJ's embedded Chromium (JCEF). This is **additive**; the desktop app
+is unchanged.
+
+**It is not an "IPC → WebSocket" rewrite.** The frontend always talks to the
+backend through one seam: Tauri's injected `window.__TAURI_INTERNALS__`
+(`invoke` / `listen`). There are two implementations of that one contract:
+
+- **Desktop (unchanged):** Tauri injects the global; IPC is in-process via the WebView.
+- **Outside Tauri:** `src/lib/ipc-shim.ts` detects the global is absent and installs a
+  compatible one that routes `invoke`/`listen` over a localhost **WebSocket** to
+  `rssh-server`. Inside the real app the shim is a no-op.
+
+So the 90+ `invoke` / 25+ `listen` call sites are untouched and the desktop
+transport stays byte-identical. On the Rust side the *same engine* is reused via a
+`Host` enum (`src-tauri/src/emitter.rs`): Tauri commands pass `Host::Tauri`
+(→ `app.emit` / `app.state`), the headless server passes `Host::Sink` (→ ws push).
+
+### Pieces
+
+```
+src-tauri/src/server.rs        # headless adapter: HTTP (embedded UI) + ws (IPC) on one port
+src-tauri/src/emitter.rs       # Host enum (Tauri | headless sink)
+src-tauri/src/bin/rssh-server/ # the `rssh-server` binary (--features server)
+src/lib/ipc-shim.ts            # Tauri-IPC shim over ws (no-op inside Tauri)
+idea-plugin/                   # IntelliJ plugin (JCEF tool window)
+```
+
+`rssh-server` is self-contained: `npm run build`'s output is embedded into the binary
+(`include_dir!`), and a single loopback port serves both the UI (HTTP) and the IPC
+(WebSocket, guarded by a per-launch token).
+
+### Run in a browser
+
+```bash
+npm run build
+node scripts/dev-browser.mjs   # builds + runs rssh-server, prints a localhost URL to open
+```
+
+### IDEA plugin
+
+```bash
+npm run build
+cargo build --release --manifest-path src-tauri/Cargo.toml --features server --bin rssh-server
+export RSSH_SERVER_BIN="$PWD/src-tauri/target/release/rssh-server"
+# open idea-plugin/ in IDEA → run the `runIde` Gradle task → open the "RSSH" tool window
+```
+
+Package: `cd idea-plugin && ./gradlew buildPlugin` → a zip under `build/distributions/`.
+Ship it on a GitHub release; install via Settings → Plugins → ⚙ → Install Plugin from
+Disk. Details in `idea-plugin/README.md`.
+
 ## Project Structure
 
 ```

@@ -2,9 +2,20 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
-use tauri::Emitter;
 
 use crate::error::{locked, AppError, AppResult};
+
+/// PTY output destined for the host. The Tauri command turns these into
+/// `app.emit("pty:data:<id>")` / `pty:close:<id>`; the headless ws server
+/// pushes them to its socket. `spawn` itself stays transport-agnostic.
+pub enum PtyOut {
+    Data(Vec<u8>),
+    Close,
+}
+
+/// Sink the reader thread invokes for each chunk. The `&str` is the session
+/// id, so one sink can serve any number of PTY sessions.
+pub type PtySink = Arc<dyn Fn(&str, PtyOut) + Send + Sync>;
 
 /// 子进程持有者：保证 PtyHandle 最后一份 clone 被 drop 时（tab 关闭 / session 结束），
 /// 显式 kill + wait 子 shell。否则 Box<dyn Child> 在 spawn() 返回后立刻 drop，
@@ -306,7 +317,7 @@ fn default_shell() -> String {
 pub fn spawn(
     cols: u16,
     rows: u16,
-    app: tauri::AppHandle,
+    sink: PtySink,
     shell_override: Option<String>,
 ) -> AppResult<(String, PtyHandle)> {
     let pty_system = native_pty_system();
@@ -363,12 +374,10 @@ pub fn spawn(
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    let _ = app.emit(&format!("pty:data:{pty_id}"), buf[..n].to_vec());
-                }
+                Ok(n) => sink(&pty_id, PtyOut::Data(buf[..n].to_vec())),
             }
         }
-        let _ = app.emit(&format!("pty:close:{pty_id}"), ());
+        sink(&pty_id, PtyOut::Close);
     });
 
     Ok((id, handle))

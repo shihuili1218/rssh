@@ -353,7 +353,7 @@ impl SftpHandle {
         &self,
         remote_path: &str,
         local_path: &Path,
-        app: &tauri::AppHandle,
+        host: &crate::emitter::Host,
         transfer_id: &str,
         cancel: Arc<AtomicBool>,
     ) -> AppResult<u64> {
@@ -391,7 +391,7 @@ impl SftpHandle {
         let tmp_path = local_path.with_file_name(format!("{file_name}.part"));
 
         let result = self
-            .stream_to_part(&mut remote_file, &tmp_path, total, app, transfer_id, cancel)
+            .stream_to_part(&mut remote_file, &tmp_path, total, host, transfer_id, cancel)
             .await;
         match result {
             Ok(transferred) => {
@@ -421,12 +421,10 @@ impl SftpHandle {
         remote_file: &mut russh_sftp::client::fs::File,
         tmp_path: &Path,
         total: u64,
-        app: &tauri::AppHandle,
+        host: &crate::emitter::Host,
         transfer_id: &str,
         cancel: Arc<AtomicBool>,
     ) -> AppResult<u64> {
-        use tauri::Emitter;
-
         let mut local_file = tokio::fs::File::create(tmp_path).await?;
         let mut transferred: u64 = 0;
         let mut buf = vec![0u8; 32768];
@@ -447,7 +445,7 @@ impl SftpHandle {
             }
             local_file.write_all(&buf[..n]).await?;
             transferred += n as u64;
-            let _ = app.emit(
+            let _ = host.emit(
                 &event,
                 serde_json::json!({ "transferred": transferred, "total": total }),
             );
@@ -505,12 +503,10 @@ impl SftpHandle {
         &self,
         local_path: &Path,
         remote_path: &str,
-        app: &tauri::AppHandle,
+        host: &crate::emitter::Host,
         transfer_id: &str,
         cancel: Arc<AtomicBool>,
     ) -> AppResult<u64> {
-        use tauri::Emitter;
-
         let local_meta = tokio::fs::metadata(local_path).await?;
         let total = local_meta.len();
 
@@ -551,7 +547,7 @@ impl SftpHandle {
                 .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "write", "err": e.to_string() })))?;
             transferred += n as u64;
 
-            let _ = app.emit(
+            let _ = host.emit(
                 &event,
                 serde_json::json!({ "transferred": transferred, "total": total }),
             );

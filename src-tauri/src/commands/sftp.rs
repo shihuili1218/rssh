@@ -16,14 +16,16 @@ const LOCAL_WALK_DEPTH_CAP: u32 = 32;
 
 /// RAII：注册 cancel flag 并在 drop 时自动 unregister，无论 streaming 正常返回、
 /// 早 `?`、还是 panic。替代旧的手写 register/unregister 配对。
-struct CancelGuard<'a> {
+pub struct CancelGuard<'a> {
     state: &'a AppState,
     transfer_id: String,
 }
 
 impl<'a> CancelGuard<'a> {
     /// 注册 flag。返回 (guard, flag)：guard 控生命周期，flag 喂给 streaming 函数。
-    fn register(state: &'a AppState, transfer_id: String) -> AppResult<(Self, Arc<AtomicBool>)> {
+    /// `pub` 让 headless server 复用同一套 RAII 清理（drop 时 unregister，覆盖
+    /// 正常返回 / 早 `?` / panic 三种路径），避免手写 register/remove 漏删。
+    pub fn register(state: &'a AppState, transfer_id: String) -> AppResult<(Self, Arc<AtomicBool>)> {
         let flag = Arc::new(AtomicBool::new(false));
         locked(&state.transfer_cancels)?.insert(transfer_id.clone(), flag.clone());
         Ok((Self { state, transfer_id }, flag))
@@ -262,7 +264,8 @@ pub async fn sftp_save_file(
     let sftp = get_sftp(&state, &sftp_id)?;
     let transfer_id = uuid::Uuid::new_v4().to_string();
     let (_guard, cancel) = CancelGuard::register(&state, transfer_id.clone())?;
-    sftp.download_streaming(&remote_path, &local, &app, &transfer_id, cancel)
+    let host = crate::emitter::Host::Tauri(app);
+    sftp.download_streaming(&remote_path, &local, &host, &transfer_id, cancel)
         .await?;
     Ok(Some(local.display().to_string()))
 }
@@ -294,7 +297,8 @@ pub async fn sftp_pick_and_upload(
     let sftp = get_sftp(&state, &sftp_id)?;
     let transfer_id = uuid::Uuid::new_v4().to_string();
     let (_guard, cancel) = CancelGuard::register(&state, transfer_id.clone())?;
-    sftp.upload_streaming(&local, &remote_path, &app, &transfer_id, cancel)
+    let host = crate::emitter::Host::Tauri(app);
+    sftp.upload_streaming(&local, &remote_path, &host, &transfer_id, cancel)
         .await?;
     Ok(Some(name))
 }
@@ -353,7 +357,8 @@ pub async fn sftp_download_to(
     let sftp = get_sftp(&state, &sftp_id)?;
     let local = std::path::PathBuf::from(&local_path);
     let (_guard, cancel) = CancelGuard::register(&state, transfer_id.clone())?;
-    sftp.download_streaming(&remote_path, &local, &app, &transfer_id, cancel)
+    let host = crate::emitter::Host::Tauri(app);
+    sftp.download_streaming(&remote_path, &local, &host, &transfer_id, cancel)
         .await
         .map(|_| ())
 }
@@ -372,7 +377,8 @@ pub async fn sftp_upload_from(
     let sftp = get_sftp(&state, &sftp_id)?;
     let local = std::path::PathBuf::from(&local_path);
     let (_guard, cancel) = CancelGuard::register(&state, transfer_id.clone())?;
-    sftp.upload_streaming(&local, &remote_path, &app, &transfer_id, cancel)
+    let host = crate::emitter::Host::Tauri(app);
+    sftp.upload_streaming(&local, &remote_path, &host, &transfer_id, cancel)
         .await
         .map(|_| ())
 }

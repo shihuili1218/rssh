@@ -41,6 +41,11 @@ rsa = { version = "=0.10.0-rc.16", default-features = false }
 tokio = { version = "1", features = ["sync", "macros", "net", "io-util", "rt", "process", "time"] }
 async-trait = "0.1"
 
+# headless ws server (optional; enabled by `--features server`)
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["handshake"], optional = true }
+# embeds the built frontend (../dist) into the server binary so it's self-contained
+include_dir = { version = "0.7", optional = true }
+
 # SFTP
 russh-sftp = "2"
 
@@ -82,6 +87,7 @@ keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 [features]
 default = []
 cli = ["clap", "rpassword", "tempfile"]
+server = ["dep:tokio-tungstenite", "dep:include_dir"]
 custom-protocol = ["tauri/custom-protocol"]
 
 # 测试专用依赖：让 `cargo test`（默认 feature 集）可以无条件用 tempfile，
@@ -97,3 +103,8 @@ path = "src/main.rs"
 name = "rssh-cli"
 path = "src/bin/rssh/main.rs"
 required-features = ["cli"]
+
+[[bin]]
+name = "rssh-server"
+path = "src/bin/rssh-server/main.rs"
+required-features = ["server"]

@@ -15,11 +15,9 @@ use russh::client;
 use russh::keys::agent::AgentIdentity;
 use russh::keys::{Algorithm, HashAlg, PrivateKey, PrivateKeyWithHashAlg};
 use serde_json::json;
-use tauri::{Emitter, Manager};
 
 use crate::error::{locked, AppError, AppResult};
 use crate::models::{Credential, CredentialType};
-use crate::state::AppState;
 
 use super::client::SshHandler;
 use super::prompt::{prompt_passphrase, AuthCtx};
@@ -57,7 +55,7 @@ pub(crate) async fn decode_key_with_prompt(
     // 命中缓存 → 直接重试；不命中或失败再走交互
     if let (Some(key), Some(ctx)) = (cache_key, ctx) {
         let cached: Option<zeroize::Zeroizing<String>> = {
-            let state = ctx.app.state::<AppState>();
+            let state = ctx.app.state();
             locked(&state.passphrase_cache)
                 .ok()
                 .and_then(|m| m.get(key).cloned())
@@ -67,7 +65,7 @@ pub(crate) async fn decode_key_with_prompt(
                 Ok(k) => return Ok(k),
                 Err(KeyIsEncrypted) => {
                     // 缓存的 passphrase 不再匹配（用户改了密码）— 清掉再走交互
-                    let state = ctx.app.state::<AppState>();
+                    let state = ctx.app.state();
                     if let Ok(mut m) = locked(&state.passphrase_cache) {
                         m.remove(key);
                     };
@@ -86,7 +84,7 @@ pub(crate) async fn decode_key_with_prompt(
         match russh::keys::decode_secret_key(pem, Some(&pw)) {
             Ok(k) => {
                 if let Some(key) = cache_key {
-                    let state = ctx.app.state::<AppState>();
+                    let state = ctx.app.state();
                     if let Ok(mut m) = locked(&state.passphrase_cache) {
                         m.insert(key.to_string(), zeroize::Zeroizing::new(pw));
                     };
@@ -440,7 +438,7 @@ fn default_identity_paths() -> Vec<PathBuf> {
 pub async fn authenticate_interactive(
     handle: &mut client::Handle<SshHandler>,
     username: String,
-    app: tauri::AppHandle,
+    app: crate::emitter::Host,
     tab_id: String,
 ) -> AppResult<()> {
     use russh::client::KeyboardInteractiveAuthResponse;
@@ -469,7 +467,7 @@ pub async fn authenticate_interactive(
                     .collect();
 
                 // state 拿出来一次，让 &state.auth_waiters 的借用横跨 insert + guard。
-                let state = app.state::<AppState>();
+                let state = app.state();
                 // 必须先注册 sender 再 emit。否则前端响应快到能在 insert 之前
                 // 调 ssh_auth_respond，找不到 waiter → 响应被丢，rx 永远 hang。
                 locked(&state.auth_waiters)?.insert(tab_id.clone(), tx);

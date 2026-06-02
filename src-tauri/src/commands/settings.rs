@@ -113,7 +113,12 @@ pub async fn list_fonts() -> Vec<FontInfo> {
 
 #[tauri::command]
 pub fn list_recordings(state: State<AppState>) -> AppResult<Vec<String>> {
-    let dir = recording_dir(&state)?;
+    list_recordings_impl(&state)
+}
+
+/// Transport-agnostic body shared by the Tauri command and the headless server.
+pub fn list_recordings_impl(state: &AppState) -> AppResult<Vec<String>> {
+    let dir = recording_dir(state)?;
     if !dir.exists() {
         return Ok(vec![]);
     }
@@ -128,11 +133,16 @@ pub fn list_recordings(state: State<AppState>) -> AppResult<Vec<String>> {
 
 #[tauri::command]
 pub fn read_recording(state: State<AppState>, name: String) -> AppResult<String> {
-    let path = recording_dir(&state)?.join(&name);
+    read_recording_impl(&state, name)
+}
+
+/// Transport-agnostic body shared by the Tauri command and the headless server.
+pub fn read_recording_impl(state: &AppState, name: String) -> AppResult<String> {
+    let path = recording_dir(state)?.join(&name);
     std::fs::read_to_string(&path).map_err(|e| AppError::other("settings_read_failed", serde_json::json!({ "err": e.to_string() })))
 }
 
-fn recording_dir(state: &State<AppState>) -> AppResult<std::path::PathBuf> {
+fn recording_dir(state: &AppState) -> AppResult<std::path::PathBuf> {
     let dir_str = crate::db::settings::get(&state.db, "recording_dir")?
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| {

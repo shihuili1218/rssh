@@ -12,7 +12,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
-use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, Notify};
 
 use crate::error::{AppError, AppResult};
@@ -192,7 +191,7 @@ impl PendingSession {
 ///     g.insert(tab_id, pending.launch());
 /// }
 /// ```
-pub fn start(cfg: SessionConfig, app: AppHandle) -> AppResult<PendingSession> {
+pub fn start(cfg: SessionConfig, app: crate::emitter::Host) -> AppResult<PendingSession> {
     // system_prompt 是静态文本（rules + user-skill catalog + locale + 平台），
     // 整段不含运行期数据 —— 启动期一次性脱敏并缓存，避免每个 dialogue turn
     // 重跑一遍 regex。redact_rules 在会话生命周期内不变，所以安全。
@@ -243,7 +242,7 @@ pub(in crate::ai::session) struct Actor {
     pub(in crate::ai::session) history: Vec<ChatMessage>,
     action_rx: mpsc::UnboundedReceiver<UserAction>,
     audit: Arc<Mutex<AuditLog>>,
-    app: AppHandle,
+    app: crate::emitter::Host,
     cancel_slot: Arc<Mutex<Option<Arc<Notify>>>>,
     /// 远端 file_ops 能力 — lazy 探测，session 内缓存。
     /// None = 还没探测；Some = 已探测，结果有效到 session 结束。
@@ -982,13 +981,7 @@ impl Actor {
 
         #[cfg(desktop)]
         {
-            use tauri::{WebviewUrl, WebviewWindowBuilder};
-            if let Err(e) = WebviewWindowBuilder::new(&self.app, &label, WebviewUrl::App("index.html".into()))
-                .title("RSSH — Local Analysis")
-                .inner_size(1200.0, 800.0)
-                .initialization_script(&init_script)
-                .build()
-            {
+            if let Err(e) = self.app.open_app_window(&label, "RSSH — Local Analysis", &init_script) {
                 emit_done(self, 1, format!("打开分析窗口失败：{e}"));
                 return Ok(self.make_tool_error(
                     &tc.id,

@@ -20,7 +20,7 @@ use std::sync::Arc;
 /// but each call is a fast SELECT (<1 ms) and the total per-connect run is
 /// ~10 ms — well below the threshold where wrapping pays for the closure
 /// boilerplate. Leave them alone; this helper is targeted at sync's heavy paths.
-async fn run_db_blocking<F, T>(state: &State<'_, AppState>, f: F) -> AppResult<T>
+async fn run_db_blocking<F, T>(state: &AppState, f: F) -> AppResult<T>
 where
     F: FnOnce(Arc<Db>, Arc<dyn SecretStore>) -> AppResult<T> + Send + 'static,
     T: Send + 'static,
@@ -69,7 +69,12 @@ fn build_export_json_blocking(db: &Db, ss: &dyn SecretStore) -> AppResult<String
 
 #[tauri::command]
 pub fn export_config(state: State<'_, AppState>) -> AppResult<String> {
-    // Sync command — Tauri runs this on the blocking pool already.
+    export_config_impl(&state)
+}
+
+/// Transport-agnostic body shared by the Tauri command and the headless server.
+/// Sync — the caller runs it on a blocking-safe context.
+pub fn export_config_impl(state: &AppState) -> AppResult<String> {
     build_export_json_blocking(&state.db, state.secret_store.as_ref())
 }
 
@@ -81,6 +86,11 @@ pub fn export_config(state: State<'_, AppState>) -> AppResult<String> {
 /// transaction inside `merge_import` doesn't stall the async runtime.
 #[tauri::command]
 pub fn import_config(state: State<'_, AppState>, json: String) -> AppResult<()> {
+    import_config_impl(&state, json)
+}
+
+/// Transport-agnostic body shared by the Tauri command and the headless server.
+pub fn import_config_impl(state: &AppState, json: String) -> AppResult<()> {
     let data: serde_json::Value = serde_json::from_str(&json)
         .map_err(|e| AppError::config("json_parse_failed", json!({ "err": e.to_string() })))?;
     crate::sync::config::merge_import(&state.db, state.secret_store.as_ref(), &data)
@@ -155,12 +165,17 @@ pub async fn import_config_from_file(
 
 #[tauri::command]
 pub async fn github_push(state: State<'_, AppState>, password: String) -> AppResult<()> {
+    github_push_impl(&state, password).await
+}
+
+/// Transport-agnostic body shared by the Tauri command and the headless server.
+pub async fn github_push_impl(state: &AppState, password: String) -> AppResult<()> {
     use crate::sync::github::GitHubSync;
 
     // Build the full JSON payload off the async runtime — list_*, secret-store
     // lookups, and serde all run in the blocking pool. See `run_db_blocking`
     // doc for why this matters for sync but not for ssh_connect.
-    let (token, repo, branch, json) = run_db_blocking(&state, move |db, ss| {
+    let (token, repo, branch, json) = run_db_blocking(state, move |db, ss| {
         let token = ss
             .get(&setting_key("github_token"))?
             .ok_or_else(|| AppError::config("github_token_missing", json!({})))?;
@@ -204,13 +219,18 @@ pub async fn github_push(state: State<'_, AppState>, password: String) -> AppRes
 
 #[tauri::command]
 pub async fn github_pull(state: State<'_, AppState>, password: String) -> AppResult<()> {
+    github_pull_impl(&state, password).await
+}
+
+/// Transport-agnostic body shared by the Tauri command and the headless server.
+pub async fn github_pull_impl(state: &AppState, password: String) -> AppResult<()> {
     use crate::sync::github::GitHubSync;
 
     // Settings reads are cheap; group them with the network-prep step.
     // The decrypt + replace_import block — `replace_import` runs a
     // BEGIN IMMEDIATE transaction touching every config table — is the
     // expensive part and goes to spawn_blocking below.
-    let (token, repo, branch) = run_db_blocking(&state, |db, ss| {
+    let (token, repo, branch) = run_db_blocking(state, |db, ss| {
         let token = ss
             .get(&setting_key("github_token"))?
             .ok_or_else(|| AppError::config("github_token_missing", json!({})))?;
@@ -227,7 +247,7 @@ pub async fn github_pull(state: State<'_, AppState>, password: String) -> AppRes
 
     // decrypt + JSON parse + full-replace transaction: all blocking work.
     let password = password;
-    run_db_blocking(&state, move |db, ss| {
+    run_db_blocking(state, move |db, ss| {
         let json = crate::crypto::decrypt(&encrypted, &password)?;
         let data: serde_json::Value = serde_json::from_str(&json)
             .map_err(|e| AppError::config("json_parse_failed", json!({ "err": e.to_string() })))?;

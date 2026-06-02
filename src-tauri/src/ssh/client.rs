@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use russh::client;
 use russh::ChannelMsg;
 use serde_json::json;
-use tauri::Emitter;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 
@@ -758,7 +757,7 @@ pub async fn connect(
     bastion_chain: Vec<(Profile, Credential)>,
     cols: u32,
     rows: u32,
-    app: tauri::AppHandle,
+    app: crate::emitter::Host,
     recording_path: Option<std::path::PathBuf>,
     log_session_id: Option<String>,
     known_hosts_path: PathBuf,
@@ -870,7 +869,7 @@ async fn session_task(
     close_event: String,
     mut channel: russh::Channel<client::Msg>,
     mut rx: mpsc::UnboundedReceiver<SessionCmd>,
-    app: tauri::AppHandle,
+    app: crate::emitter::Host,
     mut recorder: Option<Recorder>,
 ) {
     loop {

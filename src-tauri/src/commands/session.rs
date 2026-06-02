@@ -90,7 +90,7 @@ pub async fn ssh_connect(
             chain,
             cols,
             rows,
-            app,
+            crate::emitter::Host::Tauri(app),
             recording_path,
             effective_log_id,
             known_hosts_path,

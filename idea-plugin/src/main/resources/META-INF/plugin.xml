@@ -1,0 +1,21 @@
+<idea-plugin>
+    <id>sh.rssh.idea</id>
+    <name>RSSH</name>
+    <vendor url="https://github.com/rssh">rssh</vendor>
+    <description><![CDATA[
+        Run the full RSSH terminal — signature color bars, AI diagnose panel, and
+        SFTP browser — inside an IntelliJ tool window. The plugin spawns a bundled
+        headless rssh-server and renders the same web UI in JCEF, sharing your
+        existing rssh hosts, keys and settings (same data directory).
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow
+            id="RSSH"
+            anchor="bottom"
+            icon="AllIcons.Nodes.Console"
+            factoryClass="sh.rssh.idea.RsshToolWindowFactory"/>
+    </extensions>
+</idea-plugin>

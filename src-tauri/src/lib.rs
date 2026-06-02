@@ -3,6 +3,7 @@ mod commands;
 pub mod crypto;
 pub mod db;
 pub mod error;
+pub mod emitter;
 pub mod migration;
 pub mod models;
 pub mod secret;
@@ -11,6 +12,8 @@ pub use ssh::bastion;
 mod state;
 pub mod sync;
 mod terminal;
+#[cfg(all(feature = "server", not(target_os = "android")))]
+pub mod server;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

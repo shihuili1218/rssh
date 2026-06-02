@@ -37,6 +37,12 @@ pub fn delete_forward(state: State<AppState>, id: String) -> Result<(), AppError
 
 #[tauri::command]
 pub async fn forward_start(state: State<'_, AppState>, forward_id: String) -> AppResult<String> {
+    forward_start_impl(&state, forward_id).await
+}
+
+/// Transport-agnostic body shared by the Tauri command and the headless server.
+/// Forwarding emits no events, so it needs no `Host` — only `AppState`.
+pub async fn forward_start_impl(state: &AppState, forward_id: String) -> AppResult<String> {
     let f = crate::db::forward::get(&state.db, &forward_id)?;
     let p = crate::db::profile::get(&state.db, &f.profile_id).map_err(|e| match e {
         AppError::NotFound(_) => AppError::not_found("fwd_profile_not_found", json!({})),

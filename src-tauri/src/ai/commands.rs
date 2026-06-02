@@ -138,9 +138,37 @@ fn locale_label(locale: &str) -> &'static str {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn ai_session_start(
     app: AppHandle,
     state: State<'_, AppState>,
+    tab_id: String,
+    target_kind: String,
+    target_id: String,
+    skill: String,
+    provider: String,
+    model: String,
+    locale: Option<String>,
+) -> AppResult<AiSessionInfo> {
+    ai_session_start_impl(
+        &state,
+        crate::emitter::Host::Tauri(app),
+        tab_id,
+        target_kind,
+        target_id,
+        skill,
+        provider,
+        model,
+        locale,
+    )
+    .await
+}
+
+/// Transport-agnostic body shared by the Tauri command and the headless server.
+#[allow(clippy::too_many_arguments)]
+pub async fn ai_session_start_impl(
+    state: &AppState,
+    host: crate::emitter::Host,
     tab_id: String,
     target_kind: String, // "ssh" | "local"
     target_id: String,
@@ -255,7 +283,7 @@ pub async fn ai_session_start(
     // `session::start` 现在返回 `PendingSession`（actor **未 spawn**）—— 在
     // 锁下再查一遍，撞了直接 return Err，PendingSession 就地 drop，actor
     // 从未运行过、不会 emit `ai:session_ended:<tab_id>` 污染赢家的事件流。
-    let pending = session::start(cfg, app)?;
+    let pending = session::start(cfg, host)?;
     let info = AiSessionInfo::from(pending.info());
     {
         let mut g = locked(&state.ai_sessions)?;
@@ -366,6 +394,11 @@ pub async fn ai_remote_shell_probe_needed(
     state: State<'_, AppState>,
     target_id: String,
 ) -> AppResult<bool> {
+    ai_remote_shell_probe_needed_impl(&state, target_id)
+}
+
+/// Transport-agnostic body shared by the Tauri command and the headless server.
+pub fn ai_remote_shell_probe_needed_impl(state: &AppState, target_id: String) -> AppResult<bool> {
     let auto_detect = crate::db::settings::get(&state.db, &key_auto_detect_remote_shell())?
         .map(|v| v == "1")
         .unwrap_or(false);
@@ -588,7 +621,7 @@ fn auto_default(name: &str) -> bool {
     matches!(name, "run_command" | "match_file")
 }
 
-fn read_auto(state: &State<'_, AppState>, name: &str) -> AppResult<bool> {
+fn read_auto(state: &AppState, name: &str) -> AppResult<bool> {
     Ok(crate::db::settings::get(&state.db, &key_auto(name))?
         .map(|v| v == "1")
         .unwrap_or_else(|| auto_default(name)))
@@ -599,6 +632,14 @@ fn read_auto(state: &State<'_, AppState>, name: &str) -> AppResult<bool> {
 #[tauri::command]
 pub async fn ai_settings_get(
     state: State<'_, AppState>,
+    provider: Option<String>,
+) -> AppResult<AiSettings> {
+    ai_settings_get_impl(&state, provider).await
+}
+
+/// Transport-agnostic body shared by the Tauri command and the headless server.
+pub async fn ai_settings_get_impl(
+    state: &AppState,
     provider: Option<String>,
 ) -> AppResult<AiSettings> {
     let provider = match provider.filter(|s| !s.is_empty()) {
@@ -627,14 +668,14 @@ pub async fn ai_settings_get(
         endpoint,
         has_api_key,
         danger_mode,
-        auto_run_command: read_auto(&state, "run_command")?,
-        auto_match_file: read_auto(&state, "match_file")?,
-        auto_download_file: read_auto(&state, "download_file")?,
-        auto_analyze_locally: read_auto(&state, "analyze_locally")?,
-        auto_patch_cp: read_auto(&state, "patch_cp")?,
-        auto_patch_modify: read_auto(&state, "patch_modify")?,
-        auto_patch_diff: read_auto(&state, "patch_diff")?,
-        auto_patch_mv: read_auto(&state, "patch_mv")?,
+        auto_run_command: read_auto(state, "run_command")?,
+        auto_match_file: read_auto(state, "match_file")?,
+        auto_download_file: read_auto(state, "download_file")?,
+        auto_analyze_locally: read_auto(state, "analyze_locally")?,
+        auto_patch_cp: read_auto(state, "patch_cp")?,
+        auto_patch_modify: read_auto(state, "patch_modify")?,
+        auto_patch_diff: read_auto(state, "patch_diff")?,
+        auto_patch_mv: read_auto(state, "patch_mv")?,
         auto_detect_remote_shell,
     })
 }
@@ -647,6 +688,16 @@ pub async fn ai_settings_get(
 #[tauri::command]
 pub async fn ai_list_models(
     state: State<'_, AppState>,
+    provider: String,
+    api_key: Option<String>,
+    endpoint: Option<String>,
+) -> AppResult<Vec<llm::ModelInfo>> {
+    ai_list_models_impl(&state, provider, api_key, endpoint).await
+}
+
+/// Transport-agnostic body shared by the Tauri command and the headless server.
+pub async fn ai_list_models_impl(
+    state: &AppState,
     provider: String,
     api_key: Option<String>,
     endpoint: Option<String>,
@@ -672,6 +723,45 @@ pub async fn ai_list_models(
 #[tauri::command]
 pub async fn ai_settings_set(
     state: State<'_, AppState>,
+    provider: Option<String>,
+    model: Option<String>,
+    endpoint: Option<String>,
+    api_key: Option<String>,
+    danger_mode: Option<bool>,
+    auto_run_command: Option<bool>,
+    auto_match_file: Option<bool>,
+    auto_download_file: Option<bool>,
+    auto_analyze_locally: Option<bool>,
+    auto_patch_cp: Option<bool>,
+    auto_patch_modify: Option<bool>,
+    auto_patch_diff: Option<bool>,
+    auto_patch_mv: Option<bool>,
+    auto_detect_remote_shell: Option<bool>,
+) -> AppResult<()> {
+    ai_settings_set_impl(
+        &state,
+        provider,
+        model,
+        endpoint,
+        api_key,
+        danger_mode,
+        auto_run_command,
+        auto_match_file,
+        auto_download_file,
+        auto_analyze_locally,
+        auto_patch_cp,
+        auto_patch_modify,
+        auto_patch_diff,
+        auto_patch_mv,
+        auto_detect_remote_shell,
+    )
+    .await
+}
+
+/// Transport-agnostic body shared by the Tauri command and the headless server.
+#[allow(clippy::too_many_arguments)]
+pub async fn ai_settings_set_impl(
+    state: &AppState,
     provider: Option<String>,
     model: Option<String>,
     endpoint: Option<String>,
