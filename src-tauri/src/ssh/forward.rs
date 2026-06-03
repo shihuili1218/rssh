@@ -15,6 +15,19 @@ use crate::models::{Credential, Forward};
 use crate::ssh::client::{self, LogFn};
 use std::sync::Arc as StdArc;
 
+/// Everything needed to open an authenticated SSH connection to a forward's
+/// target host through its bastion chain. `start_local` / `start_remote` /
+/// `start_dynamic` all took these six parameters identically — they are one
+/// concept ("how to reach the endpoint"), so they travel as one value.
+pub struct ConnTarget {
+    pub host: String,
+    pub port: u16,
+    pub credential: Credential,
+    pub bastion_chain: Vec<(Profile, Credential)>,
+    pub known_hosts_path: PathBuf,
+    pub timeout_secs: u64,
+}
+
 pub struct ForwardHandle {
     abort: tokio::task::AbortHandle,
     /// Notify-based disconnect signal. `stop()` fires this; the accept-loop
@@ -107,17 +120,19 @@ async fn counted_copy<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     Ok(())
 }
 
-pub async fn start_local(
-    forward: Forward,
-    host: String,
-    port: u16,
-    credential: Credential,
-    bastion_chain: Vec<(Profile, Credential)>,
-    known_hosts_path: PathBuf,
-    timeout_secs: u64,
-) -> AppResult<ForwardHandle> {
+/// Open an authenticated SSH connection to a forward's endpoint through its
+/// bastion chain. `start_local` / `start_remote` / `start_dynamic` all opened
+/// the connection with this exact prologue; keeping the dial policy
+/// (known_hosts / timeout / log / prompt-ctx) in one place stops the three
+/// from drifting apart. `start_remote` is the only caller that uses the
+/// returned `ForwardedChannelSender`; the others discard it.
+async fn connect_authed(
+    target: ConnTarget,
+) -> AppResult<(russh::client::Handle<client::SshHandler>, client::ForwardedChannelSender)> {
+    let ConnTarget { host, port, credential, bastion_chain, known_hosts_path, timeout_secs } =
+        target;
     let log: LogFn = StdArc::new(|_: String| ());
-    let (mut handle, _fwd) = client::establish_via_chain(
+    let (mut handle, fwd_sender) = client::establish_via_chain(
         bastion_chain,
         host,
         port,
@@ -128,6 +143,11 @@ pub async fn start_local(
     )
     .await?;
     client::authenticate(&mut handle, credential, None).await?;
+    Ok((handle, fwd_sender))
+}
+
+pub async fn start_local(forward: Forward, target: ConnTarget) -> AppResult<ForwardHandle> {
+    let (mut handle, _fwd) = connect_authed(target).await?;
 
     let remote_host = forward.remote_host.clone();
     let remote_port = forward.remote_port;
@@ -201,27 +221,8 @@ pub async fn start_local(
 // Remote port forwarding
 // ---------------------------------------------------------------------------
 
-pub async fn start_remote(
-    forward: Forward,
-    host: String,
-    port: u16,
-    credential: Credential,
-    bastion_chain: Vec<(Profile, Credential)>,
-    known_hosts_path: PathBuf,
-    timeout_secs: u64,
-) -> AppResult<ForwardHandle> {
-    let log: LogFn = StdArc::new(|_: String| ());
-    let (mut handle, fwd_sender) = client::establish_via_chain(
-        bastion_chain,
-        host,
-        port,
-        known_hosts_path,
-        timeout_secs,
-        log,
-        None,
-    )
-    .await?;
-    client::authenticate(&mut handle, credential, None).await?;
+pub async fn start_remote(forward: Forward, target: ConnTarget) -> AppResult<ForwardHandle> {
+    let (mut handle, fwd_sender) = connect_authed(target).await?;
 
     // Register a channel to receive forwarded connections from the Handler
     let (ch_tx, mut ch_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -398,27 +399,8 @@ async fn socks5_handshake(stream: &mut TcpStream) -> std::io::Result<(String, u1
     Ok((host, port))
 }
 
-pub async fn start_dynamic(
-    forward: Forward,
-    host: String,
-    port: u16,
-    credential: Credential,
-    bastion_chain: Vec<(Profile, Credential)>,
-    known_hosts_path: PathBuf,
-    timeout_secs: u64,
-) -> AppResult<ForwardHandle> {
-    let log: LogFn = StdArc::new(|_: String| ());
-    let (mut handle, _fwd) = client::establish_via_chain(
-        bastion_chain,
-        host,
-        port,
-        known_hosts_path,
-        timeout_secs,
-        log,
-        None,
-    )
-    .await?;
-    client::authenticate(&mut handle, credential, None).await?;
+pub async fn start_dynamic(forward: Forward, target: ConnTarget) -> AppResult<ForwardHandle> {
+    let (mut handle, _fwd) = connect_authed(target).await?;
 
     let local_port = forward.local_port;
 

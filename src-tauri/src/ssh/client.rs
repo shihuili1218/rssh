@@ -364,6 +364,20 @@ async fn handle_key_mismatch(
 pub type ForwardedChannelSender =
     Arc<StdMutex<Option<mpsc::UnboundedSender<russh::Channel<client::Msg>>>>>;
 
+/// The constant context for dialing one SSH endpoint: everything that stays the
+/// same across every hop of a bastion chain. Only `host`/`port` (and the relayed
+/// `stream` for tunneled hops) vary per call, so those stay separate parameters.
+/// `ssh_connect` / `ssh_connect_with_forward` / `ssh_connect_stream` each carried
+/// these five identically before.
+#[derive(Clone)]
+pub struct DialCtx {
+    pub config: Arc<client::Config>,
+    pub known_hosts_path: PathBuf,
+    pub timeout_secs: u64,
+    pub log: LogFn,
+    pub prompt_ctx: Option<AuthCtx>,
+}
+
 fn new_handler(
     host: &str,
     port: u16,
@@ -408,14 +422,11 @@ fn map_connect_error(
 /// host: String (owned) — every `&str` parameter that survives an await
 /// risks tripping the HRTB-Send elaboration bug downstream.
 pub async fn ssh_connect(
-    config: Arc<client::Config>,
+    ctx: DialCtx,
     host: String,
     port: u16,
-    known_hosts_path: PathBuf,
-    timeout_secs: u64,
-    log: LogFn,
-    prompt_ctx: Option<AuthCtx>,
 ) -> AppResult<client::Handle<SshHandler>> {
+    let DialCtx { config, known_hosts_path, timeout_secs, log, prompt_ctx } = ctx;
     let connect_timeout = Duration::from_secs(timeout_secs);
     let (handler, mismatch, _fwd) = new_handler(&host, port, known_hosts_path, log, prompt_ctx);
     match timeout(
@@ -434,14 +445,11 @@ pub async fn ssh_connect(
 
 /// SSH connect that also returns the forwarded channel sender (for remote forwarding).
 pub async fn ssh_connect_with_forward(
-    config: Arc<client::Config>,
+    ctx: DialCtx,
     host: String,
     port: u16,
-    known_hosts_path: PathBuf,
-    timeout_secs: u64,
-    log: LogFn,
-    prompt_ctx: Option<AuthCtx>,
 ) -> AppResult<(client::Handle<SshHandler>, ForwardedChannelSender)> {
+    let DialCtx { config, known_hosts_path, timeout_secs, log, prompt_ctx } = ctx;
     let connect_timeout = Duration::from_secs(timeout_secs);
     let (handler, mismatch, fwd) = new_handler(&host, port, known_hosts_path, log, prompt_ctx);
     let handle = match timeout(
@@ -464,18 +472,15 @@ pub async fn ssh_connect_with_forward(
 /// 在已有 stream 上建立 SSH 连接（用于堡垒机隧道）。同时返回 forward channel sender，
 /// 让远程转发能注册到末跳 handler。普通调用方丢 `_` 即可。
 pub async fn ssh_connect_stream<S>(
-    config: Arc<client::Config>,
+    ctx: DialCtx,
     stream: S,
     host: String,
     port: u16,
-    known_hosts_path: PathBuf,
-    timeout_secs: u64,
-    log: LogFn,
-    prompt_ctx: Option<AuthCtx>,
 ) -> AppResult<(client::Handle<SshHandler>, ForwardedChannelSender)>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
+    let DialCtx { config, known_hosts_path, timeout_secs, log, prompt_ctx } = ctx;
     let connect_timeout = Duration::from_secs(timeout_secs);
     let (handler, mismatch, fwd) = new_handler(&host, port, known_hosts_path, log, prompt_ctx);
     let handle = match timeout(
@@ -508,23 +513,22 @@ pub async fn establish_via_chain(
     log: LogFn,
     ctx: Option<&AuthCtx>,
 ) -> AppResult<(client::Handle<SshHandler>, ForwardedChannelSender)> {
-    let config = default_client_config();
+    // The dial context is constant across every hop; only host/port (and the
+    // tunnel stream) change. Build it once and hand a clone to each hop.
+    let dial = DialCtx {
+        config: default_client_config(),
+        known_hosts_path,
+        timeout_secs,
+        log: log.clone(),
+        prompt_ctx: ctx.cloned(),
+    };
 
     if bastion_chain.is_empty() {
         log(format!(
             "TCP connecting to {}:{} ...",
             target_host, target_port
         ));
-        let (h, fwd) = ssh_connect_with_forward(
-            config,
-            target_host,
-            target_port,
-            known_hosts_path,
-            timeout_secs,
-            log.clone(),
-            ctx.cloned(),
-        )
-        .await?;
+        let (h, fwd) = ssh_connect_with_forward(dial, target_host, target_port).await?;
         log(format!("TCP connected. SSH handshake OK."));
         return Ok((h, fwd));
     }
@@ -538,16 +542,7 @@ pub async fn establish_via_chain(
         "Connecting to bastion {} ({}:{}) ...",
         first_name, first_host, first_port
     ));
-    let mut hop = ssh_connect(
-        config.clone(),
-        first_host,
-        first_port,
-        known_hosts_path.clone(),
-        timeout_secs,
-        log.clone(),
-        ctx.cloned(),
-    )
-    .await?;
+    let mut hop = ssh_connect(dial.clone(), first_host, first_port).await?;
     log(format!(
         "Bastion {} connected. Authenticating as {} ({}) ...",
         first_name,
@@ -574,17 +569,8 @@ pub async fn establish_via_chain(
             format!("{} → {}", prev_name, next_name),
         )
         .await?;
-        let (new_hop, _) = ssh_connect_stream(
-            config.clone(),
-            tunnel.into_stream(),
-            next_host,
-            next_port,
-            known_hosts_path.clone(),
-            timeout_secs,
-            log.clone(),
-            ctx.cloned(),
-        )
-        .await?;
+        let (new_hop, _) =
+            ssh_connect_stream(dial.clone(), tunnel.into_stream(), next_host, next_port).await?;
         hop = new_hop;
         log(format!(
             "Bastion {} connected. Authenticating as {} ({}) ...",
@@ -610,17 +596,7 @@ pub async fn establish_via_chain(
     )
     .await?;
     log(format!("Tunnel established. SSH handshake with target ..."));
-    ssh_connect_stream(
-        config,
-        tunnel.into_stream(),
-        target_host,
-        target_port,
-        known_hosts_path,
-        timeout_secs,
-        log.clone(),
-        ctx.cloned(),
-    )
-    .await
+    ssh_connect_stream(dial, tunnel.into_stream(), target_host, target_port).await
 }
 
 /// 在已建好的 SSH 连接上开 direct-tcpip 隧道，带超时。

@@ -96,11 +96,14 @@ impl SftpHandle {
         known_hosts_path: PathBuf,
         timeout_secs: u64,
     ) -> AppResult<Self> {
-        let config = crate::ssh::client::default_client_config();
-        let log = crate::ssh::client::null_logger();
-        let mut handle =
-            client::ssh_connect(config, host, port, known_hosts_path, timeout_secs, log, None)
-                .await?;
+        let dial = client::DialCtx {
+            config: crate::ssh::client::default_client_config(),
+            known_hosts_path,
+            timeout_secs,
+            log: crate::ssh::client::null_logger(),
+            prompt_ctx: None,
+        };
+        let mut handle = client::ssh_connect(dial, host, port).await?;
 
         client::authenticate(&mut handle, credential, None).await?;
 

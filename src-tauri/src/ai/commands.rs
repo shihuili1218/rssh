@@ -90,6 +90,27 @@ impl From<&DiagnoseSession> for AiSessionInfo {
     }
 }
 
+/// What an AI session is attached to. An enum — not a `(kind: String, id: String)`
+/// pair — precisely because the kind is closed ("ssh" | "local"): the type makes
+/// the old stringly-typed `_ => unknown_target_kind` runtime error (which was
+/// duplicated across session start, rebind, and the headless rebind) impossible
+/// to reach. Wire shape: `{ "kind": "ssh"|"local", "id": "<session/pty id>" }`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", content = "id", rename_all = "lowercase")]
+pub enum AiTarget {
+    Ssh(String),
+    Local(String),
+}
+
+impl AiTarget {
+    /// The underlying SSH session / local-PTY id, regardless of kind.
+    pub fn id(&self) -> &str {
+        match self {
+            AiTarget::Ssh(id) | AiTarget::Local(id) => id,
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn ai_list_skills(state: State<'_, AppState>) -> AppResult<Vec<SkillRecord>> {
     skills::list_all(&state.db)
@@ -143,8 +164,7 @@ pub async fn ai_session_start(
     app: AppHandle,
     state: State<'_, AppState>,
     tab_id: String,
-    target_kind: String,
-    target_id: String,
+    target: AiTarget,
     skill: String,
     provider: String,
     model: String,
@@ -154,8 +174,7 @@ pub async fn ai_session_start(
         &state,
         crate::emitter::Host::Tauri(app),
         tab_id,
-        target_kind,
-        target_id,
+        target,
         skill,
         provider,
         model,
@@ -170,8 +189,7 @@ pub async fn ai_session_start_impl(
     state: &AppState,
     host: crate::emitter::Host,
     tab_id: String,
-    target_kind: String, // "ssh" | "local"
-    target_id: String,
+    target: AiTarget,
     skill: String,
     provider: String,
     model: String,
@@ -211,12 +229,12 @@ pub async fn ai_session_start_impl(
         .map(|v| v == "1")
         .unwrap_or(false);
     let mut initial_shell = super::shell::ShellKind::default();
-    let ssh_handle = match target_kind.as_str() {
-        "ssh" => {
+    let ssh_handle = match &target {
+        AiTarget::Ssh(target_id) => {
             let (handle, profile_id) = {
                 let g = locked(&state.sessions)?;
                 let h = g
-                    .get(&target_id)
+                    .get(target_id)
                     .ok_or_else(|| AppError::not_found("ssh_session_not_found", json!({})))?;
                 (h.ssh_handle().clone(), h.profile_id().to_string())
             };
@@ -229,19 +247,17 @@ pub async fn ai_session_start_impl(
             Some(handle)
         }
         #[cfg(not(target_os = "android"))]
-        "local" => {
+        AiTarget::Local(target_id) => {
             let g = locked(&state.pty_sessions)?;
             let pty = g
-                .get(&target_id)
+                .get(target_id)
                 .ok_or_else(|| AppError::not_found("local_pty_not_found", json!({})))?;
             initial_shell = super::shell::ShellKind::from_local_path(pty.shell_path());
             None
         }
-        _ => {
-            return Err(AppError::config(
-                "unknown_target_kind",
-                json!({ "kind": target_kind }),
-            ))
+        #[cfg(target_os = "android")]
+        AiTarget::Local(_) => {
+            return Err(AppError::not_found("local_pty_not_found", json!({})))
         }
     };
 
@@ -261,7 +277,7 @@ pub async fn ai_session_start_impl(
 
     let cfg = session::SessionConfig {
         tab_id: tab_id.clone(),
-        target_id,
+        target_id: target.id().to_string(),
         skill: "general".to_string(),
         system_prompt,
         user_skills_cache,
@@ -444,32 +460,30 @@ pub async fn ai_cache_remote_shell(
 pub async fn ai_session_rebind_target(
     state: State<'_, AppState>,
     tab_id: String,
-    target_kind: String, // "ssh" | "local"
-    target_id: String,
+    target: AiTarget,
 ) -> AppResult<()> {
     // 重新抓 ssh_handle（local 是 None）—— 复用 ai_session_start 的同款校验。
-    let ssh_handle = match target_kind.as_str() {
-        "ssh" => {
+    let ssh_handle = match &target {
+        AiTarget::Ssh(target_id) => {
             let g = locked(&state.sessions)?;
             let h = g
-                .get(&target_id)
+                .get(target_id)
                 .ok_or_else(|| AppError::not_found("ssh_session_not_found", json!({})))?;
             Some(h.ssh_handle().clone())
         }
         #[cfg(not(target_os = "android"))]
-        "local" => {
-            if !locked(&state.pty_sessions)?.contains_key(&target_id) {
+        AiTarget::Local(target_id) => {
+            if !locked(&state.pty_sessions)?.contains_key(target_id) {
                 return Err(AppError::not_found("local_pty_not_found", json!({})));
             }
             None
         }
-        _ => {
-            return Err(AppError::config(
-                "unknown_target_kind",
-                json!({ "kind": target_kind }),
-            ))
+        #[cfg(target_os = "android")]
+        AiTarget::Local(_) => {
+            return Err(AppError::not_found("local_pty_not_found", json!({})))
         }
     };
+    let target_id = target.id().to_string();
 
     // 锁里一次完成：拿 action_tx + 同步更新 stored target_id。
     // 不更新 stored 那一份的话，ai_list_sessions / AiSessionInfo::from 会一直
@@ -719,27 +733,37 @@ pub async fn ai_list_models_impl(
     client.list_models().await
 }
 
-#[allow(clippy::too_many_arguments)]
+/// A partial update of the AI settings: each field is "set this if `Some`, leave
+/// untouched if `None`". Replaces the 14 positional `Option<_>` arguments that
+/// `ai_settings_set` / `_impl` previously carried (and forwarded twice). Field
+/// names match the frontend's camelCase wire shape.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiSettingsPatch {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub endpoint: Option<String>,
+    pub api_key: Option<String>,
+    pub danger_mode: Option<bool>,
+    pub auto_run_command: Option<bool>,
+    pub auto_match_file: Option<bool>,
+    pub auto_download_file: Option<bool>,
+    pub auto_analyze_locally: Option<bool>,
+    pub auto_patch_cp: Option<bool>,
+    pub auto_patch_modify: Option<bool>,
+    pub auto_patch_diff: Option<bool>,
+    pub auto_patch_mv: Option<bool>,
+    pub auto_detect_remote_shell: Option<bool>,
+}
+
 #[tauri::command]
-pub async fn ai_settings_set(
-    state: State<'_, AppState>,
-    provider: Option<String>,
-    model: Option<String>,
-    endpoint: Option<String>,
-    api_key: Option<String>,
-    danger_mode: Option<bool>,
-    auto_run_command: Option<bool>,
-    auto_match_file: Option<bool>,
-    auto_download_file: Option<bool>,
-    auto_analyze_locally: Option<bool>,
-    auto_patch_cp: Option<bool>,
-    auto_patch_modify: Option<bool>,
-    auto_patch_diff: Option<bool>,
-    auto_patch_mv: Option<bool>,
-    auto_detect_remote_shell: Option<bool>,
-) -> AppResult<()> {
-    ai_settings_set_impl(
-        &state,
+pub async fn ai_settings_set(state: State<'_, AppState>, patch: AiSettingsPatch) -> AppResult<()> {
+    ai_settings_set_impl(&state, patch).await
+}
+
+/// Transport-agnostic body shared by the Tauri command and the headless server.
+pub async fn ai_settings_set_impl(state: &AppState, patch: AiSettingsPatch) -> AppResult<()> {
+    let AiSettingsPatch {
         provider,
         model,
         endpoint,
@@ -754,29 +778,7 @@ pub async fn ai_settings_set(
         auto_patch_diff,
         auto_patch_mv,
         auto_detect_remote_shell,
-    )
-    .await
-}
-
-/// Transport-agnostic body shared by the Tauri command and the headless server.
-#[allow(clippy::too_many_arguments)]
-pub async fn ai_settings_set_impl(
-    state: &AppState,
-    provider: Option<String>,
-    model: Option<String>,
-    endpoint: Option<String>,
-    api_key: Option<String>,
-    danger_mode: Option<bool>,
-    auto_run_command: Option<bool>,
-    auto_match_file: Option<bool>,
-    auto_download_file: Option<bool>,
-    auto_analyze_locally: Option<bool>,
-    auto_patch_cp: Option<bool>,
-    auto_patch_modify: Option<bool>,
-    auto_patch_diff: Option<bool>,
-    auto_patch_mv: Option<bool>,
-    auto_detect_remote_shell: Option<bool>,
-) -> AppResult<()> {
+    } = patch;
     if let Some(p) = provider.as_ref() {
         crate::db::settings::set(&state.db, &key_provider(), p)?;
     }
@@ -827,4 +829,61 @@ pub async fn ai_settings_set_impl(
         )?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AiSettingsPatch, AiTarget};
+    use serde_json::json;
+
+    #[test]
+    fn patch_deserializes_camelcase_wire_shape() {
+        // Frontend sends camelCase keys; the headless server deserializes the same
+        // object. Pin that contract so a field rename can't silently break it.
+        let p: AiSettingsPatch = serde_json::from_value(json!({
+            "provider": "anthropic",
+            "apiKey": "sk-x",
+            "dangerMode": true,
+            "autoRunCommand": false,
+            "autoDetectRemoteShell": true,
+        }))
+        .unwrap();
+        assert_eq!(p.provider.as_deref(), Some("anthropic"));
+        assert_eq!(p.api_key.as_deref(), Some("sk-x"));
+        assert_eq!(p.danger_mode, Some(true));
+        assert_eq!(p.auto_run_command, Some(false));
+        assert_eq!(p.auto_detect_remote_shell, Some(true));
+    }
+
+    #[test]
+    fn patch_absent_fields_are_none() {
+        // A partial update touches only the present keys; everything else stays None
+        // so the impl leaves those settings untouched.
+        let p: AiSettingsPatch = serde_json::from_value(json!({ "model": "claude" })).unwrap();
+        assert_eq!(p.model.as_deref(), Some("claude"));
+        assert!(p.provider.is_none());
+        assert!(p.danger_mode.is_none());
+        assert!(p.auto_patch_mv.is_none());
+    }
+
+    #[test]
+    fn ai_target_deserializes_from_kind_id_wire() {
+        // Frontend (and headless ws) send `{ kind, id }`; pin both variants.
+        let ssh: AiTarget = serde_json::from_value(json!({ "kind": "ssh", "id": "s1" })).unwrap();
+        assert!(matches!(ssh, AiTarget::Ssh(ref id) if id == "s1"));
+        assert_eq!(ssh.id(), "s1");
+
+        let local: AiTarget =
+            serde_json::from_value(json!({ "kind": "local", "id": "p9" })).unwrap();
+        assert!(matches!(local, AiTarget::Local(ref id) if id == "p9"));
+        assert_eq!(local.id(), "p9");
+    }
+
+    #[test]
+    fn ai_target_rejects_unknown_kind() {
+        // The old `_ => unknown_target_kind` runtime branch is now a parse error —
+        // an invalid kind can't even be constructed.
+        let bad = serde_json::from_value::<AiTarget>(json!({ "kind": "wat", "id": "x" }));
+        assert!(bad.is_err());
+    }
 }

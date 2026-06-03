@@ -625,6 +625,19 @@ impl Actor {
         }
     }
 
+    /// Record a command/card rejection: audit it and emit `command_rejected`
+    /// so the front-end clears the pending card. The emit is load-bearing —
+    /// forgetting it strands the card in `pending` forever (the bug once hit
+    /// on patch_file sub-cards). Centralising it here means no caller can
+    /// forget. `id` is the proposal/card id, not the tool_call id.
+    pub(in crate::ai::session) fn record_rejection(&self, id: &str, reason: &str) {
+        self.audit_push(AuditKind::CommandRejected {
+            id: id.to_string(),
+            reason: reason.to_string(),
+        });
+        self.emit("command_rejected", json!({ "id": id, "reason": reason }));
+    }
+
     async fn handle_load_skill(&mut self, tc: ToolCall) -> AppResult<ChatMessage> {
         let input: LoadSkillInput = match serde_json::from_value(tc.input.clone()) {
             Ok(i) => i,
@@ -740,19 +753,7 @@ impl Actor {
 
         match self.wait_command_outcome(&tc.id).await? {
             CommandOutcome::Rejected { reason } => {
-                self.audit_push(AuditKind::CommandRejected {
-                    id: dl_id.clone(),
-                    reason: reason.clone(),
-                });
-                // Unified rejection signal across all tool kinds — front-end
-                // listener clears pending + sets ChatItem.rejected on this event.
-                self.emit(
-                    "command_rejected",
-                    json!({
-                        "id": dl_id,
-                        "reason": reason.clone(),
-                    }),
-                );
+                self.record_rejection(&dl_id, &reason);
                 return Ok(self.make_tool_error(
                     &tc.id,
                     &format!("User rejected download_file. Reason: {reason}."),
@@ -916,17 +917,7 @@ impl Actor {
         let started_at = std::time::Instant::now();
         match self.wait_command_outcome(&tc.id).await? {
             CommandOutcome::Rejected { reason } => {
-                self.audit_push(AuditKind::CommandRejected {
-                    id: card_id.clone(),
-                    reason: reason.clone(),
-                });
-                self.emit(
-                    "command_rejected",
-                    json!({
-                        "id": card_id,
-                        "reason": reason.clone(),
-                    }),
-                );
+                self.record_rejection(&card_id, &reason);
                 return Ok(self.make_tool_error(
                     &tc.id,
                     &format!("User rejected analyze_locally. Reason: {reason}."),
@@ -1076,17 +1067,7 @@ impl Actor {
                     tool_call_id,
                     reason,
                 } if tool_call_id == tc.id => {
-                    self.audit_push(AuditKind::CommandRejected {
-                        id: cmd_id.clone(),
-                        reason: reason.clone(),
-                    });
-                    self.emit(
-                        "command_rejected",
-                        json!({
-                            "id": cmd_id.clone(),
-                            "reason": reason.clone(),
-                        }),
-                    );
+                    self.record_rejection(&cmd_id, &reason);
                     return Ok(self.make_tool_error(
                         &tc.id,
                         &format!("User rejected the command. Reason: {reason}. Adjust your plan based on this reason."),

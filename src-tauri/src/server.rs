@@ -600,24 +600,9 @@ async fn dispatch_async(
             args.get("provider").and_then(Value::as_str).map(str::to_string),
         )
         .await),
-        "ai_settings_set" => ok(crate::ai::commands::ai_settings_set_impl(
-            state,
-            args.get("provider").and_then(Value::as_str).map(str::to_string),
-            args.get("model").and_then(Value::as_str).map(str::to_string),
-            args.get("endpoint").and_then(Value::as_str).map(str::to_string),
-            args.get("apiKey").and_then(Value::as_str).map(str::to_string),
-            args.get("dangerMode").and_then(Value::as_bool),
-            args.get("autoRunCommand").and_then(Value::as_bool),
-            args.get("autoMatchFile").and_then(Value::as_bool),
-            args.get("autoDownloadFile").and_then(Value::as_bool),
-            args.get("autoAnalyzeLocally").and_then(Value::as_bool),
-            args.get("autoPatchCp").and_then(Value::as_bool),
-            args.get("autoPatchModify").and_then(Value::as_bool),
-            args.get("autoPatchDiff").and_then(Value::as_bool),
-            args.get("autoPatchMv").and_then(Value::as_bool),
-            args.get("autoDetectRemoteShell").and_then(Value::as_bool),
-        )
-        .await),
+        "ai_settings_set" => {
+            ok(crate::ai::commands::ai_settings_set_impl(state, arg(&args, "patch")?).await)
+        }
         "ai_list_models" => ok(crate::ai::commands::ai_list_models_impl(
             state,
             arg(&args, "provider")?,
@@ -637,8 +622,7 @@ async fn dispatch_async(
                 state,
                 host,
                 arg(&args, "tabId")?,
-                arg(&args, "targetKind")?,
-                arg(&args, "targetId")?,
+                arg(&args, "target")?,
                 args.get("skill").and_then(Value::as_str).unwrap_or("general").to_string(),
                 arg(&args, "provider")?,
                 arg(&args, "model")?,
@@ -952,26 +936,26 @@ fn ai_send(state: &AppState, tab_id: &str, action: UserAction) -> Result<Value, 
 }
 
 fn ai_rebind(state: &AppState, args: Value) -> Result<Value, Value> {
-    let target_kind: String = arg(&args, "targetKind")?;
-    let target_id: String = arg(&args, "targetId")?;
+    use crate::ai::commands::AiTarget;
+    let target: AiTarget = arg(&args, "target")?;
     let tab_id: String = arg(&args, "tabId")?;
-    let ssh_handle = match target_kind.as_str() {
-        "ssh" => Some(
+    let ssh_handle = match &target {
+        AiTarget::Ssh(id) => Some(
             locked(&state.sessions)
                 .map_err(err_value)?
-                .get(&target_id)
+                .get(id)
                 .ok_or_else(|| json!("ssh_session_not_found"))?
                 .ssh_handle()
                 .clone(),
         ),
-        "local" => {
-            if !locked(&state.pty_sessions).map_err(err_value)?.contains_key(&target_id) {
+        AiTarget::Local(id) => {
+            if !locked(&state.pty_sessions).map_err(err_value)?.contains_key(id) {
                 return Err(json!("local_pty_not_found"));
             }
             None
         }
-        _ => return Err(json!("unknown_target_kind")),
     };
+    let target_id = target.id().to_string();
     let tx = {
         let mut g = locked(&state.ai_sessions).map_err(err_value)?;
         let s = g.get_mut(&tab_id).ok_or_else(|| json!("ai_session_not_found"))?;

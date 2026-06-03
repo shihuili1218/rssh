@@ -111,8 +111,7 @@ export async function startSession(args: {
 }): Promise<AiSessionInfo> {
   const info = await invoke<AiSessionInfo>("ai_session_start", {
     tabId: args.tabId,
-    targetKind: args.targetKind,
-    targetId: args.targetId,
+    target: { kind: args.targetKind, id: args.targetId },
     skill: args.skill,
     provider: args.provider,
     model: args.model,
@@ -170,8 +169,7 @@ export async function rebindTarget(
 ): Promise<void> {
   await invoke("ai_session_rebind_target", {
     tabId: tab_id,
-    targetKind: target_kind,
-    targetId: target_id,
+    target: { kind: target_kind, id: target_id },
   });
   // 同步前端 cache：AiSessionInfo.target_id 也要换，否则下次 sendMessage 走的
   // executeCommand 还会用旧 target_session_id 给 ssh_write —— 拿不到新 PTY。
@@ -494,7 +492,9 @@ export async function saveSettings(s: Partial<{
   autoPatchMv: boolean;
   autoDetectRemoteShell: boolean;
 }>) {
-  await invoke("ai_settings_set", s);
+  // Backend takes a single `patch` object (AiSettingsPatch) — every field is
+  // "update if present". Wrap the partial settings accordingly.
+  await invoke("ai_settings_set", { patch: s });
   await loadSettings();
 }
 
