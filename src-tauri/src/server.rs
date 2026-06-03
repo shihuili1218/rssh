@@ -812,9 +812,13 @@ fn recording_path_for(
         });
     let dir = std::path::PathBuf::from(&dir_str);
     std::fs::create_dir_all(&dir).ok();
+    // Reduce the user-controlled profile name to a safe filename component:
+    // neutralize separators and dots so it can't inject `..` or extra path
+    // segments and escape the recordings dir.
+    let safe = profile_name.replace(['/', '\\', '.', ' '], "_");
     let name = format!(
         "{}_{}.cast",
-        profile_name.replace(' ', "_"),
+        safe,
         chrono::Local::now().format("%Y%m%d_%H%M%S")
     );
     Ok(Some(dir.join(name)))

@@ -36,7 +36,11 @@ class RsshServerProcess private constructor(private val process: Process) : Disp
             val bin = resolveBinary()
             LOG.info("starting rssh-server: ${bin.absolutePath}")
             val proc = ProcessBuilder(bin.absolutePath)
-                .redirectErrorStream(false)
+                // Drain the child's stderr into ours. rssh-server logs to stderr at
+                // info level (env_logger); an unread pipe buffer (~64KB) would fill
+                // and block the server, freezing tool-window startup. stdout stays a
+                // pipe — we read the one endpoint line below and it's quiet after.
+                .redirectError(ProcessBuilder.Redirect.INHERIT)
                 .start()
             val handle = RsshServerProcess(proc)
             Disposer.register(parent, handle)

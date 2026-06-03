@@ -205,7 +205,10 @@ export function installTauriShim(): void {
         open_external_url: async (a) => {
             const u = String(a.url ?? "");
             if (!u.startsWith("http://") && !u.startsWith("https://")) throw "window_non_https_url";
-            window.open(u, "_blank", "noopener");
+            // `noreferrer` (not just `noopener`): the headless UI carries the
+            // per-launch `?rsshToken=` in its URL, so without it the browser would
+            // leak the token to the external site via the `Referer` header.
+            window.open(u, "_blank", "noopener,noreferrer");
         },
         // No native multi-window off-Tauri: open a new browser window of the same
         // app (shared server ⇒ shared sessions, like the desktop's shared state),

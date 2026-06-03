@@ -46,8 +46,8 @@ cargo build --release --manifest-path src-tauri/Cargo.toml \
 ```sh
 export RSSH_SERVER_BIN="$PWD/src-tauri/target/release/rssh-server"   # or .../debug/
 # open idea-plugin/ in IDEA (auto-imports Gradle), then run the `runIde` task
-# — or via CLI once a wrapper exists:
-#   (cd idea-plugin && gradle wrapper --gradle-version 8.10 && ./gradlew runIde)
+# — or via the checked-in wrapper (pinned to Gradle 8.10.2):
+#   (cd idea-plugin && ./gradlew runIde)
 ```
 
 A sandbox IDE launches; open the **RSSH** tool window (docked bottom).

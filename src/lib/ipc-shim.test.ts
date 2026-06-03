@@ -215,7 +215,7 @@ describe("browser-environment commands (served locally, never over ws)", () => {
         fakeWindow.open = vi.fn();
 
         await internals.invoke("open_external_url", { url: "https://example.com" });
-        expect(fakeWindow.open).toHaveBeenCalledWith("https://example.com", "_blank", "noopener");
+        expect(fakeWindow.open).toHaveBeenCalledWith("https://example.com", "_blank", "noopener,noreferrer");
 
         await expect(internals.invoke("open_external_url", { url: "file:///etc/passwd" })).rejects.toBe(
             "window_non_https_url",

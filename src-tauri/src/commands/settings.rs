@@ -136,8 +136,26 @@ pub fn read_recording(state: State<AppState>, name: String) -> AppResult<String>
     read_recording_impl(&state, name)
 }
 
+/// A valid recording name is exactly what `list_recordings_impl` hands back: a
+/// bare filename living directly in the recordings dir. Anything carrying path
+/// separators, `..`, or an absolute prefix differs from its own `file_name()`,
+/// so this one comparison rejects every traversal/escape shape with no special
+/// cases.
+fn is_safe_recording_name(name: &str) -> bool {
+    std::path::Path::new(name).file_name() == Some(std::ffi::OsStr::new(name))
+}
+
 /// Transport-agnostic body shared by the Tauri command and the headless server.
 pub fn read_recording_impl(state: &AppState, name: String) -> AppResult<String> {
+    // Confine reads to the recordings dir. The headless server routes client
+    // requests here verbatim, so an unchecked `name` ("../../etc/passwd", an
+    // absolute path, …) would read arbitrary files the process can reach.
+    if !is_safe_recording_name(&name) {
+        return Err(AppError::config(
+            "invalid_recording_name",
+            serde_json::json!({ "name": name }),
+        ));
+    }
     let path = recording_dir(state)?.join(&name);
     std::fs::read_to_string(&path).map_err(|e| AppError::other("settings_read_failed", serde_json::json!({ "err": e.to_string() })))
 }
@@ -153,4 +171,34 @@ fn recording_dir(state: &AppState) -> AppResult<std::path::PathBuf> {
                 .into_owned()
         });
     Ok(std::path::PathBuf::from(dir_str))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_safe_recording_name;
+
+    #[test]
+    fn accepts_bare_recording_filenames() {
+        assert!(is_safe_recording_name("session_20260603_120000.cast"));
+        assert!(is_safe_recording_name("my profile_1.cast"));
+        assert!(is_safe_recording_name("会话.cast"));
+    }
+
+    #[test]
+    fn rejects_traversal_and_escapes() {
+        // `/`, `..`, and absolute paths escape on every platform. (Backslash is a
+        // plain filename char on Unix, so it's intentionally not asserted here.)
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../secret.cast",
+            "../../etc/passwd",
+            "sub/dir.cast",
+            "/etc/passwd",
+            "/abs.cast",
+        ] {
+            assert!(!is_safe_recording_name(bad), "should reject {bad:?}");
+        }
+    }
 }
