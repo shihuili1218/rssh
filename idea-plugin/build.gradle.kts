@@ -13,7 +13,8 @@ plugins {
 }
 
 group = "sh.rssh"
-version = "0.1.5" // 0.1.5: WS read loop breaks (not `?`-returns) on abnormal close so the cleanup block always runs — closes the last Finding-3 hole codex found (TCP reset / JCEF kill skipped shutdown+waiter-clear, leaking parked SSH prompt workers)
+version = "0.1.6" // 0.1.6: title-bar Close (✕) button stops the rssh-server + browser and hides the tool window; reopening from the sidebar respawns a fresh session (server/browser re-rooted under a per-session Disposable, relaunch driven off toolWindowShown)
+// 0.1.5: WS read loop breaks (not `?`-returns) on abnormal close so the cleanup block always runs — closes the last Finding-3 hole codex found (TCP reset / JCEF kill skipped shutdown+waiter-clear, leaking parked SSH prompt workers)
 
 repositories {
     mavenCentral()
