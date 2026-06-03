@@ -104,7 +104,11 @@ name = "rssh-cli"
 path = "src/bin/rssh/main.rs"
 required-features = ["cli"]
 
+# NOTE: kept OUT of src/bin/ on purpose. The Tauri bundler auto-discovers every
+# src/bin/<name> as an app binary (ignoring required-features) and would force the
+# GUI build to copy a `rssh-server` it never builds. This binary is JetBrains-only
+# (`cargo build --features server --bin rssh-server`).
 [[bin]]
 name = "rssh-server"
-path = "src/bin/rssh-server/main.rs"
+path = "src/server_main.rs"
 required-features = ["server"]

@@ -136,7 +136,7 @@ transport stays byte-identical. On the Rust side the *same engine* is reused via
 ```
 src-tauri/src/server.rs        # headless adapter: HTTP (embedded UI) + ws (IPC) on one port
 src-tauri/src/emitter.rs       # Host enum (Tauri | headless sink)
-src-tauri/src/bin/rssh-server/ # the `rssh-server` binary (--features server)
+src-tauri/src/server_main.rs   # the `rssh-server` binary entry (--features server; kept out of src/bin/ so the Tauri bundler ignores it)
 src/lib/ipc-shim.ts            # Tauri-IPC shim over ws (no-op inside Tauri)
 idea-plugin/                   # IntelliJ plugin (JCEF tool window)
 ```
