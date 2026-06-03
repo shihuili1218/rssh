@@ -599,7 +599,19 @@
                 },
                 {
                     label: t("tab.context.paste"),
-                    onClick: () => { app.readClipboard().then(text => { if (text) app.terminalPaste(tab.id, text); }); },
+                    // Activate the target tab, then hand focus back to its
+                    // terminal: the menu closing drops focus to <body>, and the
+                    // activate-focus $effect in TerminalPane is a no-op when the
+                    // tab was already active — so paste-into-current-tab would
+                    // otherwise leave the user unable to type. terminalFocus runs
+                    // after the async read, so it wins the focus back from <body>.
+                    onClick: () => {
+                        app.setActiveTab(tab.id);
+                        app.readClipboard().then(text => {
+                            if (text) app.terminalPaste(tab.id, text);
+                            app.terminalFocus(tab.id);
+                        });
+                    },
                 },
             ];
             if (ts) {
