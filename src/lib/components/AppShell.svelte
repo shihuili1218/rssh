@@ -595,7 +595,7 @@
                 {
                     label: t("tab.context.copy"),
                     disabled: !selection,
-                    onClick: () => { if (selection) navigator.clipboard.writeText(selection).catch(() => {}); },
+                    onClick: () => { if (selection) app.writeClipboard(selection); },
                 },
                 {
                     label: t("tab.context.paste"),
@@ -606,7 +606,7 @@
                 const utc = formatUtc(ts);
                 copyPaste.push({
                     label: `${t("tab.context.copy_utc")}: ${utc}`,
-                    onClick: () => { navigator.clipboard.writeText(utc).catch(() => {}); },
+                    onClick: () => { app.writeClipboard(utc); },
                 });
             }
             // Save the selected text as a command snippet: name = first 10

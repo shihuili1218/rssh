@@ -344,12 +344,11 @@
         // 命令输出全卷进来（PR #24 reviewer 发现的 bug）
         const text = extractBlocksText(terminal, blocks, foldStore);
         if (!text) return;
-        try {
-            await navigator.clipboard.writeText(text);
-            clearBlockSelection();
-        } catch (e) {
-            console.warn("copy text failed:", e);
-        }
+        // arboard (not navigator.clipboard) so this process — not WebKitGTK —
+        // owns the X11 CLIPBOARD selection. Otherwise a later arboard-based
+        // paste (clipboard_read) deadlocks on its own WebView and times out.
+        await app.writeClipboard(text);
+        clearBlockSelection();
     }
 
     function copyBlocksAsImage(blocks: CommandBlock[]) {
@@ -950,11 +949,7 @@
                 case "term.sftp": app.navigate("sftp"); break;
                 case "term.snippet": app.openSnippetPicker(); break;
                 case "term.paste": app.readClipboard().then(pasteText); break;
-                case "term.copy": {
-                    const sel = terminal.getSelection();
-                    if (sel) navigator.clipboard.writeText(sel).catch(() => {});
-                    break;
-                }
+                case "term.copy": copySelection(); break;
             }
         }
         terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
