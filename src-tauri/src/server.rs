@@ -235,6 +235,13 @@ fn dispatch(
         "create_profile" => ok(crate::db::profile::insert(&state.db, &arg::<Profile>(&args, "profile")?)),
         "update_profile" => ok(crate::db::profile::update(&state.db, &arg::<Profile>(&args, "profile")?)),
         "delete_profile" => ok(crate::db::profile::delete(&state.db, &arg::<String>(&args, "id")?)),
+        // Parse-only (no native dialog): the frontend reads ~/.ssh/config text and
+        // sends it; returns the parsed entries. import_ssh_config returns a bare Vec.
+        "import_ssh_config" => ok(Ok::<_, AppError>(crate::commands::profile::import_ssh_config(
+            arg::<String>(&args, "content")?,
+        ))),
+        // List the local shells the host offers (pure engine, no UI).
+        "refresh_shells" => ok(crate::commands::pty::refresh_shells()),
 
         // ---- credentials (secret via SecretStore, metadata via DB) ----
         "list_credentials" => ok(crate::db::credential::list(&state.db)),

@@ -264,6 +264,22 @@ export function installTauriShim(): void {
         "plugin:window|is_decorated": async () => true,
     };
 
+    // Running inside the IDEA plugin's JCEF host? The bridge injects __RSSH_PICK__;
+    // a plain browser has no equivalent.
+    const inPlugin = () => typeof (window as any).__RSSH_PICK__ === "function";
+
+    // Features with no working path inside JCEF: config export/import + audit save
+    // ride a browser Blob download / <input type=file>, which JCEF silently drops
+    // without download/dialog handlers — and those can't be bound across the
+    // plugin's IDE range (the CEF Java signatures differ 242↔261). Rather than do
+    // nothing, tell the user. Plain-browser deployments are unaffected (inPlugin()
+    // is false there, so these fall through to the LOCAL browser handlers).
+    const PLUGIN_UNSUPPORTED: Record<string, string> = {
+        export_config_to_file: "IDE 插件中暂不支持导出配置到文件，请在 RSSH 桌面版中操作。",
+        import_config_from_file: "IDE 插件中暂不支持从文件导入配置，请在 RSSH 桌面版中操作。",
+        ai_audit_save_pick: "IDE 插件中暂不支持保存审计记录到文件，请在 RSSH 桌面版中操作。",
+    };
+
     function invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
         // The event-plugin pseudo-commands are bookkeeping — they never hit the
         // wire as real commands; the WS event push is what drives delivery.
@@ -286,6 +302,9 @@ export function installTauriShim(): void {
             // Frontend→backend emit: not needed by the tracer; no-op.
             return Promise.resolve();
         }
+        // In the IDEA plugin, surface a clear "unsupported here" message for
+        // features that have no JCEF path, instead of failing silently.
+        if (inPlugin() && PLUGIN_UNSUPPORTED[cmd]) return Promise.reject(PLUGIN_UNSUPPORTED[cmd]);
         // Browser-environment commands (clipboard / open / file dialogs).
         const local = LOCAL[cmd];
         if (local) return local(args ?? {});
