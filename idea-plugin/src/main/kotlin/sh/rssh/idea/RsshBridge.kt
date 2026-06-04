@@ -1,6 +1,7 @@
 package sh.rssh.idea
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.project.Project
@@ -31,6 +32,8 @@ import org.cef.handler.CefLoadHandlerAdapter
  */
 object RsshBridge {
 
+    private val LOG = logger<RsshBridge>()
+
     fun install(browser: JBCefBrowser, project: Project?) {
         val query = JBCefJSQuery.create(browser as JBCefBrowserBase)
 
@@ -39,6 +42,10 @@ object RsshBridge {
             val json = try {
                 pickPathsOnEdt(kind, project)
             } catch (t: Throwable) {
+                // Don't let a real bridge/runtime failure masquerade silently as a
+                // user cancel — log it. (JS still sees "null"/cancel; surfacing a
+                // distinct error to the SPA would need a shim-side protocol change.)
+                LOG.warn("RSSH file picker failed for kind=$kind", t)
                 "null"
             }
             JBCefJSQuery.Response(json)

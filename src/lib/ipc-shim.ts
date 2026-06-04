@@ -315,9 +315,12 @@ export function installTauriShim(): void {
         },
     };
     (window as any).__TAURI_EVENT_PLUGIN_INTERNALS__ = {
-        unregisterListener: (event: string, eventId: number) => {
+        unregisterListener: (_event: string, eventId: number) => {
             const reg = eventReg.get(eventId);
-            if (reg) { listeners.get(event)?.delete(reg.cbId); eventReg.delete(eventId); }
+            // Delete by the registration's authoritative event name, not the
+            // caller's arg — a mismatched/empty `event` would otherwise fail to
+            // remove the entry and leak the callback (matches the path above).
+            if (reg) { listeners.get(reg.event)?.delete(reg.cbId); eventReg.delete(eventId); }
         },
     };
 
