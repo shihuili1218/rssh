@@ -189,6 +189,37 @@ jobs:
           7z a "dist/${PORTABLE}.zip" "${PORTABLE}/"
           ls -lh dist/
 
+      # ── JetBrains plugin (per-OS: bundles THIS target's rssh-server) ──
+      # The plugin embeds a native rssh-server, so one zip is platform-specific;
+      # each matrix leg produces rssh-<ver>-<os-arch>-jetbrains-plugin.zip.
+      # CI has no local IDE, so build.gradle downloads the 2024.2 SDK (the
+      # sinceBuild floor, JBR 21) via -PrsshIdeVersion.
+      - name: Set up JDK 21 (JetBrains plugin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Build rssh-server (for plugin)
+        working-directory: src-tauri
+        run: cargo build --release --features server --bin rssh-server --target ${{ matrix.target }}
+
+      - name: Build JetBrains plugin
+        shell: bash
+        run: |
+          VERSION="${{ steps.ver.outputs.v }}"
+          BIN="rssh-server"
+          [[ "${{ matrix.target }}" == *windows* ]] && BIN="rssh-server.exe"
+          SRV="$(pwd)/src-tauri/target/${{ matrix.target }}/release/${BIN}"
+          chmod +x idea-plugin/gradlew || true
+          (cd idea-plugin && ./gradlew --no-daemon clean buildPlugin \
+            -PrsshIdeVersion=2024.2 \
+            -PrsshServerBin="${SRV}")
+          mkdir -p dist
+          cp idea-plugin/build/distributions/*.zip \
+            "dist/rssh-${VERSION}-${{ matrix.name }}-jetbrains-plugin.zip"
+          ls -lh dist/
+
       # 走 Release Assets（Fastly）而不是 Actions Artifacts（Azure Blob + zip
       # 包装），下载速度差一个数量级。draft + prerelease 跟 release.yml 一致：
       # 自动上传到 draft release，由人工 publish。多个 job 共享同一 tag，

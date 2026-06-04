@@ -23,10 +23,17 @@ repositories {
 
 dependencies {
     intellijPlatform {
-        // Build against the locally-installed IDE — no multi-hundred-MB SDK
+        // Local dev builds against the installed IDE — no multi-hundred-MB SDK
         // download, and it's exactly the runtime the plugin will load into.
-        // Override with -PrsshIde=/path/to/AnotherIDE.app if yours differs.
-        local(providers.gradleProperty("rsshIde").orElse("/Applications/IntelliJ IDEA CE.app"))
+        // Override the path with -PrsshIde=/path/to/AnotherIDE.app. CI runners
+        // have no local IDE, so they pass -PrsshIdeVersion (e.g. 2024.2) to
+        // download the matching SDK instead.
+        val ideVersion = providers.gradleProperty("rsshIdeVersion").orNull
+        if (ideVersion != null) {
+            create("IC", ideVersion)
+        } else {
+            local(providers.gradleProperty("rsshIde").orElse("/Applications/IntelliJ IDEA CE.app"))
+        }
         instrumentationTools()
     }
 }
@@ -46,9 +53,8 @@ intellijPlatform {
 }
 
 kotlin {
-    // The local IDE (2026.1 / build 261) runs on JBR 21, so target 21 — also
-    // matches the JDK building this. For an older target IDE (242 runs JBR 17),
-    // drop this to 17 and build with a JDK 17.
+    // 2024.2+ (build 242+, the sinceBuild floor) all run JBR 21, so target 21 —
+    // matches both the shipped artifact and local dev on 2026.1 / build 261.
     jvmToolchain(21)
 }
 
@@ -63,13 +69,21 @@ tasks.withType<KotlinCompile>().configureEach {
 }
 
 // Release packaging: drop a per-OS `rssh-server` into resources/bin so the zip is
-// self-contained. For a multi-OS release, run this on each platform (or in CI) and
-// merge. Dev runs just set RSSH_SERVER_BIN instead.
-val bundledServer = layout.projectDirectory.file("../src-tauri/target/release/rssh-server")
+// self-contained. CI passes -PrsshServerBin to the freshly-built per-target binary
+// (release.yml / pre-release.yml build one plugin zip per OS); local dev falls back
+// to the host release path, or skips bundling and sets RSSH_SERVER_BIN at runtime.
+val serverBin = file(
+    providers.gradleProperty("rsshServerBin")
+        .orElse(layout.projectDirectory.file("../src-tauri/target/release/rssh-server").asFile.path)
+        .get()
+)
 tasks.processResources {
-    if (bundledServer.asFile.exists()) {
-        from(bundledServer) { into("bin") }
+    if (serverBin.exists()) {
+        // The plugin resolves "rssh-server.exe" on Windows, the bare name elsewhere;
+        // name the bundled resource to match the binary we were handed.
+        val bundledName = if (serverBin.name.endsWith(".exe")) "rssh-server.exe" else "rssh-server"
+        from(serverBin) { into("bin"); rename { bundledName } }
     } else {
-        logger.lifecycle("rssh-server release binary not found; plugin will rely on RSSH_SERVER_BIN at runtime.")
+        logger.lifecycle("rssh-server binary not found at ${serverBin.path}; plugin will rely on RSSH_SERVER_BIN at runtime.")
     }
 }

@@ -169,6 +169,37 @@ jobs:
           7z a "dist/${PORTABLE}.zip" "${PORTABLE}/"
           ls -lh dist/
 
+      # ── JetBrains plugin (per-OS: bundles THIS target's rssh-server) ──
+      # The plugin embeds a native rssh-server, so one zip is platform-specific;
+      # each matrix leg produces rssh-<ver>-<os>-<arch>-jetbrains-plugin.zip.
+      # CI has no local IDE, so build.gradle downloads the 2024.2 SDK (the
+      # sinceBuild floor, JBR 21) via -PrsshIdeVersion.
+      - name: Set up JDK 21 (JetBrains plugin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Build rssh-server (for plugin)
+        working-directory: src-tauri
+        run: cargo build --release --features server --bin rssh-server --target ${{ matrix.target }}
+
+      - name: Build JetBrains plugin
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BIN="rssh-server"
+          [[ "${{ matrix.target }}" == *windows* ]] && BIN="rssh-server.exe"
+          SRV="$(pwd)/src-tauri/target/${{ matrix.target }}/release/${BIN}"
+          chmod +x idea-plugin/gradlew || true
+          (cd idea-plugin && ./gradlew --no-daemon clean buildPlugin \
+            -PrsshIdeVersion=2024.2 \
+            -PrsshServerBin="${SRV}")
+          mkdir -p dist
+          cp idea-plugin/build/distributions/*.zip \
+            "dist/rssh-${VERSION}-${{ matrix.os_name }}-${{ matrix.arch }}-jetbrains-plugin.zip"
+          ls -lh dist/
+
       - name: Upload
         uses: softprops/action-gh-release@v2
         with:
