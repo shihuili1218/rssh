@@ -828,6 +828,7 @@
 
     <!-- Sidebar: 40px collapsed ↔ 260px expanded. Position = left | right. -->
     {#if sbPos === "left" || sbPos === "right"}
+    <div class="sidebar-rail">
     <nav
         class="sidebar" class:open={drawerOpen} class:right={sbPos === "right"}
         onmouseenter={enterSidebar} onmouseleave={leaveSidebar}
@@ -878,6 +879,7 @@
             </div>
         </div>
     </nav>
+    </div>
     {:else}
         <StripBar
             sections={[navSections.header, navSections.middle, navSections.footer]}
@@ -976,31 +978,47 @@
 </div>
 
 <style>
+    /* Flow layout: the bar (sidebar rail / stripbar) and .content are flex
+       items, so the bar occupies real space and content takes the rest. No
+       fixed positioning, no margin reservation — content can never slide
+       under the bar (the old position:fixed + margin-top hack let a stray
+       document scroll tuck the terminal top behind a viewport-pinned bar). */
     .shell {
         height: 100%;
         position: relative;
-        /* Sidebar 在四个方向上的占用厚度——AI 面板与 .content 都从这里读，
-           不再写 magic number 也不再为"sb 在右 + ai 在左"这种组合开特例。 */
+        display: flex;
+        /* Bar thickness per edge — only the DownloadsScreen popover reads
+           these now, to offset itself off the bar. Layout uses flow. */
         --sb-left: 0px;
         --sb-right: 0px;
         --sb-top: 0px;
         --sb-bottom: 0px;
     }
-    .shell.sb-left   { --sb-left:   40px; }
-    .shell.sb-right  { --sb-right:  40px; }
-    .shell.sb-top    { --sb-top:    44px; }
-    .shell.sb-bottom { --sb-bottom: 44px; }
+    .shell.sb-left   { flex-direction: row;            --sb-left:   40px; }
+    .shell.sb-right  { flex-direction: row-reverse;    --sb-right:  40px; }
+    .shell.sb-top    { flex-direction: column;         --sb-top:    44px; }
+    .shell.sb-bottom { flex-direction: column-reverse; --sb-bottom: 44px; }
 
-    /* ── Sidebar: one component, two states ── */
+    /* ── Sidebar: rail (flow footprint) + overlay (hover-expanding panel) ── */
+    /* The rail is a 40px flex item that reserves the collapsed sidebar's space
+       in normal flow, so content sits beside it and can never overlap it. */
+    .sidebar-rail {
+        flex: 0 0 40px;
+        position: relative;
+        z-index: 200;
+    }
+
+    /* The panel itself is absolute within the rail: 40px collapsed, 260px on
+       hover. Absolute so the expansion floats over content instead of pushing
+       it — preserving the original drawer feel without the viewport-fixed hack. */
     .sidebar {
-        position: fixed;
+        position: absolute;
         left: 0;
-        top: env(safe-area-inset-top, 0px);
+        top: 0;
         width: 40px;
-        height: calc(100% - env(safe-area-inset-top, 0px));
+        height: 100%;
         background: var(--bg);
         border-right: 1px solid var(--divider);
-        z-index: 200;
         overflow: hidden;
         transition: width 0.15s ease;
     }
@@ -1061,10 +1079,9 @@
         position: relative;
         display: flex;
         flex-direction: row;
-        margin-left: var(--sb-left);
-        margin-right: var(--sb-right);
-        margin-top: var(--sb-top);
-        height: calc(100% - var(--sb-top) - var(--sb-bottom));
+        flex: 1;
+        min-width: 0;
+        min-height: 0;
     }
     /* AI 在左：flex row 翻转，模板顺序不变，无须状态机 */
     .content.ai-left { flex-direction: row-reverse; }

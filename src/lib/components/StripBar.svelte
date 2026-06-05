@@ -109,10 +109,11 @@
 </nav>
 
 <style>
+    /* Flow flex item inside .shell (column / column-reverse). Its natural
+       height occupies real space, so content takes the rest — no viewport
+       fixed positioning, no magic-number reservation to keep in sync. */
     .stripbar {
-        position: fixed;
-        left: 0;
-        right: 0;
+        flex-shrink: 0;
         z-index: 200;
         background: var(--bg);
         display: flex;
@@ -139,11 +140,9 @@
         margin-left: auto;
     }
     .stripbar.top {
-        top: env(safe-area-inset-top, 0px);
         border-bottom: 1px solid var(--divider);
     }
     .stripbar.bottom {
-        bottom: 0;
         border-top: 1px solid var(--divider);
     }
 </style>
