@@ -880,7 +880,7 @@
     onMount(async () => {
         terminal = new Terminal({
             cursorBlink: true,
-            fontSize: 13,
+            fontSize: theme.termFontSize(),
             fontFamily: theme.currentTermFontStack(),
             allowProposedApi: true,
             theme: theme.currentTermTheme(),
@@ -907,13 +907,14 @@
         terminal.unicode.activeVersion = "11";
         fitAddon.fit();
 
-        // Terminal font: prepend the user's chosen family to the base stack.
-        // Registered after open()+fit() because the immediate callback refits,
-        // which needs fitAddon to exist. Font changes alter cell metrics, so
-        // (unlike theme) we must refit after applying.
-        unsubscribeFont = theme.registerXtermFontListener((stack) => {
+        // Terminal font: the chosen family (prepended to the base stack) and
+        // pixel size. Registered after open()+fit() because the immediate
+        // callback refits, which needs fitAddon to exist. Both fields alter
+        // cell metrics, so (unlike theme) we must refit after applying.
+        unsubscribeFont = theme.registerXtermFontListener((font) => {
             if (!terminal) return;
-            terminal.options.fontFamily = stack;
+            terminal.options.fontFamily = font.family;
+            terminal.options.fontSize = font.size;
             fitAddon?.fit();
         });
 

@@ -131,6 +131,8 @@ const zh: Messages = {
   "settings.appearance.font.mono": "等宽",
   "settings.appearance.font.none": "未找到字体",
   "settings.appearance.font.row_desc": "选择已安装字体，置于默认字体链最前。",
+  "settings.appearance.font.size": "字体大小",
+  "settings.appearance.font.size_desc": "终端文字大小，{min}–{max} 像素。",
   "settings.shell.sftp_concurrent": "SFTP 并发传输",
   "settings.shell.sftp_concurrent_label": "并发上限",
   "settings.shell.sftp_concurrent_hint": "{min}–{max}，默认 {def}。超出上限的传输自动排队，前一个结束后顶替。调大要注意 SSH 服务端 channel 上限。",

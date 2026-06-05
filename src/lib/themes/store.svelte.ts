@@ -38,6 +38,7 @@ const SETTING_KEY_DENSITY        = "theme.density";
 const SETTING_KEY_TERM           = "theme.term-palette";
 const SETTING_KEY_TERM_BG_FOLLOW = "theme.term-bg-follow";
 const SETTING_KEY_TERM_FONT      = "theme.term-font";
+const SETTING_KEY_TERM_FONT_SIZE = "theme.term-font-size";
 
 let _paletteId = $state<PaletteId>(DEFAULT_PALETTE_ID);
 
@@ -197,15 +198,28 @@ export function registerXtermThemeListener(fn: XtermThemeListener): () => void {
 }
 
 /* ───────────────────────────────────────────────────────────────
-   Terminal font — the user picks one installed family; it is
-   prepended to BASE_FONT_STACK (see term-font.ts). Stored value is
-   just the family name; empty = base stack = historical default.
+   Terminal font — the user picks one installed family (prepended to
+   BASE_FONT_STACK, see term-font.ts) and a pixel size. Both alter
+   xterm's cell metrics, so a change requires a refit — one listener
+   carries family + size together. Stored values: family name (empty =
+   base stack = historical default) and size (default 13 = the value
+   xterm was hardcoded to before this was configurable).
    Independent of palette: own listener set, notified on change.
    ─────────────────────────────────────────────────────────────── */
 
+const DEFAULT_TERM_FONT_SIZE = 13;
+export const termFontSizeBounds = { min: 8, max: 32, def: DEFAULT_TERM_FONT_SIZE } as const;
+
+function clampFontSize(px: number): number {
+  if (!Number.isFinite(px)) return DEFAULT_TERM_FONT_SIZE;
+  return Math.max(termFontSizeBounds.min, Math.min(termFontSizeBounds.max, Math.round(px)));
+}
+
 let _termFont = $state<string>("");
+let _termFontSize = $state<number>(DEFAULT_TERM_FONT_SIZE);
 
 export function termFont(): string { return _termFont; }
+export function termFontSize(): number { return _termFontSize; }
 export function currentTermFontStack(): string { return composeTermFontStack(_termFont); }
 
 export async function setTermFont(name: string): Promise<void> {
@@ -218,23 +232,39 @@ export async function setTermFont(name: string): Promise<void> {
   }
 }
 
-type XtermFontListener = (stack: string) => void;
+export async function setTermFontSize(px: number): Promise<void> {
+  _termFontSize = clampFontSize(px);
+  notifyXtermFonts();
+  try {
+    await invoke("set_setting", { key: SETTING_KEY_TERM_FONT_SIZE, value: String(_termFontSize) });
+  } catch {
+    // Persistence failure is non-fatal.
+  }
+}
+
+type XtermFont = { family: string; size: number };
+type XtermFontListener = (font: XtermFont) => void;
 const _xtermFontListeners = new Set<XtermFontListener>();
 
+function currentXtermFont(): XtermFont {
+  return { family: currentTermFontStack(), size: _termFontSize };
+}
+
 /**
- * Register a callback that receives the composed xterm font stack now and on
- * every font change. Returns an unregister function. Mirrors
- * registerXtermThemeListener; the payload is the full fontFamily string.
+ * Register a callback that receives the xterm font (family + size) now and on
+ * every font/size change. Returns an unregister function. Mirrors
+ * registerXtermThemeListener; both fields change cell metrics, so the caller
+ * must refit after applying.
  */
 export function registerXtermFontListener(fn: XtermFontListener): () => void {
   _xtermFontListeners.add(fn);
-  fn(currentTermFontStack());
+  fn(currentXtermFont());
   return () => { _xtermFontListeners.delete(fn); };
 }
 
 function notifyXtermFonts(): void {
-  const stack = currentTermFontStack();
-  for (const fn of _xtermFontListeners) fn(stack);
+  const font = currentXtermFont();
+  for (const fn of _xtermFontListeners) fn(font);
 }
 
 /* ───────────────────────────────────────────────────────────────
@@ -340,13 +370,14 @@ function isShapeId(v: string | null | undefined): v is ShapeId {
  * Loads palette + shape + density in parallel — all are independent.
  */
 export async function init(): Promise<void> {
-  const [palette, shape, density, termRaw, termBgFollow, termFontRaw] = await Promise.all([
+  const [palette, shape, density, termRaw, termBgFollow, termFontRaw, termFontSizeRaw] = await Promise.all([
     invoke<string | null>("get_setting", { key: SETTING_KEY_PALETTE        }).catch(() => null),
     invoke<string | null>("get_setting", { key: SETTING_KEY_SHAPE          }).catch(() => null),
     invoke<string | null>("get_setting", { key: SETTING_KEY_DENSITY        }).catch(() => null),
     invoke<string | null>("get_setting", { key: SETTING_KEY_TERM           }).catch(() => null),
     invoke<string | null>("get_setting", { key: SETTING_KEY_TERM_BG_FOLLOW }).catch(() => null),
     invoke<string | null>("get_setting", { key: SETTING_KEY_TERM_FONT      }).catch(() => null),
+    invoke<string | null>("get_setting", { key: SETTING_KEY_TERM_FONT_SIZE }).catch(() => null),
   ]);
   if (palette && PALETTES.some((p) => p.id === palette)) {
     _paletteId = palette as PaletteId;
@@ -370,6 +401,7 @@ export async function init(): Promise<void> {
   // string opts out.
   if (termBgFollow === "false") _termBgFollowsTheme = false;
   if (termFontRaw) _termFont = termFontRaw;
+  if (termFontSizeRaw) _termFontSize = clampFontSize(parseInt(termFontSizeRaw, 10));
   apply(paletteById(_paletteId));
   applyShape(_shapeId);
   applyDensity(_densityId);

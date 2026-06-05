@@ -11,4 +11,8 @@
 - 无活动锁定密码
 - 选中某一行打上颜色
 - clipboard：把 term.copy + 右键菜单 Copy/Copy UTC 统一走 app.writeClipboard（顺手消灭不一致）。
+- 增加只读
+- 隐藏标题栏
+- 支持串口、telnet ？
+- 字体大小
 

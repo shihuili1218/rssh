@@ -129,6 +129,8 @@ const en = {
   "settings.appearance.font.mono": "Monospace",
   "settings.appearance.font.none": "No fonts found",
   "settings.appearance.font.row_desc": "Pick an installed font; it leads the default fallback stack.",
+  "settings.appearance.font.size": "Font size",
+  "settings.appearance.font.size_desc": "Terminal text size, {min}–{max} px.",
   "settings.shell.sftp_concurrent": "SFTP CONCURRENT TRANSFERS",
   "settings.shell.sftp_concurrent_label": "Max parallel",
   "settings.shell.sftp_concurrent_hint": "{min}–{max}, default {def}. Excess transfers queue up; one starts when another finishes. Raising too high may hit your SSH server's channel limit.",

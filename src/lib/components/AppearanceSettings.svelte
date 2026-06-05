@@ -128,6 +128,18 @@
         fontChoice = name;
         await theme.setTermFont(name);
     }
+
+    // Font size — px, clamped to the store's bounds. Mirrors the shell
+    // page's numeric inputs: save on blur / Enter, snapping the box back
+    // to the clamped value so an out-of-range entry can't linger.
+    const fontSizeBounds = theme.termFontSizeBounds;
+    let fontSize = $state<number>(theme.termFontSize());
+    async function saveFontSize() {
+        const clamped = Math.max(fontSizeBounds.min,
+            Math.min(fontSizeBounds.max, Math.round(fontSize) || fontSizeBounds.def));
+        fontSize = clamped;
+        await theme.setTermFontSize(clamped);
+    }
     onMount(async () => {
         try {
             fonts = await invoke<FontInfo[]>("list_fonts");
@@ -199,6 +211,27 @@
                     ariaLabel={t("settings.appearance.terminal_font")}
                 />
             </div>
+        </div>
+
+        <div class="term-divider"></div>
+
+        <div class="term-row">
+            <div class="switch-card-body">
+                <div class="switch-card-title">{t("settings.appearance.font.size")}</div>
+                <div class="switch-card-desc">
+                    {t("settings.appearance.font.size_desc", { min: fontSizeBounds.min, max: fontSizeBounds.max })}
+                </div>
+            </div>
+            <input
+                class="term-font-size-input"
+                type="number"
+                bind:value={fontSize}
+                min={fontSizeBounds.min}
+                max={fontSizeBounds.max}
+                onblur={saveFontSize}
+                onkeydown={(e) => { if (e.key === "Enter") saveFontSize(); }}
+                aria-label={t("settings.appearance.font.size")}
+            />
         </div>
     </div>
     <div class="layout-grid" style="--preview-font: {composeTermFontStack(fontChoice)};">
@@ -839,5 +872,10 @@
         width: 260px;
         max-width: 100%;
         flex-shrink: 0;
+    }
+    .term-font-size-input {
+        width: 72px;
+        flex-shrink: 0;
+        text-align: center;
     }
 </style>
