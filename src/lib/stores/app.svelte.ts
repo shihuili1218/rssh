@@ -244,7 +244,7 @@ function _loadSidebarPos(key: string, fallback: SidebarPosition): SidebarPositio
   const v = localStorage.getItem(key);
   return v === "left" || v === "right" || v === "top" || v === "bottom" ? v : fallback;
 }
-let _sidebarPosDesktop = $state<SidebarPosition>(_loadSidebarPos(_SB_KEY_DESKTOP, "left"));
+let _sidebarPosDesktop = $state<SidebarPosition>(_loadSidebarPos(_SB_KEY_DESKTOP, "top"));
 let _sidebarPosMobile = $state<SidebarPosition>(_loadSidebarPos(_SB_KEY_MOBILE, "top"));
 export function sidebarPosition(): SidebarPosition {
   return isMobile ? _sidebarPosMobile : _sidebarPosDesktop;

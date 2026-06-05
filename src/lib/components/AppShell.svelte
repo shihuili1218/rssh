@@ -684,6 +684,7 @@
             sections.push([
                 {
                     label: t("tab.context.ai"),
+                    shortcut: keymap.format("ai.toggle"),
                     disabled: !sid,
                     onClick: () => { app.setActiveTab(tab.id); ai.openPanel(); },
                 },
