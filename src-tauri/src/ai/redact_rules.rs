@@ -80,18 +80,22 @@ pub fn delete(db: &Db, id: &str) -> AppResult<()> {
 
 /// 建会话用：把 DB 里的规则编译成 `RedactRule`，保留 list 的应用顺序。
 ///
-/// 坏规则**跳过 + log**而非整体失败 —— save 时已校验，理论上到不了这里；万一 DB 被
-/// 外部改坏，也不应该阻塞整个 AI 会话启动。fail-safe 优于 fail-closed：少一条脱敏
-/// 规则比 AI 完全用不了的体验损失小，且其余规则仍然生效。
+/// **fail-closed**：任一规则编译失败直接向上抛。save 时已校验正则，正常路径到不了
+/// 这里；走到这里 = DB 被外部改坏。这种情况**绝不静默跳过**那条规则 —— 那等于悄悄
+/// 少套一条脱敏、用一套比用户配置更弱的策略。报错让会话起步失败、用户可见，再去
+/// 设置页（走 list，不经本函数）删掉坏规则即可恢复。
 pub fn compiled(db: &Db) -> AppResult<Vec<RedactRule>> {
-    let mut out = Vec::new();
-    for row in ai_redact_rule::list(db)? {
-        match RedactRule::new(&row.pattern, &row.replacement) {
-            Ok(rule) => out.push(rule),
-            Err(e) => log::warn!("skipping invalid redact rule '{}': {e}", row.id),
-        }
-    }
-    Ok(out)
+    ai_redact_rule::list(db)?
+        .into_iter()
+        .map(|row| {
+            RedactRule::new(&row.pattern, &row.replacement).map_err(|e| {
+                AppError::config(
+                    "redact_invalid_regex",
+                    json!({ "id": row.id, "pattern": row.pattern, "error": e.to_string() }),
+                )
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -100,7 +104,7 @@ mod tests {
     use crate::ai::sanitize;
     use std::collections::HashSet;
 
-    /// 漂移守卫：seed 进 DB 的 7 条默认规则必须与 sanitize::default_rules() 完全一致。
+    /// 漂移守卫：seed 进 DB 的 8 条默认规则必须与 sanitize::default_rules() 完全一致。
     /// 谁改了一处忘了另一处（schema.rs 的 seed SQL vs sanitize.rs 的 default_rules），
     /// 这个测试就会红 —— merge 不进去。这是处理"不可避免的重复"的正确姿势：把漂移
     /// 变成编译期/测试期的硬错误。
@@ -207,5 +211,24 @@ mod tests {
         assert!(rules.is_empty());
         // 空规则集 = 原样返回（passthrough）
         assert_eq!(sanitize::redact("ssh 10.0.0.1", &rules), "ssh 10.0.0.1");
+    }
+
+    /// fail-closed：DB 里若有一条编译不了的规则（只可能来自外部改坏 DB，因为 save 已
+    /// 校验），compiled() 必须报错，绝不静默跳过 —— 否则会悄悄少套一条脱敏。
+    #[test]
+    fn compiled_fails_closed_on_uncompilable_rule() {
+        let db = Db::open_in_memory().unwrap();
+        // 绕过 save 校验，直接 upsert 一条坏正则。
+        ai_redact_rule::upsert(
+            &db,
+            &ai_redact_rule::RedactRuleRow {
+                id: "user-broken".into(),
+                pattern: "(unclosed".into(),
+                replacement: "<X>".into(),
+            },
+        )
+        .unwrap();
+        let err = compiled(&db).unwrap_err();
+        assert_eq!(err.code(), "redact_invalid_regex");
     }
 }

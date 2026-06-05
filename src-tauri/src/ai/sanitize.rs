@@ -29,7 +29,10 @@ impl RedactRule {
     }
 }
 
-/// 默认脱敏规则集。设计文档 1.2 节列出。
+/// 默认脱敏规则集（设计文档 1.2 节）。**仅测试用**：生产环境默认规则由 db::schema
+/// 的 v13 迁移 seed 进 ai_redact_rules 表、运行期从 DB 读。本函数是那份 seed 的
+/// in-code 镜像，供 ai::redact_rules 的漂移守卫单测和 sanitize 自身单测做基准。
+#[cfg(test)]
 pub fn default_rules() -> Vec<RedactRule> {
     [
         (r"\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", "<REDACTED:ip-10>"),

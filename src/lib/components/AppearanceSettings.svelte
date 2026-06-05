@@ -135,10 +135,10 @@
     const fontSizeBounds = theme.termFontSizeBounds;
     let fontSize = $state<number>(theme.termFontSize());
     async function saveFontSize() {
-        const clamped = Math.max(fontSizeBounds.min,
-            Math.min(fontSizeBounds.max, Math.round(fontSize) || fontSizeBounds.def));
-        fontSize = clamped;
-        await theme.setTermFontSize(clamped);
+        // 委托给 store 的 clampFontSize（唯一 clamp 真相）：0 夹到下限 8、空输入(NaN)
+        // 落到默认。避免本地 `Math.round(x) || def` 把合法的 0 当假值错跳成默认值。
+        await theme.setTermFontSize(fontSize);
+        fontSize = theme.termFontSize();
     }
     onMount(async () => {
         try {

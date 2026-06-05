@@ -316,6 +316,9 @@ pub async fn ai_session_start_impl(
         user_skills_cache,
         model,
         client,
+        // DB 读规则失败直接向上抛 —— fail-closed。脱敏策略读不出来就让会话起步失败、
+        // 报错给用户，绝不静默回退默认：用户可能删过 / 改严过默认规则，回退会悄悄套用
+        // 一套不同的（更弱的）脱敏策略，给"我的配置生效了"的假象，比报错危险得多。
         redact_rules: redact_rules::compiled(&state.db)?,
         max_output_bytes: sanitize::DEFAULT_MAX_OUTPUT_BYTES,
         ssh_handle,

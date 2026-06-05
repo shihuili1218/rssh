@@ -142,9 +142,9 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
             .query_row("SELECT COUNT(*) FROM ai_redact_rules", [], |r| r.get(0))
             .unwrap_or(0);
         if count == 0 {
-            // 7 条默认规则与 ai::sanitize::default_rules() 必须保持同步，由
+            // 8 条默认规则与 ai::sanitize::default_rules() 必须保持同步，由
             // ai::redact_rules 的漂移守卫单测把关（改一处忘改另一处 = 红灯）。
-            // created_at = 1..7 保留 default_rules() 的原始应用顺序；用户新规则用
+            // created_at = 1..8 保留 default_rules() 的原始应用顺序；用户新规则用
             // 真实时间戳（~1.7e9）必然排在默认之后。
             // raw string `r"..."`：pattern 里的正则反斜杠不被 Rust 转义；SQLite
             // 单引号字面量不处理反斜杠，原样入库。
