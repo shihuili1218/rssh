@@ -34,7 +34,7 @@ pub fn list(db: &Db) -> AppResult<Vec<RedactRuleRow>> {
 
 /// 插入或更新。ON CONFLICT 只改 pattern/replacement/updated_at，**保留 created_at**
 /// （= 应用顺序），所以编辑一条规则不会让它在列表里跳位。新规则用当前时间戳，
-/// 必然排在 seed 默认（created_at 1..7）之后。
+/// 必然排在 seed 默认（created_at 1..8）之后。
 pub fn upsert(db: &Db, rule: &RedactRuleRow) -> AppResult<()> {
     let conn = db.lock()?;
     // 毫秒分辨率：避免同一秒内连续新增两条规则 created_at 撞值、退化成按随机 id 排序

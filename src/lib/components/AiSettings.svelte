@@ -641,7 +641,7 @@
     {#if !editingRule}
         <div class="skill-list">
             {#each redactRules as r (r.id)}
-                <button class="skill-item neu-sm" onclick={() => viewRule(r)}>
+                <button class="skill-item surface-raised-sm" onclick={() => viewRule(r)}>
                     <div class="rule-line">
                         <code class="rule-pattern">{r.pattern}</code>
                         <span class="rule-arrow">→</span>
