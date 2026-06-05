@@ -14,7 +14,7 @@ use serde_json::json;
 use crate::db::{ai_redact_rule, Db};
 use crate::error::{AppError, AppResult};
 
-use super::sanitize::{self, RedactRule};
+use super::sanitize::RedactRule;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RedactRuleRecord {
@@ -97,6 +97,7 @@ pub fn compiled(db: &Db) -> AppResult<Vec<RedactRule>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::sanitize;
     use std::collections::HashSet;
 
     /// 漂移守卫：seed 进 DB 的 7 条默认规则必须与 sanitize::default_rules() 完全一致。
