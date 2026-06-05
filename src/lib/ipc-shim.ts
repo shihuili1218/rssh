@@ -204,7 +204,12 @@ export function installTauriShim(): void {
         clipboard_write: (a) => navigator.clipboard.writeText(String(a.text ?? "")),
         open_external_url: async (a) => {
             const u = String(a.url ?? "");
-            if (!u.startsWith("http://") && !u.startsWith("https://")) throw "window_non_https_url";
+            // Match the desktop AppError wire shape (external.rs) so errMsg() can
+            // localize this with the {url} param, instead of the UI showing the
+            // raw code. Bare-string throws below stay as-is — they're either UI
+            // messages already (PLUGIN_UNSUPPORTED) or codeless bridge errors.
+            if (!u.startsWith("http://") && !u.startsWith("https://"))
+                throw `__rssh_err__|${JSON.stringify({ code: "window_non_https_url", params: { url: u } })}`;
             // `noreferrer` (not just `noopener`): the headless UI carries the
             // per-launch `?rsshToken=` in its URL, so without it the browser would
             // leak the token to the external site via the `Referer` header.

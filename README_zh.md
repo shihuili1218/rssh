@@ -29,6 +29,7 @@ macOS / Windows / Linux / Android。
 - **同步** —— 加密导出/导入，GitHub 备份
 - **片段** —— 可复用命令快捷键（Cmd+E）
 - **移动端** —— 虚拟键盘栏（Ctrl/Alt/方向键/Tab/Esc）、安全区、栈式导航
+- **IDE 插件** —— 在 JetBrains IDE 的工具窗口里运行 RSSH（共享数据目录）
 
 ## 安装
 
@@ -45,6 +46,21 @@ macOS / Windows / Linux / Android。
 | Windows             | `rssh-{ver}-windows-x86_64-setup.exe` | 图形安装器           |
 | Android             | `rssh-{ver}-android-universal.apk`   |                 |
 | iOS                 |                                      | 没有开发者账号，自行打包    |
+
+### IntelliJ / JetBrains 插件
+
+在 JetBrains IDE 的工具窗口里运行完整 RSSH —— 与桌面版共享同一套主机、密钥、设置
+（共享 `~/.rssh`）。每个 zip 内置 headless `rssh-server`，自包含、按平台区分：
+
+| 平台                  | 文件                                              |
+|---------------------|--------------------------------------------------|
+| macOS Apple Silicon | `rssh-{ver}-macos-aarch64-jetbrains-plugin.zip`  |
+| macOS Intel         | `rssh-{ver}-macos-x86_64-jetbrains-plugin.zip`   |
+| Linux               | `rssh-{ver}-linux-x86_64-jetbrains-plugin.zip`   |
+| Windows             | `rssh-{ver}-windows-x86_64-jetbrains-plugin.zip` |
+
+安装：**Settings → Plugins → ⚙ → Install Plugin from Disk…**，选对应平台的 zip 后重启。
+打开底部 **RSSH** 工具窗口即可使用；标题栏的 ✕ 停止内置 server。
 
 ## 开发
 

@@ -129,7 +129,7 @@ backend through one seam: Tauri's injected `window.__TAURI_INTERNALS__`
 So the 90+ `invoke` / 25+ `listen` call sites are untouched and the desktop
 transport stays byte-identical. On the Rust side the *same engine* is reused via a
 `Host` enum (`src-tauri/src/emitter.rs`): Tauri commands pass `Host::Tauri`
-(→ `app.emit` / `app.state`), the headless server passes `Host::Sink` (→ ws push).
+(→ `app.emit` / `app.state`), the headless server passes `Host::Headless` (→ ws push).
 
 ### Pieces
 

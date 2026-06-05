@@ -29,6 +29,7 @@ macOS / Windows / Linux / Android.
 - **Sync** -- encrypted export/import, GitHub backup
 - **Snippets** -- reusable command shortcuts (Cmd+E)
 - **Mobile** -- virtual keybar (Ctrl/Alt/arrows/Tab/Esc), safe area, stack navigation
+- **IDE Plugin** -- run RSSH inside JetBrains IDEs in a tool window (shared data dir)
 
 ## Install
 
@@ -45,6 +46,23 @@ Download from [Releases](../../releases):
 | Windows             | `rssh-{ver}-windows-x86_64-setup.exe` | GUI installer                |
 | Android             | `rssh-{ver}-android-universal.apk`    |                              |
 | iOS                 |                                       | No ID, build you self        |
+
+### IntelliJ / JetBrains plugin
+
+Run the full RSSH UI inside a JetBrains IDE tool window — same hosts, keys and
+settings as the desktop app (shared `~/.rssh`). Each zip bundles a headless
+`rssh-server`, so it's self-contained and per-OS:
+
+| Platform            | File                                             |
+|---------------------|--------------------------------------------------|
+| macOS Apple Silicon | `rssh-{ver}-macos-aarch64-jetbrains-plugin.zip`  |
+| macOS Intel         | `rssh-{ver}-macos-x86_64-jetbrains-plugin.zip`   |
+| Linux               | `rssh-{ver}-linux-x86_64-jetbrains-plugin.zip`   |
+| Windows             | `rssh-{ver}-windows-x86_64-jetbrains-plugin.zip` |
+
+Install: **Settings → Plugins → ⚙ → Install Plugin from Disk…**, pick the zip for
+your OS and restart. Open the **RSSH** tool window (bottom) to start; the ✕ in its
+title bar stops the embedded server.
 
 ## Development
 

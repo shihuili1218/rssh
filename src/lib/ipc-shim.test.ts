@@ -217,8 +217,9 @@ describe("browser-environment commands (served locally, never over ws)", () => {
         await internals.invoke("open_external_url", { url: "https://example.com" });
         expect(fakeWindow.open).toHaveBeenCalledWith("https://example.com", "_blank", "noopener,noreferrer");
 
+        // Off-Tauri now mirrors the desktop AppError wire shape so errMsg() localizes it.
         await expect(internals.invoke("open_external_url", { url: "file:///etc/passwd" })).rejects.toBe(
-            "window_non_https_url",
+            `__rssh_err__|${JSON.stringify({ code: "window_non_https_url", params: { url: "file:///etc/passwd" } })}`,
         );
         expect(ws.sent).toHaveLength(0);
     });
