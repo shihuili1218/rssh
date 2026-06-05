@@ -449,6 +449,22 @@ const zh: Messages = {
   "ai.settings.skills.error.save_failed": "保存失败: {error}",
   "ai.settings.skills.error.delete_failed": "删除失败: {error}",
   "ai.settings.skills.confirm_delete": "确认删除 skill \"{name}\"？",
+
+  "ai.settings.section.redact": "脱敏规则",
+  "ai.settings.redact.new": "+ 新建",
+  "ai.settings.redact.empty": "没有脱敏规则 — 发往 AI 的内容将不做脱敏。点上方按钮添加。",
+  "ai.settings.redact.hint": "发往 AI 前在本地按这些正则脱敏。改动只对新会话生效。",
+  "ai.settings.redact.label.pattern": "正则",
+  "ai.settings.redact.label.replacement": "替换为",
+  "ai.settings.redact.placeholder.pattern": "正则，如 AKIA[0-9A-Z]{16}",
+  "ai.settings.redact.placeholder.replacement": "如 <REDACTED:aws-key>",
+  "ai.settings.redact.btn.delete": "删除",
+  "ai.settings.redact.btn.delete_confirm": "再点一次确认删除",
+  "ai.settings.redact.btn.cancel": "取消",
+  "ai.settings.redact.error.empty_fields": "正则 / 替换不能为空",
+  "ai.settings.redact.error.load_failed": "加载失败: {error}",
+  "ai.settings.redact.error.save_failed": "保存失败: {error}",
+  "ai.settings.redact.error.delete_failed": "删除失败: {error}",
   "ai.handoff.tab_label": "AI 分析",
   "ai.handoff.initial_msg": "请帮我在本机分析 `{path}`。任务：{task}",
 
@@ -464,6 +480,8 @@ const zh: Messages = {
 
   // ── 后端错误（按错误码翻译） ──
   "error.unknown": "{message}",
+  "error.redact_invalid_regex": "正则非法: {error}",
+  "error.redact_zero_width_pattern": "正则会匹配空串 / 零宽位置，将导致全文过度脱敏。请让它至少匹配一个字符。",
   "error.session_already_exists": "目标 {target} 已有 AI 会话，请先停止",
   "error.api_key_missing": "缺少 {provider} API key，请到设置里配置",
   "error.ssh_session_not_found": "SSH session 不存在",

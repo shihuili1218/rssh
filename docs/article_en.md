@@ -25,7 +25,7 @@ Skills live in `src-tauri/src/ai/prompts`, audits welcome.
 
 Of course, security is paramount. Every action by the LLM must go through tools provided by RSSH, and every action passes through RSSH's shape validator + your authorization.
 
-![img_ai.png](img_ai.png)
+![welcome-ai.gif](welcome-ai.gif)
 
 ## 2. The rssh CLI
 
@@ -40,6 +40,8 @@ rssh add profile           # interactive create
 ```
 
 This means you can drop `rssh open foo` into any script, alias, or Makefile, with no need to maintain a duplicate SSH config.
+
+![welcome-cli.gif](welcome-cli.gif)
 
 ---
 
@@ -57,6 +59,8 @@ rssh is **fully implemented on the front end**, with zero server changes:
 - One toggle in settings disables it.
 
 **It doesn't know which machine you're on, and it doesn't need to know.** It works the moment you connect, including someone else's bastion host.
+
+![welcome-blocks.gif](welcome-blocks.gif)
 
 ---
 
@@ -91,6 +95,8 @@ rssh config pull    # pull
 ```
 
 Underneath it's just base64 + GitHub API. **Switch tools whenever you want — your data is in your repo.** No lock-in, no subscription, no "Export to CSV" button.
+
+![welcome-sync.gif](welcome-sync.gif)
 
 ---
 

@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::error::AppResult;
 
-const SCHEMA_VERSION: u32 = 12;
+const SCHEMA_VERSION: u32 = 13;
 
 pub fn migrate(conn: &Connection) -> AppResult<()> {
     let version: u32 = conn
@@ -117,6 +117,51 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
             );
             ",
         )?;
+    }
+
+    if version < 13 {
+        // AI 脱敏规则表。设计取舍：默认规则不再写死在代码里"永远生效"，而是首次建表时
+        // seed 进表，之后与用户自定义规则一视同仁，统一增删改 —— 消除 builtin 特殊情况。
+        //
+        // 这个块一辈子只跑一次（user_version 跨过 13 后不再进），所以用户删掉某条默认规则
+        // 不会在下次启动时被复活。空表 = 脱敏关闭，是用户的显式选择（等同 danger mode）。
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS ai_redact_rules (
+                id          TEXT PRIMARY KEY,
+                pattern     TEXT NOT NULL,
+                replacement TEXT NOT NULL,
+                created_at  INTEGER NOT NULL DEFAULT 0,
+                updated_at  INTEGER NOT NULL DEFAULT 0
+            );
+            ",
+        )?;
+
+        // 仅在表为空时 seed（防御性，建表块本就只跑一次）。
+        let count: u32 = conn
+            .query_row("SELECT COUNT(*) FROM ai_redact_rules", [], |r| r.get(0))
+            .unwrap_or(0);
+        if count == 0 {
+            // 7 条默认规则与 ai::sanitize::default_rules() 必须保持同步，由
+            // ai::redact_rules 的漂移守卫单测把关（改一处忘改另一处 = 红灯）。
+            // created_at = 1..7 保留 default_rules() 的原始应用顺序；用户新规则用
+            // 真实时间戳（~1.7e9）必然排在默认之后。
+            // raw string `r"..."`：pattern 里的正则反斜杠不被 Rust 转义；SQLite
+            // 单引号字面量不处理反斜杠，原样入库。
+            conn.execute_batch(
+                r"
+                INSERT INTO ai_redact_rules (id, pattern, replacement, created_at, updated_at) VALUES
+                  ('ip-10',   '\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b',                                '<REDACTED:ip-10>',   1, 1),
+                  ('ip-172',  '\b172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b',                     '<REDACTED:ip-172>',  2, 2),
+                  ('ip-192',  '\b192\.168\.\d{1,3}\.\d{1,3}\b',                                    '<REDACTED:ip-192>',  3, 3),
+                  ('bearer',  'Bearer [A-Za-z0-9_\-\.]{20,}',                                      '<REDACTED:bearer>',  4, 4),
+                  ('sk-key',  'sk-[A-Za-z0-9_\-]{20,}',                                            '<REDACTED:sk-key>',  5, 5),
+                  ('aws-key', 'AKIA[0-9A-Z]{16}',                                                  '<REDACTED:aws-key>', 6, 6),
+                  ('jwt',     'eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]+',      '<REDACTED:jwt>',     7, 7),
+                  ('hex',     '\b[0-9a-fA-F]{32,}\b',                                              '<REDACTED:hex>',     8, 8);
+                ",
+            )?;
+        }
     }
 
     if version < SCHEMA_VERSION {

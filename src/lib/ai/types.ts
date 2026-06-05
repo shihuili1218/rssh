@@ -10,6 +10,18 @@ export interface SkillRecord {
   builtin: boolean;
 }
 
+/**
+ * 脱敏规则。默认规则首次运行 seed 进 DB，之后与用户规则一视同仁（无 builtin 字段）。
+ * 规则变更只对新会话生效。
+ */
+export interface RedactRuleRecord {
+  id: string;
+  /** 正则源串 */
+  pattern: string;
+  /** 命中后替换成的占位符 */
+  replacement: string;
+}
+
 export type LlmProvider = "anthropic" | "openai" | "deepseek" | "glm";
 
 export interface AiSettings {

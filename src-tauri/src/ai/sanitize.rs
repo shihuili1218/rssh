@@ -40,6 +40,7 @@ pub fn default_rules() -> Vec<RedactRule> {
         (r"\b192\.168\.\d{1,3}\.\d{1,3}\b", "<REDACTED:ip-192>"),
         (r"Bearer [A-Za-z0-9_\-\.]{20,}", "<REDACTED:bearer>"),
         (r"sk-[A-Za-z0-9_\-]{20,}", "<REDACTED:sk-key>"),
+        (r"AKIA[0-9A-Z]{16}", "<REDACTED:aws-key>"),
         (
             r"eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]+",
             "<REDACTED:jwt>",
@@ -55,9 +56,12 @@ pub fn default_rules() -> Vec<RedactRule> {
 pub fn redact(text: &str, rules: &[RedactRule]) -> String {
     let mut out = text.to_string();
     for r in rules {
+        // NoExpand = 字面替换。**绝不能**用 `&str` replacement —— 那会把 `$1`/`$0`/`${name}`
+        // 当捕获组模板展开，用户写 replacement `$1` 配 pattern `(sk-…)` 就能把密钥原样回插，
+        // 直接击穿脱敏。默认规则不含 `$`，行为不变。
         out = r
             .pattern
-            .replace_all(&out, r.replacement.as_str())
+            .replace_all(&out, regex::NoExpand(r.replacement.as_str()))
             .into_owned();
     }
     out
@@ -872,6 +876,17 @@ mod tests {
         assert!(redact("0123456789ABCDEF0123456789ABCDEF", &rules).contains("<REDACTED:hex>"));
         assert!(redact("DeAdBeEfDeAdBeEfDeAdBeEfDeAdBeEf", &rules).contains("<REDACTED:hex>"));
         assert_eq!(redact("short=abc123", &rules), "short=abc123");
+    }
+
+    /// 用户自定义 replacement 含 `$1` 必须**字面**插入，绝不展开成捕获组 ——
+    /// 否则 pattern `(sk-…)` + replacement `$1` 会把密钥原样回插，击穿脱敏。
+    #[test]
+    fn redact_replacement_is_literal_not_capture_template() {
+        let rule = RedactRule::new(r"(sk-[A-Za-z0-9]{20,})", "$1").unwrap();
+        let out = redact("key=sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ end", &[rule]);
+        // 不含原始密钥，且 `$1` 按字面输出
+        assert!(!out.contains("sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ"));
+        assert_eq!(out, "key=$1 end");
     }
 
     #[test]

@@ -3,7 +3,7 @@
     import { invoke } from "@tauri-apps/api/core";
     import * as ai from "../ai/store.svelte.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
-    import type { LlmProvider, ModelInfo, SkillRecord } from "../ai/types.ts";
+    import type { LlmProvider, ModelInfo, RedactRuleRecord, SkillRecord } from "../ai/types.ts";
     import Select from "./Select.svelte";
     import SearchSelect from "./SearchSelect.svelte";
 
@@ -227,6 +227,26 @@
         }
     }
 
+    // ─── 脱敏规则管理 ──────────────────────────────────────────
+    // 镜像 Skill 管理：列表 + 行内编辑表单 + 二次点击删除确认。规则没有 builtin
+    // 概念（默认已 seed 进 DB），全部可改可删。变更只对新会话生效。
+    let redactRules = $state<RedactRuleRecord[]>([]);
+    let editingRule = $state<RedactRuleRecord | null>(null);
+    let isNewRule = $state(false);
+    let savingRule = $state(false);
+    let ruleNote = $state<string | null>(null);
+    // 独立于 skill 的删除确认状态，避免两处共用一个 flag 互相串台。
+    let confirmingRuleDelete = $state(false);
+    let confirmRuleDeleteTimer: number | null = null;
+
+    function resetRuleDeleteConfirm() {
+        confirmingRuleDelete = false;
+        if (confirmRuleDeleteTimer !== null) {
+            clearTimeout(confirmRuleDeleteTimer);
+            confirmRuleDeleteTimer = null;
+        }
+    }
+
     onMount(async () => {
         const s = await ai.loadSettings();
         provider = s.provider as LlmProvider;
@@ -245,11 +265,13 @@
         autoDetectRemoteShell = s.auto_detect_remote_shell;
         if (hasKey) void autoLoadModels();
         await refreshSkills();
+        await refreshRedactRules();
     });
 
     onDestroy(() => {
         if (byokNoteTimer !== null) clearTimeout(byokNoteTimer);
         if (confirmDeleteTimer !== null) clearTimeout(confirmDeleteTimer);
+        if (confirmRuleDeleteTimer !== null) clearTimeout(confirmRuleDeleteTimer);
     });
 
     async function refreshSkills() {
@@ -356,6 +378,86 @@
             await refreshSkills();
         } catch (e) {
             skillNote = t("ai.settings.skills.error.delete_failed", { error: errMsg(e) });
+        }
+    }
+
+    async function refreshRedactRules() {
+        try {
+            redactRules = await ai.listRedactRules();
+        } catch (e) {
+            ruleNote = t("ai.settings.redact.error.load_failed", { error: errMsg(e) });
+        }
+    }
+
+    function newRule() {
+        editingRule = {
+            id: "user-" + crypto.randomUUID().slice(0, 8),
+            pattern: "",
+            replacement: "",
+        };
+        isNewRule = true;
+        ruleNote = null;
+        resetRuleDeleteConfirm();
+    }
+
+    function viewRule(r: RedactRuleRecord) {
+        editingRule = { ...r };
+        isNewRule = false;
+        ruleNote = null;
+        resetRuleDeleteConfirm();
+    }
+
+    function cancelRuleEdit() {
+        editingRule = null;
+        isNewRule = false;
+        ruleNote = null;
+        resetRuleDeleteConfirm();
+    }
+
+    async function saveRule() {
+        if (!editingRule) return;
+        // 空串校验用 === ""（不 trim）：正则里前后空格可能有意义；空 pattern 会匹配
+        // 每个位置导致灾难性替换，必须挡掉。后端还会再编译校验一次。
+        if (editingRule.pattern === "" || editingRule.replacement === "") {
+            ruleNote = t("ai.settings.redact.error.empty_fields");
+            return;
+        }
+        savingRule = true;
+        ruleNote = null;
+        try {
+            await ai.saveRedactRule({
+                id: editingRule.id,
+                pattern: editingRule.pattern,
+                replacement: editingRule.replacement,
+            });
+            editingRule = null;
+            isNewRule = false;
+            await refreshRedactRules();
+        } catch (e) {
+            // 坏正则在后端被拒，errMsg 解析出 error.redact_invalid_regex 的中文/英文消息。
+            ruleNote = t("ai.settings.redact.error.save_failed", { error: errMsg(e) });
+        } finally {
+            savingRule = false;
+        }
+    }
+
+    async function removeRule(r: RedactRuleRecord) {
+        if (!confirmingRuleDelete) {
+            confirmingRuleDelete = true;
+            confirmRuleDeleteTimer = window.setTimeout(() => {
+                confirmingRuleDelete = false;
+                confirmRuleDeleteTimer = null;
+            }, 3000);
+            return;
+        }
+        resetRuleDeleteConfirm();
+        try {
+            await ai.deleteRedactRule(r.id);
+            editingRule = null;
+            isNewRule = false;
+            await refreshRedactRules();
+        } catch (e) {
+            ruleNote = t("ai.settings.redact.error.delete_failed", { error: errMsg(e) });
         }
     }
 </script>
@@ -522,6 +624,61 @@
             </label>
         </div>
     </div>
+
+    <!-- 脱敏规则管理 —— 镜像下方 Skill 段：列表 / 行内表单 / 二次删除确认。 -->
+    <div class="section-label skill-header">
+        {t("ai.settings.section.redact")}
+        {#if !editingRule}
+            <button class="btn btn-sm" onclick={newRule}>{t("ai.settings.redact.new")}</button>
+        {/if}
+    </div>
+    <div class="redact-hint">{t("ai.settings.redact.hint")}</div>
+
+    {#if ruleNote}
+        <div class="banner">{ruleNote} <button class="banner-close" onclick={() => (ruleNote = null)} aria-label={t("common.close")}>×</button></div>
+    {/if}
+
+    {#if !editingRule}
+        <div class="skill-list">
+            {#each redactRules as r (r.id)}
+                <button class="skill-item neu-sm" onclick={() => viewRule(r)}>
+                    <div class="rule-line">
+                        <code class="rule-pattern">{r.pattern}</code>
+                        <span class="rule-arrow">→</span>
+                        <code class="rule-replacement">{r.replacement}</code>
+                    </div>
+                </button>
+            {/each}
+            {#if redactRules.length === 0}
+                <div class="placeholder">{t("ai.settings.redact.empty")}</div>
+            {/if}
+        </div>
+    {:else}
+        <div class="form">
+            <div class="row">
+                <label for="rr-pattern">{t("ai.settings.redact.label.pattern")}</label>
+                <input id="rr-pattern" type="text" class="mono" bind:value={editingRule.pattern}
+                       placeholder={t("ai.settings.redact.placeholder.pattern")}/>
+            </div>
+            <div class="row">
+                <label for="rr-replacement">{t("ai.settings.redact.label.replacement")}</label>
+                <input id="rr-replacement" type="text" class="mono" bind:value={editingRule.replacement}
+                       placeholder={t("ai.settings.redact.placeholder.replacement")}/>
+            </div>
+            <div class="actions">
+                <button class="btn btn-accent btn-sm" onclick={saveRule} disabled={savingRule}>
+                    {savingRule ? t("ai.settings.btn.saving") : t("common.save")}
+                </button>
+                {#if !isNewRule}
+                    <button class="btn btn-sm btn-danger" class:confirming={confirmingRuleDelete}
+                            onclick={() => editingRule && removeRule(editingRule)}>
+                        {confirmingRuleDelete ? t("ai.settings.redact.btn.delete_confirm") : t("ai.settings.redact.btn.delete")}
+                    </button>
+                {/if}
+                <button class="btn btn-sm" onclick={cancelRuleEdit}>{t("ai.settings.redact.btn.cancel")}</button>
+            </div>
+        </div>
+    {/if}
 
     <div class="section-label skill-header">
         {t("ai.settings.section.skills")}
@@ -895,5 +1052,44 @@
         padding: 24px;
         color: var(--text-dim);
         font-size: 13px;
+    }
+
+    /* 脱敏规则 ─────────────────────────────────────────────── */
+    .redact-hint {
+        font-size: 11px;
+        color: var(--text-dim);
+        line-height: 1.5;
+        margin-top: -6px;
+    }
+    /* 列表行：pattern → replacement，等宽字体，过长截断不撑破卡片。 */
+    .rule-line {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        min-width: 0;
+    }
+    .rule-pattern,
+    .rule-replacement {
+        font-family: monospace;
+        font-size: 12px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .rule-pattern {
+        color: var(--text);
+        flex: 1 1 auto;
+    }
+    .rule-arrow {
+        color: var(--text-dim);
+        flex: 0 0 auto;
+    }
+    .rule-replacement {
+        color: var(--accent);
+        flex: 0 1 auto;
+    }
+    /* pattern / replacement 输入框用等宽，跟正则语义一致。 */
+    .row input.mono {
+        font-family: monospace;
     }
 </style>

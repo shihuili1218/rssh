@@ -697,8 +697,10 @@
             const top = Math.max(minTop, Math.min(maxTop, containerTop));
 
             // xterm keeps this textarea far off-screen by default. On mobile
-            // WebView, focusing/typing into that off-screen control can pan the
-            // page while fixed chrome stays put. Keep it invisible but in-view.
+            // WebView, focusing it makes the page pan to reveal it, and the IME
+            // composition/candidate UI anchors to its position — so off-screen
+            // means a yanked page and a misplaced input popup. Keep it invisible
+            // but in-view. (Layout-independent: not about any fixed chrome.)
             helper.style.position = "fixed";
             helper.style.left = "1px";
             helper.style.top = `${Math.round(top)}px`;

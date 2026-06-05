@@ -701,6 +701,18 @@ async fn dispatch_async(
         "ai_delete_skill" => {
             ok(crate::ai::skills::delete_user(&state.db, &arg::<String>(&args, "id")?))
         }
+        "ai_list_redact_rules" => ok(crate::ai::redact_rules::list(&state.db)),
+        "ai_save_redact_rule" => ok(crate::ai::redact_rules::save(
+            &state.db,
+            &crate::ai::redact_rules::RedactRuleRecord {
+                id: arg(&args, "id")?,
+                pattern: arg(&args, "pattern")?,
+                replacement: arg(&args, "replacement")?,
+            },
+        )),
+        "ai_delete_redact_rule" => {
+            ok(crate::ai::redact_rules::delete(&state.db, &arg::<String>(&args, "id")?))
+        }
         "ai_audit_get" => {
             let tab_id: String = arg(&args, "tabId")?;
             let audit = locked(&state.ai_sessions)

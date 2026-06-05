@@ -60,6 +60,9 @@ getrandom = "0.2"
 # 进程内 passphrase 缓存的内存清零保护（drop 时擦写底层字节）
 zeroize = { version = "1", features = ["derive"] }
 regex = "1"
+# regex 的伴生 crate（已在依赖树里）。用于 save 时拒绝零宽匹配的脱敏规则
+# （minimum_len()==0 → 会在每个位置 replace → 灾难性 over-replacement）。
+regex-syntax = "0.8"
 futures-util = "0.3"
 
 # CLI（optional，靠 --features cli 启用）

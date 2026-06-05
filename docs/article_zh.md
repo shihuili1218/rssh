@@ -25,7 +25,7 @@ skills 在 src-tauri/src/ai/prompts ，欢迎审查。
 
 当然安全是无比重要的，LLM 的任何操作都必须通过 RSSH 提供的工具，而所有操作都会在 RSSH 层 shape validator + 你的授权。
 
-![img_ai.png](img_ai.png)
+![welcome-ai.gif](welcome-ai.gif)
 
 ## 二、rssh CLI
 `rssh` CLI是一个特殊的存在，你可以在任意终端工具里使用rssh的数据，随时随地rssh open [profile]，并且它和 GUI **读同一个** SQLite（~/.rssh/rssh.db）。在 GUI 里加的 Profile，命令行立刻能用；反之亦然。
@@ -39,6 +39,8 @@ rssh add profile           # 交互式创建
 ```
 
 这意味着你可以把 `rssh open foo` 塞进任何脚本、alias、Makefile，不需要再维护一份重复的 SSH 配置。
+
+![welcome-cli.gif](welcome-cli.gif)
 
 ---
 
@@ -56,6 +58,8 @@ rssh **完全前端实现**，零服务器改动：
 - 设置里一键关掉
 
 **它不知道你在哪台机器上，也不需要知道。** 一次连接立刻生效，包括别人的堡垒机。
+
+![welcome-blocks.gif](welcome-blocks.gif)
 
 ---
 
@@ -90,6 +94,8 @@ rssh config pull    # 拉取
 ```
 
 底层就是 base64 + GitHub API。**想换工具就换，数据就在你的 repo 里。**没有锁定，没有订阅，没有"导出到 CSV"按钮。
+
+![welcome-sync.gif](welcome-sync.gif)
 
 ---
 

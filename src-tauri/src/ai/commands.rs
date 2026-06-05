@@ -12,6 +12,7 @@ use crate::secret::setting_key;
 use crate::state::AppState;
 
 use super::llm;
+use super::redact_rules::{self, RedactRuleRecord};
 use super::sanitize;
 use super::session::{self, DiagnoseSession, UserAction};
 use super::skills::{self, SkillRecord};
@@ -149,6 +150,38 @@ pub async fn ai_delete_skill(state: State<'_, AppState>, id: String) -> AppResul
     skills::delete_user(&state.db, &id)
 }
 
+// ─── 脱敏规则管理 ────────────────────────────────────────────────────
+// 规则变更只对**新会话**生效（同 skill：建会话时 snapshot，会话期间不重读 DB）。
+
+#[tauri::command]
+pub async fn ai_list_redact_rules(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<RedactRuleRecord>> {
+    redact_rules::list(&state.db)
+}
+
+#[tauri::command]
+pub async fn ai_save_redact_rule(
+    state: State<'_, AppState>,
+    id: String,
+    pattern: String,
+    replacement: String,
+) -> AppResult<()> {
+    redact_rules::save(
+        &state.db,
+        &RedactRuleRecord {
+            id,
+            pattern,
+            replacement,
+        },
+    )
+}
+
+#[tauri::command]
+pub async fn ai_delete_redact_rule(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    redact_rules::delete(&state.db, &id)
+}
+
 /// 把前端 locale code 映射为给 LLM 的语言名称（用于 prompt 末尾的 "Respond in X"）。
 fn locale_label(locale: &str) -> &'static str {
     match locale {
@@ -283,7 +316,7 @@ pub async fn ai_session_start_impl(
         user_skills_cache,
         model,
         client,
-        redact_rules: sanitize::default_rules(),
+        redact_rules: redact_rules::compiled(&state.db)?,
         max_output_bytes: sanitize::DEFAULT_MAX_OUTPUT_BYTES,
         ssh_handle,
         data_dir: state.data_dir.clone(),

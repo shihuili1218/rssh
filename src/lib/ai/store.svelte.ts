@@ -20,6 +20,7 @@ import type {
   CommandResult,
   LlmProvider,
   ModelInfo,
+  RedactRuleRecord,
   ShellKind,
   SkillRecord,
 } from "./types.ts";
@@ -728,4 +729,20 @@ export async function saveSkill(s: { id: string; name: string; description: stri
 
 export async function deleteSkill(id: string): Promise<void> {
   return invoke("ai_delete_skill", { id });
+}
+
+// ─── 脱敏规则管理 ──────────────────────────────────────────────────
+// 变更只对新会话生效（后端建会话时 snapshot）。saveRedactRule 在后端编译校验正则，
+// 坏正则会抛 redact_invalid_regex。
+
+export async function listRedactRules(): Promise<RedactRuleRecord[]> {
+  return invoke<RedactRuleRecord[]>("ai_list_redact_rules");
+}
+
+export async function saveRedactRule(r: { id: string; pattern: string; replacement: string }): Promise<void> {
+  return invoke("ai_save_redact_rule", r);
+}
+
+export async function deleteRedactRule(id: string): Promise<void> {
+  return invoke("ai_delete_redact_rule", { id });
 }

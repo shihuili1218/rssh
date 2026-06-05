@@ -5038,6 +5038,7 @@ dependencies = [
  "pkcs8",
  "portable-pty",
  "regex",
+ "regex-syntax",
  "reqwest 0.12.28",
  "rfd",
  "rpassword",

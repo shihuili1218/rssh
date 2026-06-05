@@ -447,6 +447,22 @@ const en = {
   "ai.settings.skills.error.save_failed": "Save failed: {error}",
   "ai.settings.skills.error.delete_failed": "Delete failed: {error}",
   "ai.settings.skills.confirm_delete": "Delete skill \"{name}\"?",
+
+  "ai.settings.section.redact": "REDACTION RULES",
+  "ai.settings.redact.new": "+ New",
+  "ai.settings.redact.empty": "No redaction rules — content sent to the AI will not be redacted. Click the button above to add one.",
+  "ai.settings.redact.hint": "Applied locally before anything is sent to the AI. Changes affect new sessions only.",
+  "ai.settings.redact.label.pattern": "PATTERN",
+  "ai.settings.redact.label.replacement": "REPLACE WITH",
+  "ai.settings.redact.placeholder.pattern": "regex, e.g. AKIA[0-9A-Z]{16}",
+  "ai.settings.redact.placeholder.replacement": "e.g. <REDACTED:aws-key>",
+  "ai.settings.redact.btn.delete": "Delete",
+  "ai.settings.redact.btn.delete_confirm": "Click again to confirm",
+  "ai.settings.redact.btn.cancel": "Cancel",
+  "ai.settings.redact.error.empty_fields": "pattern / replacement cannot be empty",
+  "ai.settings.redact.error.load_failed": "Load failed: {error}",
+  "ai.settings.redact.error.save_failed": "Save failed: {error}",
+  "ai.settings.redact.error.delete_failed": "Delete failed: {error}",
   "ai.handoff.tab_label": "AI Analysis",
   "ai.handoff.initial_msg": "Please analyze `{path}` locally. Task: {task}",
 
@@ -462,6 +478,8 @@ const en = {
 
   // ── Backend errors (translated by error code) ──
   "error.unknown": "{message}",
+  "error.redact_invalid_regex": "Invalid regex: {error}",
+  "error.redact_zero_width_pattern": "Pattern matches empty / zero-width text — it would over-redact everything. Make it match at least one character.",
   "error.session_already_exists": "Target {target} already has an AI session — stop it first",
   "error.api_key_missing": "Missing {provider} API key — configure it in Settings",
   "error.ssh_session_not_found": "SSH session not found",
