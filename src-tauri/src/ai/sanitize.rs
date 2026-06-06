@@ -250,7 +250,6 @@ const COMMAND_ALIASES: &[(&str, &str)] = &[
     ("mawk", "awk"),
     ("nawk", "awk"),
     // 同语义不同名
-    ("unlink", "rm"),
     ("nvim", "vi"),
     ("neovim", "vi"),
     ("view", "vi"),
