@@ -166,7 +166,7 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
 
     if version < 14 {
         // AI 命令黑名单表。模型同 ai_redact_rules（v13）：出厂默认首次建表 seed 进表，
-        // 之后无 builtin 概念，统一 CRUD。空表 = 用户显式放行该类。
+        // 之后无 builtin 概念，统一 CRUD。某类无行 = 放行该类，整表皆空 = 全放行（皆用户显式删除）。
         //
         // 这个块一辈子只跑一次（user_version 跨过 14 后不再进），删掉的命令不会复活。
         // name 是 PRIMARY KEY —— 一个命令只属一类，DB 层钉死。
@@ -184,7 +184,7 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
             .query_row("SELECT COUNT(*) FROM ai_command_blacklist", [], |r| r.get(0))
             .unwrap_or(0);
         if count == 0 {
-            // 这 5 类 46 条与 ai::sanitize 的 5 张 const 表必须一致，由
+            // 这 5 类 49 条与 ai::sanitize 的 5 张 const 表必须一致，由
             // ai::command_blacklist 的漂移守卫单测 `seed_matches_builtin` 把关
             // （改一处忘改另一处 = 红灯）。category 串见 BlCategory::as_str。
             conn.execute_batch(
@@ -205,7 +205,8 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
                   ('eval','deferred_exec'),('source','deferred_exec'),('.','deferred_exec'),
                   ('xargs','forwarder'),('nice','forwarder'),('time','forwarder'),
                   ('timeout','forwarder'),('nohup','forwarder'),('stdbuf','forwarder'),
-                  ('setsid','forwarder'),('ionice','forwarder');
+                  ('setsid','forwarder'),('ionice','forwarder'),('flock','forwarder'),
+                  ('taskset','forwarder'),('chrt','forwarder');
                 ",
             )?;
         }

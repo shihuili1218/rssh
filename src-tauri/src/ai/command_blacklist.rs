@@ -1,7 +1,8 @@
 //! 命令黑名单的策略层：DB ↔ sanitize 之间的薄封装，与 redact_rules 同结构。
 //!
 //! C 模型：const 仅作 seed 真值 + 出厂兜底（见 db::schema v14）；运行时以 DB 为准，
-//! 空表 = 用户显式放行该类。这里只放两件 db 层不该管的事：
+//! 某类无行 = 放行该类，整表皆空 = 全部放行 —— 都是用户显式删除的结果。
+//! 这里只放两件 db 层不该管的事：
 //!   - save 时校验命令名（坏名 fail-fast，绝不入库）
 //!   - 建会话时把 DB 行物化成 sanitize::Blacklist（fail-closed）
 
@@ -104,7 +105,7 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    /// 漂移守卫：schema.rs v14 seed 进 DB 的 39 条必须与 sanitize 的 5 张 const 表
+    /// 漂移守卫：schema.rs v14 seed 进 DB 的 49 条必须与 sanitize 的 5 张 const 表
     /// （= `Blacklist::builtin()`）完全一致。改了一处忘了另一处就红 —— 把不可避免的
     /// 重复变成测试期硬错误。
     #[test]

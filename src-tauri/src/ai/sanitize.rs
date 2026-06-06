@@ -238,6 +238,13 @@ const COMMAND_ALIASES: &[(&str, &str)] = &[
     ("gtouch", "touch"),
     ("gtail", "tail"),
     ("gcpio", "cpio"),
+    // 透明 exec wrapper 的 GNU 变体（brew coreutils / gnu-time 的 g 前缀）——
+    // 归一后落到 COMMAND_FORWARDERS 里的 canonical 名被拒，否则 `gtimeout 5 rm` 绕过。
+    ("gtimeout", "timeout"),
+    ("gnice", "nice"),
+    ("gnohup", "nohup"),
+    ("gstdbuf", "stdbuf"),
+    ("gtime", "time"),
     // awk 实现变体
     ("gawk", "awk"),
     ("mawk", "awk"),
@@ -273,13 +280,15 @@ pub const DEFERRED_EXEC: &[&str] = &["eval", "source", "."];
 /// 审查 AST 里的 command_name 节点，转发器后面的命令名是 argument 节点）。全拒。
 ///
 /// - `xargs`：经典转发器，LLM 改用 shell pipe / for 循环 / find -print 替代。
-/// - `nice` / `time` / `timeout` / `nohup` / `stdbuf` / `setsid` / `ionice`：透明执行
-///   wrapper，自身不危险但把真命令推到 args 里 → `timeout 5 rm -rf /` 的 head 是
-///   `timeout`、`rm` 当 arg 永不检查 = 绕过黑名单。不解析各自的 flag 语法，直接当
-///   转发器拒掉最简单安全 —— LLM 用裸命令即可，限时有 `run_command` 自带的 `timeout_s`。
+/// - 透明执行 wrapper（coreutils / util-linux）：`nice` / `time` / `timeout` / `nohup` /
+///   `stdbuf` / `setsid` / `ionice` / `flock` / `taskset` / `chrt`。自身不危险但把真命令推到
+///   args 里 → `timeout 5 rm -rf /` 的 head 是 `timeout`、`rm` 当 arg 永不检查 = 绕过黑名单。
+///   不解析各自的 flag 语法，直接当转发器拒掉最简单安全 —— LLM 用裸命令即可，限时有
+///   `run_command` 自带的 `timeout_s`。GNU g 前缀变体（gtimeout 等）由 COMMAND_ALIASES 归一。
 #[cfg(test)]
 pub const COMMAND_FORWARDERS: &[&str] = &[
-    "xargs", "nice", "time", "timeout", "nohup", "stdbuf", "setsid", "ionice",
+    "xargs", "nice", "time", "timeout", "nohup", "stdbuf", "setsid", "ionice", "flock",
+    "taskset", "chrt",
 ];
 
 /// 全拒的脚本解释器：任意一个都可以通过 `open()` 类 API 写文件，绕过 patch_file 守护。
@@ -2117,6 +2126,15 @@ mod tests {
             "ionice -c3 rm /tmp/x",
             "time rm /tmp/x",
             "sudo timeout 5 rm -rf /tmp/x",
+            // util-linux exec wrapper
+            "flock /tmp/x rm -rf /tmp/y",
+            "taskset -c 0 rm /tmp/x",
+            "chrt -f 99 mkfs /dev/sdb",
+            // macOS brew GNU 变体（g 前缀）—— 经 COMMAND_ALIASES 归一后仍被拦
+            "gtimeout 5 rm -rf /tmp/x",
+            "gnice -n 10 dd if=/dev/zero of=/tmp/x",
+            "gnohup rm /tmp/x",
+            "gstdbuf -oL kill -9 1",
         ] {
             assert!(
                 matches!(validate(cmd), Err(ShapeError::Destructive(_))),
