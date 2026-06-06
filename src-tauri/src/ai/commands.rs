@@ -11,6 +11,7 @@ use crate::error::{locked, AppError, AppResult};
 use crate::secret::setting_key;
 use crate::state::AppState;
 
+use super::command_blacklist::{self, CategoryGroup};
 use super::llm;
 use super::redact_rules::{self, RedactRuleRecord};
 use super::sanitize;
@@ -182,6 +183,23 @@ pub async fn ai_delete_redact_rule(state: State<'_, AppState>, id: String) -> Ap
     redact_rules::delete(&state.db, &id)
 }
 
+#[tauri::command]
+pub async fn ai_list_command_blacklist(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<CategoryGroup>> {
+    command_blacklist::list_grouped(&state.db)
+}
+
+/// 整类替换某一分类的命令集合（前端按类编辑、整行保存）。坏命令名 fail-fast，整批拒。
+#[tauri::command]
+pub async fn ai_replace_command_blacklist(
+    state: State<'_, AppState>,
+    category: String,
+    names: Vec<String>,
+) -> AppResult<()> {
+    command_blacklist::replace_category(&state.db, &category, &names)
+}
+
 /// 把前端 locale code 映射为给 LLM 的语言名称（用于 prompt 末尾的 "Respond in X"）。
 fn locale_label(locale: &str) -> &'static str {
     match locale {
@@ -320,6 +338,9 @@ pub async fn ai_session_start_impl(
         // 报错给用户，绝不静默回退默认：用户可能删过 / 改严过默认规则，回退会悄悄套用
         // 一套不同的（更弱的）脱敏策略，给"我的配置生效了"的假象，比报错危险得多。
         redact_rules: redact_rules::compiled(&state.db)?,
+        // 同 redact_rules 的理由 —— fail-closed。DB 读黑名单失败就让会话起步失败、
+        // 报错给用户，绝不退化成空名单放行一切（C 模型下唯一的硬不变量）。
+        blacklist: command_blacklist::load(&state.db)?,
         max_output_bytes: sanitize::DEFAULT_MAX_OUTPUT_BYTES,
         ssh_handle,
         data_dir: state.data_dir.clone(),

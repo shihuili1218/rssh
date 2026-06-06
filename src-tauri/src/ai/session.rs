@@ -20,7 +20,7 @@ use crate::ssh::sftp::SftpHandle;
 
 use super::audit::{AuditKind, AuditLog};
 use super::llm::{ChatDelta, ChatMessage, ChatRequest, DeltaSink, LlmClient, ToolCall};
-use super::sanitize::{self, RedactRule};
+use super::sanitize::{self, Blacklist, RedactRule};
 use super::skills::SkillRecord;
 use super::tools::{
     self, AnalyzeLocallyInput, DownloadFileInput, LoadSkillInput, RunCommandInput,
@@ -138,6 +138,9 @@ pub struct SessionConfig {
     pub model: String,
     pub client: Box<dyn LlmClient>,
     pub redact_rules: Vec<RedactRule>,
+    /// 命令黑名单：启动时从 DB 一次性物化（fail-closed，见 command_blacklist::load）。
+    /// 同 redact_rules —— 会话期内不变，用户中途改黑名单不影响运行中的会话。
+    pub blacklist: Blacklist,
     pub max_output_bytes: usize,
     /// SSH target 的连接 handle（本地 PTY target 为 None）。
     /// download_file 工具复用这个 handle 起 SFTP 子系统。
@@ -1019,7 +1022,7 @@ impl Actor {
             Err(e) => return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}"))),
         };
 
-        if let Err(e) = sanitize::validate(&input.cmd) {
+        if let Err(e) = sanitize::validate_with(&input.cmd, &self.cfg.blacklist) {
             return Ok(self.make_tool_error(
                 &tc.id,
                 &format!("rssh refused the command: {e}. Try a compliant rewrite."),

@@ -3,7 +3,7 @@
     import { invoke } from "@tauri-apps/api/core";
     import * as ai from "../ai/store.svelte.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
-    import type { LlmProvider, ModelInfo, RedactRuleRecord, SkillRecord } from "../ai/types.ts";
+    import type { CategoryGroup, LlmProvider, ModelInfo, RedactRuleRecord, SkillRecord } from "../ai/types.ts";
     import Select from "./Select.svelte";
     import SearchSelect from "./SearchSelect.svelte";
 
@@ -266,6 +266,7 @@
         if (hasKey) void autoLoadModels();
         await refreshSkills();
         await refreshRedactRules();
+        await refreshBlacklist();
     });
 
     onDestroy(() => {
@@ -460,6 +461,64 @@
             ruleNote = t("ai.settings.redact.error.delete_failed", { error: errMsg(e) });
         }
     }
+
+    // ─── 命令黑名单管理 ──────────────────────────────────────────
+    // 五类，每类一行，整类编辑：点行 → textarea 改 → 保存即整类替换。
+    // 没有 builtin 概念（默认已 seed 进 DB），全部可改；空一类 = 放行该类。
+    // 变更只对新会话生效。
+    let blacklist = $state<CategoryGroup[]>([]);
+    let editingCat = $state<string | null>(null);
+    let editingCmds = $state("");
+    let savingCat = $state(false);
+    let blNote = $state<string | null>(null);
+
+    // 分类 key → i18n 标签。t() 的 key 是字面量联合类型，不能动态拼，所以这里 switch。
+    function catLabel(cat: string): string {
+        switch (cat) {
+            case "destructive": return t("ai.settings.blacklist.cat.destructive");
+            case "write_verb": return t("ai.settings.blacklist.cat.write_verb");
+            case "interpreter": return t("ai.settings.blacklist.cat.interpreter");
+            case "deferred_exec": return t("ai.settings.blacklist.cat.deferred_exec");
+            case "forwarder": return t("ai.settings.blacklist.cat.forwarder");
+            default: return cat;
+        }
+    }
+
+    async function refreshBlacklist() {
+        try {
+            blacklist = await ai.listCommandBlacklist();
+        } catch (e) {
+            blNote = t("ai.settings.blacklist.error.load_failed", { error: errMsg(e) });
+        }
+    }
+
+    function editCat(g: CategoryGroup) {
+        editingCat = g.category;
+        editingCmds = g.commands.join(" ");
+        blNote = null;
+    }
+
+    function cancelCatEdit() {
+        editingCat = null;
+        blNote = null;
+    }
+
+    async function saveCat() {
+        if (!editingCat) return;
+        // 空格 / 逗号 / 换行分隔，去空。后端还会再校验每个命令名。
+        const names = editingCmds.split(/[\s,]+/).filter(Boolean);
+        savingCat = true;
+        blNote = null;
+        try {
+            await ai.replaceCommandBlacklist(editingCat, names);
+            editingCat = null;
+            await refreshBlacklist();
+        } catch (e) {
+            blNote = t("ai.settings.blacklist.error.save_failed", { error: errMsg(e) });
+        } finally {
+            savingCat = false;
+        }
+    }
 </script>
 
 <div class="page">
@@ -626,59 +685,114 @@
     </div>
 
     <!-- 脱敏规则管理 —— 镜像下方 Skill 段：列表 / 行内表单 / 二次删除确认。 -->
-    <div class="section-label skill-header">
-        {t("ai.settings.section.redact")}
-        {#if !editingRule}
-            <button class="btn btn-sm" onclick={newRule}>{t("ai.settings.redact.new")}</button>
-        {/if}
-    </div>
-    <div class="redact-hint">{t("ai.settings.redact.hint")}</div>
-
-    {#if ruleNote}
-        <div class="banner">{ruleNote} <button class="banner-close" onclick={() => (ruleNote = null)} aria-label={t("common.close")}>×</button></div>
-    {/if}
-
-    {#if !editingRule}
-        <div class="skill-list">
-            {#each redactRules as r (r.id)}
-                <button class="skill-item surface-raised-sm" onclick={() => viewRule(r)}>
-                    <div class="rule-line">
-                        <code class="rule-pattern">{r.pattern}</code>
-                        <span class="rule-arrow">→</span>
-                        <code class="rule-replacement">{r.replacement}</code>
-                    </div>
-                </button>
-            {/each}
-            {#if redactRules.length === 0}
-                <div class="placeholder">{t("ai.settings.redact.empty")}</div>
+    <div class="section-label">{t("ai.settings.section.redact")}</div>
+    <!-- 脱敏规则整块装进 .card.surface-raised（同 provider-card）；新建按钮移进卡片内的 card-head。 -->
+    <div class="card surface-raised list-card">
+        <div class="card-head">
+            <span class="hint">{t("ai.settings.redact.hint")}</span>
+            {#if !editingRule}
+                <button class="btn btn-sm" onclick={newRule}>{t("ai.settings.redact.new")}</button>
             {/if}
         </div>
-    {:else}
-        <div class="form">
-            <div class="row">
-                <label for="rr-pattern">{t("ai.settings.redact.label.pattern")}</label>
-                <input id="rr-pattern" type="text" class="mono" bind:value={editingRule.pattern}
-                       placeholder={t("ai.settings.redact.placeholder.pattern")}/>
+
+        {#if ruleNote}
+            <div class="banner">{ruleNote} <button class="banner-close" onclick={() => (ruleNote = null)} aria-label={t("common.close")}>×</button></div>
+        {/if}
+
+        {#if !editingRule}
+            <div class="skill-list">
+                {#each redactRules as r (r.id)}
+                    <button class="skill-item surface-raised-sm" onclick={() => viewRule(r)}>
+                        <div class="rule-line">
+                            <code class="rule-pattern">{r.pattern}</code>
+                            <span class="rule-arrow">→</span>
+                            <code class="rule-replacement">{r.replacement}</code>
+                        </div>
+                    </button>
+                {/each}
+                {#if redactRules.length === 0}
+                    <div class="placeholder">{t("ai.settings.redact.empty")}</div>
+                {/if}
             </div>
-            <div class="row">
-                <label for="rr-replacement">{t("ai.settings.redact.label.replacement")}</label>
-                <input id="rr-replacement" type="text" class="mono" bind:value={editingRule.replacement}
-                       placeholder={t("ai.settings.redact.placeholder.replacement")}/>
+        {:else}
+            <div class="form">
+                <div class="row">
+                    <label for="rr-pattern">{t("ai.settings.redact.label.pattern")}</label>
+                    <input id="rr-pattern" type="text" class="mono" bind:value={editingRule.pattern}
+                           placeholder={t("ai.settings.redact.placeholder.pattern")}/>
+                </div>
+                <div class="row">
+                    <label for="rr-replacement">{t("ai.settings.redact.label.replacement")}</label>
+                    <input id="rr-replacement" type="text" class="mono" bind:value={editingRule.replacement}
+                           placeholder={t("ai.settings.redact.placeholder.replacement")}/>
+                </div>
+                <div class="actions">
+                    <button class="btn btn-accent btn-sm" onclick={saveRule} disabled={savingRule}>
+                        {savingRule ? t("ai.settings.btn.saving") : t("common.save")}
+                    </button>
+                    {#if !isNewRule}
+                        <button class="btn btn-sm btn-danger" class:confirming={confirmingRuleDelete}
+                                onclick={() => editingRule && removeRule(editingRule)}>
+                            {confirmingRuleDelete ? t("ai.settings.redact.btn.delete_confirm") : t("ai.settings.redact.btn.delete")}
+                        </button>
+                    {/if}
+                    <button class="btn btn-sm" onclick={cancelRuleEdit}>{t("ai.settings.redact.btn.cancel")}</button>
+                </div>
             </div>
-            <div class="actions">
-                <button class="btn btn-accent btn-sm" onclick={saveRule} disabled={savingRule}>
-                    {savingRule ? t("ai.settings.btn.saving") : t("common.save")}
-                </button>
-                {#if !isNewRule}
-                    <button class="btn btn-sm btn-danger" class:confirming={confirmingRuleDelete}
-                            onclick={() => editingRule && removeRule(editingRule)}>
-                        {confirmingRuleDelete ? t("ai.settings.redact.btn.delete_confirm") : t("ai.settings.redact.btn.delete")}
+        {/if}
+    </div>
+
+    <!-- 命令黑名单 + 可用性过滤 合进一个 .card.surface-raised。
+         黑名单：五类整类编辑；可用性：只读，照 ShellSettings 的 tips-list 样式。 -->
+    <div class="section-label">{t("ai.settings.section.blacklist")}</div>
+    <div class="card surface-raised list-card">
+        <div class="hint">{t("ai.settings.blacklist.hint")}</div>
+
+        {#if blNote}
+            <div class="banner">{blNote} <button class="banner-close" onclick={() => (blNote = null)} aria-label={t("common.close")}>×</button></div>
+        {/if}
+
+        <div class="skill-list">
+            {#each blacklist as g (g.category)}
+                {#if editingCat === g.category}
+                    <div class="form">
+                        <div class="row">
+                            <label for="bl-cmds">{catLabel(g.category)}</label>
+                            <textarea id="bl-cmds" class="mono bl-textarea" bind:value={editingCmds}
+                                      placeholder={t("ai.settings.blacklist.placeholder")}></textarea>
+                        </div>
+                        <div class="actions">
+                            <button class="btn btn-accent btn-sm" onclick={saveCat} disabled={savingCat}>
+                                {savingCat ? t("ai.settings.btn.saving") : t("common.save")}
+                            </button>
+                            <button class="btn btn-sm" onclick={cancelCatEdit}>{t("ai.settings.redact.btn.cancel")}</button>
+                        </div>
+                    </div>
+                {:else}
+                    <button class="skill-item surface-raised-sm" onclick={() => editCat(g)}>
+                        <div class="bl-row">
+                            <span class="bl-cat">{catLabel(g.category)}</span>
+                            <code class="bl-cmds" class:bl-empty={g.commands.length === 0}>
+                                {g.commands.length ? g.commands.join("  ") : t("ai.settings.blacklist.empty_cat")}
+                            </code>
+                        </div>
                     </button>
                 {/if}
-                <button class="btn btn-sm" onclick={cancelRuleEdit}>{t("ai.settings.redact.btn.cancel")}</button>
-            </div>
+            {/each}
         </div>
-    {/if}
+
+        <div class="card-divider"></div>
+
+        <!-- 可用性过滤 —— 只读说明，非安全拦截。tips-group / tips-list 同 ShellSettings。 -->
+        <div class="tips-group">
+            <div class="tips-title">{t("ai.settings.section.usability")}</div>
+            <div class="hint">{t("ai.settings.usability.intro")}</div>
+            <ul class="tips-list">
+                <li>{t("ai.settings.usability.item_tui")}</li>
+                <li>{t("ai.settings.usability.item_loop")}</li>
+            </ul>
+        </div>
+    </div>
 
     <div class="section-label skill-header">
         {t("ai.settings.section.skills")}
@@ -856,11 +970,23 @@
     /* Provider / Danger 卡片：复用全局 .card.surface-raised 提供 bg + 阴影 + 圆角，
        本地只加 padding + 内布局，跟 GitHubSyncScreen 同款。 */
     .provider-card,
-    .danger-card {
+    .danger-card,
+    .list-card {
         padding: 18px;
         display: flex;
         flex-direction: column;
         gap: 14px;
+    }
+
+    /* 卡片内顶部行：说明在左、操作按钮（如脱敏规则的"新建"）在右。 */
+    .card-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+    }
+    .card-head .hint {
+        flex: 1;
     }
 
     /* 主开关行：title/desc 在左，switch 在右；不再依赖全局 .switch-card 容器。 */
@@ -1054,12 +1180,36 @@
         font-size: 13px;
     }
 
-    /* 脱敏规则 ─────────────────────────────────────────────── */
-    .redact-hint {
+    /* 脱敏规则 / 命令黑名单 ────────────────────────────────── */
+    /* 卡片内说明文本：跟 ShellSettings .shell-hint 同档（11px / dim / 1.5）。 */
+    .hint {
         font-size: 11px;
         color: var(--text-dim);
         line-height: 1.5;
-        margin-top: -6px;
+    }
+
+    /* 可用性过滤：照 ShellSettings 的 tips-group / tips-title / tips-list。 */
+    .tips-group {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+    .tips-title {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-sub);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .tips-list {
+        margin: 0;
+        padding-left: 18px;
+        font-size: 12px;
+        color: var(--text);
+        line-height: 1.6;
+    }
+    .tips-list li {
+        margin: 2px 0;
     }
     /* 列表行：pattern → replacement，等宽字体，过长截断不撑破卡片。 */
     .rule-line {
@@ -1091,5 +1241,39 @@
     /* pattern / replacement 输入框用等宽，跟正则语义一致。 */
     .row input.mono {
         font-family: monospace;
+    }
+
+    /* 命令黑名单：分类行（标签 + 命令列表），整类编辑。 */
+    .bl-row {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        min-width: 0;
+    }
+    .bl-cat {
+        flex: 0 0 auto;
+        font-size: 12px;
+        color: var(--text);
+        font-weight: 600;
+    }
+    .bl-cmds {
+        flex: 1 1 auto;
+        font-family: monospace;
+        font-size: 12px;
+        color: var(--text-dim);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .bl-empty {
+        font-style: italic;
+        opacity: 0.7;
+    }
+    /* 命令列表短，覆盖 `.row textarea` 的 240px（那是给 skill 正文的）。
+       选择器带 .row + 元素，特异性高于 `.row textarea` 才压得住。 */
+    .row textarea.bl-textarea {
+        min-height: 3.2rem;
+        font-size: 12px;
+        line-height: 1.5;
     }
 </style>

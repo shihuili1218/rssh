@@ -17,6 +17,7 @@ import type {
   AuditLog,
   ChatItem,
   CommandProposed,
+  CategoryGroup,
   CommandResult,
   LlmProvider,
   ModelInfo,
@@ -745,4 +746,16 @@ export async function saveRedactRule(r: { id: string; pattern: string; replaceme
 
 export async function deleteRedactRule(id: string): Promise<void> {
   return invoke("ai_delete_redact_rule", { id });
+}
+
+// ─── 命令黑名单管理 ──────────────────────────────────────────────────
+// 整类编辑：保存即整类替换。改动只对新会话生效（后端建会话时 snapshot）。
+// replaceCommandBlacklist 在后端校验命令名，坏名会抛 blacklist_invalid_name。
+
+export async function listCommandBlacklist(): Promise<CategoryGroup[]> {
+  return invoke<CategoryGroup[]>("ai_list_command_blacklist");
+}
+
+export async function replaceCommandBlacklist(category: string, names: string[]): Promise<void> {
+  return invoke("ai_replace_command_blacklist", { category, names });
 }

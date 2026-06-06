@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::error::AppResult;
 
-const SCHEMA_VERSION: u32 = 13;
+const SCHEMA_VERSION: u32 = 14;
 
 pub fn migrate(conn: &Connection) -> AppResult<()> {
     let version: u32 = conn
@@ -159,6 +159,53 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
                   ('aws-key', 'AKIA[0-9A-Z]{16}',                                                  '<REDACTED:aws-key>', 6, 6),
                   ('jwt',     'eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]+',      '<REDACTED:jwt>',     7, 7),
                   ('hex',     '\b[0-9a-fA-F]{32,}\b',                                              '<REDACTED:hex>',     8, 8);
+                ",
+            )?;
+        }
+    }
+
+    if version < 14 {
+        // AI 命令黑名单表。模型同 ai_redact_rules（v13）：出厂默认首次建表 seed 进表，
+        // 之后无 builtin 概念，统一 CRUD。空表 = 用户显式放行该类。
+        //
+        // 这个块一辈子只跑一次（user_version 跨过 14 后不再进），删掉的命令不会复活。
+        // name 是 PRIMARY KEY —— 一个命令只属一类，DB 层钉死。
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS ai_command_blacklist (
+                name     TEXT PRIMARY KEY,
+                category TEXT NOT NULL
+            );
+            ",
+        )?;
+
+        // 仅在表为空时 seed（防御性，建表块本就只跑一次）。
+        let count: u32 = conn
+            .query_row("SELECT COUNT(*) FROM ai_command_blacklist", [], |r| r.get(0))
+            .unwrap_or(0);
+        if count == 0 {
+            // 这 5 类 46 条与 ai::sanitize 的 5 张 const 表必须一致，由
+            // ai::command_blacklist 的漂移守卫单测 `seed_matches_builtin` 把关
+            // （改一处忘改另一处 = 红灯）。category 串见 BlCategory::as_str。
+            conn.execute_batch(
+                "
+                INSERT INTO ai_command_blacklist (name, category) VALUES
+                  ('rm','destructive'),('dd','destructive'),('mkfs','destructive'),
+                  ('iptables','destructive'),('ip6tables','destructive'),('shutdown','destructive'),
+                  ('reboot','destructive'),('halt','destructive'),('poweroff','destructive'),
+                  ('kill','destructive'),('pkill','destructive'),('killall','destructive'),
+                  ('mount','destructive'),('umount','destructive'),('exec','destructive'),
+                  ('tee','write_verb'),('cp','write_verb'),('mv','write_verb'),('ln','write_verb'),
+                  ('install','write_verb'),('truncate','write_verb'),('ed','write_verb'),
+                  ('tar','write_verb'),('unzip','write_verb'),('cpio','write_verb'),
+                  ('python','interpreter'),('python3','interpreter'),('python2','interpreter'),
+                  ('perl','interpreter'),('ruby','interpreter'),('node','interpreter'),
+                  ('nodejs','interpreter'),('lua','interpreter'),('luajit','interpreter'),
+                  ('php','interpreter'),
+                  ('eval','deferred_exec'),('source','deferred_exec'),('.','deferred_exec'),
+                  ('xargs','forwarder'),('nice','forwarder'),('time','forwarder'),
+                  ('timeout','forwarder'),('nohup','forwarder'),('stdbuf','forwarder'),
+                  ('setsid','forwarder'),('ionice','forwarder');
                 ",
             )?;
         }

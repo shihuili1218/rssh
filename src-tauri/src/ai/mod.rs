@@ -12,6 +12,7 @@
 //! - commands  Tauri 命令入口
 
 pub mod audit;
+pub mod command_blacklist;
 pub mod commands;
 pub mod llm;
 pub mod prompts;

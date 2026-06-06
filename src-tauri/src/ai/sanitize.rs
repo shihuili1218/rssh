@@ -169,6 +169,10 @@ pub enum ShapeError {
     Empty,
 }
 
+// 迁移到 DB 后，这 5 张表是出厂默认的 in-code 镜像 —— 仅 `Blacklist::builtin()`（测试基线）
+// + seed 漂移守卫用。生产 seed 走 schema.rs v14 的 SQL、校验走 DB 物化的 Blacklist。
+// 标 `#[cfg(test)]` 与 redact 的 `default_rules()` 同例，避免生产 build 携带死代码。
+#[cfg(test)]
 pub const DESTRUCTIVE: &[&str] = &[
     "rm",
     "dd",
@@ -201,6 +205,7 @@ pub const COUNTED_LOOP: &[&str] = &["vmstat", "iostat", "pidstat", "mpstat", "sa
 /// - `ed`：行编辑器，从 stdin 读命令并写盘（`echo ',d\nw\n' | ed file` 清空）
 /// - `tar` / `unzip` / `cpio`：解 archive 写任意路径（`tar xf -C /etc`）。读用法
 ///   （`tar tf` / `unzip -l`）在 rssh 诊断场景罕见，LLM 用 `ls` / `file` 替代
+#[cfg(test)]
 pub const WRITE_VERBS: &[&str] = &[
     "tee", "cp", "mv", "ln", "install", "truncate", "ed", "tar", "unzip", "cpio",
 ];
@@ -261,12 +266,21 @@ pub const SHELLS: &[&str] = &["bash", "sh", "zsh", "dash", "ksh", "mksh", "ash"]
 
 /// Deferred-execution builtins：和 `bash -c` 同性质，把后续字符串作为命令执行，
 /// sanitize 完全看不到内容。LLM 在 rssh 场景下从无合法用例。
+#[cfg(test)]
 pub const DEFERRED_EXEC: &[&str] = &["eval", "source", "."];
 
 /// 命令转发器：把要执行的真正命令塞进 args，walker 看不到命令头（因为 walker 只
-/// 审查 AST 里的 command_name 节点，xargs 后面的命令名是 argument 节点）。
-/// 全拒——LLM 改用 shell pipe / for 循环 / find -print 替代。
-pub const COMMAND_FORWARDERS: &[&str] = &["xargs"];
+/// 审查 AST 里的 command_name 节点，转发器后面的命令名是 argument 节点）。全拒。
+///
+/// - `xargs`：经典转发器，LLM 改用 shell pipe / for 循环 / find -print 替代。
+/// - `nice` / `time` / `timeout` / `nohup` / `stdbuf` / `setsid` / `ionice`：透明执行
+///   wrapper，自身不危险但把真命令推到 args 里 → `timeout 5 rm -rf /` 的 head 是
+///   `timeout`、`rm` 当 arg 永不检查 = 绕过黑名单。不解析各自的 flag 语法，直接当
+///   转发器拒掉最简单安全 —— LLM 用裸命令即可，限时有 `run_command` 自带的 `timeout_s`。
+#[cfg(test)]
+pub const COMMAND_FORWARDERS: &[&str] = &[
+    "xargs", "nice", "time", "timeout", "nohup", "stdbuf", "setsid", "ionice",
+];
 
 /// 全拒的脚本解释器：任意一个都可以通过 `open()` 类 API 写文件，绕过 patch_file 守护。
 /// 业务上 LLM 也不需要它们——读文件用 cat/grep/awk(read-only)，改文件用 patch_file。
@@ -276,6 +290,7 @@ pub const COMMAND_FORWARDERS: &[&str] = &["xargs"];
 ///
 /// rssh 自己的 file_ops 走 `run_file_op` 不经 sanitize::validate（详见 file_ops.rs 注释），
 /// 所以这里禁 perl 不影响 file_ops 的 perl 降级路径。
+#[cfg(test)]
 pub const INTERPRETERS_DENIED: &[&str] = &[
     "python",
     "python3",
@@ -350,7 +365,18 @@ fn strip_backslashes(s: &str) -> String {
     out
 }
 
-pub fn validate(cmd: &str) -> Result<(), ShapeError> {
+/// 仅测试 helper：用出厂默认黑名单（`Blacklist::builtin()`）校验，给几十个 `shape_*`
+/// 形态测试用。**生产严禁用** —— 生产必须 `validate_with` 传会话从 DB 物化的黑名单，
+/// 否则绕过用户配置（删空的类 / 自定义命令全不生效）。`#[cfg(test)]` 保证它根本不在
+/// 生产 build 里存在，从源头掐掉误用。
+#[cfg(test)]
+fn validate(cmd: &str) -> Result<(), ShapeError> {
+    validate_with(cmd, &Blacklist::builtin())
+}
+
+/// 用给定黑名单校验命令形态。黑名单只影响命令头判定（`Blacklist::check_head`）；
+/// 其余形态规则（wrapper / substitution / redirect / per-command）与黑名单无关。
+pub fn validate_with(cmd: &str, bl: &Blacklist) -> Result<(), ShapeError> {
     let trimmed = cmd.trim();
     if trimmed.is_empty() {
         return Err(ShapeError::Empty);
@@ -383,27 +409,27 @@ pub fn validate(cmd: &str) -> Result<(), ShapeError> {
         ));
     }
     let src = trimmed.as_bytes();
-    walk_ast(&root, src)
+    walk_ast(&root, src, bl)
 }
 
 /// 在 AST 上 DFS 遇到 command / redirected_statement 就跑形态规则；
 /// pipeline / list / 顶层多 command（紧贴 `;`）天然平铺成 children，不再需要分段函数。
-fn walk_ast(n: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeError> {
+fn walk_ast(n: &tree_sitter::Node, src: &[u8], bl: &Blacklist) -> Result<(), ShapeError> {
     let mut cursor = n.walk();
     for child in n.children(&mut cursor) {
         match child.kind() {
-            "command" => check_command(&child, src)?,
+            "command" => check_command(&child, src, bl)?,
             "redirected_statement" => {
                 if let Some(body) = child.child_by_field_name("body") {
                     if body.kind() == "command" {
-                        check_command(&body, src)?;
+                        check_command(&body, src, bl)?;
                     } else {
-                        walk_ast(&body, src)?;
+                        walk_ast(&body, src, bl)?;
                     }
                 }
-                check_redirects(&child, src)?;
+                check_redirects(&child, src, bl)?;
             }
-            _ => walk_ast(&child, src)?,
+            _ => walk_ast(&child, src, bl)?,
         }
     }
     Ok(())
@@ -454,7 +480,7 @@ fn extract_command_name(
     )))
 }
 
-fn check_command(cmd: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeError> {
+fn check_command(cmd: &tree_sitter::Node, src: &[u8], bl: &Blacklist) -> Result<(), ShapeError> {
     let name_node = match cmd.child_by_field_name("name") {
         Some(n) => n,
         None => return Ok(()), // 空命令（变量赋值前缀等），不管
@@ -470,7 +496,7 @@ fn check_command(cmd: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeError> 
     let mut arg_strings: Vec<String> = Vec::new();
     let mut cur = cmd.walk();
     for c in cmd.children_by_field_name("argument", &mut cur) {
-        recurse_substitutions(&c, src)?;
+        recurse_substitutions(&c, src, bl)?;
         if c.kind() == "ansi_c_string" {
             return Err(ShapeError::Destructive(format!(
                 "obfuscated argument '{}' (ANSI-C $'...' in args can hide flags from sanitize)",
@@ -487,18 +513,18 @@ fn check_command(cmd: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeError> 
     // 取代散落的 family 列表。
     let head = canonical_head(head);
 
-    check_command_head(head)?;
+    bl.check_head(head)?;
     check_per_command_rules(head, &arg_strings[head_args_start..])?;
     Ok(())
 }
 
-fn recurse_substitutions(n: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeError> {
+fn recurse_substitutions(n: &tree_sitter::Node, src: &[u8], bl: &Blacklist) -> Result<(), ShapeError> {
     if matches!(n.kind(), "command_substitution" | "process_substitution") {
-        return walk_ast(n, src);
+        return walk_ast(n, src, bl);
     }
     let mut cur = n.walk();
     for c in n.children(&mut cur) {
-        recurse_substitutions(&c, src)?;
+        recurse_substitutions(&c, src, bl)?;
     }
     Ok(())
 }
@@ -560,31 +586,127 @@ fn strip_wrappers<'a>(
     Ok((head, i))
 }
 
-fn check_command_head(head: &str) -> Result<(), ShapeError> {
-    if DESTRUCTIVE.contains(&head) {
-        return Err(ShapeError::Destructive(head.to_string()));
+/// 黑名单分类。一个命令头只可能属于一类（这 5 张表语义互斥），所以运行时名单用
+/// `HashMap<String, BlCategory>` 而非 5 个 set —— 查一次同时拿到「中没中 + 哪一类 +
+/// 报哪个 ShapeError」，把原来 5 个连续 `if contains` 塌缩成一次查表 + match。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlCategory {
+    Destructive,
+    WriteVerb,
+    Interpreter,
+    DeferredExec,
+    Forwarder,
+}
+
+impl BlCategory {
+    /// 前端展示 / DB 存储顺序：每类一行，顺序稳定。
+    pub const ALL: [BlCategory; 5] = [
+        BlCategory::Destructive,
+        BlCategory::WriteVerb,
+        BlCategory::Interpreter,
+        BlCategory::DeferredExec,
+        BlCategory::Forwarder,
+    ];
+
+    /// DB / 前端用的稳定字符串键。改了它就是改 DB schema，别动。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BlCategory::Destructive => "destructive",
+            BlCategory::WriteVerb => "write_verb",
+            BlCategory::Interpreter => "interpreter",
+            BlCategory::DeferredExec => "deferred_exec",
+            BlCategory::Forwarder => "forwarder",
+        }
     }
-    if WRITE_VERBS.contains(&head) {
-        return Err(ShapeError::Write(format!(
-            "{head} (file modification must go through patch_file)"
-        )));
+
+    /// 从 DB / 前端字符串解析。未知串 → None（调用方 fail-closed 上抛）。
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "destructive" => Some(BlCategory::Destructive),
+            "write_verb" => Some(BlCategory::WriteVerb),
+            "interpreter" => Some(BlCategory::Interpreter),
+            "deferred_exec" => Some(BlCategory::DeferredExec),
+            "forwarder" => Some(BlCategory::Forwarder),
+            _ => None,
+        }
     }
-    if INTERPRETERS_DENIED.contains(&head) {
-        return Err(ShapeError::Write(format!(
-            "{head} (rssh blocks script interpreters; use patch_file / match_file for file work)"
-        )));
+}
+
+/// 运行时命令黑名单。两个来源产出同型值、共用 `check_head`：
+///   - `builtin()`：从 5 张 const 表构造（出厂默认 / seed 真值 / 测试基线）；
+///   - DB 物化（见后续阶段的 `command_blacklist::load`）。
+///
+/// **空名单 = 放行一切**（C 模型：用户显式删空的结果）。区分「空」与「加载失败」
+/// 是调用方的责任：load 失败必须 fail-closed 上抛，绝不退化成空 `Blacklist`。
+#[derive(Debug, Clone, Default)]
+pub struct Blacklist(std::collections::HashMap<String, BlCategory>);
+
+impl Blacklist {
+    /// 出厂默认：5 张 const 表灌进 HashMap。seed 进 DB 的内容必须与此一致，
+    /// 由 `command_blacklist` 的漂移守卫单测把关。
+    /// 仅测试用（迁移后生产不构造 builtin，黑名单一律从 DB load）。
+    #[cfg(test)]
+    pub fn builtin() -> Self {
+        let mut m = std::collections::HashMap::new();
+        for &c in DESTRUCTIVE {
+            m.insert(c.to_string(), BlCategory::Destructive);
+        }
+        for &c in WRITE_VERBS {
+            m.insert(c.to_string(), BlCategory::WriteVerb);
+        }
+        for &c in INTERPRETERS_DENIED {
+            m.insert(c.to_string(), BlCategory::Interpreter);
+        }
+        for &c in DEFERRED_EXEC {
+            m.insert(c.to_string(), BlCategory::DeferredExec);
+        }
+        for &c in COMMAND_FORWARDERS {
+            m.insert(c.to_string(), BlCategory::Forwarder);
+        }
+        Blacklist(m)
     }
-    if DEFERRED_EXEC.contains(&head) {
-        return Err(ShapeError::Write(format!(
-            "{head} (deferred execution hides the real command from sanitize)"
-        )));
+
+    /// 从 (name, category) 序列构造（DB load / 测试用）。
+    pub fn from_entries(entries: impl IntoIterator<Item = (String, BlCategory)>) -> Self {
+        Blacklist(entries.into_iter().collect())
     }
-    if COMMAND_FORWARDERS.contains(&head) {
-        return Err(ShapeError::Destructive(format!(
-            "{head} (command forwarder; the real command is passed as an argument and bypasses sanitize)"
-        )));
+
+    /// 遍历 (命令名, 分类)。仅测试用（漂移守卫 + load 反映 DB 的断言）。
+    #[cfg(test)]
+    pub fn iter(&self) -> impl Iterator<Item = (&str, BlCategory)> + '_ {
+        self.0.iter().map(|(k, &v)| (k.as_str(), v))
     }
-    Ok(())
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// 命令头查黑名单。命中 → 对应 ShapeError；未命中 → Ok。
+    /// 错误信息与原 `check_command_head` 逐字一致（保持给 LLM 的改写提示不变）。
+    fn check_head(&self, head: &str) -> Result<(), ShapeError> {
+        match self.0.get(head) {
+            None => Ok(()),
+            Some(BlCategory::Destructive) => Err(ShapeError::Destructive(head.to_string())),
+            Some(BlCategory::WriteVerb) => Err(ShapeError::Write(format!(
+                "{head} (file modification must go through patch_file)"
+            ))),
+            Some(BlCategory::Interpreter) => Err(ShapeError::Write(format!(
+                "{head} (rssh blocks script interpreters; use patch_file / match_file for file work)"
+            ))),
+            Some(BlCategory::DeferredExec) => Err(ShapeError::Write(format!(
+                "{head} (deferred execution hides the real command from sanitize)"
+            ))),
+            Some(BlCategory::Forwarder) => Err(ShapeError::Destructive(format!(
+                "{head} (command forwarder; the real command is passed as an argument and bypasses sanitize)"
+            ))),
+        }
+    }
 }
 
 /// 真正命令头之后剩下的 args 上跑 per-command 规则。args 已 normalize_head。
@@ -799,7 +921,7 @@ fn check_per_command_rules(head: &str, args: &[String]) -> Result<(), ShapeError
 /// **输入重定向 (`cmd < file`)** 是 file_redirect 节点但 operator 是 `<`，读文件不写。
 /// 通过扫节点 text 里第一个 `<`/`>` 区分 —— `<` 在前是输入，放行写检查；但仍要
 /// 递归 destination 找 command_substitution（`cat < $(rm -rf /)` 否则绕过）。
-fn check_redirects(stmt: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeError> {
+fn check_redirects(stmt: &tree_sitter::Node, src: &[u8], bl: &Blacklist) -> Result<(), ShapeError> {
     let mut cur = stmt.walk();
     for r in stmt.children_by_field_name("redirect", &mut cur) {
         if r.kind() != "file_redirect" {
@@ -808,7 +930,7 @@ fn check_redirects(stmt: &tree_sitter::Node, src: &[u8]) -> Result<(), ShapeErro
         let dest_opt = r.child_by_field_name("destination");
         // 不管输入 / 输出 / fd-dup：destination 可能含 `$(...)`，里面的命令必审查。
         if let Some(dest) = dest_opt {
-            recurse_substitutions(&dest, src)?;
+            recurse_substitutions(&dest, src, bl)?;
         }
         // 区分输入 vs 输出：file_redirect 节点 text 形如 "> /tmp/x" / "<file" / "2>&1" /
         // "&> out" / "1< file" / "<> rw"。
@@ -1236,6 +1358,68 @@ mod tests {
             validate("env FOO=bar ruby -e ''"),
             Err(ShapeError::Write(_))
         ));
+    }
+
+    #[test]
+    fn validate_with_empty_blacklist_allows_destructive_head() {
+        // 空黑名单 = 放行命令头（C 模型：用户显式删空 destructive 类）。
+        // 放行的只是「命令头判定」—— per-command / redirect / substitution 规则与
+        // 黑名单无关，仍然生效。
+        let empty = Blacklist::from_entries(std::iter::empty());
+        assert!(validate_with("rm -rf /tmp/x", &empty).is_ok());
+        assert!(validate_with("python3 script.py", &empty).is_ok());
+        // builtin 仍然拦它们 —— 默认行为不变。
+        assert!(matches!(
+            validate("rm -rf /tmp/x"),
+            Err(ShapeError::Destructive(_))
+        ));
+    }
+
+    #[test]
+    fn validate_with_custom_blacklist_blocks_new_head() {
+        // 自定义黑名单：把原本放行的命令加进 destructive 类 → 被拦；builtin 不认识它
+        // → 放行。证明命令头判定确实跟着传入的 Blacklist 走。
+        let bl =
+            Blacklist::from_entries([("frobnicate".to_string(), BlCategory::Destructive)]);
+        assert!(matches!(
+            validate_with("frobnicate --hard", &bl),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(validate("frobnicate --hard").is_ok());
+        // wrapper 穿透对自定义命令同样生效（sudo frobnicate 仍被拦）。
+        assert!(matches!(
+            validate_with("sudo frobnicate", &bl),
+            Err(ShapeError::Destructive(_))
+        ));
+    }
+
+    #[test]
+    fn builtin_blacklist_covers_all_const_tables() {
+        // builtin() 必须忠实反映 5 张 const 表（分类正确、无重叠、无遗漏）——
+        // 这是后续阶段 seed 漂移守卫（DB seed == builtin）的前置。
+        let bl = Blacklist::builtin();
+        for &c in DESTRUCTIVE {
+            assert_eq!(bl.0.get(c), Some(&BlCategory::Destructive), "{c}");
+        }
+        for &c in WRITE_VERBS {
+            assert_eq!(bl.0.get(c), Some(&BlCategory::WriteVerb), "{c}");
+        }
+        for &c in INTERPRETERS_DENIED {
+            assert_eq!(bl.0.get(c), Some(&BlCategory::Interpreter), "{c}");
+        }
+        for &c in DEFERRED_EXEC {
+            assert_eq!(bl.0.get(c), Some(&BlCategory::DeferredExec), "{c}");
+        }
+        for &c in COMMAND_FORWARDERS {
+            assert_eq!(bl.0.get(c), Some(&BlCategory::Forwarder), "{c}");
+        }
+        // HashMap 条数 == 5 张表之和：撞了重名（同名进两类）或漏了都会红。
+        let total = DESTRUCTIVE.len()
+            + WRITE_VERBS.len()
+            + INTERPRETERS_DENIED.len()
+            + DEFERRED_EXEC.len()
+            + COMMAND_FORWARDERS.len();
+        assert_eq!(bl.0.len(), total, "重叠或遗漏：HashMap 条数 != const 表总数");
     }
 
     #[test]
@@ -1922,6 +2106,23 @@ mod tests {
             validate("sudo xargs ls"),
             Err(ShapeError::Destructive(_))
         ));
+        // 透明执行 wrapper：真命令在 args 里，把 wrapper 名拉黑即拦（head 就是 wrapper 名）。
+        // `timeout 5 rm -rf /` 若放过 timeout，rm 永不被检查 —— 这正是黑名单存在的意义。
+        for cmd in [
+            "timeout 5 rm -rf /tmp/x",
+            "nohup rm -rf /tmp/x",
+            "nice -n 10 dd if=/dev/zero of=/tmp/x",
+            "stdbuf -oL kill -9 1",
+            "setsid mkfs /dev/sdb",
+            "ionice -c3 rm /tmp/x",
+            "time rm /tmp/x",
+            "sudo timeout 5 rm -rf /tmp/x",
+        ] {
+            assert!(
+                matches!(validate(cmd), Err(ShapeError::Destructive(_))),
+                "forwarder bypass not blocked: {cmd}"
+            );
+        }
     }
 
     #[test]

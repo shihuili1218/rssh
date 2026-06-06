@@ -216,6 +216,8 @@ pub fn run() {
             ai::commands::ai_list_redact_rules,
             ai::commands::ai_save_redact_rule,
             ai::commands::ai_delete_redact_rule,
+            ai::commands::ai_list_command_blacklist,
+            ai::commands::ai_replace_command_blacklist,
             ai::commands::ai_session_start,
             ai::commands::ai_session_stop,
             ai::commands::ai_session_clear_context,

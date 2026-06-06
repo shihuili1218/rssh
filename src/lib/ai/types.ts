@@ -22,6 +22,17 @@ export interface RedactRuleRecord {
   replacement: string;
 }
 
+/**
+ * 命令黑名单的一个分类（后端按 5 类分组返回，顺序稳定）。
+ * `category` 是稳定 key（destructive / write_verb / interpreter / deferred_exec /
+ * forwarder），前端用它查 i18n 标签。整类编辑：保存即整类替换。
+ * 空 commands = 该类被用户放行。改动只对新会话生效。
+ */
+export interface CategoryGroup {
+  category: string;
+  commands: string[];
+}
+
 export type LlmProvider = "anthropic" | "openai" | "deepseek" | "glm";
 
 export interface AiSettings {
