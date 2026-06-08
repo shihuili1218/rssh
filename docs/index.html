@@ -8,36 +8,26 @@
           content="Cross-platform SSH client with AI-assisted ops diagnose, command block colors, keychain-backed credential security, and multi-device sync. Desktop GUI + CLI for macOS, Windows, Linux, Android."/>
     <meta name="keywords" content="ssh client, ssh manager, ai ops, sftp client, terminal, command blocks, ssh gui, ssh keychain, ssh sync"/>
     <meta name="author" content="ofcoder"/>
-    <meta name="theme-color" content="#0f1117"/>
-
-    <!-- Canonical: avoid duplicate-content penalties from www. / trailing slash / query variants. -->
+    <meta name="theme-color" content="#0b0f16"/>
     <link rel="canonical" href="https://rssh.ofcoder.com/"/>
-
-    <!-- Search engine directives —— allow everything; rely on sitemap.xml for discovery. -->
     <meta name="robots" content="index, follow, max-image-preview:large"/>
 
-    <!-- Open Graph: social link unfurl. og:image must be an absolute URL; relative paths
-         fail in most social platforms (Slack/Telegram/LinkedIn rewriters fetch on their
-         servers without the page's base). 1200×630 is the de-facto target size. -->
     <meta property="og:site_name" content="RSSH"/>
     <meta property="og:title" content="RSSH - SSH Connection Manager with AI Ops Diagnose"/>
     <meta property="og:description" content="Cross-platform SSH client with AI-assisted ops diagnose, command block colors, keychain-backed credential security, and multi-device sync."/>
     <meta property="og:type" content="website"/>
     <meta property="og:url" content="https://rssh.ofcoder.com/"/>
-    <meta property="og:image" content="https://rssh.ofcoder.com/img.png"/>
-    <meta property="og:image:alt" content="RSSH application screenshot"/>
+    <meta property="og:image" content="https://rssh.ofcoder.com/og-card.svg"/>
+    <meta property="og:image:alt" content="RSSH application preview"/>
     <meta property="og:locale" content="en_US"/>
     <meta property="og:locale:alternate" content="zh_CN"/>
-
-    <!-- Twitter / X card -->
     <meta name="twitter:card" content="summary_large_image"/>
     <meta name="twitter:title" content="RSSH - SSH Connection Manager with AI Ops Diagnose"/>
     <meta name="twitter:description" content="Cross-platform SSH client with AI-assisted ops diagnose, command block colors, keychain-backed credential security, and multi-device sync."/>
-    <meta name="twitter:image" content="https://rssh.ofcoder.com/img.png"/>
+    <meta name="twitter:image" content="https://rssh.ofcoder.com/og-card.svg"/>
 
-    <!-- JSON-LD: SoftwareApplication —— gives Google the option to show a rich
-         result card (rating / OS / download). offers.price=0 because rssh is free OSS;
-         omitting offers entirely causes Google to skip the card. -->
+    <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="%230b0f16"/><path d="M14 20h36M14 32h22M14 44h28" stroke="%234a6cf7" stroke-width="5" stroke-linecap="round"/><path d="M44 32l6 6-6 6" stroke="%234cb88a" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>'/>
+
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",
@@ -45,7 +35,7 @@
       "name": "RSSH",
       "description": "Cross-platform SSH connection manager with AI-assisted ops diagnose, command block colors, keychain credential security, and multi-device sync.",
       "url": "https://rssh.ofcoder.com/",
-      "image": "https://rssh.ofcoder.com/img.png",
+      "image": "https://rssh.ofcoder.com/og-card.svg",
       "applicationCategory": "DeveloperApplication",
       "applicationSubCategory": "SSH Client",
       "operatingSystem": "macOS, Windows, Linux, Android",
@@ -61,848 +51,2912 @@
       }
     }
     </script>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        bg: '#0f1117',
-                        surface: '#1a1b26',
-                        panel: '#21222e',
-                        accent: '#4A6CF7',
-                        term: '#2B2D3A',
-                        ok: '#4CB88A',
-                        err: '#E05555',
-                        warn: '#DDAA33',
-                        dim: '#6B7A99',
-                    },
-                    fontFamily: {
-                        sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'system-ui', 'sans-serif'],
-                        mono: ['JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Menlo', 'monospace'],
-                    },
-                    animation: {
-                        'fade-up': 'fadeUp 0.7s ease-out forwards',
-                        'fade-in': 'fadeIn 0.8s ease-out forwards',
-                        'blink': 'blink 1s step-end infinite',
-                        'pulse-glow': 'pulseGlow 3s ease-in-out infinite',
-                    },
-                    keyframes: {
-                        fadeUp: {'0%': {opacity: '0', transform: 'translateY(24px)'}, '100%': {opacity: '1', transform: 'translateY(0)'}},
-                        fadeIn: {'0%': {opacity: '0'}, '100%': {opacity: '1'}},
-                        blink: {'0%,100%': {opacity: '1'}, '50%': {opacity: '0'}},
-                        pulseGlow: {'0%,100%': {boxShadow: '0 0 30px rgba(74,108,247,0.1)'}, '50%': {boxShadow: '0 0 60px rgba(74,108,247,0.25)'}},
-                    }
-                }
-            }
-        }
-    </script>
+
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
-        .delay-100 {
-            animation-delay: 100ms;
+        :root {
+            --bg: #0b0f16;
+            --bg-2: #101621;
+            --bg-3: #131a26;
+            --surface: rgba(22, 29, 42, 0.76);
+            --surface-strong: #171f2e;
+            --panel: #1c2432;
+            --panel-2: #232c3d;
+            --line: rgba(148, 163, 184, 0.16);
+            --line-strong: rgba(148, 163, 184, 0.32);
+            --ink: #f5f7fb;
+            --text: #d9e0ed;
+            --muted: #8794aa;
+            --dim: #5f6d83;
+            --accent: #4a6cf7;
+            --accent-2: #6f8cff;
+            --cyan: #38bdf8;
+            --green: #4cb88a;
+            --amber: #ddaa33;
+            --red: #e05555;
+            --violet: #9b7cff;
+            --shadow: 0 24px 70px rgba(2, 8, 23, 0.44);
+            --max: 1360px;
+            --mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', Menlo, monospace;
+            --sans: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
         }
 
-        .delay-200 {
-            animation-delay: 200ms;
-        }
-
-        .delay-300 {
-            animation-delay: 300ms;
-        }
-
-        .delay-400 {
-            animation-delay: 400ms;
-        }
-
-        .scroll-reveal {
-            opacity: 0;
-            transform: translateY(24px);
-            transition: opacity 0.6s ease-out, transform 0.6s ease-out;
-        }
-
-        .scroll-reveal.visible {
-            opacity: 1;
-            transform: translateY(0);
-        }
-
-        .term-line {
-            opacity: 0;
-            transform: translateY(6px);
-        }
-
-        .term-line.show {
-            opacity: 1;
-            transform: translateY(0);
-            transition: opacity 0.25s, transform 0.25s;
-        }
-
-        /* Command block bar */
-        .cmd-block {
-            border-left: 3px solid transparent;
-            padding-left: 12px;
-            transition: border-color 0.4s;
-        }
-
-        .cmd-block.show {
-            border-color: var(--block-color);
-        }
-
-        ::-webkit-scrollbar {
-            width: 6px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: transparent;
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: #2a2c3a;
-            border-radius: 3px;
+        * {
+            box-sizing: border-box;
         }
 
         html {
             scroll-behavior: smooth;
+            background: var(--bg);
         }
 
-        /* Security flow arrow animation */
-        @keyframes flowRight {
-            0% {
-                transform: translateX(-4px);
-                opacity: 0.4;
-            }
-            50% {
-                opacity: 1;
-            }
-            100% {
-                transform: translateX(4px);
-                opacity: 0.4;
-            }
+        body {
+            margin: 0;
+            min-width: 320px;
+            overflow-x: hidden;
+            background:
+                linear-gradient(90deg, rgba(74, 108, 247, 0.05) 1px, transparent 1px) 50% 0 / 88px 88px,
+                linear-gradient(180deg, rgba(74, 108, 247, 0.04) 1px, transparent 1px) 50% 0 / 88px 88px,
+                linear-gradient(180deg, #0b0f16 0%, #0d1320 46%, #0a0e15 100%);
+            color: var(--text);
+            font-family: var(--sans);
+            -webkit-font-smoothing: antialiased;
+            text-rendering: optimizeLegibility;
         }
 
-        .flow-arrow {
-            animation: flowRight 1.5s ease-in-out infinite;
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            z-index: -2;
+            pointer-events: none;
+            opacity: 0.34;
+            background-image:
+                linear-gradient(rgba(255, 255, 255, 0.042) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.024) 1px, transparent 1px);
+            background-size: 4px 4px, 24px 24px;
+            mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.9), transparent 78%);
         }
 
-        /* AI demo sequence — each step fades in on cue */
-        .ai-step {
+        body::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            pointer-events: none;
+            opacity: 0.26;
+            background-image:
+                linear-gradient(120deg, rgba(74, 108, 247, 0.22), transparent 34%),
+                linear-gradient(240deg, rgba(76, 184, 138, 0.16), transparent 30%),
+                linear-gradient(180deg, transparent 0%, rgba(11, 15, 22, 0.8) 72%);
+        }
+
+        a {
+            color: inherit;
+            text-decoration: none;
+        }
+
+        button,
+        a {
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        code {
+            font-family: var(--mono);
+        }
+
+        ::selection {
+            color: white;
+            background: rgba(74, 108, 247, 0.58);
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #0b0f16;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #283346;
+            border-radius: 8px;
+        }
+
+        .skip-link {
+            position: fixed;
+            left: 16px;
+            top: 16px;
+            z-index: 1000;
+            padding: 10px 14px;
+            border-radius: 6px;
+            background: var(--ink);
+            color: var(--bg);
+            font-weight: 800;
+            transform: translateY(-150%);
+        }
+
+        .skip-link:focus {
+            transform: translateY(0);
+        }
+
+        .progress-bar {
+            position: fixed;
+            left: 0;
+            top: 0;
+            z-index: 999;
+            width: 100%;
+            height: 3px;
+            background: linear-gradient(90deg, var(--accent), var(--green), var(--amber));
+            transform: scaleX(var(--progress, 0));
+            transform-origin: 0 50%;
+        }
+
+        .site-nav {
+            position: fixed;
+            left: 50%;
+            top: 16px;
+            z-index: 80;
+            width: min(calc(100% - 32px), 1180px);
+            height: 58px;
+            transform: translateX(-50%);
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            align-items: center;
+            gap: 22px;
+            padding: 0 12px 0 16px;
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            border-radius: 8px;
+            background: rgba(10, 15, 23, 0.76);
+            box-shadow: 0 18px 44px rgba(2, 6, 23, 0.32);
+            backdrop-filter: blur(16px);
+        }
+
+        .brand {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 900;
+            letter-spacing: 0;
+            color: var(--ink);
+        }
+
+        .brand-mark {
+            position: relative;
+            width: 34px;
+            height: 34px;
+            border: 1px solid rgba(74, 108, 247, 0.5);
+            border-radius: 8px;
+            background: linear-gradient(145deg, rgba(74, 108, 247, 0.22), rgba(76, 184, 138, 0.12));
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 12px 26px rgba(74, 108, 247, 0.16);
+        }
+
+        .brand-mark::before,
+        .brand-mark::after {
+            content: '';
+            position: absolute;
+            left: 8px;
+            height: 2px;
+            border-radius: 2px;
+            background: var(--accent-2);
+        }
+
+        .brand-mark::before {
+            top: 11px;
+            width: 18px;
+        }
+
+        .brand-mark::after {
+            top: 20px;
+            width: 12px;
+            background: var(--green);
+        }
+
+        .nav-links {
+            display: flex;
+            justify-content: center;
+            gap: 6px;
+        }
+
+        .nav-links a {
+            display: inline-flex;
+            align-items: center;
+            min-height: 34px;
+            padding: 0 9px;
+            border-radius: 6px;
+            color: var(--muted);
+            font-size: 13px;
+            font-weight: 700;
+            transition: color 180ms ease, background 180ms ease;
+        }
+
+        .nav-links a:hover,
+        .nav-links a:focus-visible {
+            color: var(--ink);
+            background: rgba(255, 255, 255, 0.06);
+            outline: none;
+        }
+
+        .nav-cta {
+            display: inline-flex;
+            align-items: center;
+            gap: 9px;
+            min-height: 38px;
+            padding: 0 14px;
+            border-radius: 6px;
+            background: var(--accent);
+            color: white;
+            font-size: 13px;
+            font-weight: 800;
+            box-shadow: 0 12px 30px rgba(74, 108, 247, 0.3);
+            transition: transform 180ms ease, background 180ms ease;
+        }
+
+        .nav-cta:hover {
+            transform: translateY(-1px);
+            background: #5878ff;
+        }
+
+        .nav-cta:active {
+            transform: translateY(1px) scale(0.99);
+        }
+
+        .container {
+            width: min(calc(100% - 40px), var(--max));
+            margin: 0 auto;
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 18px;
+            color: var(--accent-2);
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+        }
+
+        .eyebrow::before {
+            content: '';
+            width: 34px;
+            height: 1px;
+            background: currentColor;
+            opacity: 0.7;
+        }
+
+        .hero {
+            position: relative;
+            min-height: min(92svh, 940px);
+            padding: 118px 0 48px;
+            display: grid;
+            align-items: center;
+            isolation: isolate;
+        }
+
+        .hero-stage {
+            position: absolute;
+            inset: 78px 0 0;
+            z-index: -1;
+            overflow: hidden;
+        }
+
+        .hero-wire {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0.96;
+        }
+
+        .hero-wire .path {
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            stroke-dasharray: 780;
+            stroke-dashoffset: 780;
+            animation: tracePath 4.8s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+        }
+
+        .hero-wire .path:nth-of-type(2) {
+            animation-delay: 420ms;
+        }
+
+        .hero-wire .path:nth-of-type(3) {
+            animation-delay: 780ms;
+        }
+
+        .hero-wire .pulse {
+            animation: nodePulse 2.8s ease-in-out infinite;
+            transform-origin: center;
+        }
+
+        .hero-wire .delay-a {
+            animation-delay: 460ms;
+        }
+
+        .hero-wire .delay-b {
+            animation-delay: 920ms;
+        }
+
+        .hero::after {
+            content: '';
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: -1px;
+            z-index: -1;
+            height: 34%;
+            background: linear-gradient(180deg, transparent, var(--bg));
+            pointer-events: none;
+        }
+
+        .hero-content {
+            max-width: 1020px;
+            padding-top: clamp(22px, 4vh, 58px);
+            padding-bottom: 0;
+        }
+
+        .hero h1 {
+            margin: 0;
+            color: var(--ink);
+            font-size: clamp(78px, 15vw, 232px);
+            line-height: 0.74;
+            font-weight: 900;
+            letter-spacing: 0;
+        }
+
+        .hero-subtitle {
+            display: grid;
+            grid-template-columns: minmax(0, 650px) auto;
+            align-items: end;
+            gap: 32px;
+            margin-top: 30px;
+        }
+
+        .hero-subtitle p {
+            margin: 0;
+            color: #b8c4d8;
+            font-size: clamp(20px, 2.8vw, 36px);
+            line-height: 1.12;
+            font-weight: 760;
+            text-wrap: balance;
+        }
+
+        .hero-copy {
+            max-width: 590px;
+            margin-top: 22px;
+            color: var(--muted);
+            font-size: 17px;
+            line-height: 1.7;
+        }
+
+        .hero-actions {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 34px;
+        }
+
+        .button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            min-height: 48px;
+            padding: 0 18px;
+            border: 1px solid transparent;
+            border-radius: 6px;
+            font-weight: 850;
+            transition: transform 180ms ease, border-color 180ms ease, background 180ms ease, color 180ms ease;
+        }
+
+        .button.primary {
+            background: var(--accent);
+            color: white;
+            box-shadow: 0 18px 38px rgba(74, 108, 247, 0.28);
+        }
+
+        .button.primary:hover {
+            transform: translateY(-2px);
+            background: #5878ff;
+        }
+
+        .button.secondary {
+            border-color: var(--line);
+            background: rgba(255, 255, 255, 0.045);
+            color: var(--text);
+        }
+
+        .button.secondary:hover {
+            transform: translateY(-2px);
+            border-color: rgba(74, 108, 247, 0.45);
+            color: white;
+        }
+
+        .button:active {
+            transform: translateY(1px) scale(0.99);
+        }
+
+        .hero-status {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 1px;
+            width: min(100%, 980px);
+            margin-top: 60px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            overflow: hidden;
+            background: var(--line);
+            box-shadow: var(--shadow);
+        }
+
+        .status-cell {
+            min-height: 104px;
+            padding: 18px;
+            background: rgba(16, 22, 33, 0.86);
+        }
+
+        .status-cell b {
+            display: block;
+            color: var(--ink);
+            font-size: 26px;
+            line-height: 1;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .status-cell span {
+            display: block;
+            margin-top: 10px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.4;
+        }
+
+        .route-strip {
+            position: relative;
+            margin-top: -10px;
+            padding: 26px 0;
+            border-top: 1px solid rgba(148, 163, 184, 0.12);
+            border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+            background: rgba(9, 13, 20, 0.58);
+            overflow: hidden;
+        }
+
+        .route-track {
+            display: flex;
+            width: max-content;
+            gap: 14px;
+            animation: marquee 34s linear infinite;
+        }
+
+        .route-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            min-height: 42px;
+            padding: 0 14px;
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.035);
+            color: #b9c4d7;
+            font-family: var(--mono);
+            font-size: 13px;
+            white-space: nowrap;
+        }
+
+        .route-pill i {
+            display: block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--green);
+            box-shadow: 0 0 18px currentColor;
+        }
+
+        .section {
+            position: relative;
+            padding: clamp(92px, 13vw, 168px) 0;
+        }
+
+        .section.tight {
+            padding-top: clamp(72px, 10vw, 118px);
+        }
+
+        .section-head {
+            display: grid;
+            grid-template-columns: minmax(0, 0.88fr) minmax(280px, 0.52fr);
+            gap: 44px;
+            align-items: end;
+            margin-bottom: 54px;
+        }
+
+        .section-title {
+            margin: 0;
+            color: var(--ink);
+            font-size: clamp(42px, 7.4vw, 112px);
+            line-height: 0.9;
+            font-weight: 900;
+            letter-spacing: 0;
+            text-wrap: balance;
+        }
+
+        .section-lede {
+            margin: 0;
+            max-width: 620px;
+            color: var(--muted);
+            font-size: 17px;
+            line-height: 1.75;
+        }
+
+        .story-grid {
+            display: grid;
+            grid-template-columns: minmax(250px, 0.76fr) minmax(0, 1.24fr);
+            gap: 42px;
+            align-items: start;
+        }
+
+        .story-nav {
+            position: sticky;
+            top: 98px;
+            display: grid;
+            gap: 10px;
+        }
+
+        .story-nav button {
+            display: grid;
+            grid-template-columns: 34px 1fr;
+            gap: 12px;
+            align-items: start;
+            width: 100%;
+            padding: 14px;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            background: transparent;
+            color: var(--muted);
+            text-align: left;
+            cursor: pointer;
+            transition: background 180ms ease, color 180ms ease, border-color 180ms ease;
+        }
+
+        .story-nav button:hover,
+        .story-nav button.is-active {
+            border-color: rgba(74, 108, 247, 0.28);
+            background: rgba(74, 108, 247, 0.08);
+            color: var(--ink);
+        }
+
+        .story-nav strong {
+            font-family: var(--mono);
+            color: var(--accent-2);
+            font-size: 13px;
+        }
+
+        .story-nav span {
+            display: block;
+            font-size: 14px;
+            font-weight: 800;
+            line-height: 1.3;
+        }
+
+        .story-panels {
+            display: grid;
+            gap: 18px;
+        }
+
+        .story-card {
+            position: relative;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(260px, min(42%, 360px));
+            grid-template-rows: auto auto;
+            column-gap: 32px;
+            align-items: start;
+            min-height: 310px;
+            padding: 28px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            overflow: hidden;
+            background: linear-gradient(135deg, rgba(27, 35, 50, 0.94), rgba(13, 19, 29, 0.9));
+            box-shadow: var(--shadow);
+        }
+
+        .story-card::before {
+            content: attr(data-index);
+            position: absolute;
+            right: 22px;
+            top: 8px;
+            color: rgba(255, 255, 255, 0.04);
+            font-size: 126px;
+            font-weight: 900;
+            line-height: 1;
+        }
+
+        .story-card > h3 {
+            position: relative;
+            z-index: 1;
+            grid-column: 1;
+            margin: 0;
+            max-width: 640px;
+            color: var(--ink);
+            font-size: clamp(28px, 3.2vw, 52px);
+            line-height: 1;
+            letter-spacing: 0;
+        }
+
+        .story-card > p {
+            position: relative;
+            z-index: 1;
+            grid-column: 1;
+            max-width: 610px;
+            margin: 16px 0 0;
+            padding-bottom: 0;
+            color: var(--muted);
+            font-size: 16px;
+            line-height: 1.7;
+        }
+
+        .story-visual {
+            position: relative;
+            z-index: 1;
+            grid-column: 2;
+            grid-row: 1 / span 2;
+            align-self: start;
+            width: 100%;
+            min-width: 0;
+            margin-top: 76px;
+        }
+
+        .mini-terminal,
+        .diagram-panel,
+        .approval-card,
+        .download-card,
+        .article-card,
+        .feature-tile {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: rgba(13, 19, 29, 0.74);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        }
+
+        .mini-terminal {
+            overflow: hidden;
+            font-family: var(--mono);
+            transform: rotate(-1.6deg);
+        }
+
+        .story-visual .mini-terminal .term-body {
+            min-height: 150px;
+        }
+
+        .ai-preview-message {
+            display: grid;
+            grid-template-columns: 24px 1fr;
+            gap: 9px;
+            margin-bottom: 10px;
+            color: #c8d2e3;
+            font-family: var(--sans);
+            font-size: 11px;
+            line-height: 1.45;
+        }
+
+        .ai-preview-message b {
+            display: grid;
+            place-items: center;
+            width: 24px;
+            height: 24px;
+            border-radius: 6px;
+            background: rgba(155, 124, 255, 0.14);
+            color: var(--violet);
+            font-size: 11px;
+        }
+
+        .sync-flow {
+            display: grid;
+            grid-template-columns: 1fr 30px 1fr 30px 1fr;
+            align-items: center;
+            gap: 0;
+            min-height: 172px;
+        }
+
+        .sync-node {
+            min-width: 0;
+        }
+
+        .sync-node-box {
+            display: grid;
+            place-items: center;
+            height: 78px;
+            border: 1px solid currentColor;
+            border-radius: 8px;
+            background: #121926;
+        }
+
+        .sync-node-box svg {
+            width: 28px;
+            height: 28px;
+        }
+
+        .sync-node.key {
+            color: var(--green);
+        }
+
+        .sync-node.filter {
+            color: var(--accent);
+        }
+
+        .sync-node.repo {
+            color: var(--violet);
+        }
+
+        .sync-node-label {
+            margin-top: 12px;
+            color: var(--muted);
+            font-family: var(--mono);
+            font-size: 11px;
+            line-height: 1.2;
+            text-align: center;
+        }
+
+        .sync-arrow {
+            height: 2px;
+            margin-bottom: 28px;
+            background: rgba(135, 148, 170, 0.72);
+        }
+
+        .term-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            height: 34px;
+            padding: 0 12px;
+            border-bottom: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.035);
+            color: var(--dim);
+            font-size: 11px;
+        }
+
+        .dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: var(--red);
+        }
+
+        .dot:nth-child(2) {
+            background: var(--amber);
+        }
+
+        .dot:nth-child(3) {
+            background: var(--green);
+        }
+
+        .term-body {
+            padding: 14px;
+            min-height: 198px;
+            color: #c8d2e3;
+            font-size: 12px;
+            line-height: 1.72;
+        }
+
+        .terminal-block {
+            position: relative;
+            padding-left: 14px;
+            margin-bottom: 10px;
             opacity: 0;
-            transform: translateY(6px);
-            transition: opacity 0.45s ease-out, transform 0.45s ease-out;
+            transform: translateY(12px);
+            transition: opacity 360ms ease, transform 360ms ease;
         }
 
-        .ai-step.show {
+        .terminal-block::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 2px;
+            bottom: 2px;
+            width: 3px;
+            border-radius: 3px;
+            background: var(--block-color);
+        }
+
+        .terminal-block.is-visible {
             opacity: 1;
             transform: translateY(0);
         }
 
-        /* Typewriter caret while a span is still typing */
-        .ai-typewriter.typing::after {
-            content: '▋';
-            color: #a855f7;
-            margin-left: 1px;
-            animation: blink 1s step-end infinite;
+        .text-green {
+            color: var(--green);
         }
 
-        /* Run button "click" pulse */
-        @keyframes runClick {
-            0%   { transform: scale(1);    box-shadow: 0 4px 14px rgba(168, 85, 247, 0.25); }
-            35%  { transform: scale(0.93); box-shadow: 0 0 0 8px rgba(168, 85, 247, 0.35); }
-            70%  { transform: scale(1.02); box-shadow: 0 0 0 4px rgba(168, 85, 247, 0.18); }
-            100% { transform: scale(1);    box-shadow: 0 4px 18px rgba(168, 85, 247, 0.35); }
+        .text-blue {
+            color: var(--accent-2);
         }
 
-        .ai-run-btn.clicked {
-            animation: runClick 0.55s ease-out forwards;
+        .text-amber {
+            color: var(--amber);
+        }
+
+        .text-red {
+            color: #ff7373;
+        }
+
+        .text-dim {
+            color: var(--dim);
+        }
+
+        .story-circuit {
+            position: absolute;
+            inset: auto 0 0;
+            height: 88px;
+            opacity: 0.8;
+        }
+
+        .story-circuit path {
+            fill: none;
+            stroke: rgba(74, 108, 247, 0.42);
+            stroke-width: 2;
+            stroke-dasharray: 360;
+            stroke-dashoffset: 360;
+        }
+
+        .story-card.in-view .story-circuit path {
+            animation: tracePath 2.4s ease forwards;
+        }
+
+        .ai-layout {
+            display: grid;
+            grid-template-columns: minmax(0, 0.92fr) minmax(500px, 1.18fr);
+            gap: 24px;
+            align-items: start;
+        }
+
+        .ai-copy {
+            position: sticky;
+            top: 108px;
+        }
+
+        .ai-copy .section-title {
+            max-width: 620px;
+            font-size: clamp(42px, 6.4vw, 88px);
+        }
+
+        .chapter-list {
+            display: grid;
+            gap: 10px;
+            margin-top: 28px;
+        }
+
+        .chapter-item {
+            display: grid;
+            grid-template-columns: 40px 1fr;
+            gap: 14px;
+            padding: 14px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .chapter-item span:first-child {
+            width: 40px;
+            height: 40px;
+            display: grid;
+            place-items: center;
+            border-radius: 8px;
+            background: rgba(155, 124, 255, 0.12);
+            color: var(--violet);
+            font-family: var(--mono);
+            font-weight: 800;
+        }
+
+        .chapter-item strong {
+            display: block;
+            margin-bottom: 4px;
+            color: var(--ink);
+        }
+
+        .chapter-item p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .diagnose-stage {
+            position: relative;
+            min-height: 760px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            overflow: hidden;
+            background:
+                linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px) 0 0 / 42px 42px,
+                linear-gradient(180deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px) 0 0 / 42px 42px,
+                rgba(13, 19, 29, 0.86);
+            box-shadow: var(--shadow);
+        }
+
+        .diagnose-stage svg {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        .diagnose-stage .flow-line {
+            fill: none;
+            stroke-width: 2.4;
+            stroke-linecap: round;
+            stroke-dasharray: 900;
+            stroke-dashoffset: 900;
+        }
+
+        .diagnose-stage.in-view .flow-line {
+            animation: tracePath 4.2s cubic-bezier(0.25, 0.8, 0.2, 1) forwards;
+        }
+
+        .diagnose-node {
+            position: absolute;
+            width: min(270px, 38%);
+            padding: 12px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: rgba(18, 25, 38, 0.92);
+            box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+            opacity: 0;
+            transform: translateY(20px);
+            transition: opacity 520ms ease, transform 520ms ease;
+        }
+
+        .diagnose-stage.in-view .diagnose-node {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .diagnose-node:nth-of-type(1) {
+            left: 6%;
+            top: 7%;
+            transition-delay: 150ms;
+        }
+
+        .diagnose-node:nth-of-type(2) {
+            right: 7%;
+            top: 15%;
+            transition-delay: 720ms;
+        }
+
+        .diagnose-node:nth-of-type(3) {
+            left: 7%;
+            top: 41%;
+            transition-delay: 1220ms;
+        }
+
+        .diagnose-node:nth-of-type(4) {
+            right: 8%;
+            top: 58%;
+            transition-delay: 1760ms;
+        }
+
+        .diagnose-node:nth-of-type(5) {
+            left: 18%;
+            bottom: 7%;
+            transition-delay: 2280ms;
+        }
+
+        .node-kicker {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 7px;
+            color: var(--dim);
+            font-family: var(--mono);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .node-kicker i {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: var(--green);
+            box-shadow: 0 0 16px var(--green);
+        }
+
+        .diagnose-node h3 {
+            margin: 0 0 7px;
+            color: var(--ink);
+            font-size: 18px;
+            line-height: 1.12;
+            letter-spacing: 0;
+        }
+
+        .diagnose-node p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        .approval-card {
+            margin-top: 9px;
+            padding: 10px;
+            background: rgba(155, 124, 255, 0.08);
+            border-color: rgba(155, 124, 255, 0.34);
+        }
+
+        .approval-card p {
+            margin: 0;
+            padding: 0;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .approval-card code {
+            display: block;
+            margin: 6px 0;
+            color: #dfe5ff;
+            font-size: 11px;
+            word-break: break-word;
+        }
+
+        .approval-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .approval-actions span {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            height: 24px;
+            padding: 0 8px;
+            border-radius: 6px;
+            font-size: 10px;
+            font-weight: 800;
+        }
+
+        .approval-actions span:first-child {
+            border: 1px solid var(--line);
+            color: var(--muted);
+        }
+
+        .approval-actions span:last-child {
+            flex: 1;
+            background: var(--violet);
+            color: white;
+            animation: approvePulse 2.4s ease-in-out infinite;
+        }
+
+        .block-layout {
+            display: grid;
+            grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.92fr);
+            gap: 34px;
+            align-items: stretch;
+        }
+
+        .terminal-large {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            overflow: hidden;
+            background: var(--surface-strong);
+            box-shadow: var(--shadow);
+            font-family: var(--mono);
+        }
+
+        .terminal-large .term-body {
+            min-height: 480px;
+            padding: 18px;
+            font-size: 13px;
+        }
+
+        .color-lab {
+            display: grid;
+            grid-template-rows: minmax(0, 1fr) auto;
+            gap: 18px;
+            height: 516px;
+        }
+
+        .dial {
+            position: relative;
+            justify-self: center;
+            height: 100%;
+            max-height: 382px;
+            aspect-ratio: 1;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background:
+                conic-gradient(from 0deg, #e05555, #ddaa33, #4cb88a, #38bdf8, #4a6cf7, #9b7cff, #e05555);
+            overflow: hidden;
+            box-shadow: var(--shadow);
+        }
+
+        .dial::before {
+            content: '';
+            position: absolute;
+            inset: 26px;
+            border-radius: 8px;
+            background: #111827;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+        }
+
+        .dial-hand {
+            position: absolute;
+            left: 50%;
+            bottom: 50%;
+            width: 3px;
+            height: 42%;
+            background: white;
+            border-radius: 99px;
+            transform: translateX(-50%) rotate(0deg);
+            transform-origin: 50% 100%;
+            animation: rotateHand 8s steps(8) infinite;
+        }
+
+        .dial-label {
+            position: absolute;
+            inset: 0;
+            display: grid;
+            place-items: center;
+            color: var(--ink);
+            text-align: center;
+            font-family: var(--mono);
+            font-weight: 800;
+        }
+
+        .dial-label small {
+            display: block;
+            margin-top: 7px;
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .spec-strip {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1px;
+            overflow: hidden;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--line);
+        }
+
+        .spec-strip div {
+            padding: 18px;
+            background: rgba(16, 22, 33, 0.9);
+        }
+
+        .spec-strip b {
+            display: block;
+            color: var(--ink);
+            font-size: 22px;
+        }
+
+        .spec-strip span {
+            display: block;
+            margin-top: 7px;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        .split-band {
+            position: relative;
+            padding: clamp(92px, 12vw, 150px) 0;
+            background:
+                linear-gradient(180deg, rgba(16, 22, 33, 0.5), rgba(10, 14, 21, 0.18)),
+                linear-gradient(90deg, rgba(74, 108, 247, 0.12), transparent 40%, rgba(76, 184, 138, 0.1));
+            border-block: 1px solid rgba(148, 163, 184, 0.1);
+        }
+
+        .data-flow {
+            display: grid;
+            grid-template-columns: 1fr 0.78fr 1fr;
+            gap: 18px;
+            align-items: stretch;
+            margin-top: 44px;
+        }
+
+        .interface-panel,
+        .db-core {
+            min-height: 304px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: rgba(13, 19, 29, 0.8);
+            box-shadow: var(--shadow);
+        }
+
+        .interface-panel {
+            padding: 18px;
+        }
+
+        .interface-panel h3,
+        .db-core h3 {
+            margin: 0 0 14px;
+            color: var(--ink);
+            font-size: 17px;
+            letter-spacing: 0;
+        }
+
+        .interface-row {
+            display: grid;
+            grid-template-columns: 28px 1fr auto;
+            gap: 10px;
+            align-items: center;
+            min-height: 50px;
+            margin-top: 9px;
+            padding: 9px;
+            border: 1px solid rgba(255, 255, 255, 0.075);
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.035);
+        }
+
+        .interface-row i {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            background: rgba(74, 108, 247, 0.18);
+        }
+
+        .interface-row b {
+            display: block;
+            color: var(--text);
+            font-size: 13px;
+        }
+
+        .interface-row span {
+            display: block;
+            color: var(--dim);
+            font-size: 11px;
+        }
+
+        .interface-row code {
+            color: var(--green);
+            font-size: 11px;
+        }
+
+        .db-core {
+            position: relative;
+            padding: 18px;
+            display: grid;
+            place-items: center;
+            text-align: center;
+            overflow: hidden;
+        }
+
+        .db-core::before {
+            content: '';
+            position: absolute;
+            inset: 16px;
+            border: 1px dashed rgba(74, 108, 247, 0.34);
+            border-radius: 8px;
+            animation: dashSpin 18s linear infinite;
+        }
+
+        .db-stack {
+            position: relative;
+            z-index: 1;
+            display: grid;
+            gap: 8px;
+            width: 72%;
+        }
+
+        .db-layer {
+            height: 48px;
+            border: 1px solid rgba(74, 108, 247, 0.32);
+            border-radius: 50%;
+            background: rgba(74, 108, 247, 0.12);
+            transform: rotateX(58deg);
+            animation: dbBreathe 2.8s ease-in-out infinite;
+        }
+
+        .db-layer:nth-child(2) {
+            animation-delay: 180ms;
+        }
+
+        .db-layer:nth-child(3) {
+            animation-delay: 360ms;
+        }
+
+        .db-core strong {
+            position: relative;
+            z-index: 1;
+            color: var(--ink);
+            font-size: 24px;
+            line-height: 1;
+        }
+
+        .db-core span {
+            position: relative;
+            z-index: 1;
+            display: block;
+            margin-top: 10px;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .sync-packet {
+            position: absolute;
+            top: 50%;
+            left: -28px;
+            width: 14px;
+            height: 14px;
+            border-radius: 4px;
+            background: var(--green);
+            box-shadow: 0 0 24px rgba(76, 184, 138, 0.74);
+            transform: translateY(-50%);
+            animation: packetFlow 4.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+        }
+
+        .sync-packet.two {
+            top: 56%;
+            animation-delay: 1.5s;
+            background: var(--accent);
+        }
+
+        .security-map {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 22px;
+            align-items: stretch;
+        }
+
+        .security-visual {
+            position: relative;
+            min-height: 620px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            overflow: hidden;
+            background:
+                linear-gradient(120deg, rgba(76, 184, 138, 0.13), transparent 38%),
+                linear-gradient(300deg, rgba(74, 108, 247, 0.13), transparent 34%),
+                rgba(13, 19, 29, 0.86);
+            box-shadow: var(--shadow);
+        }
+
+        .security-visual > svg {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        .secure-path {
+            fill: none;
+            stroke: rgba(76, 184, 138, 0.5);
+            stroke-width: 2.5;
+            stroke-linecap: round;
+            stroke-dasharray: 650;
+            stroke-dashoffset: 650;
+        }
+
+        .security-visual.in-view .secure-path {
+            animation: tracePath 4.6s ease forwards;
+        }
+
+        .secure-node {
+            position: absolute;
+            width: 180px;
+            padding: 16px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: rgba(12, 18, 27, 0.9);
+            text-align: left;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: opacity 520ms ease, transform 520ms ease;
+        }
+
+        .security-visual.in-view .secure-node {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .secure-node:nth-of-type(1) {
+            left: 8%;
+            top: 8%;
+            transition-delay: 120ms;
+        }
+
+        .secure-node:nth-of-type(2) {
+            right: 9%;
+            top: 29%;
+            transition-delay: 720ms;
+        }
+
+        .secure-node:nth-of-type(3) {
+            left: 12%;
+            top: 54%;
+            transition-delay: 1280ms;
+        }
+
+        .secure-node:nth-of-type(4) {
+            right: 9%;
+            bottom: 8%;
+            transition-delay: 1880ms;
+        }
+
+        .secure-icon {
+            display: grid;
+            place-items: center;
+            width: 40px;
+            height: 40px;
+            margin-bottom: 12px;
+            border-radius: 8px;
+            background: rgba(76, 184, 138, 0.12);
+            color: var(--green);
+        }
+
+        .secure-icon svg {
+            position: static;
+            width: 22px;
+            height: 22px;
+        }
+
+        .secure-node strong {
+            display: block;
+            color: var(--ink);
+            font-size: 15px;
+            margin-bottom: 6px;
+        }
+
+        .secure-node span {
+            display: block;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        .security-copy {
+            display: grid;
+            gap: 16px;
+        }
+
+        .security-copy article {
+            padding: 22px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: rgba(16, 22, 33, 0.72);
+        }
+
+        .security-copy h3 {
+            margin: 0 0 8px;
+            color: var(--ink);
+            font-size: 22px;
+        }
+
+        .security-copy p {
+            margin: 0;
+            color: var(--muted);
+            line-height: 1.7;
+        }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 14px;
+        }
+
+        .feature-tile {
+            position: relative;
+            min-height: 168px;
+            padding: 18px;
+            overflow: hidden;
+            transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+        }
+
+        .feature-tile:hover {
+            transform: translateY(-4px);
+            border-color: rgba(74, 108, 247, 0.36);
+            background: rgba(22, 29, 42, 0.92);
+        }
+
+        .feature-tile.wide {
+            grid-column: span 6;
+        }
+
+        .feature-tile.mid {
+            grid-column: span 4;
+        }
+
+        .feature-tile.tall {
+            min-height: 260px;
+        }
+
+        .tile-icon {
+            display: grid;
+            place-items: center;
+            width: 38px;
+            height: 38px;
+            margin-bottom: 18px;
+            border-radius: 8px;
+            color: var(--accent-2);
+            background: rgba(74, 108, 247, 0.12);
+        }
+
+        .feature-tile h3 {
+            margin: 0 0 10px;
+            color: var(--ink);
+            font-size: 20px;
+            letter-spacing: 0;
+        }
+
+        .feature-tile p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .tile-lines {
+            position: absolute;
+            right: -12px;
+            bottom: -12px;
+            width: 140px;
+            height: 140px;
+            opacity: 0.18;
+        }
+
+        .tile-lines path {
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+        }
+
+        .article-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 14px;
+        }
+
+        .article-card {
+            position: relative;
+            min-height: 220px;
+            padding: 18px;
+            overflow: hidden;
+            background: rgba(14, 20, 30, 0.78);
+            transition: transform 180ms ease, border-color 180ms ease;
+        }
+
+        .article-card:hover {
+            transform: translateY(-4px);
+            border-color: rgba(74, 108, 247, 0.38);
+        }
+
+        .article-card::after {
+            content: '';
+            position: absolute;
+            left: 18px;
+            right: 18px;
+            bottom: 18px;
+            height: 2px;
+            background: linear-gradient(90deg, var(--accent), transparent);
+            transform: scaleX(0.36);
+            transform-origin: left;
+            transition: transform 260ms ease;
+        }
+
+        .article-card:hover::after {
+            transform: scaleX(1);
+        }
+
+        .article-card small {
+            color: var(--accent-2);
+            font-family: var(--mono);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        .article-card h3 {
+            margin: 16px 0 12px;
+            color: var(--ink);
+            font-size: 22px;
+            line-height: 1.08;
+            letter-spacing: 0;
+        }
+
+        .article-card p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.58;
+        }
+
+        .download-layout {
+            display: grid;
+            grid-template-columns: minmax(280px, 0.78fr) minmax(0, 1.22fr);
+            gap: 34px;
+            align-items: start;
+        }
+
+        .download-copy {
+            position: sticky;
+            top: 108px;
+        }
+
+        .download-list {
+            display: grid;
+            gap: 12px;
+            margin-top: 34px;
+        }
+
+        .download-card {
+            display: grid;
+            grid-template-columns: 54px 1fr auto;
+            gap: 16px;
+            align-items: center;
+            min-height: 96px;
+            padding: 18px;
+            background: rgba(16, 22, 33, 0.78);
+            transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+        }
+
+        .download-card:hover {
+            transform: translateX(5px);
+            border-color: rgba(74, 108, 247, 0.4);
+            background: rgba(22, 30, 44, 0.92);
+        }
+
+        .download-icon {
+            display: grid;
+            place-items: center;
+            width: 54px;
+            height: 54px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--ink);
+            font-size: 23px;
+        }
+
+        .download-card h3 {
+            margin: 0 0 6px;
+            color: var(--ink);
+            font-size: 18px;
+        }
+
+        .download-card p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .download-arrow {
+            display: grid;
+            place-items: center;
+            width: 38px;
+            height: 38px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            color: var(--accent-2);
+            transition: transform 180ms ease;
+        }
+
+        .download-card:hover .download-arrow {
+            transform: translateX(3px);
+        }
+
+        .footer {
+            position: relative;
+            padding: 90px 0 36px;
+            overflow: hidden;
+            border-top: 1px solid rgba(148, 163, 184, 0.12);
+        }
+
+        .footer-grid {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 32px;
+            align-items: end;
+        }
+
+        .footer h2 {
+            margin: 0;
+            color: rgba(255, 255, 255, 0.08);
+            font-size: clamp(82px, 18vw, 246px);
+            line-height: 0.72;
+            letter-spacing: 0;
+            font-weight: 900;
+        }
+
+        .footer p {
+            max-width: 560px;
+            margin: 22px 0 0;
+            color: var(--muted);
+            line-height: 1.7;
+        }
+
+        .footer-links {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+
+        .footer-links a {
+            display: inline-flex;
+            align-items: center;
+            min-height: 40px;
+            padding: 0 13px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            color: var(--muted);
+            font-weight: 800;
+            font-size: 13px;
+            transition: color 180ms ease, border-color 180ms ease, background 180ms ease;
+        }
+
+        .footer-links a:hover {
+            color: var(--ink);
+            border-color: rgba(74, 108, 247, 0.38);
+            background: rgba(74, 108, 247, 0.08);
+        }
+
+        .fine-print {
+            margin-top: 42px;
+            color: var(--dim);
+            font-size: 12px;
+        }
+
+        .reveal {
+            opacity: 0;
+            transform: translateY(28px);
+            transition: opacity 700ms ease, transform 700ms ease;
+        }
+
+        .reveal.is-visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .stagger > * {
+            opacity: 0;
+            transform: translateY(18px);
+            transition: opacity 560ms ease, transform 560ms ease;
+        }
+
+        .stagger.is-visible > * {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .stagger.is-visible > *:nth-child(2) {
+            transition-delay: 80ms;
+        }
+
+        .stagger.is-visible > *:nth-child(3) {
+            transition-delay: 160ms;
+        }
+
+        .stagger.is-visible > *:nth-child(4) {
+            transition-delay: 240ms;
+        }
+
+        .stagger.is-visible > *:nth-child(5) {
+            transition-delay: 320ms;
+        }
+
+        @keyframes tracePath {
+            to {
+                stroke-dashoffset: 0;
+            }
+        }
+
+        @keyframes nodePulse {
+            0%, 100% {
+                opacity: 0.55;
+                transform: scale(1);
+            }
+            50% {
+                opacity: 1;
+                transform: scale(1.06);
+            }
+        }
+
+        @keyframes marquee {
+            to {
+                transform: translateX(-50%);
+            }
+        }
+
+        @keyframes approvePulse {
+            0%, 100% {
+                box-shadow: 0 0 0 rgba(155, 124, 255, 0);
+            }
+            48% {
+                box-shadow: 0 0 0 7px rgba(155, 124, 255, 0.16);
+            }
+        }
+
+        @keyframes rotateHand {
+            to {
+                transform: translateX(-50%) rotate(1100.064deg);
+            }
+        }
+
+        @keyframes dashSpin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        @keyframes dbBreathe {
+            0%, 100% {
+                transform: rotateX(58deg) translateY(0);
+            }
+            50% {
+                transform: rotateX(58deg) translateY(-7px);
+            }
+        }
+
+        @keyframes packetFlow {
+            0% {
+                left: -28px;
+                opacity: 0;
+            }
+            12% {
+                opacity: 1;
+            }
+            48% {
+                left: calc(50% - 7px);
+                opacity: 1;
+            }
+            86% {
+                opacity: 1;
+            }
+            100% {
+                left: calc(100% + 18px);
+                opacity: 0;
+            }
+        }
+
+        @media (max-width: 1040px) {
+            .nav-links {
+                display: none;
+            }
+
+            .site-nav {
+                grid-template-columns: auto auto;
+                justify-content: space-between;
+            }
+
+            .hero-subtitle,
+            .section-head,
+            .story-grid,
+            .ai-layout,
+            .block-layout,
+            .data-flow,
+            .security-map,
+            .download-layout,
+            .footer-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .story-nav,
+            .ai-copy,
+            .download-copy {
+                position: static;
+            }
+
+            .download-list {
+                margin-top: 0;
+            }
+
+            .story-nav {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .feature-tile.wide,
+            .feature-tile.mid {
+                grid-column: span 6;
+            }
+
+            .article-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .security-visual {
+                min-height: 560px;
+            }
+        }
+
+        @media (max-width: 720px) {
+            .container {
+                width: min(calc(100% - 28px), var(--max));
+            }
+
+            .site-nav {
+                top: 10px;
+                width: min(calc(100% - 20px), 1180px);
+                height: 54px;
+                padding-left: 12px;
+            }
+
+            .nav-cta {
+                min-height: 34px;
+                padding: 0 10px;
+                font-size: 12px;
+            }
+
+            .hero {
+                min-height: auto;
+                padding-top: 112px;
+                align-items: start;
+            }
+
+            .hero-content {
+                max-width: 100%;
+                padding-top: 0;
+            }
+
+            .hero-subtitle p,
+            .hero-copy,
+            .section-lede {
+                max-width: 100%;
+                overflow-wrap: anywhere;
+            }
+
+            .hero h1 {
+                font-size: clamp(64px, 25vw, 132px);
+            }
+
+            .hero-status {
+                grid-template-columns: 1fr 1fr;
+                margin-top: 38px;
+            }
+
+            .status-cell {
+                min-height: 96px;
+                padding: 14px;
+            }
+
+            .story-nav {
+                grid-template-columns: 1fr;
+            }
+
+            .story-card {
+                display: block;
+                min-height: auto;
+            }
+
+            .story-card > p {
+                padding-bottom: 0;
+            }
+
+            .story-visual {
+                position: relative;
+                left: auto;
+                right: auto;
+                bottom: auto;
+                width: 100%;
+                min-width: 0;
+                margin-top: 22px;
+            }
+
+            .diagnose-stage {
+                min-height: 980px;
+            }
+
+            .diagnose-node {
+                width: calc(100% - 32px);
+                left: 16px !important;
+                right: auto !important;
+            }
+
+            .diagnose-node:nth-of-type(1) {
+                top: 24px;
+            }
+
+            .diagnose-node:nth-of-type(2) {
+                top: 196px;
+            }
+
+            .diagnose-node:nth-of-type(3) {
+                top: 385px;
+            }
+
+            .diagnose-node:nth-of-type(4) {
+                top: 590px;
+            }
+
+            .diagnose-node:nth-of-type(5) {
+                top: 780px;
+                bottom: auto;
+            }
+
+            .terminal-large .term-body {
+                min-height: 390px;
+                font-size: 11px;
+            }
+
+            .spec-strip {
+                grid-template-columns: 1fr;
+            }
+
+            .feature-grid,
+            .article-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .feature-tile.wide,
+            .feature-tile.mid {
+                grid-column: auto;
+            }
+
+            .security-visual {
+                min-height: 720px;
+            }
+
+            .secure-node {
+                width: calc(100% - 34px);
+                left: 17px !important;
+                right: auto !important;
+            }
+
+            .secure-node:nth-of-type(1) {
+                top: 24px;
+            }
+
+            .secure-node:nth-of-type(2) {
+                top: 194px;
+            }
+
+            .secure-node:nth-of-type(3) {
+                top: 360px;
+            }
+
+            .secure-node:nth-of-type(4) {
+                top: 530px;
+                bottom: auto;
+            }
+
+            .download-card {
+                grid-template-columns: 46px 1fr;
+            }
+
+            .download-arrow {
+                display: none;
+            }
+
+            .footer-links {
+                justify-content: flex-start;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *,
+            *::before,
+            *::after {
+                animation-duration: 0.001ms !important;
+                animation-iteration-count: 1 !important;
+                scroll-behavior: auto !important;
+                transition-duration: 0.001ms !important;
+            }
+
+            .reveal,
+            .stagger > *,
+            .diagnose-node,
+            .secure-node,
+            .terminal-block {
+                opacity: 1 !important;
+                transform: none !important;
+            }
+
+            .hero-wire .path,
+            .story-circuit path,
+            .diagnose-stage .flow-line,
+            .secure-path {
+                stroke-dashoffset: 0 !important;
+            }
         }
     </style>
 </head>
-<body class="bg-bg text-gray-200 antialiased overflow-x-hidden font-sans">
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="progress-bar" aria-hidden="true"></div>
 
-<!-- ═══ Hero ═══ -->
-<section class="flex flex-col items-center pt-16 sm:pt-24 px-4">
-    <div class="w-full max-w-5xl flex flex-col items-center text-center">
-        <div class="mb-16 animate-fade-up">
-            <h1 class="text-5xl sm:text-7xl lg:text-8xl font-black tracking-tight leading-[1.05]">
-                <span class="bg-gradient-to-r from-gray-100 to-gray-300 bg-clip-text text-transparent">SSH,</span><br/>
-                <span class="bg-gradient-to-r from-accent via-blue-400 to-emerald-400 bg-clip-text text-transparent">Reimagined</span>
-            </h1>
-            <p class="mt-6 text-lg sm:text-xl text-dim max-w-2xl mx-auto leading-relaxed animate-fade-up delay-200" style="opacity:0">
-                Color-coded command blocks. CLI-first workflow.<br class="hidden sm:block"/>
-                Your keys stay in your keychain. Your config syncs to your repo.
+<nav class="site-nav" aria-label="Primary navigation">
+    <a class="brand" href="#top" aria-label="RSSH home">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>RSSH</span>
+    </a>
+    <div class="nav-links" aria-label="Page sections">
+        <a href="#story">Story</a>
+        <a href="#ai">AI diagnose</a>
+        <a href="#blocks">Blocks</a>
+        <a href="#cli">CLI</a>
+        <a href="#security">Security</a>
+        <a href="#features">Workbench</a>
+        <a href="#deep-dives">Deep dives</a>
+        <a href="#download">Download</a>
+    </div>
+    <a class="nav-cta" href="https://github.com/shihuili1218/rssh" target="_blank" rel="noopener">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.44 9.8 8.21 11.39.6.1.82-.26.82-.57v-2.23c-3.01.55-3.79-.74-4.03-1.41-.14-.35-.72-1.41-1.23-1.7-.42-.22-1.02-.78-.02-.79.95-.02 1.62.87 1.85 1.23 1.08 1.82 2.8 1.31 3.49.99.11-.78.42-1.31.77-1.61-2.67-.3-5.46-1.33-5.46-5.92 0-1.31.47-2.39 1.23-3.23-.12-.3-.54-1.53.12-3.18 0 0 1.01-.32 3.3 1.23.96-.27 1.98-.4 3-.4s2.04.13 3 .4c2.3-1.55 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.77.84 1.23 1.92 1.23 3.23 0 4.6-2.8 5.62-5.48 5.92.44.38.81 1.1.81 2.22v3.3c0 .31.23.68.83.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+        </svg>
+        GitHub
+    </a>
+</nav>
+
+<header id="top" class="hero">
+    <div class="hero-stage" aria-hidden="true">
+        <svg class="hero-wire" viewBox="0 0 1600 920" preserveAspectRatio="xMidYMid slice">
+            <defs>
+                <linearGradient id="heroLineA" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0" stop-color="#4a6cf7" stop-opacity="0.82"/>
+                    <stop offset="0.52" stop-color="#38bdf8" stop-opacity="0.5"/>
+                    <stop offset="1" stop-color="#4cb88a" stop-opacity="0.78"/>
+                </linearGradient>
+                <linearGradient id="heroLineB" x1="0" y1="1" x2="1" y2="0">
+                    <stop offset="0" stop-color="#ddaa33" stop-opacity="0.72"/>
+                    <stop offset="1" stop-color="#4a6cf7" stop-opacity="0.66"/>
+                </linearGradient>
+            </defs>
+            <path class="path" d="M64 712 C 250 572 356 756 546 540 S 920 210 1228 270 S 1528 184 1660 78" stroke="url(#heroLineA)" stroke-width="3"/>
+            <path class="path" d="M-80 352 C 172 322 280 164 504 224 S 772 562 1058 476 S 1340 522 1636 354" stroke="url(#heroLineB)" stroke-width="2"/>
+            <path class="path" d="M236 892 C 390 674 570 708 742 594 S 1014 396 1164 602 S 1432 686 1600 544" stroke="#4cb88a" stroke-opacity="0.45" stroke-width="2"/>
+            <g opacity="0.95">
+                <rect x="1030" y="140" width="290" height="178" rx="10" fill="#131a26" stroke="#334155"/>
+                <rect x="1030" y="140" width="290" height="34" rx="10" fill="#1f2937"/>
+                <circle cx="1054" cy="157" r="5" fill="#e05555"/>
+                <circle cx="1071" cy="157" r="5" fill="#ddaa33"/>
+                <circle cx="1088" cy="157" r="5" fill="#4cb88a"/>
+                <text x="1056" y="204" fill="#6f8cff" font-family="JetBrains Mono, monospace" font-size="16">$ rssh open prod-api</text>
+                <text x="1056" y="236" fill="#4cb88a" font-family="JetBrains Mono, monospace" font-size="16">connected via bastion-01</text>
+                <text x="1056" y="268" fill="#8794aa" font-family="JetBrains Mono, monospace" font-size="16">blocks: 18  alerts: 0</text>
+            </g>
+            <circle class="pulse" cx="504" cy="224" r="11" fill="#4a6cf7"/>
+            <circle class="pulse delay-a" cx="920" cy="210" r="9" fill="#38bdf8"/>
+            <circle class="pulse delay-b" cx="1164" cy="602" r="10" fill="#4cb88a"/>
+        </svg>
+    </div>
+
+    <div class="container">
+        <div class="hero-content reveal is-visible">
+            <div class="eyebrow">SSH connection manager with an ops memory</div>
+            <h1>RSSH</h1>
+            <div class="hero-subtitle">
+                <p>Terminal sessions, credentials, tunnels, files, recordings, and AI diagnosis in one local-first cockpit.</p>
+                <div class="hero-actions">
+                    <a class="button primary" href="#download">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
+                            <path d="M12 3v12m0 0 5-5m-5 5-5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        Download
+                    </a>
+                    <a class="button secondary" href="#story">Explore flow</a>
+                </div>
+            </div>
+            <p class="hero-copy">
+                Color-coded command blocks make long terminal history readable. The desktop app and bundled CLI share the same SQLite database. Secrets stay in your platform keychain; encrypted sync goes to your own private GitHub repo.
             </p>
-            <div class="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4 animate-fade-up delay-300" style="opacity:0">
-                <a href="#download"
-                   class="inline-flex items-center gap-2.5 bg-accent hover:bg-accent/90 text-white px-8 py-4 rounded-2xl text-lg font-bold transition-all hover:scale-105 shadow-xl shadow-accent/25">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round"
-                              d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+            <div class="hero-status stagger is-visible" aria-label="RSSH platform and product summary">
+                <div class="status-cell"><b>4</b><span>desktop and mobile targets: macOS, Windows, Linux, Android</span></div>
+                <div class="status-cell"><b>0</b><span>RSSH cloud accounts or hosted secret stores</span></div>
+                <div class="status-cell"><b>1</b><span>shared database for GUI and CLI workflows</span></div>
+                <div class="status-cell"><b>137.508°</b><span>golden-angle hue step for command blocks</span></div>
+            </div>
+        </div>
+    </div>
+</header>
+
+<main id="main">
+    <section class="route-strip" aria-label="RSSH workflow samples">
+        <div class="route-track" aria-hidden="true">
+            <span class="route-pill"><i></i>rssh ls</span>
+            <span class="route-pill"><i></i>rssh open prod-api</span>
+            <span class="route-pill"><i></i>ProxyJump through bastion hosts</span>
+            <span class="route-pill"><i></i>SFTP upload and download</span>
+            <span class="route-pill"><i></i>local, remote, SOCKS5 forwarding</span>
+            <span class="route-pill"><i></i>session recording as asciicast v2</span>
+            <span class="route-pill"><i></i>AI diagnose, never fix</span>
+            <span class="route-pill"><i></i>GitHub encrypted backup</span>
+            <span class="route-pill"><i></i>rssh ls</span>
+            <span class="route-pill"><i></i>rssh open prod-api</span>
+            <span class="route-pill"><i></i>ProxyJump through bastion hosts</span>
+            <span class="route-pill"><i></i>SFTP upload and download</span>
+            <span class="route-pill"><i></i>local, remote, SOCKS5 forwarding</span>
+            <span class="route-pill"><i></i>session recording as asciicast v2</span>
+            <span class="route-pill"><i></i>AI diagnose, never fix</span>
+            <span class="route-pill"><i></i>GitHub encrypted backup</span>
+        </div>
+    </section>
+
+    <section id="story" class="section">
+        <div class="container">
+            <div class="section-head reveal">
+                <div>
+                    <div class="eyebrow">Narrative interface</div>
+                    <h2 class="section-title">A session turns into a timeline.</h2>
+                </div>
+                <p class="section-lede">
+                    RSSH keeps the ordinary SSH loop intact, then adds structure around it: connection profiles, readable command blocks, explainable AI probes, replayable sessions, and sync that does not require a vendor cloud.
+                </p>
+            </div>
+
+            <div class="story-grid">
+                <div class="story-nav" aria-label="Story chapters">
+                    <button class="is-active" type="button" data-jump="connect"><strong>01</strong><span>Connect through saved profiles</span></button>
+                    <button type="button" data-jump="read"><strong>02</strong><span>Read command history by color</span></button>
+                    <button type="button" data-jump="probe"><strong>03</strong><span>Approve every AI probe</span></button>
+                    <button type="button" data-jump="ship"><strong>04</strong><span>Reuse the same data from CLI</span></button>
+                    <button type="button" data-jump="sync"><strong>05</strong><span>Sync config without moving secrets blindly</span></button>
+                </div>
+
+                <div class="story-panels">
+                    <article id="connect" class="story-card reveal" data-story="0" data-index="01">
+                        <h3>Open prod from a GUI group or from any shell.</h3>
+                        <p>Profiles, credentials, groups, ProxyJump bastions, and port forwards live in one local database. The GUI is for browsing and editing; the CLI is for muscle memory.</p>
+                        <div class="story-visual">
+                            <div class="mini-terminal">
+                                <div class="term-title"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>zsh</span></div>
+                                <div class="term-body">
+                                    <div><span class="text-green">~</span> <span class="text-blue">rssh</span> ls</div>
+                                    <div class="text-dim">prod-api  10.0.1.42  deploy</div>
+                                    <div class="text-dim">staging   10.0.2.10  ubuntu</div>
+                                    <div><span class="text-green">~</span> <span class="text-blue">rssh</span> open prod-api</div>
+                                    <div><span class="text-green">ok</span> connected via bastion-01</div>
+                                </div>
+                            </div>
+                        </div>
+                        <svg class="story-circuit" viewBox="0 0 800 120" preserveAspectRatio="none" aria-hidden="true">
+                            <path d="M0 72H146C188 72 176 30 218 30H382C430 30 420 92 468 92H800"/>
+                        </svg>
+                    </article>
+
+                    <article id="read" class="story-card reveal" data-story="1" data-index="02">
+                        <h3>Every Enter key creates a visual boundary.</h3>
+                        <p>RSSH uses local xterm markers, not fragile prompt parsing. Each command block gets a golden-angle color, so thousands of lines still show where work started, failed, retried, and recovered.</p>
+                        <div class="story-visual">
+                            <div class="mini-terminal">
+                                <div class="term-title"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>rssh - production</span></div>
+                                <div class="term-body" id="story-terminal"></div>
+                            </div>
+                        </div>
+                        <svg class="story-circuit" viewBox="0 0 800 120" preserveAspectRatio="none" aria-hidden="true">
+                            <path d="M0 92H100C168 92 148 20 218 20H364C432 20 400 70 474 70H800"/>
+                        </svg>
+                    </article>
+
+                    <article id="probe" class="story-card reveal" data-story="2" data-index="03">
+                        <h3>AI diagnosis pauses at the exact point of risk.</h3>
+                        <p>The assistant can choose a Java, Go, CPU, memory, IO, or network playbook, but every command passes shape validation and lands on a human approval card before it runs.</p>
+                        <div class="story-visual">
+                            <div class="mini-terminal">
+                                <div class="term-title"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>rssh — AI diagnose</span></div>
+                                <div class="term-body">
+                                    <div class="ai-preview-message">
+                                        <b>AI</b>
+                                        <span>Probing the environment first — OS and JDK version determine the toolchain.</span>
+                                    </div>
+                                    <div class="approval-card">
+                                        <div class="node-kicker"><span>run_command</span><i></i></div>
+                                        <code>java -version && uname -a</code>
+                                        <p>Read-only probe. No files changed.</p>
+                                        <div class="approval-actions"><span>Reject</span><span>Run on prod-api</span></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <svg class="story-circuit" viewBox="0 0 800 120" preserveAspectRatio="none" aria-hidden="true">
+                            <path d="M0 68H132C180 68 170 44 218 44H360C434 44 394 102 468 102H800"/>
+                        </svg>
+                    </article>
+
+                    <article id="ship" class="story-card reveal" data-story="3" data-index="04">
+                        <h3>One-click CLI install keeps the same source of truth.</h3>
+                        <p>Shell completions are generated for zsh, bash, fish, and PowerShell. The CLI can open sessions, manage config, launch forwards, and push encrypted backups.</p>
+                        <div class="story-visual">
+                            <div class="diagram-panel" style="padding:16px;">
+                                <div class="interface-row"><i></i><div><b>Desktop GUI</b><span>profiles, files, recordings</span></div><code>rw</code></div>
+                                <div class="interface-row"><i></i><div><b>SQLite</b><span>shared local database</span></div><code>sync</code></div>
+                                <div class="interface-row"><i></i><div><b>CLI</b><span>rssh open prod</span></div><code>rw</code></div>
+                            </div>
+                        </div>
+                        <svg class="story-circuit" viewBox="0 0 800 120" preserveAspectRatio="none" aria-hidden="true">
+                            <path d="M0 78H112C176 78 164 28 228 28H416C472 28 448 80 504 80H800"/>
+                        </svg>
+                    </article>
+
+                    <article id="sync" class="story-card reveal" data-story="4" data-index="05">
+                        <h3>Sync configuration, not blind trust.</h3>
+                        <p>Private keys and passwords stay in OS keychain storage. Each credential decides whether it can sync remotely, and the remote target is your private GitHub repo.</p>
+                        <div class="story-visual">
+                            <div class="sync-flow" role="img" aria-label="Keychain filter GitHub sync diagram">
+                                <div class="sync-node key">
+                                    <div class="sync-node-box">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/>
+                                        </svg>
+                                    </div>
+                                    <div class="sync-node-label">keychain</div>
+                                </div>
+                                <div class="sync-arrow"></div>
+                                <div class="sync-node filter">
+                                    <div class="sync-node-box">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 01-.659 1.591l-5.432 5.432a2.25 2.25 0 00-.659 1.591v2.927a2.25 2.25 0 01-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 00-.659-1.591L3.659 7.409A2.25 2.25 0 013 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0112 3z"/>
+                                        </svg>
+                                    </div>
+                                    <div class="sync-node-label">filter</div>
+                                </div>
+                                <div class="sync-arrow"></div>
+                                <div class="sync-node repo">
+                                    <div class="sync-node-box">
+                                        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                                        </svg>
+                                    </div>
+                                    <div class="sync-node-label">your repo</div>
+                                </div>
+                            </div>
+                        </div>
+                        <svg class="story-circuit" viewBox="0 0 800 120" preserveAspectRatio="none" aria-hidden="true">
+                            <path d="M0 72H180C230 72 206 28 258 28H420C468 28 450 92 498 92H800"/>
+                        </svg>
+                    </article>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="ai" class="section tight">
+        <div class="container">
+            <div class="ai-layout">
+                <div class="ai-copy reveal">
+                    <div class="eyebrow">AI Ops Diagnose</div>
+                    <h2 class="section-title">Automated triage, human-approved.</h2>
+                    <p class="section-lede">
+                        Tell RSSH what is wrong. It picks the playbook, probes the environment, samples lightly, and attributes the likely cause. You never type <code>jstack</code>, <code>pprof</code>, or <code>jmap</code> by hand just to start the investigation.
+                    </p>
+                    <div class="chapter-list stagger">
+                        <div class="chapter-item"><span>01</span><div><strong>Scenario routing</strong><p>Java, Go, CPU, memory, IO, network, and shell context are selected from the symptoms.</p></div></div>
+                        <div class="chapter-item"><span>02</span><div><strong>Command shape validation</strong><p>Destructive forms are rejected before a command reaches the approval card.</p></div></div>
+                        <div class="chapter-item"><span>03</span><div><strong>Diagnose only</strong><p>The assistant gathers and explains evidence. It does not apply fixes on your server.</p></div></div>
+                    </div>
+                </div>
+
+                <div class="diagnose-stage reveal" id="diagnose-stage" aria-label="AI diagnose flow">
+                    <svg viewBox="0 0 760 820" preserveAspectRatio="none" aria-hidden="true">
+                        <path class="flow-line" d="M172 118 C 384 98 368 212 578 224 S 358 366 204 420 S 340 606 582 604 S 388 774 178 760" stroke="#9b7cff"/>
+                        <path class="flow-line" d="M132 156 C 318 260 406 364 598 334" stroke="#4a6cf7" opacity=".28"/>
+                        <path class="flow-line" d="M198 492 C 360 536 450 504 592 656" stroke="#4cb88a" opacity=".34"/>
                     </svg>
-                    Download
+                    <article class="diagnose-node">
+                        <div class="node-kicker"><span>symptom</span><i></i></div>
+                        <h3>CPU is at 100% on prod-api.</h3>
+                        <p>User intent stays plain. The assistant turns it into an investigation plan.</p>
+                    </article>
+                    <article class="diagnose-node">
+                        <div class="node-kicker"><span>probe</span><i></i></div>
+                        <h3>Detect OS, runtime, and toolchain.</h3>
+                        <p>RSSH samples environment facts before choosing Java, Go, process, network, or disk tools.</p>
+                    </article>
+                    <article class="diagnose-node">
+                        <div class="node-kicker"><span>approval</span><i></i></div>
+                        <h3>Every command pauses.</h3>
+                        <div class="approval-card">
+                            <code>java -version && uname -a</code>
+                            <p>Read-only probe. No files changed.</p>
+                            <div class="approval-actions"><span>Reject</span><span>Run on prod-api</span></div>
+                        </div>
+                    </article>
+                    <article class="diagnose-node">
+                        <div class="node-kicker"><span>sample</span><i></i></div>
+                        <h3>Heavy artifacts stay local.</h3>
+                        <p>Large files and samples are pulled back for local analysis instead of being pasted into the model context.</p>
+                    </article>
+                    <article class="diagnose-node">
+                        <div class="node-kicker"><span>report</span><i></i></div>
+                        <h3>Cause attribution, not mystery output.</h3>
+                        <p>The final answer ties symptoms to evidence and leaves the operator in control of the fix.</p>
+                    </article>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="blocks" class="section">
+        <div class="container">
+            <div class="section-head reveal">
+                <div>
+                    <div class="eyebrow">Signature feature</div>
+                    <h2 class="section-title">Command Block Colors.</h2>
+                </div>
+                <p class="section-lede">
+                    Every command becomes a block. A colored edge marks its output until the next command begins. The color sequence is generated by golden-angle HSL rotation, giving stable contrast without remote hooks or shell prompt hacks.
+                </p>
+            </div>
+
+            <div class="block-layout">
+                <div class="terminal-large reveal">
+                    <div class="term-title"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>rssh - production-server</span></div>
+                    <div class="term-body" id="block-terminal"></div>
+                </div>
+                <div class="color-lab reveal">
+                    <div class="dial" aria-label="Golden angle HSL color dial">
+                        <div class="dial-hand"></div>
+                        <div class="dial-label">
+                            <div>137.508°<small>hue step per command</small></div>
+                        </div>
+                    </div>
+                    <div class="spec-strip">
+                        <div><b>0</b><span>remote dependencies for block boundaries</span></div>
+                        <div><b>∞</b><span>non-colliding hue progression</span></div>
+                        <div><b>local</b><span>xterm markers and client-side rendering</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="cli" class="split-band">
+        <div class="container">
+            <div class="section-head reveal">
+                <div>
+                    <div class="eyebrow">CLI-first</div>
+                    <h2 class="section-title">One database, two interfaces.</h2>
+                </div>
+                <p class="section-lede">
+                    The bundled CLI reads the same SQLite database as the desktop app. Create a profile in the GUI, then run <code>rssh open prod</code> from the terminal. Shell completions cover zsh, bash, fish, and PowerShell.
+                </p>
+            </div>
+
+            <div class="data-flow reveal">
+                <article class="interface-panel">
+                    <h3>Desktop GUI</h3>
+                    <div class="interface-row"><i></i><div><b>Profile groups</b><span>color-coded hosts and credentials</span></div><code>edit</code></div>
+                    <div class="interface-row"><i></i><div><b>SFTP browser</b><span>upload and download files</span></div><code>rw</code></div>
+                    <div class="interface-row"><i></i><div><b>Recording</b><span>asciicast v2 playback</span></div><code>play</code></div>
+                    <div class="interface-row"><i></i><div><b>Forward pane</b><span>local, remote, SOCKS5 tunnels</span></div><code>live</code></div>
+                </article>
+                <article class="db-core">
+                    <div class="sync-packet"></div>
+                    <div class="sync-packet two"></div>
+                    <div>
+                        <div class="db-stack" aria-hidden="true">
+                            <div class="db-layer"></div>
+                            <div class="db-layer"></div>
+                            <div class="db-layer"></div>
+                        </div>
+                        <strong>SQLite</strong>
+                        <span>one local source of truth<br/>for GUI and CLI</span>
+                    </div>
+                </article>
+                <article class="interface-panel">
+                    <h3>Terminal CLI</h3>
+                    <div class="interface-row"><i></i><div><b>rssh ls</b><span>list saved targets</span></div><code>read</code></div>
+                    <div class="interface-row"><i></i><div><b>rssh open prod-api</b><span>open a saved session</span></div><code>ssh</code></div>
+                    <div class="interface-row"><i></i><div><b>rssh open fwd postgres</b><span>start a named tunnel</span></div><code>fwd</code></div>
+                    <div class="interface-row"><i></i><div><b>rssh config push</b><span>encrypted GitHub backup</span></div><code>sync</code></div>
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <section id="security" class="section">
+        <div class="container">
+            <div class="section-head reveal">
+                <div>
+                    <div class="eyebrow">Security model</div>
+                    <h2 class="section-title">Your keys never leave your machine by accident.</h2>
+                </div>
+                <p class="section-lede">
+                    Secrets live in your platform keychain. You decide per credential what can sync. The remote destination is your own private GitHub repo, and payloads are encrypted before upload.
+                </p>
+            </div>
+
+            <div class="security-map">
+                <div class="security-visual reveal" id="security-visual" aria-label="Security and sync architecture">
+                    <svg viewBox="0 0 620 620" preserveAspectRatio="none" aria-hidden="true">
+                        <path class="secure-path" d="M122 104 C 318 82 284 250 468 242 S 352 394 156 390 S 314 560 468 526"/>
+                        <path class="secure-path" d="M146 188 C 220 260 308 326 460 336" opacity=".36"/>
+                    </svg>
+                    <article class="secure-node">
+                        <div class="secure-icon">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
+                        </div>
+                        <strong>Keychain</strong>
+                        <span>macOS Keychain, Windows Credential Manager, Linux Secret Service.</span>
+                    </article>
+                    <article class="secure-node">
+                        <div class="secure-icon">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 01-.659 1.591l-5.432 5.432a2.25 2.25 0 00-.659 1.591v2.927a2.25 2.25 0 01-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 00-.659-1.591L3.659 7.409A2.25 2.25 0 013 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0112 3z"/></svg>
+                        </div>
+                        <strong>Per-key filter</strong>
+                        <span><code>save_to_remote</code> decides what can enter an encrypted backup.</span>
+                    </article>
+                    <article class="secure-node">
+                        <div class="secure-icon">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 11V7a5 5 0 0 1 10 0v4"/><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M12 15v2"/></svg>
+                        </div>
+                        <strong>Encrypted payload</strong>
+                        <span>Config is encrypted before it leaves the device.</span>
+                    </article>
+                    <article class="secure-node">
+                        <div class="secure-icon">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+                        </div>
+                        <strong>Your GitHub repo</strong>
+                        <span>No RSSH account, no RSSH server, no hosted secret store.</span>
+                    </article>
+                </div>
+
+                <div class="security-copy stagger">
+                    <article>
+                        <h3>Local secrets</h3>
+                        <p>Private keys and passwords are stored in platform secret storage. Android falls back to encrypted SQLite for the mobile environment.</p>
+                    </article>
+                    <article>
+                        <h3>Granular sync control</h3>
+                        <p>Production root key? Keep it local. Dev password? Allow it to sync. The decision is attached to each credential instead of a global all-or-nothing switch.</p>
+                    </article>
+                    <article>
+                        <h3>No third-party cloud</h3>
+                        <p>The sync target is a private GitHub repo you own. RSSH does not need accounts, hosted config storage, or telemetry to keep devices aligned.</p>
+                    </article>
+                    <article>
+                        <h3>Shape-checked AI commands</h3>
+                        <p>AI diagnosis also follows the security model: commands are validated, explained, and explicitly approved before execution.</p>
+                    </article>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="features" class="section tight">
+        <div class="container">
+            <div class="section-head reveal">
+                <div>
+                    <div class="eyebrow">Workbench</div>
+                    <h2 class="section-title">The rest of the terminal day is covered.</h2>
+                </div>
+                <p class="section-lede">
+                    RSSH includes the operational details that usually force teams to juggle terminal tabs, SFTP apps, tunnel scripts, shell history, and scattered SSH config files.
+                </p>
+            </div>
+
+            <div class="feature-grid stagger">
+                <article class="feature-tile wide tall">
+                    <div class="tile-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg></div>
+                    <h3>SFTP file browser</h3>
+                    <p>Remote file browsing with upload and download, attached to the same SSH profiles you already use for terminal sessions.</p>
+                    <svg class="tile-lines" viewBox="0 0 140 140" aria-hidden="true"><path d="M10 36h120M10 70h96M10 104h70"/></svg>
+                </article>
+                <article class="feature-tile mid">
+                    <div class="tile-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7h7v10H4zM13 7h7v10h-7zM11 12h2"/></svg></div>
+                    <h3>Port forwarding</h3>
+                    <p>Local, remote, and SOCKS5 forwards with named configs and live traffic stats.</p>
+                </article>
+                <article class="feature-tile mid">
+                    <div class="tile-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M10 8l6 4-6 4V8z"/></svg></div>
+                    <h3>Session recording</h3>
+                    <p>Record and replay sessions as asciicast v2 with speed control.</p>
+                </article>
+                <article class="feature-tile mid">
+                    <div class="tile-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 6h14M5 12h10M5 18h7"/><path d="M18 14l2 2-2 2"/></svg></div>
+                    <h3>Keyword highlighting</h3>
+                    <p>Highlight ERROR, WARN, INFO, or your own terms inside long scrollback.</p>
+                </article>
+                <article class="feature-tile mid">
+                    <div class="tile-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M8 17 3 12l5-5M16 7l5 5-5 5"/><path d="M14 4 10 20"/></svg></div>
+                    <h3>Import <code>~/.ssh/config</code></h3>
+                    <p>Bring existing SSH config into the profile manager instead of recreating every host.</p>
+                </article>
+                <article class="feature-tile wide">
+                    <div class="tile-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 18V6h6l2 2h8v10H4z"/><path d="M8 13h8"/></svg></div>
+                    <h3>Command snippets and broadcast</h3>
+                    <p>Reusable commands open with Cmd+E, and broadcast can send input across multiple sessions when you are coordinating repeated work.</p>
+                </article>
+                <article class="feature-tile mid">
+                    <div class="tile-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="2"/><path d="M9 17h6"/></svg></div>
+                    <h3>Mobile keybar</h3>
+                    <p>Ctrl, Alt, Esc, Tab, and arrows are reachable on Android with safe-area-aware navigation.</p>
+                </article>
+                <article class="feature-tile mid">
+                    <div class="tile-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 8h14M5 16h14"/><path d="M8 5v14M16 5v14"/></svg></div>
+                    <h3>Local terminal</h3>
+                    <p>Open zsh, bash, or PowerShell locally when the task starts outside SSH.</p>
+                </article>
+                <article class="feature-tile mid">
+                    <div class="tile-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 7h14v10H5z"/><path d="M8 10h8M8 14h5"/></svg></div>
+                    <h3>JetBrains plugin</h3>
+                    <p>Run RSSH inside a JetBrains IDE tool window while sharing the same <code>~/.rssh</code> data directory.</p>
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <section id="deep-dives" class="section tight">
+        <div class="container">
+            <div class="section-head reveal">
+                <div>
+                    <div class="eyebrow">Deep dives</div>
+                    <h2 class="section-title">Read the design notes.</h2>
+                </div>
+                <p class="section-lede">
+                    Go deeper into the decisions behind RSSH: why the terminal is a natural ops surface, how AI diagnosis stays operator-approved, and how local-first sync keeps credentials under your control.
+                </p>
+            </div>
+
+            <div class="article-grid stagger">
+                <a class="article-card" href="article_zh.md">
+                    <small>Why RSSH</small>
+                    <h3>AI-native ops assistant</h3>
+                    <p>The product philosophy behind RSSH and why the SSH client is the right place for operational context.</p>
                 </a>
-                <span class="text-dim text-sm">macOS / Windows / Linux / Android</span>
+                <a class="article-card" href="article_ai_zh.md">
+                    <small>AI</small>
+                    <h3>Diagnose flow</h3>
+                    <p>How routing, approval, shape validation, and local analysis fit together.</p>
+                </a>
+                <a class="article-card" href="article_blocks_zh.md">
+                    <small>Blocks</small>
+                    <h3>Structured terminal output</h3>
+                    <p>Command block markers, golden-angle colors, and keyword highlighting.</p>
+                </a>
+                <a class="article-card" href="article_security_zh.md">
+                    <small>Security</small>
+                    <h3>Secrets and sync</h3>
+                    <p>Keychain storage, per-credential remote flags, and encrypted backup boundaries.</p>
+                </a>
+                <a class="article-card" href="article_workbench_zh.md">
+                    <small>Workbench</small>
+                    <h3>Daily SSH workflows</h3>
+                    <p>SFTP, forwards, recording, snippets, search, and mobile terminal ergonomics.</p>
+                </a>
             </div>
         </div>
+    </section>
 
-        <!-- ═══ Terminal Demo — Command Blocks ═══ -->
-        <div class="w-full max-w-4xl animate-fade-up delay-400" style="opacity:0">
-            <div id="term-window" class="rounded-2xl border border-white/5 bg-term shadow-2xl animate-pulse-glow overflow-hidden">
-                <div class="h-10 bg-[#252734] border-b border-white/5 flex items-center px-4 gap-2">
-                    <div class="w-3 h-3 rounded-full bg-err/80"></div>
-                    <div class="w-3 h-3 rounded-full bg-warn/80"></div>
-                    <div class="w-3 h-3 rounded-full bg-ok/80"></div>
-                    <span class="ml-3 text-xs text-dim font-mono">rssh — production-server</span>
-                </div>
-                <div id="term-body" class="p-5 sm:p-6 font-mono text-[13px] sm:text-sm leading-6 min-h-[320px] sm:min-h-[360px] text-left"></div>
-            </div>
-        </div>
-    </div>
-</section>
-
-<!-- ═══════════════════════════════════════════════════
-     FEATURE 1 — AI Ops Diagnose
-     ═══════════════════════════════════════════════════ -->
-<section class="mt-32 sm:mt-48 px-4 max-w-5xl mx-auto">
-    <div class="scroll-reveal flex flex-col lg:flex-row gap-12 items-center">
-        <!-- Text -->
-        <div class="flex-1 min-w-0">
-            <div class="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-purple-400/70 mb-4">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round"
-                          d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.456-2.456L14.25 6l1.035-.259a3.375 3.375 0 002.456-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z"/>
-                </svg>
-                AI Ops Diagnose
-            </div>
-            <h2 class="text-3xl sm:text-4xl font-bold mb-4">Automated triage, <span class="text-purple-400">human-approved</span></h2>
-            <p class="text-dim leading-relaxed mb-6">
-                Tell the AI what's wrong. It picks the playbook — Java / Go CPU, memory, IO, network — probes the environment, samples lightly, and attributes the cause.
-                You never type <code class="text-purple-400/80 text-xs bg-purple-400/5 px-1.5 py-0.5 rounded">jstack</code>, <code class="text-purple-400/80 text-xs bg-purple-400/5 px-1.5 py-0.5 rounded">pprof</code>, or <code class="text-purple-400/80 text-xs bg-purple-400/5 px-1.5 py-0.5 rounded">jmap</code> again.
-            </p>
-            <p class="text-dim leading-relaxed mb-6">
-                Every command pauses on a <strong class="text-gray-300">click-to-approve</strong> card with the explain text, side-effects, and a <strong class="text-gray-300">Reject</strong> button. A built-in shape validator hard-rejects destructive commands before they ever reach you. <strong class="text-gray-300">Diagnose only — never fix.</strong>
-            </p>
-            <div class="flex flex-wrap gap-3">
-                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-purple-400 bg-purple-400/10 px-3 py-1.5 rounded-full">Auto-routes scenarios</span>
-                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-400 bg-amber-400/10 px-3 py-1.5 rounded-full">Click-to-approve</span>
-                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-400 bg-emerald-400/10 px-3 py-1.5 rounded-full">Diagnose only, never fix</span>
-                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-cyan-400 bg-cyan-400/10 px-3 py-1.5 rounded-full">Heavy artifacts → local analysis</span>
-            </div>
-        </div>
-        <!-- Visual: AI dialogue + command-approval card -->
-        <div class="w-full lg:w-[420px] shrink-0">
-            <div class="rounded-xl bg-term border border-white/5 overflow-hidden">
-                <div class="h-8 bg-[#252734] border-b border-white/5 flex items-center px-3 gap-1.5">
-                    <div class="w-2.5 h-2.5 rounded-full bg-err/70"></div>
-                    <div class="w-2.5 h-2.5 rounded-full bg-warn/70"></div>
-                    <div class="w-2.5 h-2.5 rounded-full bg-ok/70"></div>
-                    <span class="ml-2 text-[10px] text-dim font-mono">rssh — AI diagnose</span>
-                </div>
-                <div id="ai-demo" class="p-4 space-y-3 text-[12.5px] leading-relaxed font-sans">
-                    <!-- User message -->
-                    <div class="ai-step flex gap-2">
-                        <div class="w-7 h-7 rounded-full bg-emerald-500/15 text-emerald-400 flex items-center justify-center text-[11px] font-bold shrink-0">U</div>
-                        <div class="flex-1 text-gray-300"><span class="ai-typewriter" data-text="CPU is at 100% on prod-api. Help me dig in."></span></div>
+    <section id="download" class="section">
+        <div class="container">
+            <div class="download-layout">
+                <div class="download-copy reveal">
+                    <div class="eyebrow">Download</div>
+                    <h2 class="section-title">Free, open source, MIT licensed.</h2>
+                    <p class="section-lede">
+                        Releases are published on GitHub. The cards below resolve to the newest matching asset when the GitHub API is reachable, and fall back to the latest release page otherwise.
+                    </p>
+                    <div class="hero-actions">
+                        <a class="button secondary" href="https://github.com/shihuili1218/rssh/releases/latest" target="_blank" rel="noopener">Latest release</a>
+                        <a class="button secondary" href="https://github.com/shihuili1218/rssh/blob/main/README_zh.md" target="_blank" rel="noopener">README</a>
                     </div>
+                </div>
 
-                    <!-- AI message -->
-                    <div class="ai-step flex gap-2">
-                        <div class="w-7 h-7 rounded-full bg-purple-500/15 text-purple-400 flex items-center justify-center shrink-0">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/>
-                            </svg>
+                <div class="download-list stagger">
+                    <a href="https://github.com/shihuili1218/rssh/releases/latest" target="_blank" rel="noopener" data-platform="macos-aarch64" class="download-card">
+                        <div class="download-icon" aria-hidden="true">&#63743;</div>
+                        <div><h3>macOS Apple Silicon</h3><p>.dmg - aarch64</p></div>
+                        <span class="download-arrow" aria-hidden="true">→</span>
+                    </a>
+                    <a href="https://github.com/shihuili1218/rssh/releases/latest" target="_blank" rel="noopener" data-platform="macos-x86_64" class="download-card">
+                        <div class="download-icon" aria-hidden="true">&#63743;</div>
+                        <div><h3>macOS Intel</h3><p>.dmg - x86_64</p></div>
+                        <span class="download-arrow" aria-hidden="true">→</span>
+                    </a>
+                    <a href="https://github.com/shihuili1218/rssh/releases/latest" target="_blank" rel="noopener" data-platform="windows-msi" class="download-card">
+                        <div class="download-icon" aria-hidden="true">
+                            <svg width="25" height="25" viewBox="0 0 24 24" fill="currentColor"><path d="M3 12V6.75l8-1.25V12H3zm0 .5h8v6.5l-8-1.25V12.5zM11.5 5.4 21 4v8h-9.5V5.4zm0 7.1H21V20l-9.5-1.4v-6.1z"/></svg>
                         </div>
-                        <div class="flex-1 text-gray-300"><span class="ai-typewriter" data-text="Probing the environment first — OS and JDK version determine the toolchain."></span></div>
-                    </div>
-
-                    <!-- Command approval card -->
-                    <div class="ai-step ml-9 rounded-lg border border-purple-500/30 bg-purple-500/5 p-3">
-                        <div class="flex items-center gap-2 mb-2">
-                            <svg class="w-3.5 h-3.5 text-purple-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15"/>
-                            </svg>
-                            <span class="text-[10.5px] uppercase tracking-wider text-purple-400 font-bold">run_command</span>
-                            <span class="text-[10px] text-dim ml-auto">timeout 30s</span>
+                        <div><h3>Windows</h3><p>.msi - x86_64</p></div>
+                        <span class="download-arrow" aria-hidden="true">→</span>
+                    </a>
+                    <a href="https://github.com/shihuili1218/rssh/releases/latest" target="_blank" rel="noopener" data-platform="linux-appimage" class="download-card">
+                        <div class="download-icon" aria-hidden="true">
+                            <svg width="25" height="25" viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 0c-.16 0-.31.02-.47.05-3.08.64-5.42 3.94-4.95 7.02.27 1.78 1.24 3.24 2.62 4.15-.22.19-.43.39-.62.6-1.72 1.91-2.71 4.33-1.99 6.89.43 1.53 1.46 2.75 2.83 3.42.38.18.79.31 1.21.38.82.14 1.59.06 2.3-.17 1.53-.5 2.71-1.68 3.27-3.23.46-1.27.35-2.63-.23-3.87l-.04-.07c-.23-.44-.5-.85-.81-1.23-.24-.3-.5-.58-.77-.83 1.15-.92 1.93-2.26 2.17-3.77.46-3.08-1.88-6.38-4.97-7.02A2.3 2.3 0 0 0 12.5 0z"/></svg>
                         </div>
-                        <div class="font-mono text-[12px] text-gray-200 mb-2 break-all">java -version &amp;&amp; uname -a</div>
-                        <div class="text-[11px] text-dim mb-1"><span class="text-gray-400">explain:</span> probe OS + JDK major version</div>
-                        <div class="text-[11px] text-dim mb-3"><span class="text-emerald-400/80">side_effect:</span> read-only, no impact</div>
-                        <div class="flex gap-2">
-                            <button class="text-[11px] font-semibold px-3 py-1.5 rounded-md bg-white/5 text-dim border border-white/10">Reject</button>
-                            <button id="ai-run-btn" class="ai-run-btn text-[11px] font-semibold px-3 py-1.5 rounded-md bg-purple-500/90 text-white shadow-md shadow-purple-500/20 flex-1">Run on prod-api</button>
+                        <div><h3>Linux</h3><p>.AppImage / .deb / .rpm</p></div>
+                        <span class="download-arrow" aria-hidden="true">→</span>
+                    </a>
+                    <a href="https://github.com/shihuili1218/rssh/releases/latest" target="_blank" rel="noopener" data-platform="android" class="download-card">
+                        <div class="download-icon" aria-hidden="true">
+                            <svg width="25" height="25" viewBox="0 0 24 24" fill="currentColor"><path d="M17.52 15.34a.96.96 0 1 0 0 1.92.96.96 0 0 0 0-1.92zm-11.04 0a.96.96 0 1 0 0 1.92.96.96 0 0 0 0-1.92zm11.4-6.02 2-3.46a.42.42 0 0 0-.15-.57.42.42 0 0 0-.57.15l-2.04 3.51a11.6 11.6 0 0 0-4.87-1.04c-1.77 0-3.41.38-4.87 1.04L5.34 5.44a.42.42 0 0 0-.57-.15.42.42 0 0 0-.15.57l2 3.46C3.42 11.32 1.2 14.55 1.2 18.24h21.6c0-3.69-2.22-6.92-5.32-8.92z"/></svg>
                         </div>
-                    </div>
-
-                    <!-- Output -->
-                    <div class="ai-step ml-9 font-mono text-[11.5px] leading-5 text-dim">
-                        <div>openjdk version "17.0.9" 2023-10-17</div>
-                        <div>Linux prod-api 5.15.0 #1 SMP x86_64 GNU/Linux</div>
-                    </div>
-
-                    <!-- AI follow-up -->
-                    <div class="ai-step flex gap-2">
-                        <div class="w-7 h-7 rounded-full bg-purple-500/15 text-purple-400 flex items-center justify-center shrink-0">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/>
-                            </svg>
-                        </div>
-                        <div class="flex-1 text-gray-300">JDK 17 — I'll use <code class="text-purple-400/80 text-[11px] bg-purple-400/5 px-1 rounded">jcmd Thread.print</code>. Sampling 5 stack snapshots next…</div>
-                    </div>
-                </div>
-            </div>
-            <p class="text-center text-[11px] text-dim mt-3">Every command pauses on the approval card before it runs.</p>
-        </div>
-    </div>
-</section>
-
-<!-- ═══════════════════════════════════════════════════
-     FEATURE 2 — CLI
-     ═══════════════════════════════════════════════════ -->
-<section class="mt-32 sm:mt-48 px-4 max-w-5xl mx-auto">
-    <div class="scroll-reveal flex flex-col lg:flex-row-reverse gap-12 items-center">
-        <!-- Text -->
-        <div class="flex-1 min-w-0">
-            <div class="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-amber-400/70 mb-4">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round"
-                          d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3M3.75 3h16.5a.75.75 0 01.75.75v16.5a.75.75 0 01-.75.75H3.75a.75.75 0 01-.75-.75V3.75A.75.75 0 013.75 3z"/>
-                </svg>
-                CLI-First
-            </div>
-            <h2 class="text-3xl sm:text-4xl font-bold mb-4">One database, two interfaces</h2>
-            <p class="text-dim leading-relaxed mb-6">
-                The bundled CLI reads the <strong class="text-gray-300">same SQLite database</strong> as the desktop app. Create a profile in the GUI, <code
-                    class="text-amber-400/80 text-xs bg-amber-400/5 px-1.5 py-0.5 rounded">rssh open prod</code> from your terminal. No sync, no export — they share one source of
-                truth.
-            </p>
-            <p class="text-dim leading-relaxed mb-6">
-                One-click install from Settings. Auto-configures shell completions for zsh, bash, fish, and PowerShell.
-            </p>
-            <div class="flex flex-wrap gap-3">
-                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-400 bg-amber-400/10 px-3 py-1.5 rounded-full">Shared SQLite</span>
-                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-purple-400 bg-purple-400/10 px-3 py-1.5 rounded-full">Shell completions</span>
-                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-cyan-400 bg-cyan-400/10 px-3 py-1.5 rounded-full">GitHub sync from CLI</span>
-            </div>
-        </div>
-        <!-- Visual: CLI demo -->
-        <div class="w-full lg:w-[380px] shrink-0">
-            <div class="rounded-xl bg-term border border-white/5 overflow-hidden">
-                <div class="h-8 bg-[#252734] border-b border-white/5 flex items-center px-3 gap-1.5">
-                    <div class="w-2.5 h-2.5 rounded-full bg-err/70"></div>
-                    <div class="w-2.5 h-2.5 rounded-full bg-warn/70"></div>
-                    <div class="w-2.5 h-2.5 rounded-full bg-ok/70"></div>
-                    <span class="ml-2 text-[10px] text-dim font-mono">zsh</span>
-                </div>
-                <div class="p-4 font-mono text-xs sm:text-[13px] leading-6 space-y-1" id="cli-demo">
-                    <div><span class="text-emerald-400">~</span> <span class="text-accent">rssh</span> ls</div>
-                    <div class="text-dim"> prod-api 10.0.1.42 deploy</div>
-                    <div class="text-dim"> staging 10.0.2.10 ubuntu</div>
-                    <div class="text-dim"> bastion-01 jump.co:22 ops</div>
-                    <div class="mt-2"><span class="text-emerald-400">~</span> <span class="text-accent">rssh</span> open prod-api</div>
-                    <div><span class="text-ok">&#10003;</span> Connected via bastion-01</div>
-                    <div class="mt-2"><span class="text-emerald-400">~</span> <span class="text-accent">rssh</span> open fwd postgres-tunnel</div>
-                    <div><span class="text-ok">&#10003;</span> <span class="text-dim">127.0.0.1:5432 &#8594; db:5432</span></div>
-                    <div class="mt-2"><span class="text-emerald-400">~</span> <span class="text-accent">rssh</span> config push</div>
-                    <div><span class="text-ok">&#10003;</span> Pushed to github.com/you/rssh-backup</div>
+                        <div><h3>Android</h3><p>.apk - universal</p></div>
+                        <span class="download-arrow" aria-hidden="true">→</span>
+                    </a>
                 </div>
             </div>
         </div>
-    </div>
-</section>
+    </section>
+</main>
 
-<!-- ═══════════════════════════════════════════════════
-     FEATURE 3 — Command Block Colors
-     ═══════════════════════════════════════════════════ -->
-<section class="mt-32 sm:mt-48 px-4 max-w-5xl mx-auto">
-    <div class="scroll-reveal flex flex-col lg:flex-row gap-12 items-center">
-        <!-- Text -->
-        <div class="flex-1 min-w-0">
-            <div class="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-accent/70 mb-4">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12"/>
-                </svg>
-                Signature Feature
-            </div>
-            <h2 class="text-3xl sm:text-4xl font-bold mb-4">Command Block Colors</h2>
-            <p class="text-dim leading-relaxed mb-6">
-                Every Enter keystroke opens a new block. Each block gets a unique color bar on the left edge — generated by <strong class="text-gray-300">golden-angle HSL
-                rotation</strong> (137.508&deg;), guaranteeing infinite non-colliding hues.
-            </p>
-            <p class="text-dim leading-relaxed mb-6">
-                Scroll through thousands of lines and instantly see where each command starts and ends. No parsing, no prompt detection, no remote dependency — pure client-side
-                xterm markers.
-            </p>
-            <div class="flex flex-wrap gap-3">
-                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-400 bg-emerald-400/10 px-3 py-1.5 rounded-full">Zero remote dependency</span>
-                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-accent bg-accent/10 px-3 py-1.5 rounded-full">Infinite palette</span>
-                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-400 bg-amber-400/10 px-3 py-1.5 rounded-full">Keyword highlighting</span>
-            </div>
-        </div>
-        <!-- Visual: color palette demo -->
-        <div class="w-full lg:w-[340px] shrink-0">
-            <div class="rounded-xl bg-term border border-white/5 p-4 font-mono text-xs sm:text-sm leading-7">
-                <div id="block-demo"></div>
-            </div>
-            <p class="text-center text-[11px] text-dim mt-3">Golden angle: each hue = previous + 137.508&deg;</p>
-        </div>
-    </div>
-</section>
-
-<!-- ═══════════════════════════════════════════════════
-     FEATURE 4 — Security & Sync
-     ═══════════════════════════════════════════════════ -->
-<section class="mt-32 sm:mt-48 px-4 max-w-5xl mx-auto">
-    <div class="scroll-reveal flex flex-col items-center text-center">
-        <div class="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-emerald-400/70 mb-4">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round"
-                      d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/>
-            </svg>
-            Security Model
-        </div>
-        <h2 class="text-3xl sm:text-4xl font-bold mb-4">Your keys never leave your machine</h2>
-        <p class="text-dim leading-relaxed max-w-2xl mb-12">
-            Secrets live in your platform keychain. You decide <strong class="text-gray-300">per credential</strong> what syncs to remote. And "remote" means <strong
-                class="text-gray-300">your own private GitHub repo</strong> — not our servers. We don't have servers.
-        </p>
-
-        <!-- Security flow diagram -->
-        <div class="w-full max-w-3xl grid grid-cols-1 sm:grid-cols-5 gap-4 sm:gap-2 items-center">
-            <!-- Step 1: Keychain -->
-            <div class="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-5 flex flex-col items-center gap-3 sm:col-span-1">
-                <div class="w-12 h-12 rounded-xl bg-emerald-500/15 flex items-center justify-center">
-                    <svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round"
-                              d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/>
-                    </svg>
-                </div>
-                <div class="text-sm font-bold text-emerald-400">Keychain</div>
-                <div class="text-[11px] text-dim leading-snug">macOS Keychain<br/>Win Credential Mgr<br/>Linux Secret Service</div>
-            </div>
-
-            <!-- Arrow -->
-            <div class="hidden sm:flex items-center justify-center">
-                <svg class="w-6 h-6 text-dim flow-arrow" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/>
-                </svg>
-            </div>
-
-            <!-- Step 2: Per-credential filter -->
-            <div class="rounded-2xl border border-accent/20 bg-accent/5 p-5 flex flex-col items-center gap-3 sm:col-span-1">
-                <div class="w-12 h-12 rounded-xl bg-accent/15 flex items-center justify-center">
-                    <svg class="w-6 h-6 text-accent" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round"
-                              d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 01-.659 1.591l-5.432 5.432a2.25 2.25 0 00-.659 1.591v2.927a2.25 2.25 0 01-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 00-.659-1.591L3.659 7.409A2.25 2.25 0 013 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0112 3z"/>
-                    </svg>
-                </div>
-                <div class="text-sm font-bold text-accent">Per-Key Filter</div>
-                <div class="text-[11px] text-dim leading-snug"><code class="text-accent/70">save_to_remote</code><br/>flag on each credential</div>
-            </div>
-
-            <!-- Arrow -->
-            <div class="hidden sm:flex items-center justify-center">
-                <svg class="w-6 h-6 text-dim flow-arrow" style="animation-delay:0.5s" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/>
-                </svg>
-            </div>
-
-            <!-- Step 3: Your GitHub -->
-            <div class="rounded-2xl border border-purple-500/20 bg-purple-500/5 p-5 flex flex-col items-center gap-3 sm:col-span-1">
-                <div class="w-12 h-12 rounded-xl bg-purple-500/15 flex items-center justify-center">
-                    <svg class="w-6 h-6 text-purple-400" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
-                    </svg>
-                </div>
-                <div class="text-sm font-bold text-purple-400">Your Repo</div>
-                <div class="text-[11px] text-dim leading-snug">Private GitHub repo<br/>Encrypted backup<br/>You own the data</div>
-            </div>
-        </div>
-
-        <!-- Detail cards -->
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-10 w-full max-w-3xl text-left">
-            <div class="rounded-xl border border-white/5 bg-surface p-5">
-                <div class="text-sm font-bold mb-2">Local secrets</div>
-                <p class="text-xs text-dim leading-relaxed">Private keys and passwords stored in your OS keychain. Never written to disk unencrypted. Android falls back to
-                    encrypted SQLite.</p>
-            </div>
-            <div class="rounded-xl border border-white/5 bg-surface p-5">
-                <div class="text-sm font-bold mb-2">Granular sync control</div>
-                <p class="text-xs text-dim leading-relaxed">Each credential has a <code class="text-accent/70 text-[11px]">save_to_remote</code> toggle. Production root key? Keep
-                    it local. Dev password? Let it sync.</p>
-            </div>
-            <div class="rounded-xl border border-white/5 bg-surface p-5">
-                <div class="text-sm font-bold mb-2">No third-party cloud</div>
-                <p class="text-xs text-dim leading-relaxed">Sync target is your own private GitHub repo. Payload encrypted before upload. We have no servers, no accounts, no
-                    telemetry.</p>
-            </div>
-        </div>
-    </div>
-</section>
-
-<!-- ═══════════════════════════════════════════════════
-     Also included
-     ═══════════════════════════════════════════════════ -->
-<section class="mt-32 px-4 max-w-4xl mx-auto">
-    <div class="scroll-reveal rounded-2xl border border-white/5 bg-surface p-8 sm:p-10">
-        <h3 class="text-2xl font-bold mb-8 text-center">Also included</h3>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-12 gap-y-4 text-sm">
-            <div class="flex items-center gap-3 py-2 border-b border-white/5">
-                <span class="text-accent">&#10003;</span>
-                <span>SFTP file browser with upload/download</span>
-            </div>
-            <div class="flex items-center gap-3 py-2 border-b border-white/5">
-                <span class="text-accent">&#10003;</span>
-                <span>Port forwarding (local, remote, SOCKS5)</span>
-            </div>
-            <div class="flex items-center gap-3 py-2 border-b border-white/5">
-                <span class="text-accent">&#10003;</span>
-                <span>Session recording &amp; playback (asciicast v2)</span>
-            </div>
-            <div class="flex items-center gap-3 py-2 border-b border-white/5">
-                <span class="text-accent">&#10003;</span>
-                <span>Keyword highlighting (ERROR, WARN, INFO...)</span>
-            </div>
-            <div class="flex items-center gap-3 py-2 border-b border-white/5">
-                <span class="text-accent">&#10003;</span>
-                <span>Import from <code class="text-xs text-accent/70">~/.ssh/config</code></span>
-            </div>
-            <div class="flex items-center gap-3 py-2 border-b border-white/5">
-                <span class="text-accent">&#10003;</span>
-                <span>ProxyJump through bastion hosts</span>
-            </div>
-            <div class="flex items-center gap-3 py-2 border-b border-white/5">
-                <span class="text-accent">&#10003;</span>
-                <span>Command snippets (Cmd+E)</span>
-            </div>
-            <div class="flex items-center gap-3 py-2 border-b border-white/5">
-                <span class="text-accent">&#10003;</span>
-                <span>Broadcast to multiple sessions</span>
-            </div>
-            <div class="flex items-center gap-3 py-2 border-b border-white/5">
-                <span class="text-accent">&#10003;</span>
-                <span>Local terminal (zsh / bash / PowerShell)</span>
-            </div>
-            <div class="flex items-center gap-3 py-2 border-b border-white/5">
-                <span class="text-accent">&#10003;</span>
-                <span>Mobile virtual keybar (Ctrl/Alt/Esc)</span>
-            </div>
-            <div class="flex items-center gap-3 py-2 border-b border-white/5">
-                <span class="text-accent">&#10003;</span>
-                <span>Profile groups with color coding</span>
-            </div>
-            <div class="flex items-center gap-3 py-2 border-b border-white/5">
-                <span class="text-accent">&#10003;</span>
-                <span>Tauri 2 + Rust — not Electron</span>
-            </div>
-        </div>
-    </div>
-</section>
-
-<!-- ═══ Download ═══ -->
-<section id="download" class="mt-32 sm:mt-48 px-4 max-w-4xl mx-auto">
-    <h2 class="text-3xl sm:text-4xl font-bold text-center mb-4 scroll-reveal">Download</h2>
-    <p class="text-dim text-center mb-12 scroll-reveal">Free and open source. MIT license.</p>
-    <div class="scroll-reveal grid grid-cols-1 sm:grid-cols-2 gap-4" id="download-grid">
-
-        <a href="https://github.com/shihuili1218/rssh/releases/latest" target="_blank" data-platform="macos-aarch64"
-           class="dl-card group flex items-center gap-4 rounded-2xl border border-white/5 bg-surface p-5 transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5">
-            <div class="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center text-2xl shrink-0">&#63743;</div>
+<footer class="footer">
+    <div class="container">
+        <div class="footer-grid">
             <div>
-                <div class="font-semibold group-hover:text-accent transition-colors">macOS (Apple Silicon)</div>
-                <div class="text-xs text-dim mt-0.5">.dmg &middot; aarch64</div>
+                <h2>RSSH</h2>
+                <p>SSH management with a readable terminal timeline, local-first credentials, shared GUI/CLI data, and AI diagnosis that keeps the operator in control.</p>
             </div>
-        </a>
-        <a href="https://github.com/shihuili1218/rssh/releases/latest" target="_blank" data-platform="macos-x86_64"
-           class="dl-card group flex items-center gap-4 rounded-2xl border border-white/5 bg-surface p-5 transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5">
-            <div class="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center text-2xl shrink-0">&#63743;</div>
-            <div>
-                <div class="font-semibold group-hover:text-accent transition-colors">macOS (Intel)</div>
-                <div class="text-xs text-dim mt-0.5">.dmg &middot; x86_64</div>
+            <div class="footer-links">
+                <a href="https://github.com/shihuili1218/rssh" target="_blank" rel="noopener">GitHub</a>
+                <a href="https://github.com/shihuili1218/rssh/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">Contributing</a>
+                <a href="article_en.md">English article</a>
+                <a href="article_zh.md">中文文章</a>
             </div>
-        </a>
-        <a href="https://github.com/shihuili1218/rssh/releases/latest" target="_blank" data-platform="windows-msi"
-           class="dl-card group flex items-center gap-4 rounded-2xl border border-white/5 bg-surface p-5 transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5">
-            <div class="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
-                <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M3 12V6.75l8-1.25V12H3zm0 .5h8v6.5l-8-1.25V12.5zM11.5 5.4l9.5-1.4v8h-9.5V5.4zM11.5 12.5H21V20l-9.5-1.4v-6.1z"/>
-                </svg>
-            </div>
-            <div>
-                <div class="font-semibold group-hover:text-accent transition-colors">Windows</div>
-                <div class="text-xs text-dim mt-0.5">.msi &middot; x86_64</div>
-            </div>
-        </a>
-        <a href="https://github.com/shihuili1218/rssh/releases/latest" target="_blank" data-platform="linux-appimage"
-           class="dl-card group flex items-center gap-4 rounded-2xl border border-white/5 bg-surface p-5 transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5">
-            <div class="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
-                <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12.504 0c-.155 0-.311.015-.466.046-3.08.639-5.42 3.94-4.95 7.02.27 1.778 1.236 3.236 2.617 4.152-.22.188-.428.39-.624.603C7.36 13.73 6.37 16.15 7.09 18.71c.43 1.53 1.46 2.75 2.83 3.42.38.18.79.31 1.21.38.82.14 1.59.06 2.3-.17 1.53-.5 2.71-1.68 3.27-3.23.46-1.27.35-2.63-.23-3.87l-.04-.07c-.23-.44-.5-.85-.81-1.23-.24-.3-.5-.58-.77-.83 1.15-.92 1.93-2.26 2.17-3.77.46-3.08-1.88-6.38-4.97-7.02-.15-.03-.31-.046-.47-.046zm-.004 1.093c.088 0 .177.008.264.025 2.39.497 4.18 3.18 3.8 5.66-.2 1.3-.94 2.4-2.01 3.1l-.25.15c-.09-.06-.19-.11-.28-.17-.88-.53-1.62-1.27-2.13-2.16-.53-.93-.82-2.01-.68-3.08.17-1.23.89-2.34 1.9-3.04.33-.23.68-.39 1.04-.46.11-.02.22-.03.33-.03zM8.59 14.42c.21-.04.42-.06.63-.05.72.04 1.4.33 1.93.82.32.29.59.63.82 1 .24.39.43.81.56 1.24.06.18.1.36.13.55.06.43.02.86-.1 1.27-.42 1.19-1.35 2.1-2.55 2.49-.54.18-1.07.22-1.59.12-.32-.06-.63-.16-.92-.31-1.07-.52-1.87-1.47-2.2-2.63-.56-2.01.17-3.89 1.59-5.01.35-.26.74-.45 1.14-.53l.01-.01c.17-.04.34-.06.52-.06l-.01.01z"/>
-                </svg>
-            </div>
-            <div>
-                <div class="font-semibold group-hover:text-accent transition-colors">Linux</div>
-                <div class="text-xs text-dim mt-0.5">.AppImage / .deb / .rpm</div>
-            </div>
-        </a>
-        <a href="https://github.com/shihuili1218/rssh/releases/latest" target="_blank" data-platform="android"
-           class="dl-card group flex items-center gap-4 rounded-2xl border border-white/5 bg-surface p-5 transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5 sm:col-span-2 sm:max-w-md sm:mx-auto sm:w-full">
-            <div class="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
-                <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M17.523 15.341a.96.96 0 00-.001 1.919.96.96 0 00.001-1.919zm-11.046 0a.96.96 0 000 1.919.96.96 0 000-1.919zm11.405-6.02l1.997-3.46a.416.416 0 00-.152-.567.416.416 0 00-.568.152L17.12 8.95c-1.46-.669-3.1-1.044-4.87-1.044-1.77 0-3.41.375-4.87 1.044L5.34 5.446a.416.416 0 00-.568-.152.416.416 0 00-.152.567l1.997 3.46C3.42 11.318 1.2 14.554 1.2 18.24h21.6c0-3.686-2.22-6.922-5.318-8.919z"/>
-                </svg>
-            </div>
-            <div>
-                <div class="font-semibold group-hover:text-accent transition-colors">Android</div>
-                <div class="text-xs text-dim mt-0.5">.apk &middot; universal</div>
-            </div>
-        </a>
-
-    </div>
-</section>
-
-<!-- ═══ Footer ═══ -->
-<footer class="mt-32 pb-12 flex flex-col items-center gap-6 px-4">
-    <div class="flex items-center gap-4">
-        <a href="https://github.com/shihuili1218/rssh" target="_blank" rel="noopener"
-           class="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-dim hover:text-gray-200 hover:bg-white/10 transition-all">
-            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
-            </svg>
-        </a>
-    </div>
-    <div class="text-dim text-xs">MIT License &middot; RSSH</div>
-    <div class="pointer-events-none select-none bg-gradient-to-b from-white/[0.06] to-transparent bg-clip-text text-[18vw] font-black leading-none text-transparent tracking-tighter translate-y-[10%]">
-        RSSH
+        </div>
+        <div class="fine-print">MIT License - RSSH by ofcoder</div>
     </div>
 </footer>
 
-<!-- ═══ Tab button styles ═══ -->
-<style>
-    .tab-btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.5rem;
-        padding: 0.625rem 1.25rem;
-        border-radius: 9999px;
-        font-size: 0.875rem;
-        font-weight: 600;
-        border: 1px solid rgba(255, 255, 255, 0.05);
-        background: rgba(255, 255, 255, 0.03);
-        color: #6B7A99;
-        cursor: pointer;
-        transition: all 0.3s;
-    }
-
-    .tab-btn:hover {
-        background: rgba(255, 255, 255, 0.06);
-        color: #A0A8BB;
-    }
-
-    .tab-btn.active {
-        background: #4A6CF7;
-        color: #fff;
-        border-color: #4A6CF7;
-        box-shadow: 0 4px 20px rgba(74, 108, 247, 0.3);
-    }
-</style>
-
-<!-- ═══ Scripts ═══ -->
 <script>
-    // --- Golden angle color function (same as the real app) ---
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
     function blockColor(i) {
         const hue = (i * 137.508) % 360;
         return 'hsl(' + hue.toFixed(1) + ', 65%, 58%)';
     }
 
-    // --- Hero terminal: command blocks with colored bars ---
-    const BLOCKS = [
+    const terminalBlocks = [
         {
-            prompt: '<span class="text-emerald-400">deploy@prod</span>:<span class="text-accent">~</span>$',
+            prompt: '<span class="text-green">deploy@prod</span>:<span class="text-blue">~</span>$',
             cmd: 'systemctl status nginx',
             output: [
-                '<span class="text-ok">&#9679;</span> nginx.service - A high performance web server',
-                '   Active: <span class="text-ok">active (running)</span> since Mon; 14 days ago',
-                '   Main PID: 1842 (nginx)',
+                '<span class="text-green">●</span> nginx.service - high performance web server',
+                'Active: <span class="text-green">active (running)</span> since Mon; 14 days ago',
+                'Main PID: 1842 (nginx)'
             ]
         },
         {
-            prompt: '<span class="text-emerald-400">deploy@prod</span>:<span class="text-accent">~</span>$',
+            prompt: '<span class="text-green">deploy@prod</span>:<span class="text-blue">~</span>$',
             cmd: 'tail -5 /var/log/app.log',
             output: [
-                '<span class="text-dim">09:41:02</span> <span class="text-accent font-bold">INFO</span>  Request handled in 3ms — 200 OK',
-                '<span class="text-dim">09:41:03</span> <span class="text-amber-400 font-bold">WARN</span>  Cache miss rate 12%',
-                '<span class="text-dim">09:41:07</span> <span class="text-red-400 font-bold">ERROR</span> Connection refused: redis:6379',
-                '<span class="text-dim">09:41:08</span> <span class="text-accent font-bold">INFO</span>  Retry succeeded, reconnected',
+                '<span class="text-dim">09:41:02</span> <span class="text-blue">INFO</span> Request handled in 3ms - 200 OK',
+                '<span class="text-dim">09:41:03</span> <span class="text-amber">WARN</span> Cache miss rate 12%',
+                '<span class="text-dim">09:41:07</span> <span class="text-red">ERROR</span> Connection refused: redis:6379',
+                '<span class="text-dim">09:41:08</span> <span class="text-blue">INFO</span> Retry succeeded, reconnected'
             ]
         },
         {
-            prompt: '<span class="text-emerald-400">deploy@prod</span>:<span class="text-accent">~</span>$',
+            prompt: '<span class="text-green">deploy@prod</span>:<span class="text-blue">~</span>$',
             cmd: 'df -h / | tail -1',
-            output: [
-                '/dev/sda1    50G   <span class="text-ok">18G</span>   30G  38% /',
-            ]
+            output: ['/dev/sda1 50G <span class="text-green">18G</span> 30G 38% /']
         },
         {
-            prompt: '<span class="text-emerald-400">deploy@prod</span>:<span class="text-accent">~</span>$',
-            cmd: '<span class="animate-blink">&#9608;</span>',
-            output: []
-        },
+            prompt: '<span class="text-green">deploy@prod</span>:<span class="text-blue">~</span>$',
+            cmd: 'rssh ai "why is cpu high?"',
+            output: [
+                '<span class="text-dim">route:</span> java-cpu-playbook',
+                '<span class="text-dim">next:</span> waiting for command approval'
+            ]
+        }
     ];
 
-    let heroTimeouts = [];
-
-    function renderHero() {
-        heroTimeouts.forEach(clearTimeout);
-        heroTimeouts = [];
-        const body = document.getElementById('term-body');
-        body.innerHTML = '';
-        let delay = 0;
-
-        BLOCKS.forEach((block, bi) => {
-            const color = blockColor(bi);
+    function renderTerminal(target, blocks, compact) {
+        const root = document.getElementById(target);
+        if (!root) return;
+        root.innerHTML = '';
+        blocks.forEach((block, index) => {
             const wrapper = document.createElement('div');
-            wrapper.className = 'cmd-block term-line';
-            wrapper.style.setProperty('--block-color', color);
-
-            // prompt + command
-            const promptLine = document.createElement('div');
-            promptLine.innerHTML = block.prompt + ' ' + block.cmd;
-            wrapper.appendChild(promptLine);
-
-            // output lines
-            block.output.forEach(line => {
-                const div = document.createElement('div');
-                div.innerHTML = line;
-                wrapper.appendChild(div);
-            });
-
-            body.appendChild(wrapper);
-            const d = delay;
-            heroTimeouts.push(setTimeout(() => wrapper.classList.add('show'), d));
-            delay += 600 + block.output.length * 150;
+            wrapper.className = 'terminal-block';
+            wrapper.style.setProperty('--block-color', blockColor(index));
+            const lines = ['<div>' + block.prompt + ' ' + block.cmd + '</div>'].concat(block.output.map(line => '<div>' + line + '</div>'));
+            wrapper.innerHTML = compact ? lines.slice(0, 3).join('') : lines.join('');
+            root.appendChild(wrapper);
         });
     }
 
-    renderHero();
+    renderTerminal('story-terminal', [terminalBlocks[0], terminalBlocks[2]], true);
+    renderTerminal('block-terminal', terminalBlocks, false);
 
-    // --- Block color palette demo (Feature 1 sidebar) ---
-    (function renderBlockDemo() {
-        const el = document.getElementById('block-demo');
-        const cmds = [
-            {cmd: 'ls -la', out: 'drwxr-xr-x  12 deploy ...'},
-            {cmd: 'git status', out: 'On branch main, clean'},
-            {cmd: 'docker ps', out: 'nginx  Up 14d  :80->80'},
-            {cmd: 'free -h', out: 'Mem: 7.8G / 16G (48%)'},
-            {cmd: 'uptime', out: '14 days, load: 0.42'},
-        ];
-        cmds.forEach((c, i) => {
-            const color = blockColor(i);
-            const div = document.createElement('div');
-            div.className = 'cmd-block show';
-            div.style.setProperty('--block-color', color);
-            div.innerHTML = '<div><span class="text-emerald-400">$</span> ' + c.cmd + '</div><div class="text-dim">' + c.out + '</div>';
-            if (i < cmds.length - 1) div.style.marginBottom = '4px';
-            el.appendChild(div);
-        });
-    })();
-
-    // --- AI demo: scripted sequence (fades + typewriter + Run-button click pulse) ---
-    (function aiDemoSequence() {
-        const root = document.getElementById('ai-demo');
+    function revealTerminal(rootId) {
+        const root = document.getElementById(rootId);
         if (!root) return;
-        const steps = root.querySelectorAll('.ai-step');
-        const runBtn = document.getElementById('ai-run-btn');
+        root.querySelectorAll('.terminal-block').forEach((block, index) => {
+            window.setTimeout(() => block.classList.add('is-visible'), reduceMotion ? 0 : index * 320);
+        });
+    }
 
-        function typeInto(span, onDone) {
-            const text = span.dataset.text || '';
-            span.textContent = '';
-            span.classList.add('typing');
-            let i = 0;
-            const tick = () => {
-                if (i >= text.length) {
-                    span.classList.remove('typing');
-                    if (onDone) onDone();
-                    return;
-                }
-                span.textContent += text.charAt(i++);
-                setTimeout(tick, 22 + Math.random() * 28);
-            };
-            tick();
+    function showElement(element) {
+        element.classList.add('is-visible');
+        if (element.id === 'diagnose-stage' || element.id === 'security-visual' || element.classList.contains('story-card')) {
+            element.classList.add('in-view');
         }
+        if (element.id === 'story-terminal') revealTerminal('story-terminal');
+        if (element.id === 'block-terminal') revealTerminal('block-terminal');
+    }
 
-        function revealStep(idx) {
-            const step = steps[idx];
-            if (!step) return;
-            step.classList.add('show');
-            const writers = step.querySelectorAll('.ai-typewriter');
-            writers.forEach(w => typeInto(w));
-        }
-
-        // Timeline (ms from when the section enters view)
-        // 0   user message      (typewriter ~1s)
-        // 1500  AI proposes      (typewriter ~1.6s)
-        // 4500  command card appears
-        // 5400  Run button clicked
-        // 7100  command output rendered
-        // 8000  AI follow-up
-        const schedule = [
-            [0,    () => revealStep(0)],
-            [1500, () => revealStep(1)],
-            [4500, () => revealStep(2)],
-            [5400, () => runBtn && runBtn.classList.add('clicked')],
-            [7100, () => revealStep(3)],
-            [8000, () => revealStep(4)],
-        ];
-
-        const obs = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    obs.unobserve(entry.target);
-                    schedule.forEach(([d, fn]) => setTimeout(fn, d));
-                }
-            });
-        }, {threshold: 0.35});
-        obs.observe(root);
-    })();
-
-    // --- Scroll reveal ---
-    const observer = new IntersectionObserver((entries) => {
-        entries.forEach((entry, i) => {
-            if (entry.isIntersecting) {
-                setTimeout(() => entry.target.classList.add('visible'), i * 80);
-                observer.unobserve(entry.target);
+    function revealVisibleElements() {
+        document.querySelectorAll('.reveal, .stagger, #diagnose-stage, #security-visual, #story-terminal, #block-terminal').forEach((element) => {
+            const rect = element.getBoundingClientRect();
+            if (rect.top < window.innerHeight * 1.08 && rect.bottom > -80) {
+                showElement(element);
             }
         });
-    }, {threshold: 0.15});
-    document.querySelectorAll('.scroll-reveal').forEach(el => observer.observe(el));
+    }
 
-    // --- Download links ---
+    const revealObserver = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            showElement(entry.target);
+            revealObserver.unobserve(entry.target);
+        });
+    }, {threshold: 0.14, rootMargin: '0px 0px -6% 0px'});
+
+    document.querySelectorAll('.reveal, .stagger, #diagnose-stage, #security-visual').forEach((element) => {
+        revealObserver.observe(element);
+    });
+    document.querySelectorAll('#story-terminal, #block-terminal').forEach((element) => revealObserver.observe(element));
+
+    const storyButtons = Array.from(document.querySelectorAll('.story-nav button'));
+    const storyCards = Array.from(document.querySelectorAll('.story-card'));
+    const storyObserver = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            const index = Number(entry.target.dataset.story);
+            storyButtons.forEach((button, buttonIndex) => button.classList.toggle('is-active', buttonIndex === index));
+            entry.target.classList.add('in-view');
+        });
+    }, {threshold: 0.48});
+
+    storyCards.forEach((card) => storyObserver.observe(card));
+    storyButtons.forEach((button) => {
+        button.addEventListener('click', () => {
+            const target = document.getElementById(button.dataset.jump);
+            if (target) target.scrollIntoView({behavior: reduceMotion ? 'auto' : 'smooth', block: 'center'});
+        });
+    });
+
+    function updateScrollProgress() {
+        const scrollable = document.documentElement.scrollHeight - window.innerHeight;
+        const progress = scrollable <= 0 ? 0 : window.scrollY / scrollable;
+        document.documentElement.style.setProperty('--progress', String(Math.max(0, Math.min(1, progress))));
+    }
+
+    updateScrollProgress();
+    window.addEventListener('scroll', updateScrollProgress, {passive: true});
+    window.addEventListener('resize', updateScrollProgress);
+
+    document.querySelectorAll('.feature-tile, .article-card, .download-card').forEach((card) => {
+        card.addEventListener('pointermove', (event) => {
+            if (reduceMotion || window.innerWidth < 800) return;
+            const rect = card.getBoundingClientRect();
+            const x = (event.clientX - rect.left) / rect.width - 0.5;
+            const y = (event.clientY - rect.top) / rect.height - 0.5;
+            card.style.transform = 'translateY(-4px) rotateX(' + (-y * 2).toFixed(2) + 'deg) rotateY(' + (x * 2).toFixed(2) + 'deg)';
+        });
+        card.addEventListener('pointerleave', () => {
+            card.style.transform = '';
+        });
+    });
+
+    revealTerminal('story-terminal');
+    window.addEventListener('load', revealVisibleElements);
+    window.addEventListener('hashchange', () => window.setTimeout(revealVisibleElements, 120));
+    if (location.hash) window.setTimeout(revealVisibleElements, 180);
+
     const REPO = 'shihuili1218/rssh';
     const PLATFORM_MAP = {
         'macos-aarch64': '-macos-aarch64.dmg',
         'macos-x86_64': '-macos-x86_64.dmg',
         'windows-msi': '-windows-x86_64.msi',
         'linux-appimage': '-linux-x86_64.AppImage',
-        'android': '-android-universal.apk',
+        'android': '-android-universal.apk'
     };
+
     fetch('https://api.github.com/repos/' + REPO + '/releases/latest')
-        .then(r => r.json())
-        .then(release => {
+        .then((response) => response.json())
+        .then((release) => {
             const assets = release.assets || [];
-            document.querySelectorAll('.dl-card').forEach(card => {
+            document.querySelectorAll('.download-card').forEach((card) => {
                 const suffix = PLATFORM_MAP[card.dataset.platform];
                 if (!suffix) return;
-                const asset = assets.find(a => a.name.endsWith(suffix));
+                const asset = assets.find((item) => item.name.endsWith(suffix));
                 if (asset) card.href = asset.browser_download_url;
             });
         })
         .catch(() => {
-            document.querySelectorAll('.dl-card').forEach(card => {
+            document.querySelectorAll('.download-card').forEach((card) => {
                 card.href = 'https://github.com/' + REPO + '/releases/latest';
             });
         });
 </script>
-
 </body>
 </html>
