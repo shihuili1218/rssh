@@ -139,6 +139,17 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
 
+      # linuxdeploy bakes .DirIcon as an absolute symlink into the runner's
+      # build path (/home/runner/work/...), which breaks AppImage unpackers
+      # like AppManager ("Symlink target not found"). Make it relative. (#91)
+      - name: Fix AppImage icon symlink
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle"
+          APPIMAGE="$(ls "${BUNDLE}"/appimage/*.AppImage 2>/dev/null | head -1 || true)"
+          [ -n "$APPIMAGE" ] && bash .github/scripts/fix-appimage-icon.sh "$APPIMAGE" || echo "No AppImage; skipping."
+
       # Rename to the same `rssh-<version>-<os>-<arch>.<ext>` convention as
       # release.yml so users get identical filenames whether they grab a
       # pre-release or a final release.

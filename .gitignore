@@ -2,6 +2,9 @@
 /src-tauri/target/
 /src-tauri/bin/rssh-cli*
 
+# Tauri 按构建平台生成的 schema 副本，内容与已跟踪的 desktop-schema.json 相同
+/src-tauri/gen/schemas/linux-schema.json
+
 # Node
 /node_modules/
 /dist/
