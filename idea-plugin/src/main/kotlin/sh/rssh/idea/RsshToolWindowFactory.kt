@@ -19,6 +19,8 @@ import com.intellij.ui.jcef.JBCefApp
 import com.intellij.ui.jcef.JBCefBrowser
 import javax.swing.JLabel
 import javax.swing.SwingConstants
+import org.cef.browser.CefBrowser
+import org.cef.handler.CefLifeSpanHandlerAdapter
 
 /**
  * The "RSSH" tool window: spawn the headless server, then render the rssh web UI
@@ -119,7 +121,22 @@ private class RsshToolWindowController(
                     val browser = JBCefBrowser()
                     Disposer.register(live, browser)
                     RsshBridge.install(browser, project)
-                    browser.loadURL(url)
+                    // Load ONLY after the native CEF browser actually exists.
+                    // JBCefBrowser creates the native browser lazily — when its component
+                    // is added to the UI (the `content.component = …` below). Calling
+                    // loadURL before that hands the URL to a browser that doesn't exist
+                    // yet and it's silently dropped (page never loads → blank panel on
+                    // first open). Registering this handler first means onAfterCreated
+                    // fires the instant the native browser exists — cold OR warm CEF — so
+                    // loadURL can never race ahead of creation.
+                    browser.jbCefClient.addLifeSpanHandler(
+                        object : CefLifeSpanHandlerAdapter() {
+                            override fun onAfterCreated(b: CefBrowser?) {
+                                browser.loadURL(url)
+                            }
+                        },
+                        browser.cefBrowser,
+                    )
                     content.component = browser.component
                 }
             } catch (t: Throwable) {

@@ -107,7 +107,7 @@ async fn handle_conn(stream: TcpStream, expected: String, state: Arc<AppState>) 
     let n = stream.peek(&mut sniff).await?;
     let head = String::from_utf8_lossy(&sniff[..n]).to_string();
     if !head.to_ascii_lowercase().contains("upgrade: websocket") {
-        return serve_static(stream, &head).await.map_err(Into::into);
+        return serve_static(stream).await.map_err(Into::into);
     }
 
     // Loopback bind + per-launch token are the guard (INV-3). Browsers can't set
@@ -905,8 +905,38 @@ async fn ssh_connect(
 
 /// Serve an embedded frontend asset over HTTP/1.1 (one-shot, Connection: close).
 /// Unknown paths fall back to index.html for client-side routing.
-async fn serve_static(mut stream: TcpStream, head: &str) -> std::io::Result<()> {
-    use tokio::io::AsyncWriteExt;
+///
+/// We must READ (drain) the request before replying, not just peek it.
+/// `handle_conn` only PEEKED the head (so the ws path can hand the untouched
+/// stream to tungstenite), leaving the request bytes unread in the socket's RX
+/// buffer. Closing a socket that still has unread RX data makes the kernel send
+/// an RST instead of a FIN — and an RST discards whatever is still queued in the
+/// TX buffer, truncating large responses mid-flight. The 1.3 MB JS bundle would
+/// arrive cut off (intermittently, depending on the RST-vs-transfer race), CEF
+/// would see a half script, and the SPA would never mount → blank panel. Reading
+/// to end-of-head lets us close cleanly (FIN), so the whole body is delivered.
+async fn serve_static(mut stream: TcpStream) -> std::io::Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // Drain the request to end-of-head (a GET has no body). Parsing the path from
+    // what we actually read is also more reliable than the single peek, which
+    // could have been a partial fragment.
+    let mut req: Vec<u8> = Vec::with_capacity(1024);
+    let mut tmp = [0u8; 1024];
+    loop {
+        if req.windows(4).any(|w| w == b"\r\n\r\n") {
+            break;
+        }
+        if req.len() > 16 * 1024 {
+            break; // header-flood guard
+        }
+        match stream.read(&mut tmp).await? {
+            0 => break, // peer closed early
+            n => req.extend_from_slice(&tmp[..n]),
+        }
+    }
+
+    let head = String::from_utf8_lossy(&req);
     let target = head
         .lines()
         .next()

@@ -13,8 +13,12 @@ plugins {
 }
 
 group = "sh.rssh"
-version = "0.1.6" // 0.1.6: title-bar Close (✕) button stops the rssh-server + browser and hides the tool window; reopening from the sidebar respawns a fresh session (server/browser re-rooted under a per-session Disposable, relaunch driven off toolWindowShown)
-// 0.1.5: WS read loop breaks (not `?`-returns) on abnormal close so the cleanup block always runs — closes the last Finding-3 hole codex found (TCP reset / JCEF kill skipped shutdown+waiter-clear, leaking parked SSH prompt workers)
+// Version is injected by CI (-PpluginVersion) from the release tag — the same
+// single source the desktop/Android builds sync into package.json /
+// tauri.conf.json / Cargo.toml (see release.yml & pre-release.yml "Sync version").
+// Local/dev builds fall back to 0.0.0, mirroring Android's versionName fallback in
+// gen/android/app/build.gradle.kts. Changelog lives in git tags / GitHub releases.
+version = providers.gradleProperty("pluginVersion").getOrElse("0.0.0")
 
 repositories {
     mavenCentral()

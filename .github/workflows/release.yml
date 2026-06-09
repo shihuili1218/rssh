@@ -205,7 +205,8 @@ jobs:
           chmod +x idea-plugin/gradlew || true
           (cd idea-plugin && ./gradlew --no-daemon clean buildPlugin \
             -PrsshIdeVersion=2024.2 \
-            -PrsshServerBin="${SRV}")
+            -PrsshServerBin="${SRV}" \
+            -PpluginVersion="${VERSION}")
           mkdir -p dist
           cp idea-plugin/build/distributions/*.zip \
             "dist/rssh-${VERSION}-${{ matrix.os_name }}-${{ matrix.arch }}-jetbrains-plugin.zip"
