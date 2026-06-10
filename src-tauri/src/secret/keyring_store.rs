@@ -28,8 +28,12 @@ pub fn try_open() -> Option<KeyringStore> {
 }
 
 fn entry(key: &str) -> AppResult<keyring::Entry> {
-    keyring::Entry::new(super::SERVICE, key)
-        .map_err(|e| AppError::other("keyring_failed", serde_json::json!({ "op": "entry", "err": e.to_string() })))
+    keyring::Entry::new(super::SERVICE, key).map_err(|e| {
+        AppError::other(
+            "keyring_failed",
+            serde_json::json!({ "op": "entry", "err": e.to_string() }),
+        )
+    })
 }
 
 impl SecretStore for KeyringStore {
@@ -37,20 +41,29 @@ impl SecretStore for KeyringStore {
         match entry(key)?.get_password() {
             Ok(s) => Ok(Some(s)),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(AppError::other("keyring_failed", serde_json::json!({ "op": "get", "err": e.to_string() }))),
+            Err(e) => Err(AppError::other(
+                "keyring_failed",
+                serde_json::json!({ "op": "get", "err": e.to_string() }),
+            )),
         }
     }
 
     fn set(&self, key: &str, value: &str) -> AppResult<()> {
-        entry(key)?
-            .set_password(value)
-            .map_err(|e| AppError::other("keyring_failed", serde_json::json!({ "op": "set", "err": e.to_string() })))
+        entry(key)?.set_password(value).map_err(|e| {
+            AppError::other(
+                "keyring_failed",
+                serde_json::json!({ "op": "set", "err": e.to_string() }),
+            )
+        })
     }
 
     fn delete(&self, key: &str) -> AppResult<()> {
         match entry(key)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(AppError::other("keyring_failed", serde_json::json!({ "op": "delete", "err": e.to_string() }))),
+            Err(e) => Err(AppError::other(
+                "keyring_failed",
+                serde_json::json!({ "op": "delete", "err": e.to_string() }),
+            )),
         }
     }
 

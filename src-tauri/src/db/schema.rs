@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::error::AppResult;
 
-const SCHEMA_VERSION: u32 = 14;
+const SCHEMA_VERSION: u32 = 16;
 
 pub fn migrate(conn: &Connection) -> AppResult<()> {
     let version: u32 = conn
@@ -181,7 +181,9 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
 
         // 仅在表为空时 seed（防御性，建表块本就只跑一次）。
         let count: u32 = conn
-            .query_row("SELECT COUNT(*) FROM ai_command_blacklist", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM ai_command_blacklist", [], |r| {
+                r.get(0)
+            })
             .unwrap_or(0);
         if count == 0 {
             // 这 5 类 49 条与 ai::sanitize 的 5 张 const 表必须一致，由
@@ -209,6 +211,44 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
                   ('taskset','forwarder'),('chrt','forwarder');
                 ",
             )?;
+        }
+    }
+
+    if version < 15 {
+        // Serial console profiles — a peer of `profiles`/`forwards`. No secret,
+        // no FK: a saved port + line framing. UNIQUE name like the others.
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS serial_profiles (
+                id           TEXT PRIMARY KEY,
+                name         TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                port         TEXT NOT NULL,
+                baud_rate    INTEGER NOT NULL DEFAULT 115200,
+                data_bits    INTEGER NOT NULL DEFAULT 8,
+                parity       TEXT NOT NULL DEFAULT 'none',
+                stop_bits    INTEGER NOT NULL DEFAULT 1,
+                flow_control TEXT NOT NULL DEFAULT 'none'
+            );
+            ",
+        )?;
+    }
+
+    if version < 16 {
+        // Tabby-style serial extras. ADD COLUMN (not a fresh CREATE) so a DB that
+        // already ran v15's 8-column serial_profiles gets the new columns too.
+        for stmt in [
+            "ALTER TABLE serial_profiles ADD COLUMN xany INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE serial_profiles ADD COLUMN input_newline TEXT NOT NULL DEFAULT 'cr';",
+            "ALTER TABLE serial_profiles ADD COLUMN output_newline TEXT NOT NULL DEFAULT 'raw';",
+            "ALTER TABLE serial_profiles ADD COLUMN local_echo INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE serial_profiles ADD COLUMN backspace TEXT NOT NULL DEFAULT 'del';",
+            "ALTER TABLE serial_profiles ADD COLUMN slow_send INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE serial_profiles ADD COLUMN input_mode TEXT NOT NULL DEFAULT 'normal';",
+            "ALTER TABLE serial_profiles ADD COLUMN output_mode TEXT NOT NULL DEFAULT 'text';",
+            "ALTER TABLE serial_profiles ADD COLUMN login_script TEXT NOT NULL DEFAULT '';",
+        ] {
+            // Ignore "duplicate column" if a partial run already added some.
+            let _ = conn.execute_batch(stmt);
         }
     }
 

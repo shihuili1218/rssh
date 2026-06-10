@@ -26,9 +26,10 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::ai::session::UserAction;
 use crate::error::{locked, AppError, AppResult};
-use crate::models::{Credential, Forward, Group, HighlightRule, Profile, Snippet};
+use crate::models::{Credential, Forward, Group, HighlightRule, Profile, SerialProfile, Snippet};
 use crate::state::AppState;
 use crate::terminal::pty::{self, PtyOut, PtySink};
+use crate::terminal::serial::{self, SerialOut, SerialSink};
 
 type ConnResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
@@ -57,6 +58,7 @@ fn build_state() -> AppResult<AppState> {
         secret_store: secret_system.store,
         sessions: Mutex::new(HashMap::new()),
         pty_sessions: Mutex::new(HashMap::new()),
+        serial_sessions: Mutex::new(HashMap::new()),
         sftp_sessions: Mutex::new(HashMap::new()),
         transfer_cancels: Mutex::new(HashMap::new()),
         active_forwards: Mutex::new(HashMap::new()),
@@ -171,7 +173,11 @@ async fn handle_conn(stream: TcpStream, expected: String, state: Arc<AppState>) 
             continue;
         }
         let id = req.get("id").cloned().unwrap_or(Value::Null);
-        let cmd = req.get("cmd").and_then(Value::as_str).unwrap_or("").to_string();
+        let cmd = req
+            .get("cmd")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         let args = req.get("args").cloned().unwrap_or_else(|| json!({}));
 
         // Each invoke runs concurrently: a slow ssh_connect must not block the
@@ -215,9 +221,15 @@ async fn handle_conn(stream: TcpStream, expected: String, state: Arc<AppState>) 
     let _ = shutdown_tx.send(true);
     writer.abort();
     let _ = writer.await;
-    if let Ok(mut m) = state.auth_waiters.lock() { m.clear(); }
-    if let Ok(mut m) = state.passphrase_waiters.lock() { m.clear(); }
-    if let Ok(mut m) = state.host_key_waiters.lock() { m.clear(); }
+    if let Ok(mut m) = state.auth_waiters.lock() {
+        m.clear();
+    }
+    if let Ok(mut m) = state.passphrase_waiters.lock() {
+        m.clear();
+    }
+    if let Ok(mut m) = state.host_key_waiters.lock() {
+        m.clear();
+    }
     Ok(())
 }
 
@@ -231,15 +243,27 @@ fn dispatch(
     match cmd {
         // ---- profiles ----
         "list_profiles" => ok(crate::db::profile::list(&state.db)),
-        "get_profile" => ok(crate::db::profile::get(&state.db, &arg::<String>(&args, "id")?)),
-        "create_profile" => ok(crate::db::profile::insert(&state.db, &arg::<Profile>(&args, "profile")?)),
-        "update_profile" => ok(crate::db::profile::update(&state.db, &arg::<Profile>(&args, "profile")?)),
-        "delete_profile" => ok(crate::db::profile::delete(&state.db, &arg::<String>(&args, "id")?)),
+        "get_profile" => ok(crate::db::profile::get(
+            &state.db,
+            &arg::<String>(&args, "id")?,
+        )),
+        "create_profile" => ok(crate::db::profile::insert(
+            &state.db,
+            &arg::<Profile>(&args, "profile")?,
+        )),
+        "update_profile" => ok(crate::db::profile::update(
+            &state.db,
+            &arg::<Profile>(&args, "profile")?,
+        )),
+        "delete_profile" => ok(crate::db::profile::delete(
+            &state.db,
+            &arg::<String>(&args, "id")?,
+        )),
         // Parse-only (no native dialog): the frontend reads ~/.ssh/config text and
         // sends it; returns the parsed entries. import_ssh_config returns a bare Vec.
-        "import_ssh_config" => ok(Ok::<_, AppError>(crate::commands::profile::import_ssh_config(
-            arg::<String>(&args, "content")?,
-        ))),
+        "import_ssh_config" => ok(Ok::<_, AppError>(
+            crate::commands::profile::import_ssh_config(arg::<String>(&args, "content")?),
+        )),
         // List the local shells the host offers (pure engine, no UI).
         "refresh_shells" => ok(crate::commands::pty::refresh_shells()),
 
@@ -276,16 +300,37 @@ fn dispatch(
 
         // ---- groups ----
         "list_groups" => ok(crate::db::group::list(&state.db)),
-        "create_group" => ok(crate::db::group::insert(&state.db, &arg::<Group>(&args, "group")?)),
-        "update_group" => ok(crate::db::group::update(&state.db, &arg::<Group>(&args, "group")?)),
-        "delete_group" => ok(crate::db::group::delete(&state.db, &arg::<String>(&args, "id")?)),
+        "create_group" => ok(crate::db::group::insert(
+            &state.db,
+            &arg::<Group>(&args, "group")?,
+        )),
+        "update_group" => ok(crate::db::group::update(
+            &state.db,
+            &arg::<Group>(&args, "group")?,
+        )),
+        "delete_group" => ok(crate::db::group::delete(
+            &state.db,
+            &arg::<String>(&args, "id")?,
+        )),
 
         // ---- forwards (CRUD; active start/stop need SSH — deferred) ----
         "list_forwards" => ok(crate::db::forward::list(&state.db)),
-        "get_forward" => ok(crate::db::forward::get(&state.db, &arg::<String>(&args, "id")?)),
-        "create_forward" => ok(crate::db::forward::insert(&state.db, &arg::<Forward>(&args, "forward")?)),
-        "update_forward" => ok(crate::db::forward::update(&state.db, &arg::<Forward>(&args, "forward")?)),
-        "delete_forward" => ok(crate::db::forward::delete(&state.db, &arg::<String>(&args, "id")?)),
+        "get_forward" => ok(crate::db::forward::get(
+            &state.db,
+            &arg::<String>(&args, "id")?,
+        )),
+        "create_forward" => ok(crate::db::forward::insert(
+            &state.db,
+            &arg::<Forward>(&args, "forward")?,
+        )),
+        "update_forward" => ok(crate::db::forward::update(
+            &state.db,
+            &arg::<Forward>(&args, "forward")?,
+        )),
+        "delete_forward" => ok(crate::db::forward::delete(
+            &state.db,
+            &arg::<String>(&args, "id")?,
+        )),
 
         // ---- settings / snippets / highlights ----
         "get_setting" => {
@@ -303,7 +348,9 @@ fn dispatch(
                 if value.is_empty() {
                     state.secret_store.delete(&crate::secret::setting_key(&key))
                 } else {
-                    state.secret_store.set(&crate::secret::setting_key(&key), &value)
+                    state
+                        .secret_store
+                        .set(&crate::secret::setting_key(&key), &value)
                 }
             } else {
                 crate::db::settings::set(&state.db, &key, &value)
@@ -311,8 +358,14 @@ fn dispatch(
             ok(r)
         }
         "list_highlights" => ok(crate::db::highlight::list(&state.db)),
-        "add_highlight" => ok(crate::db::highlight::insert(&state.db, &arg::<HighlightRule>(&args, "rule")?)),
-        "remove_highlight" => ok(crate::db::highlight::delete_by_keyword(&state.db, &arg::<String>(&args, "keyword")?)),
+        "add_highlight" => ok(crate::db::highlight::insert(
+            &state.db,
+            &arg::<HighlightRule>(&args, "rule")?,
+        )),
+        "remove_highlight" => ok(crate::db::highlight::delete_by_keyword(
+            &state.db,
+            &arg::<String>(&args, "keyword")?,
+        )),
         "update_highlight" => ok(crate::db::highlight::update(
             &state.db,
             &arg::<String>(&args, "oldKeyword")?,
@@ -320,7 +373,10 @@ fn dispatch(
         )),
         "reset_highlights" => ok(crate::db::highlight::reset_defaults(&state.db)),
         "load_snippets" => ok(crate::db::snippet::load(&state.data_dir)),
-        "save_snippets" => ok(crate::db::snippet::save(&state.data_dir, &arg::<Vec<Snippet>>(&args, "snippets")?)),
+        "save_snippets" => ok(crate::db::snippet::save(
+            &state.data_dir,
+            &arg::<Vec<Snippet>>(&args, "snippets")?,
+        )),
         "secret_backend" => Ok(json!(state.secret_store.backend_name())),
 
         // ---- local PTY ----
@@ -345,13 +401,18 @@ fn dispatch(
                 let _ = tx.send(Message::Text(msg.to_string().into()));
             });
             let (id, handle) = pty::spawn(cols, rows, sink, shell).map_err(err_value)?;
-            locked(&state.pty_sessions).map_err(err_value)?.insert(id.clone(), handle);
+            locked(&state.pty_sessions)
+                .map_err(err_value)?
+                .insert(id.clone(), handle);
             Ok(json!(id))
         }
         "pty_write" => {
             let sid: String = arg(&args, "sessionId")?;
             let data: Vec<u8> = arg(&args, "data")?;
-            let handle = locked(&state.pty_sessions).map_err(err_value)?.get(&sid).cloned();
+            let handle = locked(&state.pty_sessions)
+                .map_err(err_value)?
+                .get(&sid)
+                .cloned();
             match handle {
                 Some(h) => h.write(&data).map(|_| Value::Null).map_err(err_value),
                 None => Err(json!("pty_not_found")),
@@ -361,7 +422,10 @@ fn dispatch(
             let sid: String = arg(&args, "sessionId")?;
             let cols = args.get("cols").and_then(Value::as_u64).unwrap_or(80) as u16;
             let rows = args.get("rows").and_then(Value::as_u64).unwrap_or(24) as u16;
-            let handle = locked(&state.pty_sessions).map_err(err_value)?.get(&sid).cloned();
+            let handle = locked(&state.pty_sessions)
+                .map_err(err_value)?
+                .get(&sid)
+                .cloned();
             match handle {
                 Some(h) => h.resize(cols, rows).map(|_| Value::Null).map_err(err_value),
                 None => Err(json!("pty_not_found")),
@@ -373,11 +437,109 @@ fn dispatch(
             Ok(Value::Null)
         }
 
+        // ---- serial console ----
+        "serial_list_ports" => Ok(json!(serial::available_ports())),
+        "serial_open" => {
+            let port: String = arg(&args, "port")?;
+            let config: serial::SerialConfig = arg(&args, "config")?;
+            let tx = tx.clone();
+            let sink: SerialSink = Arc::new(move |id: &str, out: SerialOut| {
+                let msg = match out {
+                    SerialOut::Data(b) => {
+                        json!({ "type": "event", "event": format!("serial:data:{id}"), "payload": b })
+                    }
+                    SerialOut::Close => {
+                        json!({ "type": "event", "event": format!("serial:close:{id}"), "payload": Value::Null })
+                    }
+                };
+                let _ = tx.send(Message::Text(msg.to_string().into()));
+            });
+            let (id, handle) = serial::open(&port, config, sink).map_err(err_value)?;
+            locked(&state.serial_sessions)
+                .map_err(err_value)?
+                .insert(id.clone(), handle);
+            Ok(json!(id))
+        }
+        "serial_write" => {
+            let sid: String = arg(&args, "sessionId")?;
+            let data: Vec<u8> = arg(&args, "data")?;
+            let handle = locked(&state.serial_sessions)
+                .map_err(err_value)?
+                .get(&sid)
+                .cloned();
+            match handle {
+                Some(h) => h.write(&data).map(|_| Value::Null).map_err(err_value),
+                None => Err(json!("serial_not_found")),
+            }
+        }
+        "serial_close" => {
+            let sid: String = arg(&args, "sessionId")?;
+            locked(&state.serial_sessions)
+                .map_err(err_value)?
+                .remove(&sid);
+            Ok(Value::Null)
+        }
+        "serial_set_dtr" => {
+            let sid: String = arg(&args, "sessionId")?;
+            let level: bool = arg(&args, "level")?;
+            let handle = locked(&state.serial_sessions)
+                .map_err(err_value)?
+                .get(&sid)
+                .cloned();
+            match handle {
+                Some(h) => h.set_dtr(level).map(|_| Value::Null).map_err(err_value),
+                None => Err(json!("serial_not_found")),
+            }
+        }
+        "serial_set_rts" => {
+            let sid: String = arg(&args, "sessionId")?;
+            let level: bool = arg(&args, "level")?;
+            let handle = locked(&state.serial_sessions)
+                .map_err(err_value)?
+                .get(&sid)
+                .cloned();
+            match handle {
+                Some(h) => h.set_rts(level).map(|_| Value::Null).map_err(err_value),
+                None => Err(json!("serial_not_found")),
+            }
+        }
+        "serial_send_break" => {
+            let sid: String = arg(&args, "sessionId")?;
+            let handle = locked(&state.serial_sessions)
+                .map_err(err_value)?
+                .get(&sid)
+                .cloned();
+            match handle {
+                Some(h) => h.send_break().map(|_| Value::Null).map_err(err_value),
+                None => Err(json!("serial_not_found")),
+            }
+        }
+
+        // ---- serial profiles (CRUD; peer of forwards) ----
+        "list_serial_profiles" => ok(crate::db::serial_profile::list(&state.db)),
+        "get_serial_profile" => ok(crate::db::serial_profile::get(
+            &state.db,
+            &arg::<String>(&args, "id")?,
+        )),
+        "create_serial_profile" => ok(crate::db::serial_profile::insert(
+            &state.db,
+            &arg::<SerialProfile>(&args, "profile")?,
+        )),
+        "update_serial_profile" => ok(crate::db::serial_profile::update(
+            &state.db,
+            &arg::<SerialProfile>(&args, "profile")?,
+        )),
+        "delete_serial_profile" => ok(crate::db::serial_profile::delete(
+            &state.db,
+            &arg::<String>(&args, "id")?,
+        )),
+
         // ---- recordings (asciicast playback) ----
         "list_recordings" => ok(crate::commands::settings::list_recordings_impl(state)),
-        "read_recording" => {
-            ok(crate::commands::settings::read_recording_impl(state, arg(&args, "name")?))
-        }
+        "read_recording" => ok(crate::commands::settings::read_recording_impl(
+            state,
+            arg(&args, "name")?,
+        )),
 
         // ---- ssh config import ----
         "read_ssh_config_default" => ok(crate::commands::profile::read_ssh_config_default()),
@@ -390,14 +552,18 @@ fn dispatch(
         // ---- config import/export (JSON-string core; the *_to_file / *_from_file
         //      dialog variants are handled browser-side by the IPC shim) ----
         "export_config" => ok(crate::commands::sync::export_config_impl(state)),
-        "import_config" => {
-            ok(crate::commands::sync::import_config_impl(state, arg(&args, "json")?))
-        }
+        "import_config" => ok(crate::commands::sync::import_config_impl(
+            state,
+            arg(&args, "json")?,
+        )),
 
         // ---- port forwarding: stop + live stats (start is async, see dispatch_async) ----
         "forward_stop" => {
             let active_id: String = arg(&args, "activeId")?;
-            match locked(&state.active_forwards).map_err(err_value)?.remove(&active_id) {
+            match locked(&state.active_forwards)
+                .map_err(err_value)?
+                .remove(&active_id)
+            {
                 Some(h) => {
                     h.stop();
                     Ok(Value::Null)
@@ -408,12 +574,16 @@ fn dispatch(
         "forward_stats" => {
             let active_id: String = arg(&args, "activeId")?;
             let forwards = locked(&state.active_forwards).map_err(err_value)?;
-            let handle = forwards.get(&active_id).ok_or_else(|| json!("fwd_not_found"))?;
+            let handle = forwards
+                .get(&active_id)
+                .ok_or_else(|| json!("fwd_not_found"))?;
             ok(Ok::<_, AppError>(handle.stats()))
         }
 
         // ---- CLI: PATH-based status; install is host-managed in embedded mode ----
-        "cli_status" => ok(Ok::<_, AppError>(crate::commands::cli::cli_status_headless())),
+        "cli_status" => ok(Ok::<_, AppError>(
+            crate::commands::cli::cli_status_headless(),
+        )),
         "cli_install" => Err(json!("cli_install_not_applicable_embedded")),
 
         // ---- AI: audit save to a server-side path + remote-shell cache write ----
@@ -438,7 +608,9 @@ fn dispatch(
                 .get(&target_id)
                 .map(|h| h.profile_id().to_string())
             {
-                locked(&state.ai_remote_shell_cache).map_err(err_value)?.insert(profile_id, shell);
+                locked(&state.ai_remote_shell_cache)
+                    .map_err(err_value)?
+                    .insert(profile_id, shell);
             }
             Ok(Value::Null)
         }
@@ -450,7 +622,9 @@ fn dispatch(
                 .get("activeIds")
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
-            ok(crate::commands::lifecycle::reconcile_sessions_impl(state, active_ids))
+            ok(crate::commands::lifecycle::reconcile_sessions_impl(
+                state, active_ids,
+            ))
         }
 
         // `getVersion()` (@tauri-apps/api/app) → plugin:app|version. Desktop has
@@ -475,13 +649,19 @@ async fn dispatch_async(
         "ssh_write" => {
             let sid: String = arg(&args, "sessionId")?;
             let data: Vec<u8> = arg(&args, "data")?;
-            ssh_session(state, &sid)?.write(&data).map(|_| Value::Null).map_err(err_value)
+            ssh_session(state, &sid)?
+                .write(&data)
+                .map(|_| Value::Null)
+                .map_err(err_value)
         }
         "ssh_resize" => {
             let sid: String = arg(&args, "sessionId")?;
             let cols = args.get("cols").and_then(Value::as_u64).unwrap_or(80) as u32;
             let rows = args.get("rows").and_then(Value::as_u64).unwrap_or(24) as u32;
-            ssh_session(state, &sid)?.resize(cols, rows).map(|_| Value::Null).map_err(err_value)
+            ssh_session(state, &sid)?
+                .resize(cols, rows)
+                .map(|_| Value::Null)
+                .map_err(err_value)
         }
         "ssh_disconnect" => {
             let sid: String = arg(&args, "sessionId")?;
@@ -505,7 +685,9 @@ async fn dispatch_async(
         "ssh_auth_respond" => {
             let tab_id: String = arg(&args, "tabId")?;
             let responses: Vec<String> = arg(&args, "responses")?;
-            let w = locked(&state.auth_waiters).map_err(err_value)?.remove(&tab_id);
+            let w = locked(&state.auth_waiters)
+                .map_err(err_value)?
+                .remove(&tab_id);
             w.ok_or_else(|| json!("no_pending_auth"))?
                 .send(responses)
                 .map(|_| Value::Null)
@@ -514,7 +696,9 @@ async fn dispatch_async(
         "ssh_passphrase_respond" => {
             let tab_id: String = arg(&args, "tabId")?;
             let passphrase: String = arg(&args, "passphrase")?;
-            let w = locked(&state.passphrase_waiters).map_err(err_value)?.remove(&tab_id);
+            let w = locked(&state.passphrase_waiters)
+                .map_err(err_value)?
+                .remove(&tab_id);
             w.ok_or_else(|| json!("no_pending_passphrase"))?
                 .send(passphrase)
                 .map(|_| Value::Null)
@@ -523,7 +707,9 @@ async fn dispatch_async(
         "ssh_host_key_respond" => {
             let tab_id: String = arg(&args, "tabId")?;
             let answer: String = arg(&args, "answer")?;
-            let w = locked(&state.host_key_waiters).map_err(err_value)?.remove(&tab_id);
+            let w = locked(&state.host_key_waiters)
+                .map_err(err_value)?
+                .remove(&tab_id);
             w.ok_or_else(|| json!("no_pending_hostkey"))?
                 .send(answer)
                 .map(|_| Value::Null)
@@ -537,7 +723,9 @@ async fn dispatch_async(
         //      the native pick dialogs that supply that path are host-provided) ----
         "sftp_connect" => sftp_connect(state, args).await,
         "sftp_connect_session" => sftp_connect_session(state, args).await,
-        "sftp_home" => ok(sftp_handle(state, &arg::<String>(&args, "sftpId")?)?.home_dir().await),
+        "sftp_home" => ok(sftp_handle(state, &arg::<String>(&args, "sftpId")?)?
+            .home_dir()
+            .await),
         "sftp_list" => {
             let h = sftp_handle(state, &arg::<String>(&args, "sftpId")?)?;
             ok(h.list_dir(&arg::<String>(&args, "path")?).await)
@@ -555,20 +743,29 @@ async fn dispatch_async(
         }
         "sftp_upload" => {
             let h = sftp_handle(state, &arg::<String>(&args, "sftpId")?)?;
-            ok(h.upload(&arg::<String>(&args, "path")?, &arg::<Vec<u8>>(&args, "data")?).await)
+            ok(h.upload(
+                &arg::<String>(&args, "path")?,
+                &arg::<Vec<u8>>(&args, "data")?,
+            )
+            .await)
         }
         "sftp_mkdir" => {
             let h = sftp_handle(state, &arg::<String>(&args, "sftpId")?)?;
             ok(h.mkdir(&arg::<String>(&args, "path")?).await)
         }
         "sftp_close" => {
-            locked(&state.sftp_sessions).map_err(err_value)?.remove(&arg::<String>(&args, "sftpId")?);
+            locked(&state.sftp_sessions)
+                .map_err(err_value)?
+                .remove(&arg::<String>(&args, "sftpId")?);
             Ok(Value::Null)
         }
         "sftp_cancel_transfer" => {
             use std::sync::atomic::Ordering;
             let tid: String = arg(&args, "transferId")?;
-            if let Some(flag) = locked(&state.transfer_cancels).map_err(err_value)?.get(&tid) {
+            if let Some(flag) = locked(&state.transfer_cancels)
+                .map_err(err_value)?
+                .get(&tid)
+            {
                 flag.store(true, Ordering::SeqCst);
             }
             Ok(Value::Null)
@@ -579,11 +776,18 @@ async fn dispatch_async(
             let local_path: String = arg(&args, "localPath")?;
             let transfer_id: String = arg(&args, "transferId")?;
             // RAII: unregisters the cancel flag on return / `?` / panic (matches desktop).
-            let (_guard, flag) = crate::commands::sftp::CancelGuard::register(state, transfer_id.clone())
-                .map_err(err_value)?;
+            let (_guard, flag) =
+                crate::commands::sftp::CancelGuard::register(state, transfer_id.clone())
+                    .map_err(err_value)?;
             let host = headless_host(state, tx);
             ok(sftp
-                .download_streaming(&remote_path, std::path::Path::new(&local_path), &host, &transfer_id, flag)
+                .download_streaming(
+                    &remote_path,
+                    std::path::Path::new(&local_path),
+                    &host,
+                    &transfer_id,
+                    flag,
+                )
                 .await
                 .map(|_| ()))
         }
@@ -592,11 +796,18 @@ async fn dispatch_async(
             let local_path: String = arg(&args, "localPath")?;
             let remote_path: String = arg(&args, "remotePath")?;
             let transfer_id: String = arg(&args, "transferId")?;
-            let (_guard, flag) = crate::commands::sftp::CancelGuard::register(state, transfer_id.clone())
-                .map_err(err_value)?;
+            let (_guard, flag) =
+                crate::commands::sftp::CancelGuard::register(state, transfer_id.clone())
+                    .map_err(err_value)?;
             let host = headless_host(state, tx);
             ok(sftp
-                .upload_streaming(std::path::Path::new(&local_path), &remote_path, &host, &transfer_id, flag)
+                .upload_streaming(
+                    std::path::Path::new(&local_path),
+                    &remote_path,
+                    &host,
+                    &transfer_id,
+                    flag,
+                )
                 .await
                 .map(|_| ()))
         }
@@ -604,7 +815,9 @@ async fn dispatch_async(
         // ---- AI (settings + models + sessions + messaging + skills + audit) ----
         "ai_settings_get" => ok(crate::ai::commands::ai_settings_get_impl(
             state,
-            args.get("provider").and_then(Value::as_str).map(str::to_string),
+            args.get("provider")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         )
         .await),
         "ai_settings_set" => {
@@ -613,14 +826,20 @@ async fn dispatch_async(
         "ai_list_models" => ok(crate::ai::commands::ai_list_models_impl(
             state,
             arg(&args, "provider")?,
-            args.get("apiKey").and_then(Value::as_str).map(str::to_string),
-            args.get("endpoint").and_then(Value::as_str).map(str::to_string),
+            args.get("apiKey")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            args.get("endpoint")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         )
         .await),
         "ai_list_sessions" => {
             let g = locked(&state.ai_sessions).map_err(err_value)?;
-            let infos: Vec<crate::ai::commands::AiSessionInfo> =
-                g.values().map(crate::ai::commands::AiSessionInfo::from).collect();
+            let infos: Vec<crate::ai::commands::AiSessionInfo> = g
+                .values()
+                .map(crate::ai::commands::AiSessionInfo::from)
+                .collect();
             ok(Ok::<_, AppError>(infos))
         }
         "ai_session_start" => {
@@ -630,16 +849,23 @@ async fn dispatch_async(
                 host,
                 arg(&args, "tabId")?,
                 arg(&args, "target")?,
-                args.get("skill").and_then(Value::as_str).unwrap_or("general").to_string(),
+                args.get("skill")
+                    .and_then(Value::as_str)
+                    .unwrap_or("general")
+                    .to_string(),
                 arg(&args, "provider")?,
                 arg(&args, "model")?,
-                args.get("locale").and_then(Value::as_str).map(str::to_string),
+                args.get("locale")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             )
             .await)
         }
-        "ai_user_message" => {
-            ai_send(state, &arg::<String>(&args, "tabId")?, UserAction::Message(arg(&args, "text")?))
-        }
+        "ai_user_message" => ai_send(
+            state,
+            &arg::<String>(&args, "tabId")?,
+            UserAction::Message(arg(&args, "text")?),
+        ),
         "ai_command_result" => ai_send(
             state,
             &arg::<String>(&args, "tabId")?,
@@ -647,8 +873,14 @@ async fn dispatch_async(
                 tool_call_id: arg(&args, "toolCallId")?,
                 exit_code: args.get("exitCode").and_then(Value::as_i64).unwrap_or(0) as i32,
                 output: arg(&args, "output")?,
-                timed_out: args.get("timedOut").and_then(Value::as_bool).unwrap_or(false),
-                early_terminated: args.get("earlyTerminated").and_then(Value::as_bool).unwrap_or(false),
+                timed_out: args
+                    .get("timedOut")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                early_terminated: args
+                    .get("earlyTerminated")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
             },
         ),
         "ai_command_reject" => ai_send(
@@ -659,12 +891,17 @@ async fn dispatch_async(
                 reason: arg(&args, "reason")?,
             },
         ),
-        "ai_session_clear_context" => {
-            ai_send(state, &arg::<String>(&args, "tabId")?, UserAction::ClearContext)
-        }
+        "ai_session_clear_context" => ai_send(
+            state,
+            &arg::<String>(&args, "tabId")?,
+            UserAction::ClearContext,
+        ),
         "ai_session_stop" => {
             let tab_id: String = arg(&args, "tabId")?;
-            match locked(&state.ai_sessions).map_err(err_value)?.remove(&tab_id) {
+            match locked(&state.ai_sessions)
+                .map_err(err_value)?
+                .remove(&tab_id)
+            {
                 Some(s) => {
                     let _ = s.action_tx.send(UserAction::Stop);
                     Ok(Value::Null)
@@ -679,7 +916,12 @@ async fn dispatch_async(
                 .get(&tab_id)
                 .map(|s| s.cancel_slot.clone())
                 .ok_or_else(|| json!("ai_session_not_found"))?;
-            let notify = { slot.lock().map_err(|_| json!("lock_poisoned"))?.as_ref().cloned() };
+            let notify = {
+                slot.lock()
+                    .map_err(|_| json!("lock_poisoned"))?
+                    .as_ref()
+                    .cloned()
+            };
             if let Some(n) = notify {
                 n.notify_one();
             }
@@ -687,7 +929,10 @@ async fn dispatch_async(
         }
         "ai_session_rebind_target" => ai_rebind(state, args),
         "ai_list_skills" => ok(crate::ai::skills::list_all(&state.db)),
-        "ai_get_skill" => ok(crate::ai::skills::get(&state.db, &arg::<String>(&args, "id")?)),
+        "ai_get_skill" => ok(crate::ai::skills::get(
+            &state.db,
+            &arg::<String>(&args, "id")?,
+        )),
         "ai_save_skill" => ok(crate::ai::skills::save_user(
             &state.db,
             &crate::ai::skills::SkillRecord {
@@ -698,9 +943,10 @@ async fn dispatch_async(
                 builtin: false,
             },
         )),
-        "ai_delete_skill" => {
-            ok(crate::ai::skills::delete_user(&state.db, &arg::<String>(&args, "id")?))
-        }
+        "ai_delete_skill" => ok(crate::ai::skills::delete_user(
+            &state.db,
+            &arg::<String>(&args, "id")?,
+        )),
         "ai_list_redact_rules" => ok(crate::ai::redact_rules::list(&state.db)),
         "ai_save_redact_rule" => ok(crate::ai::redact_rules::save(
             &state.db,
@@ -710,9 +956,10 @@ async fn dispatch_async(
                 replacement: arg(&args, "replacement")?,
             },
         )),
-        "ai_delete_redact_rule" => {
-            ok(crate::ai::redact_rules::delete(&state.db, &arg::<String>(&args, "id")?))
-        }
+        "ai_delete_redact_rule" => ok(crate::ai::redact_rules::delete(
+            &state.db,
+            &arg::<String>(&args, "id")?,
+        )),
         "ai_audit_get" => {
             let tab_id: String = arg(&args, "tabId")?;
             let audit = locked(&state.ai_sessions)
@@ -746,7 +993,9 @@ async fn dispatch_async(
         }
 
         // ---- fonts (fontdb scan; the impl runs it on a blocking thread) ----
-        "list_fonts" => ok(Ok::<_, AppError>(crate::commands::settings::list_fonts().await)),
+        "list_fonts" => ok(Ok::<_, AppError>(
+            crate::commands::settings::list_fonts().await,
+        )),
 
         _ => dispatch(state, cmd, args, tx),
     }
@@ -783,7 +1032,9 @@ fn headless_host(
             // `is_ok()` is false once the writer's receiver is dropped (connection
             // closed) → Host::emit returns Err so prompt paths stop waiting.
             tx.send(Message::Text(
-                json!({ "type": "event", "event": event, "payload": payload }).to_string().into(),
+                json!({ "type": "event", "event": event, "payload": payload })
+                    .to_string()
+                    .into(),
             ))
             .is_ok()
         }),
@@ -838,8 +1089,10 @@ async fn ssh_connect(
     use crate::ssh::client;
 
     let profile_id: String = arg(&args, "profileId")?;
-    let log_session_id: Option<String> =
-        args.get("logSessionId").and_then(Value::as_str).map(str::to_string);
+    let log_session_id: Option<String> = args
+        .get("logSessionId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let cols = args.get("cols").and_then(Value::as_u64).unwrap_or(80) as u32;
     let rows = args.get("rows").and_then(Value::as_u64).unwrap_or(24) as u32;
 
@@ -851,10 +1104,12 @@ async fn ssh_connect(
         .get(&crate::secret::cred_secret_key(&credential.id))
         .map_err(err_value)?;
 
-    let chain_profiles = crate::ssh::bastion::resolve_chain(&state.db, &profile).map_err(err_value)?;
+    let chain_profiles =
+        crate::ssh::bastion::resolve_chain(&state.db, &profile).map_err(err_value)?;
     let mut chain = Vec::with_capacity(chain_profiles.len());
     for hop in chain_profiles {
-        let mut bc = crate::db::credential::get(&state.db, &hop.credential_id).map_err(err_value)?;
+        let mut bc =
+            crate::db::credential::get(&state.db, &hop.credential_id).map_err(err_value)?;
         bc.secret = state
             .secret_store
             .get(&crate::secret::cred_secret_key(&bc.id))
@@ -896,10 +1151,15 @@ async fn ssh_connect(
 
     if let Some(ref cmd) = init_command {
         if !cmd.is_empty() {
-            result.handle.write(format!("{}\n", cmd).as_bytes()).map_err(err_value)?;
+            result
+                .handle
+                .write(format!("{}\n", cmd).as_bytes())
+                .map_err(err_value)?;
         }
     }
-    locked(&state.sessions).map_err(err_value)?.insert(result.session_id.clone(), result.handle);
+    locked(&state.sessions)
+        .map_err(err_value)?
+        .insert(result.session_id.clone(), result.handle);
     Ok(json!(result.session_id))
 }
 
@@ -942,7 +1202,11 @@ async fn serve_static(mut stream: TcpStream) -> std::io::Result<()> {
         .next()
         .and_then(|l| l.split_whitespace().nth(1))
         .unwrap_or("/");
-    let path = target.split('?').next().unwrap_or("/").trim_start_matches('/');
+    let path = target
+        .split('?')
+        .next()
+        .unwrap_or("/")
+        .trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
     let (body, ctype): (&[u8], &str) = match UI.get_file(path) {
         Some(f) => (f.contents(), mime_for(path)),
@@ -981,7 +1245,9 @@ fn ai_send(state: &AppState, tab_id: &str, action: UserAction) -> Result<Value, 
         .get(tab_id)
         .map(|s| s.action_tx.clone())
         .ok_or_else(|| json!("ai_session_not_found"))?;
-    tx.send(action).map(|_| Value::Null).map_err(|_| json!("ai_session_stopped"))
+    tx.send(action)
+        .map(|_| Value::Null)
+        .map_err(|_| json!("ai_session_stopped"))
 }
 
 fn ai_rebind(state: &AppState, args: Value) -> Result<Value, Value> {
@@ -998,7 +1264,10 @@ fn ai_rebind(state: &AppState, args: Value) -> Result<Value, Value> {
                 .clone(),
         ),
         AiTarget::Local(id) => {
-            if !locked(&state.pty_sessions).map_err(err_value)?.contains_key(id) {
+            if !locked(&state.pty_sessions)
+                .map_err(err_value)?
+                .contains_key(id)
+            {
                 return Err(json!("local_pty_not_found"));
             }
             None
@@ -1007,13 +1276,18 @@ fn ai_rebind(state: &AppState, args: Value) -> Result<Value, Value> {
     let target_id = target.id().to_string();
     let tx = {
         let mut g = locked(&state.ai_sessions).map_err(err_value)?;
-        let s = g.get_mut(&tab_id).ok_or_else(|| json!("ai_session_not_found"))?;
+        let s = g
+            .get_mut(&tab_id)
+            .ok_or_else(|| json!("ai_session_not_found"))?;
         s.target_id = target_id.clone();
         s.action_tx.clone()
     };
-    tx.send(UserAction::RebindTarget { target_id, ssh_handle })
-        .map(|_| Value::Null)
-        .map_err(|_| json!("ai_session_stopped"))
+    tx.send(UserAction::RebindTarget {
+        target_id,
+        ssh_handle,
+    })
+    .map(|_| Value::Null)
+    .map_err(|_| json!("ai_session_stopped"))
 }
 
 fn sftp_handle(
@@ -1034,7 +1308,10 @@ async fn sftp_connect(state: &Arc<AppState>, args: Value) -> Result<Value, Value
     let port = args.get("port").and_then(Value::as_u64).unwrap_or(22) as u16;
     let username: String = arg(&args, "username")?;
     let auth_type: String = arg(&args, "authType")?;
-    let secret: Option<String> = args.get("secret").and_then(Value::as_str).map(str::to_string);
+    let secret: Option<String> = args
+        .get("secret")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let cred = Credential {
         id: String::new(),
         name: String::new(),
@@ -1054,7 +1331,9 @@ async fn sftp_connect(state: &Arc<AppState>, args: Value) -> Result<Value, Value
     .await
     .map_err(err_value)?;
     let id = uuid::Uuid::new_v4().to_string();
-    locked(&state.sftp_sessions).map_err(err_value)?.insert(id.clone(), std::sync::Arc::new(handle));
+    locked(&state.sftp_sessions)
+        .map_err(err_value)?
+        .insert(id.clone(), std::sync::Arc::new(handle));
     Ok(json!(id))
 }
 
@@ -1076,7 +1355,9 @@ async fn sftp_connect_session(state: &Arc<AppState>, args: Value) -> Result<Valu
     .await
     .map_err(err_value)?;
     let id = uuid::Uuid::new_v4().to_string();
-    locked(&state.sftp_sessions).map_err(err_value)?.insert(id.clone(), std::sync::Arc::new(handle));
+    locked(&state.sftp_sessions)
+        .map_err(err_value)?
+        .insert(id.clone(), std::sync::Arc::new(handle));
     Ok(json!(id))
 }
 

@@ -54,6 +54,7 @@ fn build_export_json_blocking(db: &Db, ss: &dyn SecretStore) -> AppResult<String
     let credentials = collect_credentials_with_secrets(db, ss)?;
     let forwards = crate::db::forward::list(db)?;
     let groups = crate::db::group::list(db)?;
+    let serial_profiles = crate::db::serial_profile::list(db)?;
     let skills = crate::ai::skills::list_user(db)?;
     serde_json::to_string_pretty(&serde_json::json!({
         "version": 1,
@@ -62,6 +63,7 @@ fn build_export_json_blocking(db: &Db, ss: &dyn SecretStore) -> AppResult<String
         "credentials": credentials,
         "forwards": forwards,
         "groups": groups,
+        "serial_profiles": serial_profiles,
         "skills": skills,
     }))
     .map_err(|e| AppError::other("serde_failed", json!({ "err": e.to_string() })))
@@ -101,14 +103,14 @@ pub fn import_config_impl(state: &AppState, json: String) -> AppResult<()> {
 /// Android 无 rfd 依赖，硬阻碍。
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn export_config_to_file(
-    state: State<'_, AppState>,
-) -> AppResult<Option<String>> {
+pub async fn export_config_to_file(state: State<'_, AppState>) -> AppResult<Option<String>> {
     // Build payload on the blocking pool — same rationale as the GitHub
     // commands. After this point everything is either user-driven IO
     // (the native file dialog) or a single file write.
-    let payload =
-        run_db_blocking(&state, |db, ss| build_export_json_blocking(&db, ss.as_ref())).await?;
+    let payload = run_db_blocking(&state, |db, ss| {
+        build_export_json_blocking(&db, ss.as_ref())
+    })
+    .await?;
 
     let default_dir = dirs::document_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     let default_name = format!(
@@ -134,9 +136,7 @@ pub async fn export_config_to_file(
 /// Android 无 rfd 依赖，硬阻碍。
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn import_config_from_file(
-    state: State<'_, AppState>,
-) -> AppResult<Option<String>> {
+pub async fn import_config_from_file(state: State<'_, AppState>) -> AppResult<Option<String>> {
     let pick = rfd::AsyncFileDialog::new()
         .add_filter("JSON", &["json"])
         .pick_file()
@@ -181,13 +181,13 @@ pub async fn github_push_impl(state: &AppState, password: String) -> AppResult<(
             .ok_or_else(|| AppError::config("github_token_missing", json!({})))?;
         let repo = crate::db::settings::get(&db, "github_repo")?
             .ok_or_else(|| AppError::config("github_repo_missing", json!({})))?;
-        let branch =
-            crate::db::settings::get(&db, "github_branch")?.unwrap_or("main".into());
+        let branch = crate::db::settings::get(&db, "github_branch")?.unwrap_or("main".into());
 
         let profiles = crate::db::profile::list(&db)?;
         let mut credentials = collect_credentials_with_secrets(&db, ss.as_ref())?;
         let forwards = crate::db::forward::list(&db)?;
         let groups = crate::db::group::list(&db)?;
+        let serial_profiles = crate::db::serial_profile::list(&db)?;
         let skills = crate::ai::skills::list_user(&db)?;
 
         // Honor save_to_remote: scrub secret on credentials marked local-only.
@@ -204,6 +204,7 @@ pub async fn github_push_impl(state: &AppState, password: String) -> AppResult<(
             "credentials": credentials,
             "forwards": forwards,
             "groups": groups,
+            "serial_profiles": serial_profiles,
             "skills": skills,
         }))
         .map_err(|e| AppError::other("serde_failed", json!({ "err": e.to_string() })))?;
@@ -236,8 +237,7 @@ pub async fn github_pull_impl(state: &AppState, password: String) -> AppResult<(
             .ok_or_else(|| AppError::config("github_token_missing", json!({})))?;
         let repo = crate::db::settings::get(&db, "github_repo")?
             .ok_or_else(|| AppError::config("github_repo_missing", json!({})))?;
-        let branch =
-            crate::db::settings::get(&db, "github_branch")?.unwrap_or("main".into());
+        let branch = crate::db::settings::get(&db, "github_branch")?.unwrap_or("main".into());
         Ok((token, repo, branch))
     })
     .await?;

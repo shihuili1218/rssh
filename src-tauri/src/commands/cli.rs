@@ -110,7 +110,9 @@ pub fn cli_status_headless() -> CliStatus {
     let installed = find_installed();
     CliStatus {
         installed: installed.is_some(),
-        path: installed.map(|p| p.display().to_string()).unwrap_or_default(),
+        path: installed
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
         bundled: false,
     }
 }
@@ -136,9 +138,17 @@ pub fn cli_install(app: AppHandle) -> AppResult<String> {
             .arg("-e")
             .arg(&script)
             .status()
-            .map_err(|e| AppError::other("cli_osascript_failed", serde_json::json!({ "err": e.to_string() })))?;
+            .map_err(|e| {
+                AppError::other(
+                    "cli_osascript_failed",
+                    serde_json::json!({ "err": e.to_string() }),
+                )
+            })?;
         if !status.success() {
-            return Err(AppError::other("cli_install_cancelled", serde_json::json!({})));
+            return Err(AppError::other(
+                "cli_install_cancelled",
+                serde_json::json!({}),
+            ));
         }
     }
 
@@ -155,9 +165,17 @@ pub fn cli_install(app: AppHandle) -> AppResult<String> {
                 dest.display()
             ))
             .status()
-            .map_err(|e| AppError::other("cli_priv_request_failed", serde_json::json!({ "err": e.to_string() })))?;
+            .map_err(|e| {
+                AppError::other(
+                    "cli_priv_request_failed",
+                    serde_json::json!({ "err": e.to_string() }),
+                )
+            })?;
         if !status.success() {
-            return Err(AppError::other("cli_install_cancelled", serde_json::json!({})));
+            return Err(AppError::other(
+                "cli_install_cancelled",
+                serde_json::json!({}),
+            ));
         }
     }
 

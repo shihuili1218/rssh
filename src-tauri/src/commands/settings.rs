@@ -157,7 +157,12 @@ pub fn read_recording_impl(state: &AppState, name: String) -> AppResult<String> 
         ));
     }
     let path = recording_dir(state)?.join(&name);
-    std::fs::read_to_string(&path).map_err(|e| AppError::other("settings_read_failed", serde_json::json!({ "err": e.to_string() })))
+    std::fs::read_to_string(&path).map_err(|e| {
+        AppError::other(
+            "settings_read_failed",
+            serde_json::json!({ "err": e.to_string() }),
+        )
+    })
 }
 
 fn recording_dir(state: &AppState) -> AppResult<std::path::PathBuf> {

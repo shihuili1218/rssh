@@ -8,7 +8,9 @@ pub mod cred;
 pub mod ssh_builder;
 pub mod tui;
 
-pub use cred::{find_id_by_name, load_cred_secrets, update_cred_with_secrets, upsert_cred_with_secrets};
+pub use cred::{
+    find_id_by_name, load_cred_secrets, update_cred_with_secrets, upsert_cred_with_secrets,
+};
 pub use ssh_builder::build_ssh_command;
 pub use tui::{
     confirm, die, hex_to_rgb, menu_select, prompt, prompt_default, prompt_optional,

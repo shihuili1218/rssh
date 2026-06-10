@@ -11,6 +11,8 @@ use crate::ssh::forward::ForwardHandle;
 use crate::ssh::sftp::SftpHandle;
 #[cfg(not(target_os = "android"))]
 use crate::terminal::pty::PtyHandle;
+#[cfg(not(target_os = "android"))]
+use crate::terminal::serial::SerialHandle;
 
 pub struct AppState {
     pub db: Arc<Db>,
@@ -18,6 +20,8 @@ pub struct AppState {
     pub sessions: Mutex<HashMap<String, SessionHandle>>,
     #[cfg(not(target_os = "android"))]
     pub pty_sessions: Mutex<HashMap<String, PtyHandle>>,
+    #[cfg(not(target_os = "android"))]
+    pub serial_sessions: Mutex<HashMap<String, SerialHandle>>,
     pub sftp_sessions: Mutex<HashMap<String, Arc<SftpHandle>>>,
     /// 进行中的 SFTP 传输 cancel flag：transfer_id → AtomicBool。
     /// 用户在传输页点"取消"会把对应位置 1，streaming 循环每个 chunk 查一次，

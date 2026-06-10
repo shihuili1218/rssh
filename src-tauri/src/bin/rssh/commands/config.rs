@@ -58,6 +58,7 @@ fn build_config_json(conn: &CliCtx, respect_save_to_remote: bool) -> AppResult<S
         }
     }
     let forwards = rssh_lib::db::forward::list(conn)?;
+    let serial_profiles = rssh_lib::db::serial_profile::list(conn)?;
     let groups = rssh_lib::db::group::list(conn)?;
     // ai_skill 表只有 user 自定义条目，builtin "general" 不入表。
     // SkillRecord wire format 需要 builtin 字段，inline 拼出来避免依赖 ai 模块。
@@ -79,6 +80,7 @@ fn build_config_json(conn: &CliCtx, respect_save_to_remote: bool) -> AppResult<S
         "profiles": profiles,
         "credentials": credentials,
         "forwards": forwards,
+        "serial_profiles": serial_profiles,
         "groups": groups,
         "skills": skills,
     }))
@@ -87,8 +89,8 @@ fn build_config_json(conn: &CliCtx, respect_save_to_remote: bool) -> AppResult<S
 
 /// 解析 JSON 后委派给共享同步逻辑。CLI 与 GUI 共用 sync::config 这一份。
 fn import_config_json(conn: &CliCtx, json: &str, mode: ImportMode) -> AppResult<()> {
-    let data: serde_json::Value = serde_json::from_str(json)
-        .unwrap_or_else(|e| die(format!("JSON parse error: {e}")));
+    let data: serde_json::Value =
+        serde_json::from_str(json).unwrap_or_else(|e| die(format!("JSON parse error: {e}")));
     let ss: &dyn SecretStore = conn.secret_store().as_ref();
     match mode {
         ImportMode::Merge => rssh_lib::sync::config::merge_import(conn, ss, &data),
@@ -102,7 +104,10 @@ fn config_export(conn: &CliCtx, file: &str) -> AppResult<()> {
     let pw = read_password("Encryption password: ");
     let pw2 = read_password("Confirm password: ");
     if pw != pw2 {
-        return Err(AppError::config("cli_password_mismatch", serde_json::json!({})));
+        return Err(AppError::config(
+            "cli_password_mismatch",
+            serde_json::json!({}),
+        ));
     }
     let encrypted = rssh_lib::crypto::encrypt(&json, &pw)?;
     std::fs::write(file, &encrypted)?;

@@ -49,7 +49,12 @@ pub(crate) async fn decode_key_with_prompt(
     match russh::keys::decode_secret_key(pem, None) {
         Ok(k) => return Ok(k),
         Err(KeyIsEncrypted) => {}
-        Err(e) => return Err(AppError::ssh("ssh_privkey_parse_failed", json!({ "err": e.to_string() }))),
+        Err(e) => {
+            return Err(AppError::ssh(
+                "ssh_privkey_parse_failed",
+                json!({ "err": e.to_string() }),
+            ))
+        }
     }
 
     // 命中缓存 → 直接重试；不命中或失败再走交互
@@ -70,7 +75,12 @@ pub(crate) async fn decode_key_with_prompt(
                         m.remove(key);
                     };
                 }
-                Err(e) => return Err(AppError::ssh("ssh_privkey_parse_failed", json!({ "err": e.to_string() }))),
+                Err(e) => {
+                    return Err(AppError::ssh(
+                        "ssh_privkey_parse_failed",
+                        json!({ "err": e.to_string() }),
+                    ))
+                }
             }
         }
     }
@@ -102,7 +112,12 @@ pub(crate) async fn decode_key_with_prompt(
                     .app
                     .emit(&format!("ssh:data:{}", ctx.tab_id), msg.into_bytes());
             }
-            Err(e) => return Err(AppError::ssh("ssh_privkey_parse_failed", json!({ "err": e.to_string() }))),
+            Err(e) => {
+                return Err(AppError::ssh(
+                    "ssh_privkey_parse_failed",
+                    json!({ "err": e.to_string() }),
+                ))
+            }
         }
     }
 
@@ -127,7 +142,9 @@ pub async fn authenticate(
             let result = handle
                 .authenticate_password(credential.username, pw)
                 .await
-                .map_err(|e| AppError::ssh("ssh_password_auth_failed", json!({ "err": e.to_string() })))?;
+                .map_err(|e| {
+                    AppError::ssh("ssh_password_auth_failed", json!({ "err": e.to_string() }))
+                })?;
             check_auth_result(result)
         }
         CredentialType::Key => {
@@ -165,9 +182,8 @@ pub async fn authenticate(
             // 也没法弹 prompt —— 必须报错，不能 silent Ok 让 caller 误以为登成功。
             // 有 ctx 时仍然委派给 authenticate_interactive，让"统一通过 authenticate()
             // 入口"成立。
-            let ctx = ctx.ok_or_else(|| {
-                AppError::ssh("ssh_interactive_requires_terminal", json!({}))
-            })?;
+            let ctx =
+                ctx.ok_or_else(|| AppError::ssh("ssh_interactive_requires_terminal", json!({})))?;
             authenticate_interactive(
                 handle,
                 credential.username,
@@ -220,7 +236,12 @@ async fn authenticate_private_key(
     let result = handle
         .authenticate_publickey(username, key_with_alg)
         .await
-        .map_err(|e| AppError::ssh("ssh_pubkey_auth_failed", json!({ "label": &label, "err": e.to_string() })))?;
+        .map_err(|e| {
+            AppError::ssh(
+                "ssh_pubkey_auth_failed",
+                json!({ "label": &label, "err": e.to_string() }),
+            )
+        })?;
     check_auth_result(result)
 }
 
@@ -259,9 +280,12 @@ pub async fn authenticate_with_agent(
     use russh::keys::agent::client::AgentClient;
     #[cfg(unix)]
     {
-        let agent = AgentClient::connect_env()
-            .await
-            .map_err(|e| AppError::ssh("ssh_agent_unix_connect_failed", json!({ "err": e.to_string() })))?;
+        let agent = AgentClient::connect_env().await.map_err(|e| {
+            AppError::ssh(
+                "ssh_agent_unix_connect_failed",
+                json!({ "err": e.to_string() }),
+            )
+        })?;
         try_agent_identities(handle, username, agent.dynamic()).await
     }
     #[cfg(windows)]
@@ -273,9 +297,9 @@ pub async fn authenticate_with_agent(
         if let Ok(agent) = AgentClient::connect_named_pipe(pipe).await {
             return try_agent_identities(handle, username, agent.dynamic()).await;
         }
-        let agent = AgentClient::connect_pageant()
-            .await
-            .map_err(|e| AppError::ssh("ssh_agent_pageant_failed", json!({ "err": e.to_string() })))?;
+        let agent = AgentClient::connect_pageant().await.map_err(|e| {
+            AppError::ssh("ssh_agent_pageant_failed", json!({ "err": e.to_string() }))
+        })?;
         try_agent_identities(handle, username, agent.dynamic()).await
     }
 }
@@ -499,7 +523,9 @@ pub async fn authenticate_interactive(
                 reply = handle
                     .authenticate_keyboard_interactive_respond(responses)
                     .await
-                    .map_err(|e| AppError::ssh("ssh_kbi_response_failed", json!({ "err": e.to_string() })))?;
+                    .map_err(|e| {
+                        AppError::ssh("ssh_kbi_response_failed", json!({ "err": e.to_string() }))
+                    })?;
             }
         }
     }
@@ -564,7 +590,13 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            ["id_rsa", "id_ecdsa", "id_ecdsa_sk", "id_ed25519", "id_ed25519_sk"]
+            [
+                "id_rsa",
+                "id_ecdsa",
+                "id_ecdsa_sk",
+                "id_ed25519",
+                "id_ed25519_sk"
+            ]
         );
         // 全部位于 .ssh/ 子目录
         for p in &paths {

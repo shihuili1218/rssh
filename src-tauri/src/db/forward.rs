@@ -116,7 +116,11 @@ mod tests {
     #[test]
     fn insert_then_get_for_all_types() {
         let db = Db::open_in_memory().unwrap();
-        for ft in [ForwardType::Local, ForwardType::Remote, ForwardType::Dynamic] {
+        for ft in [
+            ForwardType::Local,
+            ForwardType::Remote,
+            ForwardType::Dynamic,
+        ] {
             let id = format!("f-{}", type_str(ft));
             insert(&db, &mk(&id, &id, ft)).unwrap();
             assert_eq!(get(&db, &id).unwrap().forward_type, ft);

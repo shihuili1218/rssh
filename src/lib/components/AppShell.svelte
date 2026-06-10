@@ -581,11 +581,15 @@
 
     function buildMenu(tab: Tab): CtxMenuItem[][] {
         const isTerminal = tab.type === "ssh" || tab.type === "local";
+        // Serial is also a text terminal — it gets copy/paste/search/snippets, but
+        // NOT AI (no agent on a serial line) nor open-in-new-window (a serial port
+        // is exclusive — a second window opening the same device would fail).
+        const isTextTerminal = isTerminal || tab.type === "serial";
         const isSsh = tab.type === "ssh";
         const sections: CtxMenuItem[][] = [];
 
         // Copy / Paste (+ UTC if selection is a timestamp) / Add-to-Snippets.
-        if (isTerminal) {
+        if (isTextTerminal) {
             const selection = app.terminalGetSelection(tab.id);
             const trimmed = selection?.trim() ?? "";
             // Parse the trimmed selection so timestamps with leading/trailing
@@ -643,7 +647,7 @@
             sections.push(copyPaste);
         }
 
-        if (isTerminal) {
+        if (isTextTerminal) {
             const items: CtxMenuItem[] = [
                 {
                     label: t("tab.context.search"),
@@ -666,6 +670,29 @@
                 });
             }
             sections.push(items);
+        }
+
+        // Serial control lines: DTR/RTS assert/deassert + break. Runtime ops on
+        // the open port (MCU reset, bootloader entry, break-to-debugger). Greyed
+        // out until the session exists (briefly during connect / after unplug).
+        if (tab.type === "serial") {
+            const sid = app.sessionIdForTab(tab.id);
+            const ctl = (cmd: string, extra: Record<string, unknown> = {}) => () =>
+                void invoke(cmd, {sessionId: sid, ...extra}).catch((e) => toast.error(errMsg(e)));
+            sections.push([
+                {
+                    label: t("serial.ctl"),
+                    disabled: !sid,
+                    onClick: () => {},
+                    submenu: [
+                        {label: t("serial.ctl.dtr_assert"), disabled: !sid, onClick: ctl("serial_set_dtr", {level: true})},
+                        {label: t("serial.ctl.dtr_deassert"), disabled: !sid, onClick: ctl("serial_set_dtr", {level: false})},
+                        {label: t("serial.ctl.rts_assert"), disabled: !sid, onClick: ctl("serial_set_rts", {level: true})},
+                        {label: t("serial.ctl.rts_deassert"), disabled: !sid, onClick: ctl("serial_set_rts", {level: false})},
+                        {label: t("serial.ctl.break"), disabled: !sid, onClick: ctl("serial_send_break")},
+                    ],
+                },
+            ]);
         }
 
         sections.push([
@@ -940,7 +967,7 @@
                      oncontextmenu={app.isMobile ? undefined : (e) => openCtxMenu(e, tab)}>
                     {#if tab.type === "home"}
                         <HomeScreen/>
-                    {:else if tab.type === "ssh" || tab.type === "local"}
+                    {:else if tab.type === "ssh" || tab.type === "local" || tab.type === "serial"}
                         <TerminalPane tabId={tab.id} tabType={tab.type} meta={tab.meta ?? {}}/>
                     {:else if tab.type === "forward"}
                         <ForwardPane tabId={tab.id} meta={tab.meta ?? {}}/>

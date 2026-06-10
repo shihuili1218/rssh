@@ -83,9 +83,12 @@ pub fn decrypt(b64: &str, password: &str) -> AppResult<String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
     use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, KeyInit, Nonce};
 
-    let data = STANDARD
-        .decode(b64)
-        .map_err(|e| AppError::config("crypto_base64_decode_failed", json!({ "err": e.to_string() })))?;
+    let data = STANDARD.decode(b64).map_err(|e| {
+        AppError::config(
+            "crypto_base64_decode_failed",
+            json!({ "err": e.to_string() }),
+        )
+    })?;
     if data.len() < MIN_BLOB {
         return Err(AppError::config("crypto_invalid_payload", json!({})));
     }

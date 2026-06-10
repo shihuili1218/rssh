@@ -21,20 +21,29 @@ use crate::error::{AppError, AppResult};
 #[tauri::command]
 pub async fn fetch_latest_release_tag(repo: String) -> AppResult<String> {
     if repo.is_empty() || !repo.contains('/') || repo.contains(char::is_whitespace) {
-        return Err(AppError::config("update_invalid_repo", serde_json::json!({ "repo": repo })));
+        return Err(AppError::config(
+            "update_invalid_repo",
+            serde_json::json!({ "repo": repo }),
+        ));
     }
     let url = format!("https://github.com/{repo}/releases/latest");
     let client = reqwest::Client::builder()
         .user_agent(concat!("rssh/", env!("CARGO_PKG_VERSION")))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|e| AppError::other("update_http_failed", serde_json::json!({ "op": "client", "err": e.to_string() })))?;
+        .map_err(|e| {
+            AppError::other(
+                "update_http_failed",
+                serde_json::json!({ "op": "client", "err": e.to_string() }),
+            )
+        })?;
 
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| AppError::other("update_http_failed", serde_json::json!({ "op": "request", "err": e.to_string() })))?;
+    let resp = client.get(&url).send().await.map_err(|e| {
+        AppError::other(
+            "update_http_failed",
+            serde_json::json!({ "op": "request", "err": e.to_string() }),
+        )
+    })?;
 
     let status = resp.status();
     if !status.is_redirection() {
@@ -54,5 +63,10 @@ pub async fn fetch_latest_release_tag(repo: String) -> AppResult<String> {
         .rsplit_once("/releases/tag/")
         .map(|(_, tag)| tag.trim().to_string())
         .filter(|t| !t.is_empty())
-        .ok_or_else(|| AppError::other("update_unexpected_redirect", serde_json::json!({ "location": location })))
+        .ok_or_else(|| {
+            AppError::other(
+                "update_unexpected_redirect",
+                serde_json::json!({ "location": location }),
+            )
+        })
 }

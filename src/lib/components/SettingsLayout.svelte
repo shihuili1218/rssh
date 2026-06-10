@@ -9,6 +9,8 @@
   import CredentialEditor from "./CredentialEditor.svelte";
   import ForwardManager from "./ForwardManager.svelte";
   import ForwardEditor from "./ForwardEditor.svelte";
+  import SerialProfileManager from "./SerialProfileManager.svelte";
+  import SerialProfileEditor from "./SerialProfileEditor.svelte";
   import GroupManager from "./GroupManager.svelte";
   import SnippetManager from "./SnippetManager.svelte";
   import HighlightManager from "./HighlightManager.svelte";
@@ -38,6 +40,8 @@
     "credential-edit":    { component: CredentialEditor, needsId: true },
     "forwards":           { component: ForwardManager },
     "forward-edit":       { component: ForwardEditor, needsId: true },
+    "serial-profiles":    { component: SerialProfileManager },
+    "serial-profile-edit":{ component: SerialProfileEditor, needsId: true },
     "groups":             { component: GroupManager },
     "snippets":           { component: SnippetManager },
     "highlights":         { component: HighlightManager },
@@ -69,6 +73,7 @@
     { id: "profiles", label: t("settings.section.profiles"), section: "Connections" },
     { id: "credentials", label: t("settings.section.credentials"), section: "Connections" },
     { id: "forwards", label: t("settings.section.forwards"), section: "Connections" },
+    { id: "serial-profiles", label: t("settings.section.serial"), section: "Connections" },
     { id: "groups", label: t("settings.section.groups"), section: "Connections" },
     { id: "import-export", label: t("settings.section.import_export"), section: "Connections" },
     { id: "github-sync", label: t("settings.section.github_sync"), section: "Connections" },
@@ -86,7 +91,13 @@
   // import-export 走 rfd 原生文件对话框，rfd 没 Android backend，
   // 后端命令在 mobile 上根本没注册（见 src-tauri/Cargo.toml + sync.rs）。
   const hiddenOnCompact = new Set<string>(["cli", "shortcuts", "import-export"]);
-  let menu = $derived(compact ? allMenu.filter(m => !hiddenOnCompact.has(m.id)) : allMenu);
+  // Serial is desktop-only; hide its settings entry on mobile (the runtime
+  // commands aren't registered there). hiddenOnCompact still applies on narrow widths.
+  let menu = $derived(
+    allMenu
+      .filter(m => !(app.isMobile && m.id === "serial-profiles"))
+      .filter(m => !(compact && hiddenOnCompact.has(m.id)))
+  );
 
   let sections = $derived((() => {
     const seen = new Set<string>();
@@ -106,6 +117,7 @@
     if (id === "profiles" && p === "profile-edit") return true;
     if (id === "credentials" && p === "credential-edit") return true;
     if (id === "forwards" && p === "forward-edit") return true;
+    if (id === "serial-profiles" && p === "serial-profile-edit") return true;
     if (id === "groups" && p === "group-edit") return true;
     if (id === "import-export" && p === "import-ssh-config") return true;
     return false;

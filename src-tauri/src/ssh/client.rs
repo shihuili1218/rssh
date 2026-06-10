@@ -266,7 +266,9 @@ async fn handle_unknown_host(
     let answer = match prompt_host_key(&ctx, &banner).await {
         Ok(a) => a,
         Err(_) => {
-            log(format!("Host key confirmation cancelled for {host}:{port}."));
+            log(format!(
+                "Host key confirmation cancelled for {host}:{port}."
+            ));
             return Ok(false);
         }
     };
@@ -336,17 +338,23 @@ async fn handle_key_mismatch(
         Ok(a) => a,
         Err(_) => {
             set_mismatch();
-            log(format!("Host key change confirmation cancelled for {host}:{port}."));
+            log(format!(
+                "Host key change confirmation cancelled for {host}:{port}."
+            ));
             return Ok(false);
         }
     };
     if answer.trim() != "replace" {
         set_mismatch();
-        log(format!("Host key change rejected by user for {host}:{port}."));
+        log(format!(
+            "Host key change rejected by user for {host}:{port}."
+        ));
         return Ok(false);
     }
     match crate::ssh::known_hosts::remove_host(&host, port, &path) {
-        Ok(n) => log(format!("Removed {n} stale entry/entries for {host}:{port}.")),
+        Ok(n) => log(format!(
+            "Removed {n} stale entry/entries for {host}:{port}."
+        )),
         Err(e) => {
             log(format!("Failed to remove old known_hosts entry: {e}"));
             set_mismatch();
@@ -354,7 +362,9 @@ async fn handle_key_mismatch(
         }
     }
     match known_hosts::learn_known_hosts_path(&host, port, &pubkey, &path) {
-        Ok(()) => log(format!("New host key for {host}:{port} added to known_hosts.")),
+        Ok(()) => log(format!(
+            "New host key for {host}:{port} added to known_hosts."
+        )),
         Err(e) => log(format!("known_hosts write failed: {e}")),
     }
     Ok(true)
@@ -426,7 +436,13 @@ pub async fn ssh_connect(
     host: String,
     port: u16,
 ) -> AppResult<client::Handle<SshHandler>> {
-    let DialCtx { config, known_hosts_path, timeout_secs, log, prompt_ctx } = ctx;
+    let DialCtx {
+        config,
+        known_hosts_path,
+        timeout_secs,
+        log,
+        prompt_ctx,
+    } = ctx;
     let connect_timeout = Duration::from_secs(timeout_secs);
     let (handler, mismatch, _fwd) = new_handler(&host, port, known_hosts_path, log, prompt_ctx);
     match timeout(
@@ -449,7 +465,13 @@ pub async fn ssh_connect_with_forward(
     host: String,
     port: u16,
 ) -> AppResult<(client::Handle<SshHandler>, ForwardedChannelSender)> {
-    let DialCtx { config, known_hosts_path, timeout_secs, log, prompt_ctx } = ctx;
+    let DialCtx {
+        config,
+        known_hosts_path,
+        timeout_secs,
+        log,
+        prompt_ctx,
+    } = ctx;
     let connect_timeout = Duration::from_secs(timeout_secs);
     let (handler, mismatch, fwd) = new_handler(&host, port, known_hosts_path, log, prompt_ctx);
     let handle = match timeout(
@@ -480,7 +502,13 @@ pub async fn ssh_connect_stream<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    let DialCtx { config, known_hosts_path, timeout_secs, log, prompt_ctx } = ctx;
+    let DialCtx {
+        config,
+        known_hosts_path,
+        timeout_secs,
+        log,
+        prompt_ctx,
+    } = ctx;
     let connect_timeout = Duration::from_secs(timeout_secs);
     let (handler, mismatch, fwd) = new_handler(&host, port, known_hosts_path, log, prompt_ctx);
     let handle = match timeout(
@@ -490,7 +518,12 @@ where
     .await
     {
         Ok(result) => result.map_err(|e| map_connect_error(e, &host, port, &mismatch))?,
-        Err(_) => return Err(AppError::ssh("ssh_handshake_timeout", json!({ "host": host, "port": port }))),
+        Err(_) => {
+            return Err(AppError::ssh(
+                "ssh_handshake_timeout",
+                json!({ "host": host, "port": port }),
+            ))
+        }
     };
     Ok((handle, fwd))
 }
@@ -616,10 +649,12 @@ async fn open_tunnel_with_timeout(
     let fut =
         hop.channel_open_direct_tcpip(target_host.as_str(), target_port as u32, "127.0.0.1", 0);
     match timeout(Duration::from_secs(timeout_secs), fut).await {
-        Ok(r) => r.map_err(|e| AppError::ssh(
-            "ssh_bastion_tunnel_failed",
-            json!({ "label": &label, "err": e.to_string() }),
-        )),
+        Ok(r) => r.map_err(|e| {
+            AppError::ssh(
+                "ssh_bastion_tunnel_failed",
+                json!({ "label": &label, "err": e.to_string() }),
+            )
+        }),
         Err(_) => Err(AppError::ssh(
             "ssh_bastion_tunnel_timeout",
             json!({
@@ -706,9 +741,7 @@ impl SessionHandle {
         let _ = spawn_ssh::<_, _, ()>(move || async move {
             let h = ssh_handle.lock().await;
             // ByApplication = 用户主动断；空 message + 空 lang 是合规的最小 payload
-            let _ = h
-                .disconnect(russh::Disconnect::ByApplication, "", "")
-                .await;
+            let _ = h.disconnect(russh::Disconnect::ByApplication, "", "").await;
             Ok(())
         });
     }

@@ -2,19 +2,21 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
-  import type { Profile, Credential, Forward, Group } from "../stores/app.svelte.ts";
+  import type { Profile, Credential, Forward, Group, SerialProfile } from "../stores/app.svelte.ts";
 
   let profiles = $state<Profile[]>([]);
   let credentials = $state<Credential[]>([]);
   let forwards = $state<Forward[]>([]);
   let groups = $state<Group[]>([]);
+  let serialProfiles = $state<SerialProfile[]>([]);
   let query = $state("");
 
-  // Grid nav: "profile" or "forward" section + index within that section
-  let navSection = $state<"profile" | "forward">("profile");
+  // Grid nav: "profile" / "forward" / "serial" section + index within that section
+  let navSection = $state<"profile" | "forward" | "serial">("profile");
   let navIdx = $state(-1);
   let profileGridEl: HTMLDivElement;
   let forwardGridEl: HTMLDivElement;
+  let serialGridEl: HTMLDivElement;
 
   let filtered = $derived(
     query
@@ -68,24 +70,38 @@
     return null;
   }
 
+  // Enter the (grouped) profile pane from below — land on the last group's last
+  // row at the given column. Shared by forward→profile and serial→profile.
+  function enterProfileFromBelow(col: number) {
+    if (navProfiles.length === 0) return;
+    const last = groupedProfiles[groupedProfiles.length - 1];
+    const pCols = getCols(profileGridEl);
+    const lastRowStart = Math.floor((last.profiles.length - 1) / pCols) * pCols;
+    navSection = "profile";
+    navIdx = last.offset + Math.min(lastRowStart + col, last.profiles.length - 1);
+  }
+
   function handleHomeKey(e: KeyboardEvent) {
     if (app.activeTabId() !== "home" || app.settingsActive()) return;
     if (document.activeElement?.tagName === "INPUT") return;
 
+    // Vertical pane order on Home: profile (grouped) → forward → serial.
     const pLen = navProfiles.length;
     const fLen = forwards.length;
-    if (!pLen && !fLen) return;
+    const sLen = serialProfiles.length;
+    if (!pLen && !fLen && !sLen) return;
 
-    // Initialize nav if not started
+    // Initialize nav if not started — first non-empty pane, top-left.
     if (navIdx < 0 && (e.key.startsWith("Arrow") || e.key === "Enter")) {
-      navSection = pLen > 0 ? "profile" : "forward";
+      navSection = pLen > 0 ? "profile" : fLen > 0 ? "forward" : "serial";
       navIdx = 0;
       e.preventDefault();
       return;
     }
 
-    const curLen = navSection === "profile" ? pLen : fLen;
-    const cols = getCols(navSection === "profile" ? profileGridEl : forwardGridEl);
+    const curLen = navSection === "profile" ? pLen : navSection === "forward" ? fLen : sLen;
+    const gridEl = navSection === "profile" ? profileGridEl : navSection === "forward" ? forwardGridEl : serialGridEl;
+    const cols = getCols(gridEl);
 
     if (e.key === "ArrowRight") {
       e.preventDefault();
@@ -109,8 +125,19 @@
         } else if (fLen > 0) {
           navSection = "forward";
           navIdx = Math.min(col, fLen - 1);
+        } else if (sLen > 0) {
+          navSection = "serial";
+          navIdx = Math.min(col, sLen - 1);
         }
-      } else if (navIdx + cols < fLen) {
+      } else if (navSection === "forward") {
+        if (navIdx + cols < fLen) {
+          navIdx += cols;
+        } else if (sLen > 0) {
+          // forward bottom → serial, same column
+          navSection = "serial";
+          navIdx = Math.min(navIdx % cols, sLen - 1);
+        }
+      } else if (navIdx + cols < sLen) {
         navIdx += cols;
       }
     } else if (e.key === "ArrowUp") {
@@ -127,25 +154,32 @@
           const lastRowStart = Math.floor((prev.profiles.length - 1) / cols) * cols;
           navIdx = prev.offset + Math.min(lastRowStart + col, prev.profiles.length - 1);
         }
+      } else if (navSection === "forward") {
+        const col = navIdx % cols;
+        if (navIdx - cols >= 0) {
+          navIdx -= cols;
+        } else {
+          enterProfileFromBelow(col); // forward top → profile (no-op if no profiles)
+        }
       } else {
-        // forward → profile
-        const fCols = getCols(forwardGridEl);
-        const col = navIdx % fCols;
-        if (navIdx - fCols >= 0) {
-          navIdx -= fCols;
-        } else if (pLen > 0) {
-          // Last profile group, last row, same column
-          const last = groupedProfiles[groupedProfiles.length - 1];
-          const pCols = getCols(profileGridEl);
-          const lastRowStart = Math.floor((last.profiles.length - 1) / pCols) * pCols;
-          navSection = "profile";
-          navIdx = last.offset + Math.min(lastRowStart + col, last.profiles.length - 1);
+        // serial top → forward last row, else profile, same column
+        const col = navIdx % cols;
+        if (navIdx - cols >= 0) {
+          navIdx -= cols;
+        } else if (fLen > 0) {
+          const fCols = getCols(forwardGridEl);
+          const lastRowStart = Math.floor((fLen - 1) / fCols) * fCols;
+          navSection = "forward";
+          navIdx = Math.min(lastRowStart + col, fLen - 1);
+        } else {
+          enterProfileFromBelow(col);
         }
       }
     } else if (e.key === "Enter" && navIdx >= 0) {
       e.preventDefault();
       if (navSection === "profile" && navIdx < pLen) connectProfile(navProfiles[navIdx]);
       else if (navSection === "forward" && navIdx < fLen) openForward(forwards[navIdx]);
+      else if (navSection === "serial" && navIdx < sLen) app.connectSerialProfile(serialProfiles[navIdx]);
     }
   }
 
@@ -156,8 +190,8 @@
   });
 
   async function refresh() {
-    [profiles, credentials, forwards, groups] = await Promise.all([
-      app.loadProfiles(), app.loadCredentials(), app.loadForwards(), app.loadGroups(),
+    [profiles, credentials, forwards, groups, serialProfiles] = await Promise.all([
+      app.loadProfiles(), app.loadCredentials(), app.loadForwards(), app.loadGroups(), app.loadSerialProfiles(),
     ]);
   }
 
@@ -262,7 +296,26 @@
     </div>
   {/if}
 
-  {#if profiles.length === 0 && forwards.length === 0}
+  {#if serialProfiles.length > 0}
+    <div class="section-label">SERIAL</div>
+    <div class="grid" bind:this={serialGridEl}>
+      {#each serialProfiles as s, i (s.id)}
+        <button
+          class="card-btn neu-raised"
+          class:selected={navSection === "serial" && navIdx === i}
+          onclick={() => app.connectSerialProfile(s)}
+        >
+          <div class="card-icon serial">⎓</div>
+          <div class="card-body">
+            <div class="card-name">{s.name}</div>
+            <div class="card-sub">{s.port} · {s.baud_rate}</div>
+          </div>
+        </button>
+      {/each}
+    </div>
+  {/if}
+
+  {#if profiles.length === 0 && forwards.length === 0 && serialProfiles.length === 0}
     <div class="empty-state">
       <p>No Profiles or Port Forwards yet</p>
       <button class="btn btn-accent" onclick={() => app.navigate("settings")}>Go to Settings</button>
@@ -323,6 +376,7 @@
     font-weight: 700; font-size: 14px; flex-shrink: 0;
   }
   .card-icon.fwd { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
+  .card-icon.serial { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
 
   .card-body { flex: 1; min-width: 0; }
   .card-name { font-weight: 600; font-size: 14px; color: var(--text); margin-bottom: 2px; }

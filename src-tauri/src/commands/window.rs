@@ -20,10 +20,30 @@ struct Rect {
 fn split_rect(r: Rect, dir: &str) -> Option<(Rect, Rect)> {
     let hw = r.w / 2;
     let hh = r.h / 2;
-    let left = Rect { x: r.x, y: r.y, w: hw, h: r.h };
-    let right = Rect { x: r.x + hw as i32, y: r.y, w: r.w - hw, h: r.h };
-    let top = Rect { x: r.x, y: r.y, w: r.w, h: hh };
-    let bottom = Rect { x: r.x, y: r.y + hh as i32, w: r.w, h: r.h - hh };
+    let left = Rect {
+        x: r.x,
+        y: r.y,
+        w: hw,
+        h: r.h,
+    };
+    let right = Rect {
+        x: r.x + hw as i32,
+        y: r.y,
+        w: r.w - hw,
+        h: r.h,
+    };
+    let top = Rect {
+        x: r.x,
+        y: r.y,
+        w: r.w,
+        h: hh,
+    };
+    let bottom = Rect {
+        x: r.x,
+        y: r.y + hh as i32,
+        w: r.w,
+        h: r.h - hh,
+    };
     match dir {
         // (window that stays, window that opens)
         "right" => Some((left, right)),
@@ -47,7 +67,12 @@ fn compute_split(win: &tauri::WebviewWindow, dir: &str) -> Option<(Rect, Rect, (
         outer.height.saturating_sub(inner.height),
     );
     let (stays, opened) = split_rect(
-        Rect { x: pos.x, y: pos.y, w: outer.width, h: outer.height },
+        Rect {
+            x: pos.x,
+            y: pos.y,
+            w: outer.width,
+            h: outer.height,
+        },
         dir,
     )?;
     Some((stays, opened, deco))
@@ -60,12 +85,22 @@ fn compute_split(win: &tauri::WebviewWindow, dir: &str) -> Option<(Rect, Rect, (
 fn place(win: &tauri::WebviewWindow, r: Rect, deco: (u32, u32)) -> AppResult<()> {
     use tauri::{PhysicalPosition, PhysicalSize};
     win.set_position(PhysicalPosition::new(r.x, r.y))
-        .map_err(|e| AppError::other("window_place_failed", serde_json::json!({ "op": "pos", "err": e.to_string() })))?;
+        .map_err(|e| {
+            AppError::other(
+                "window_place_failed",
+                serde_json::json!({ "op": "pos", "err": e.to_string() }),
+            )
+        })?;
     win.set_size(PhysicalSize::new(
         r.w.saturating_sub(deco.0).max(1),
         r.h.saturating_sub(deco.1).max(1),
     ))
-    .map_err(|e| AppError::other("window_place_failed", serde_json::json!({ "op": "size", "err": e.to_string() })))?;
+    .map_err(|e| {
+        AppError::other(
+            "window_place_failed",
+            serde_json::json!({ "op": "size", "err": e.to_string() }),
+        )
+    })?;
     Ok(())
 }
 
@@ -93,8 +128,12 @@ pub fn open_tab_in_new_window(
     // Frontend reads window.__rssh_clone as a string and JSON.parses it once.
     // Do NOT JSON.parse here — that would store an object, and the frontend's
     // JSON.parse(object) would coerce to "[object Object]" and throw.
-    let json_literal = serde_json::to_string(&clone)
-        .map_err(|e| AppError::other("window_clone_encode_failed", serde_json::json!({ "err": e.to_string() })))?;
+    let json_literal = serde_json::to_string(&clone).map_err(|e| {
+        AppError::other(
+            "window_clone_encode_failed",
+            serde_json::json!({ "err": e.to_string() }),
+        )
+    })?;
     let init_script = format!("window.__rssh_clone = {};", json_literal);
 
     let label = format!("rssh-{}", Uuid::new_v4().simple());
@@ -109,27 +148,34 @@ pub fn open_tab_in_new_window(
     #[cfg(desktop)]
     if let Some(dir) = split.as_deref() {
         if let Some((stays, opened, deco)) = compute_split(&window, dir) {
-            let new_win = builder
-                .visible(false)
-                .build()
-                .map_err(|e| AppError::other("window_open_failed", serde_json::json!({ "err": e.to_string() })))?;
+            let new_win = builder.visible(false).build().map_err(|e| {
+                AppError::other(
+                    "window_open_failed",
+                    serde_json::json!({ "err": e.to_string() }),
+                )
+            })?;
             // Best-effort tiling: a failed move/resize (e.g. a fullscreen window
             // that can't be repositioned) must not orphan the hidden window or
             // abort the whole action — opening the window is the contract,
             // perfect placement is the bonus. So we always show() regardless.
             place(&new_win, opened, deco).ok();
             place(&window, stays, deco).ok();
-            new_win
-                .show()
-                .map_err(|e| AppError::other("window_open_failed", serde_json::json!({ "op": "show", "err": e.to_string() })))?;
+            new_win.show().map_err(|e| {
+                AppError::other(
+                    "window_open_failed",
+                    serde_json::json!({ "op": "show", "err": e.to_string() }),
+                )
+            })?;
             return Ok(());
         }
     }
 
-    builder
-        .inner_size(1200.0, 800.0)
-        .build()
-        .map_err(|e| AppError::other("window_open_failed", serde_json::json!({ "err": e.to_string() })))?;
+    builder.inner_size(1200.0, 800.0).build().map_err(|e| {
+        AppError::other(
+            "window_open_failed",
+            serde_json::json!({ "err": e.to_string() }),
+        )
+    })?;
     Ok(())
 }
 
@@ -139,7 +185,12 @@ mod tests {
 
     // Odd width/height on purpose: proves the halves still tile with no gap.
     fn rect() -> Rect {
-        Rect { x: 100, y: 200, w: 1201, h: 801 }
+        Rect {
+            x: 100,
+            y: 200,
+            w: 1201,
+            h: 801,
+        }
     }
 
     #[test]
@@ -210,11 +261,19 @@ fn with_clipboard<R>(
     let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_none() {
         *guard = Some(arboard::Clipboard::new().map_err(|e| {
-            AppError::other("window_clipboard_failed", serde_json::json!({ "op": "init", "err": e.to_string() }))
+            AppError::other(
+                "window_clipboard_failed",
+                serde_json::json!({ "op": "init", "err": e.to_string() }),
+            )
         })?);
     }
     let cb = guard.as_mut().expect("clipboard initialized above");
-    f(cb).map_err(|e| AppError::other("window_clipboard_failed", serde_json::json!({ "op": op, "err": e.to_string() })))
+    f(cb).map_err(|e| {
+        AppError::other(
+            "window_clipboard_failed",
+            serde_json::json!({ "op": op, "err": e.to_string() }),
+        )
+    })
 }
 
 /// Read the system clipboard as text.

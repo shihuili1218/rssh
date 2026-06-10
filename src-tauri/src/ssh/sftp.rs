@@ -69,15 +69,20 @@ impl SftpHandle {
     ) -> AppResult<Self> {
         let channel = {
             let h = ssh_handle.lock().await;
-            h.channel_open_session()
-                .await
-                .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "open channel", "err": e.to_string() })))?
+            h.channel_open_session().await.map_err(|e| {
+                AppError::sftp(
+                    "sftp_io_failed",
+                    json!({ "op": "open channel", "err": e.to_string() }),
+                )
+            })?
         };
 
-        channel
-            .request_subsystem(true, "sftp")
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "request_subsystem", "err": e.to_string() })))?;
+        channel.request_subsystem(true, "sftp").await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "request_subsystem", "err": e.to_string() }),
+            )
+        })?;
 
         let sftp = russh_sftp::client::SftpSession::new(channel.into_stream())
             .await
@@ -107,15 +112,19 @@ impl SftpHandle {
 
         client::authenticate(&mut handle, credential, None).await?;
 
-        let channel = handle
-            .channel_open_session()
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "open channel", "err": e.to_string() })))?;
+        let channel = handle.channel_open_session().await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "open channel", "err": e.to_string() }),
+            )
+        })?;
 
-        channel
-            .request_subsystem(true, "sftp")
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "request_subsystem", "err": e.to_string() })))?;
+        channel.request_subsystem(true, "sftp").await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "request_subsystem", "err": e.to_string() }),
+            )
+        })?;
 
         let sftp = russh_sftp::client::SftpSession::new(channel.into_stream())
             .await
@@ -128,18 +137,21 @@ impl SftpHandle {
     }
 
     pub async fn home_dir(&self) -> AppResult<String> {
-        self.sftp
-            .canonicalize(".")
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "canonicalize", "err": e.to_string() })))
+        self.sftp.canonicalize(".").await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "canonicalize", "err": e.to_string() }),
+            )
+        })
     }
 
     pub async fn list_dir(&self, path: &str) -> AppResult<Vec<RemoteEntry>> {
-        let entries = self
-            .sftp
-            .read_dir(path)
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "read_dir", "err": e.to_string() })))?;
+        let entries = self.sftp.read_dir(path).await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "read_dir", "err": e.to_string() }),
+            )
+        })?;
 
         let mut result: Vec<RemoteEntry> = entries
             .map(|e| {
@@ -231,24 +243,30 @@ impl SftpHandle {
     }
 
     pub async fn download(&self, remote_path: &str) -> AppResult<Vec<u8>> {
-        self.sftp
-            .read(remote_path)
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "read", "err": e.to_string() })))
+        self.sftp.read(remote_path).await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "read", "err": e.to_string() }),
+            )
+        })
     }
 
     pub async fn upload(&self, remote_path: &str, data: &[u8]) -> AppResult<()> {
-        self.sftp
-            .write(remote_path, data)
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "write", "err": e.to_string() })))
+        self.sftp.write(remote_path, data).await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "write", "err": e.to_string() }),
+            )
+        })
     }
 
     pub async fn mkdir(&self, path: &str) -> AppResult<()> {
-        self.sftp
-            .create_dir(path)
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "create_dir", "err": e.to_string() })))
+        self.sftp.create_dir(path).await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "create_dir", "err": e.to_string() }),
+            )
+        })
     }
 
     /// Stream-download a remote file to a local path with a hard size cap.
@@ -267,11 +285,12 @@ impl SftpHandle {
         // 预检：metadata 已知大小且超限就早 bail，省一次 open。size=None
         // 时不能假装它是 0（之前的 unwrap_or(0) 会让任何"未声明大小"的文件
         // 直接绕过 max_bytes）—— 交给下面的 streaming cap 兜底。
-        let meta = self
-            .sftp
-            .metadata(remote_path)
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "metadata", "err": e.to_string() })))?;
+        let meta = self.sftp.metadata(remote_path).await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "metadata", "err": e.to_string() }),
+            )
+        })?;
         if let Some(size) = meta.size {
             if size > max_bytes {
                 return Err(AppError::sftp(
@@ -285,24 +304,32 @@ impl SftpHandle {
         let file_name = local_path
             .file_name()
             .and_then(|n| n.to_str())
-            .ok_or_else(|| AppError::sftp("sftp_io_failed", json!({ "op": "create", "err": "invalid local path" })))?;
+            .ok_or_else(|| {
+                AppError::sftp(
+                    "sftp_io_failed",
+                    json!({ "op": "create", "err": "invalid local path" }),
+                )
+            })?;
         let tmp_path = local_path.with_file_name(format!("{file_name}.part"));
 
         let result: AppResult<u64> = async {
-            let mut remote_file = self
-                .sftp
-                .open(remote_path)
-                .await
-                .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "open", "err": e.to_string() })))?;
+            let mut remote_file = self.sftp.open(remote_path).await.map_err(|e| {
+                AppError::sftp(
+                    "sftp_io_failed",
+                    json!({ "op": "open", "err": e.to_string() }),
+                )
+            })?;
             let mut local_file = tokio::fs::File::create(&tmp_path).await?;
 
             let mut transferred: u64 = 0;
             let mut buf = vec![0u8; 32768];
             loop {
-                let n = remote_file
-                    .read(&mut buf)
-                    .await
-                    .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "read", "err": e.to_string() })))?;
+                let n = remote_file.read(&mut buf).await.map_err(|e| {
+                    AppError::sftp(
+                        "sftp_io_failed",
+                        json!({ "op": "read", "err": e.to_string() }),
+                    )
+                })?;
                 if n == 0 {
                     break;
                 }
@@ -321,10 +348,12 @@ impl SftpHandle {
                 transferred = next;
             }
 
-            remote_file
-                .shutdown()
-                .await
-                .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "close", "err": e.to_string() })))?;
+            remote_file.shutdown().await.map_err(|e| {
+                AppError::sftp(
+                    "sftp_io_failed",
+                    json!({ "op": "close", "err": e.to_string() }),
+                )
+            })?;
             local_file.shutdown().await?;
             Ok(transferred)
         }
@@ -361,18 +390,20 @@ impl SftpHandle {
         cancel: Arc<AtomicBool>,
     ) -> AppResult<u64> {
         // Get file size for progress
-        let meta = self
-            .sftp
-            .metadata(remote_path)
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "metadata", "err": e.to_string() })))?;
+        let meta = self.sftp.metadata(remote_path).await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "metadata", "err": e.to_string() }),
+            )
+        })?;
         let total = meta.size.unwrap_or(0);
 
-        let mut remote_file = self
-            .sftp
-            .open(remote_path)
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "open", "err": e.to_string() })))?;
+        let mut remote_file = self.sftp.open(remote_path).await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "open", "err": e.to_string() }),
+            )
+        })?;
 
         // For multi-select downloads, local_path may live inside a subdirectory
         // we haven't created yet (e.g. <pick_dir>/<root>/<subdir>/file.txt).
@@ -394,7 +425,14 @@ impl SftpHandle {
         let tmp_path = local_path.with_file_name(format!("{file_name}.part"));
 
         let result = self
-            .stream_to_part(&mut remote_file, &tmp_path, total, host, transfer_id, cancel)
+            .stream_to_part(
+                &mut remote_file,
+                &tmp_path,
+                total,
+                host,
+                transfer_id,
+                cancel,
+            )
             .await;
         match result {
             Ok(transferred) => {
@@ -402,10 +440,12 @@ impl SftpHandle {
                 // doesn't fail on Windows (Unix rename overwrites silently).
                 let _ = tokio::fs::remove_file(local_path).await;
                 tokio::fs::rename(&tmp_path, local_path).await?;
-                let _ = remote_file
-                    .shutdown()
-                    .await
-                    .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "close", "err": e.to_string() })));
+                let _ = remote_file.shutdown().await.map_err(|e| {
+                    AppError::sftp(
+                        "sftp_io_failed",
+                        json!({ "op": "close", "err": e.to_string() }),
+                    )
+                });
                 Ok(transferred)
             }
             Err(e) => {
@@ -439,10 +479,12 @@ impl SftpHandle {
             if cancel.load(Ordering::Relaxed) {
                 return Err(AppError::sftp(CANCELLED_CODE, json!({})));
             }
-            let n = remote_file
-                .read(&mut buf)
-                .await
-                .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "read", "err": e.to_string() })))?;
+            let n = remote_file.read(&mut buf).await.map_err(|e| {
+                AppError::sftp(
+                    "sftp_io_failed",
+                    json!({ "op": "read", "err": e.to_string() }),
+                )
+            })?;
             if n == 0 {
                 break;
             }
@@ -524,11 +566,12 @@ impl SftpHandle {
             }
         }
 
-        let mut remote_file = self
-            .sftp
-            .create(remote_path)
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "create", "err": e.to_string() })))?;
+        let mut remote_file = self.sftp.create(remote_path).await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "create", "err": e.to_string() }),
+            )
+        })?;
 
         let mut transferred: u64 = 0;
         let mut buf = vec![0u8; 32768];
@@ -544,10 +587,12 @@ impl SftpHandle {
                 break;
             }
 
-            remote_file
-                .write_all(&buf[..n])
-                .await
-                .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "write", "err": e.to_string() })))?;
+            remote_file.write_all(&buf[..n]).await.map_err(|e| {
+                AppError::sftp(
+                    "sftp_io_failed",
+                    json!({ "op": "write", "err": e.to_string() }),
+                )
+            })?;
             transferred += n as u64;
 
             let _ = host.emit(
@@ -556,10 +601,12 @@ impl SftpHandle {
             );
         }
 
-        remote_file
-            .shutdown()
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "close", "err": e.to_string() })))?;
+        remote_file.shutdown().await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "close", "err": e.to_string() }),
+            )
+        })?;
 
         Ok(transferred)
     }

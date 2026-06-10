@@ -261,10 +261,7 @@ mod tests {
     #[test]
     fn coded_msg_display_handles_param_types() {
         // 前端 t() 接 string|number 占位符；嵌套对象也允许（虽然 t 不展开）
-        let m = CodedMsg::new(
-            "x",
-            json!({"s": "hello", "n": 42, "nested": {"k": "v"}}),
-        );
+        let m = CodedMsg::new("x", json!({"s": "hello", "n": 42, "nested": {"k": "v"}}));
         let s = m.to_string();
         let payload = s.strip_prefix(PROTO_PREFIX).unwrap();
         let v: serde_json::Value = serde_json::from_str(payload).unwrap();
@@ -290,10 +287,7 @@ mod tests {
                 AppError::not_found("profile_not_found", json!({"id": "x"})),
                 "profile_not_found",
             ),
-            (
-                AppError::config("bad_config", json!({})),
-                "bad_config",
-            ),
+            (AppError::config("bad_config", json!({})), "bad_config"),
             (AppError::other("oops", json!({})), "oops"),
         ];
         for (err, expected_code) in cases {

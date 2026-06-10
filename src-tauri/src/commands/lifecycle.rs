@@ -41,10 +41,11 @@ pub fn reconcile_sessions_impl(state: &AppState, active_ids: Vec<String>) -> App
         let mut sftp = locked(&state.sftp_sessions)?;
         let before = sftp.len();
         sftp.retain(|k, h| {
-            alive.contains(k) && match h.parent_ssh_id() {
-                Some(parent) => !stale_ssh.iter().any(|s| s == parent),
-                None => true,
-            }
+            alive.contains(k)
+                && match h.parent_ssh_id() {
+                    Some(parent) => !stale_ssh.iter().any(|s| s == parent),
+                    None => true,
+                }
         });
         closed += before - sftp.len();
     }
@@ -83,6 +84,16 @@ pub fn reconcile_sessions_impl(state: &AppState, active_ids: Vec<String>) -> App
         let before = pty.len();
         pty.retain(|k, _| alive.contains(k));
         closed += before - pty.len();
+    }
+
+    // Serial（桌面平台）—— 同 PTY：不在 alive 里的移除；drop 最后一份 handle
+    // 触发 reader 线程退出（CloseGuard 置位 close flag）。
+    #[cfg(not(target_os = "android"))]
+    {
+        let mut serial = locked(&state.serial_sessions)?;
+        let before = serial.len();
+        serial.retain(|k, _| alive.contains(k));
+        closed += before - serial.len();
     }
 
     // AI 排障会话：key 也是 tab_id（与其他 session 同处 alive 集合）。不在 alive 里的
@@ -154,6 +165,12 @@ pub fn close_window_sessions(state: &AppState, window_label: &str) {
     if let Ok(mut pty) = state.pty_sessions.lock() {
         for id in &ids {
             pty.remove(id);
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    if let Ok(mut serial) = state.serial_sessions.lock() {
+        for id in &ids {
+            serial.remove(id);
         }
     }
     if let Ok(mut fwds) = state.active_forwards.lock() {

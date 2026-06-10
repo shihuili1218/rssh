@@ -25,7 +25,10 @@ impl<'a> CancelGuard<'a> {
     /// 注册 flag。返回 (guard, flag)：guard 控生命周期，flag 喂给 streaming 函数。
     /// `pub` 让 headless server 复用同一套 RAII 清理（drop 时 unregister，覆盖
     /// 正常返回 / 早 `?` / panic 三种路径），避免手写 register/remove 漏删。
-    pub fn register(state: &'a AppState, transfer_id: String) -> AppResult<(Self, Arc<AtomicBool>)> {
+    pub fn register(
+        state: &'a AppState,
+        transfer_id: String,
+    ) -> AppResult<(Self, Arc<AtomicBool>)> {
         let flag = Arc::new(AtomicBool::new(false));
         locked(&state.transfer_cancels)?.insert(transfer_id.clone(), flag.clone());
         Ok((Self { state, transfer_id }, flag))
@@ -338,7 +341,11 @@ pub async fn sftp_pick_folder() -> AppResult<Option<String>> {
 #[tauri::command]
 pub async fn sftp_pick_open_files() -> AppResult<Option<Vec<String>>> {
     let handles = rfd::AsyncFileDialog::new().pick_files().await;
-    Ok(handles.map(|hs| hs.into_iter().map(|h| h.path().display().to_string()).collect()))
+    Ok(handles.map(|hs| {
+        hs.into_iter()
+            .map(|h| h.path().display().to_string())
+            .collect()
+    }))
 }
 
 /// Stream-download to a caller-supplied local path. transfer_id is used as the

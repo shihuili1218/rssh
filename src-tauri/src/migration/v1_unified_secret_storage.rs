@@ -249,12 +249,19 @@ mod tests {
 
         run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
         // 第一次跑完：新 store 拿到 + 老 keychain 没了 + marker 写入
-        assert_eq!(ns.get(&cred_secret_key("id1")).unwrap().as_deref(), Some("pem-v1"));
+        assert_eq!(
+            ns.get(&cred_secret_key("id1")).unwrap().as_deref(),
+            Some("pem-v1")
+        );
         assert!(kr.get(&cred_secret_key("id1")).unwrap().is_none());
-        assert_eq!(db::settings::get(&db, MIGRATION_MARKER).unwrap().as_deref(), Some("1"));
+        assert_eq!(
+            db::settings::get(&db, MIGRATION_MARKER).unwrap().as_deref(),
+            Some("1")
+        );
 
         // 第二次跑：mock keychain 再放一条新数据，迁移应该跳过不动它（已 marker）
-        kr.set(&cred_secret_key("id1"), "should-not-be-touched").unwrap();
+        kr.set(&cred_secret_key("id1"), "should-not-be-touched")
+            .unwrap();
         run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
         assert_eq!(
             kr.get(&cred_secret_key("id1")).unwrap().as_deref(),
@@ -273,8 +280,14 @@ mod tests {
 
         run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
 
-        assert_eq!(ns.get(&cred_secret_key("a")).unwrap().as_deref(), Some("pem-A"));
-        assert_eq!(ns.get(&cred_secret_key("b")).unwrap().as_deref(), Some("pass-B"));
+        assert_eq!(
+            ns.get(&cred_secret_key("a")).unwrap().as_deref(),
+            Some("pem-A")
+        );
+        assert_eq!(
+            ns.get(&cred_secret_key("b")).unwrap().as_deref(),
+            Some("pass-B")
+        );
         // 老 keychain 已清
         assert!(kr.get(&cred_secret_key("a")).unwrap().is_none());
         assert!(kr.get(&cred_secret_key("b")).unwrap().is_none());
@@ -284,7 +297,8 @@ mod tests {
     fn clears_legacy_passphrase() {
         let (db, kr, ns, _tmp) = make_env();
         add_cred(&db, "c");
-        kr.set(&cred_passphrase_key("c"), "stale-passphrase").unwrap();
+        kr.set(&cred_passphrase_key("c"), "stale-passphrase")
+            .unwrap();
 
         run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
 
@@ -297,13 +311,18 @@ mod tests {
     fn migrates_github_token_and_api_keys_encrypted() {
         let (db, kr, ns, _tmp) = make_env();
         kr.set(&setting_key("github_token"), "ghp_abc").unwrap();
-        kr.set(&setting_key("ai_anthropic_key"), "sk-ant-xxx").unwrap();
-        kr.set(&setting_key("ai_openai_key"), "sk-openai-yyy").unwrap();
+        kr.set(&setting_key("ai_anthropic_key"), "sk-ant-xxx")
+            .unwrap();
+        kr.set(&setting_key("ai_openai_key"), "sk-openai-yyy")
+            .unwrap();
 
         run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
 
         // 这些是 secret，进新 store（加密 DB）
-        assert_eq!(ns.get(&setting_key("github_token")).unwrap().as_deref(), Some("ghp_abc"));
+        assert_eq!(
+            ns.get(&setting_key("github_token")).unwrap().as_deref(),
+            Some("ghp_abc")
+        );
         assert_eq!(
             ns.get(&setting_key("ai_anthropic_key")).unwrap().as_deref(),
             Some("sk-ant-xxx")
@@ -316,20 +335,35 @@ mod tests {
         let (db, kr, ns, _tmp) = make_env();
         kr.set(&setting_key("ai_provider"), "anthropic").unwrap();
         kr.set(&setting_key("ai_danger_mode"), "1").unwrap();
-        kr.set(&setting_key("ai_anthropic_model"), "claude-sonnet-4-6").unwrap();
-        kr.set(&setting_key("ai_anthropic_endpoint"), "https://api.example.com").unwrap();
+        kr.set(&setting_key("ai_anthropic_model"), "claude-sonnet-4-6")
+            .unwrap();
+        kr.set(
+            &setting_key("ai_anthropic_endpoint"),
+            "https://api.example.com",
+        )
+        .unwrap();
 
         run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
 
         // 这些是行为偏好，进 DB settings 表（明文裸 key）
-        assert_eq!(db::settings::get(&db, "ai_provider").unwrap().as_deref(), Some("anthropic"));
-        assert_eq!(db::settings::get(&db, "ai_danger_mode").unwrap().as_deref(), Some("1"));
         assert_eq!(
-            db::settings::get(&db, "ai_anthropic_model").unwrap().as_deref(),
+            db::settings::get(&db, "ai_provider").unwrap().as_deref(),
+            Some("anthropic")
+        );
+        assert_eq!(
+            db::settings::get(&db, "ai_danger_mode").unwrap().as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            db::settings::get(&db, "ai_anthropic_model")
+                .unwrap()
+                .as_deref(),
             Some("claude-sonnet-4-6")
         );
         assert_eq!(
-            db::settings::get(&db, "ai_anthropic_endpoint").unwrap().as_deref(),
+            db::settings::get(&db, "ai_anthropic_endpoint")
+                .unwrap()
+                .as_deref(),
             Some("https://api.example.com")
         );
         // 老 keychain 已清
@@ -357,7 +391,10 @@ mod tests {
 
         // 明文已被加密重写：DB.secrets 里的 raw 值是 enc:v1: 密文，HybridStore 读出明文
         let raw = db::secret::get(&db, "cred:legacy:secret").unwrap().unwrap();
-        assert!(raw.starts_with("enc:v1:"), "DB.secrets 必须是密文，实际: {raw}");
+        assert!(
+            raw.starts_with("enc:v1:"),
+            "DB.secrets 必须是密文，实际: {raw}"
+        );
         assert_eq!(
             ns.get("cred:legacy:secret").unwrap().as_deref(),
             Some("raw-pem-plaintext")
@@ -402,14 +439,19 @@ mod tests {
         run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
 
         // 重加密：DB raw 值是密文，HybridStore 读出原明文
-        let raw = db::secret::get(&db, "setting:github_token").unwrap().unwrap();
+        let raw = db::secret::get(&db, "setting:github_token")
+            .unwrap()
+            .unwrap();
         assert!(raw.starts_with("enc:v1:"));
         assert_eq!(
             ns.get("setting:github_token").unwrap().as_deref(),
             Some("ghp_plain_old")
         );
         // 有 keyring → marker 写入
-        assert_eq!(db::settings::get(&db, MIGRATION_MARKER).unwrap().as_deref(), Some("1"));
+        assert_eq!(
+            db::settings::get(&db, MIGRATION_MARKER).unwrap().as_deref(),
+            Some("1")
+        );
     }
 
     #[test]
@@ -417,14 +459,21 @@ mod tests {
         // 之前已经加密过的（同 PR 内 hybrid.set 写入）再跑迁移不重复加密
         let (db, kr, ns, _tmp) = make_env();
         ns.set("setting:github_token", "ghp_new").unwrap();
-        let raw_before = db::secret::get(&db, "setting:github_token").unwrap().unwrap();
+        let raw_before = db::secret::get(&db, "setting:github_token")
+            .unwrap()
+            .unwrap();
 
         run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
 
         // raw 没变（is_encrypted_v1 跳过 re-encrypt）
-        let raw_after = db::secret::get(&db, "setting:github_token").unwrap().unwrap();
+        let raw_after = db::secret::get(&db, "setting:github_token")
+            .unwrap()
+            .unwrap();
         assert_eq!(raw_before, raw_after);
-        assert_eq!(ns.get("setting:github_token").unwrap().as_deref(), Some("ghp_new"));
+        assert_eq!(
+            ns.get("setting:github_token").unwrap().as_deref(),
+            Some("ghp_new")
+        );
     }
 
     #[test]
@@ -432,7 +481,10 @@ mod tests {
         // keychain 可用但里面啥也没有（新装用户）
         let (db, kr, ns, _tmp) = make_env();
         run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
-        assert_eq!(db::settings::get(&db, MIGRATION_MARKER).unwrap().as_deref(), Some("1"));
+        assert_eq!(
+            db::settings::get(&db, MIGRATION_MARKER).unwrap().as_deref(),
+            Some("1")
+        );
     }
 
     #[test]
@@ -449,7 +501,10 @@ mod tests {
         run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
 
         // new_store 仍是新值，不被覆盖
-        assert_eq!(ns.get(&cred_secret_key("x")).unwrap().as_deref(), Some("new-user-pem"));
+        assert_eq!(
+            ns.get(&cred_secret_key("x")).unwrap().as_deref(),
+            Some("new-user-pem")
+        );
         // keychain 旧值被清掉（清理依然进行）
         assert!(kr.get(&cred_secret_key("x")).unwrap().is_none());
     }
@@ -462,7 +517,10 @@ mod tests {
 
         run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
 
-        assert_eq!(ns.get(&setting_key("github_token")).unwrap().as_deref(), Some("ghp_new"));
+        assert_eq!(
+            ns.get(&setting_key("github_token")).unwrap().as_deref(),
+            Some("ghp_new")
+        );
         assert!(kr.get(&setting_key("github_token")).unwrap().is_none());
     }
 
@@ -475,7 +533,10 @@ mod tests {
         run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
 
         // 用户后改的 deepseek 留下
-        assert_eq!(db::settings::get(&db, "ai_provider").unwrap().as_deref(), Some("deepseek"));
+        assert_eq!(
+            db::settings::get(&db, "ai_provider").unwrap().as_deref(),
+            Some("deepseek")
+        );
         assert!(kr.get(&setting_key("ai_provider")).unwrap().is_none());
     }
 
@@ -486,8 +547,15 @@ mod tests {
         kr.set(&setting_key("ai_auto_run_command"), "1").unwrap();
         run(&db, Some(kr.as_ref()), ns.as_ref()).unwrap();
         // 没迁到任何地方
-        assert!(db::settings::get(&db, "ai_auto_run_command").unwrap().is_none());
+        assert!(db::settings::get(&db, "ai_auto_run_command")
+            .unwrap()
+            .is_none());
         // 老 keychain 残留依然在（无害但脏）—— 这是 Lord 明确决定的：不迁
-        assert_eq!(kr.get(&setting_key("ai_auto_run_command")).unwrap().as_deref(), Some("1"));
+        assert_eq!(
+            kr.get(&setting_key("ai_auto_run_command"))
+                .unwrap()
+                .as_deref(),
+            Some("1")
+        );
     }
 }

@@ -8,6 +8,7 @@ pub mod highlight;
 pub mod profile;
 pub mod schema;
 pub mod secret;
+pub mod serial_profile;
 pub mod settings;
 pub mod snippet;
 
@@ -130,9 +131,8 @@ mod with_exclusive_lock_tests {
         // 注：闭包内不能再调 db.* 方法（会死锁），所以这里只验证 Err 流转，
         // ROLLBACK 由 rusqlite::Transaction 的 Drop 语义保证（无需手动测）。
         let db = Db::open_in_memory().unwrap();
-        let r: AppResult<i32> = db.with_exclusive_lock(|| {
-            Err(AppError::other("intentional", serde_json::json!({})))
-        });
+        let r: AppResult<i32> =
+            db.with_exclusive_lock(|| Err(AppError::other("intentional", serde_json::json!({}))));
         let err = r.unwrap_err();
         assert_eq!(err.code(), "intentional");
     }

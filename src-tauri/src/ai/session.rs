@@ -22,14 +22,11 @@ use super::audit::{AuditKind, AuditLog};
 use super::llm::{ChatDelta, ChatMessage, ChatRequest, DeltaSink, LlmClient, ToolCall};
 use super::sanitize::{self, Blacklist, RedactRule};
 use super::skills::SkillRecord;
-use super::tools::{
-    self, AnalyzeLocallyInput, DownloadFileInput, LoadSkillInput, RunCommandInput,
-};
+use super::tools::{self, AnalyzeLocallyInput, DownloadFileInput, LoadSkillInput, RunCommandInput};
 
 mod file_ops;
 
 use file_ops::RemoteCapabilities;
-
 
 /// 工具命令在前端 PTY 跑完后的两种结果。file_ops 子模块的 `run_file_op` 也用它。
 #[derive(Debug)]
@@ -611,9 +608,7 @@ impl Actor {
                     // 直接清会让下一轮 LLM 调用 400。让用户先等命令走完。
                     // 给明确反馈而不是静默丢弃，跟 Message 处理一致。
                     self.audit_push(AuditKind::Note {
-                        message: format!(
-                            "clear context dropped during tool call {tool_call_id}"
-                        ),
+                        message: format!("clear context dropped during tool call {tool_call_id}"),
                     });
                     self.emit(
                         "error",
@@ -644,7 +639,9 @@ impl Actor {
     async fn handle_load_skill(&mut self, tc: ToolCall) -> AppResult<ChatMessage> {
         let input: LoadSkillInput = match serde_json::from_value(tc.input.clone()) {
             Ok(i) => i,
-            Err(e) => return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}"))),
+            Err(e) => {
+                return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}")))
+            }
         };
         // 'general' is the built-in rule set, already inlined in system prompt.
         if input.id == "general" {
@@ -690,7 +687,9 @@ impl Actor {
     async fn handle_download_file(&mut self, tc: ToolCall) -> AppResult<ChatMessage> {
         let input: DownloadFileInput = match serde_json::from_value(tc.input.clone()) {
             Ok(i) => i,
-            Err(e) => return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}"))),
+            Err(e) => {
+                return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}")))
+            }
         };
 
         // 100MB hard cap. Reject up front so we don't open SFTP only to abort.
@@ -731,11 +730,7 @@ impl Actor {
         //
         // side_effect 展示实际写入目录前缀（绝对路径），避免用 `~/.../` 这种省略号文案
         // 让用户误以为是真路径片段。
-        let dest_dir = self
-            .cfg
-            .data_dir
-            .join("diagnose")
-            .join(&self.cfg.tab_id);
+        let dest_dir = self.cfg.data_dir.join("diagnose").join(&self.cfg.tab_id);
         self.emit(
             "command_proposed",
             json!({
@@ -770,18 +765,17 @@ impl Actor {
             .map(|n| n.to_string_lossy().into_owned())
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| format!("dump-{}", &dl_id[..8]));
-        let local_dir = self
-            .cfg
-            .data_dir
-            .join("diagnose")
-            .join(&self.cfg.tab_id);
+        let local_dir = self.cfg.data_dir.join("diagnose").join(&self.cfg.tab_id);
         let local_path = local_dir.join(&basename);
         let max_bytes = (input.max_mb as u64).saturating_mul(1024 * 1024);
 
         let result: AppResult<u64> = async {
-            tokio::fs::create_dir_all(&local_dir)
-                .await
-                .map_err(|e| AppError::other("ai_local_dir_create_failed", json!({ "err": e.to_string() })))?;
+            tokio::fs::create_dir_all(&local_dir).await.map_err(|e| {
+                AppError::other(
+                    "ai_local_dir_create_failed",
+                    json!({ "err": e.to_string() }),
+                )
+            })?;
             let sftp = SftpHandle::from_handle(&ssh_handle, self.cfg.target_id.clone()).await?;
             // SFTP 不展开 `~` —— 协议层直接把字面 `~/foo` 当文件名 stat，必然 ENOENT。
             // LLM 习惯先 `ls ~/foo` 验证（shell 展开了），再原样塞进 remote_path。
@@ -846,10 +840,9 @@ impl Actor {
                         "远端文件超出 {MAX_DOWNLOAD_MB} MB 上限：{}",
                         input.remote_path
                     ),
-                    "sftp_io_failed" => format!(
-                        "无法访问远端文件（不存在或不可读）：{}",
-                        input.remote_path
-                    ),
+                    "sftp_io_failed" => {
+                        format!("无法访问远端文件（不存在或不可读）：{}", input.remote_path)
+                    }
                     _ => format!("下载失败：{}", input.remote_path),
                 };
                 self.emit(
@@ -886,7 +879,9 @@ impl Actor {
     async fn handle_analyze_locally(&mut self, tc: ToolCall) -> AppResult<ChatMessage> {
         let input: AnalyzeLocallyInput = match serde_json::from_value(tc.input.clone()) {
             Ok(i) => i,
-            Err(e) => return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}"))),
+            Err(e) => {
+                return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}")))
+            }
         };
 
         // File must exist — LLM should have called download_file first.
@@ -940,10 +935,9 @@ impl Actor {
         let json_literal = match serde_json::to_string(&handoff) {
             Ok(s) => s,
             Err(e) => {
-                return Ok(self.make_tool_error(
-                    &tc.id,
-                    &format!("Failed to encode handoff payload: {e}"),
-                ));
+                return Ok(
+                    self.make_tool_error(&tc.id, &format!("Failed to encode handoff payload: {e}"))
+                );
             }
         };
         // 直接把 JSON 字符串赋值为 JS string；前端走 JSON.parse(data) 还原。
@@ -975,7 +969,10 @@ impl Actor {
 
         #[cfg(desktop)]
         {
-            if let Err(e) = self.app.open_app_window(&label, "RSSH — Local Analysis", &init_script) {
+            if let Err(e) = self
+                .app
+                .open_app_window(&label, "RSSH — Local Analysis", &init_script)
+            {
                 emit_done(self, 1, format!("打开分析窗口失败：{e}"));
                 return Ok(self.make_tool_error(
                     &tc.id,
@@ -1019,7 +1016,9 @@ impl Actor {
     async fn handle_run_command(&mut self, tc: ToolCall) -> AppResult<ChatMessage> {
         let input: RunCommandInput = match serde_json::from_value(tc.input.clone()) {
             Ok(i) => i,
-            Err(e) => return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}"))),
+            Err(e) => {
+                return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}")))
+            }
         };
 
         if let Err(e) = sanitize::validate_with(&input.cmd, &self.cfg.blacklist) {
@@ -1222,4 +1221,3 @@ impl Actor {
         let _ = self.app.emit(&event, payload);
     }
 }
-

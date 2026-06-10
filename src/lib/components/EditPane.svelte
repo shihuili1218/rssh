@@ -131,7 +131,7 @@
         {#each sessions as s (s.tabId)}
           <label class="session-item">
             <input type="checkbox" checked={selectedTabIds.has(s.tabId)} onchange={() => toggle(s.tabId)} />
-            <span class="session-type">{s.type === "local" ? "$" : "SSH"}</span>
+            <span class="session-type">{s.type === "local" ? "$" : s.type === "serial" ? "⎓" : "SSH"}</span>
             <span class="session-label">{s.label}</span>
           </label>
         {/each}

@@ -206,17 +206,29 @@ mod tests {
         // clobber $?), and (c) coalesce to a digit so the field is always numeric.
         let got = ShellKind::Powershell.format_sentinel("Get-Process", "__rssh_done_abc");
         assert!(got.starts_with("$LASTEXITCODE=$null;"), "got: {got}");
-        assert!(got.contains("Get-Process; $ok=$?;"), "must snapshot $? right after cmd: {got}");
+        assert!(
+            got.contains("Get-Process; $ok=$?;"),
+            "must snapshot $? right after cmd: {got}"
+        );
         assert!(got.contains("__rssh_done_abc:"));
         assert!(got.contains("$LASTEXITCODE")); // native exit code when one exists
-        assert!(got.contains("elseif ($ok)"), "elseif must read the snapshot, not raw $?: {got}");
+        assert!(
+            got.contains("elseif ($ok)"),
+            "elseif must read the snapshot, not raw $?: {got}"
+        );
     }
 
     #[test]
     fn from_local_path_unix() {
         assert_eq!(ShellKind::from_local_path("/bin/bash"), ShellKind::Posix);
-        assert_eq!(ShellKind::from_local_path("/usr/local/bin/zsh"), ShellKind::Posix);
-        assert_eq!(ShellKind::from_local_path("/opt/homebrew/bin/fish"), ShellKind::Posix);
+        assert_eq!(
+            ShellKind::from_local_path("/usr/local/bin/zsh"),
+            ShellKind::Posix
+        );
+        assert_eq!(
+            ShellKind::from_local_path("/opt/homebrew/bin/fish"),
+            ShellKind::Posix
+        );
         assert_eq!(ShellKind::from_local_path("/bin/sh"), ShellKind::Posix);
     }
 
@@ -235,7 +247,9 @@ mod tests {
     #[test]
     fn from_local_path_windows_powershell() {
         assert_eq!(
-            ShellKind::from_local_path("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"),
+            ShellKind::from_local_path(
+                "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+            ),
             ShellKind::Powershell
         );
         assert_eq!(
@@ -288,7 +302,9 @@ mod tests {
         // with `&` — half POSIX, half cmd — neither shell would parse it.
         assert!(ShellKind::Posix.format_sentinel("x", "M").contains(";"));
         assert!(ShellKind::Cmd.format_sentinel("x", "M").contains(" & "));
-        assert!(ShellKind::Powershell.format_sentinel("x", "M").contains(";"));
+        assert!(ShellKind::Powershell
+            .format_sentinel("x", "M")
+            .contains(";"));
         assert_eq!(ShellKind::Posix.separator(), ";");
         assert_eq!(ShellKind::Cmd.separator(), "&");
         assert_eq!(ShellKind::Powershell.separator(), ";");

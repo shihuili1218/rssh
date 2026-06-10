@@ -107,7 +107,7 @@ fn extract_json_payload(pty_output: &str) -> Option<&str> {
         let start = cursor;
         let end = cursor + raw_line.len();
         cursor = end + 1; // 跳过 `\n`
-        // line trim 后等于 marker（兼容 `\r\n` —— raw_line 含末尾 `\r`，trim 掉）
+                          // line trim 后等于 marker（兼容 `\r\n` —— raw_line 含末尾 `\r`，trim 掉）
         if raw_line.trim() == JSON_MARKER {
             prev = last;
             last = Some((start, end));
@@ -621,7 +621,9 @@ impl Actor {
     pub(super) async fn handle_match_file(&mut self, tc: ToolCall) -> AppResult<ChatMessage> {
         let input: MatchFileInput = match serde_json::from_value(tc.input.clone()) {
             Ok(i) => i,
-            Err(e) => return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}"))),
+            Err(e) => {
+                return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}")))
+            }
         };
         if let Err(e) = validate_path(&input.path) {
             return Ok(self.make_tool_error(&tc.id, &format!("match_file: invalid path — {e}")));
@@ -733,7 +735,11 @@ impl Actor {
                 interp.binary(),
                 count.map(|c| c.to_string()).unwrap_or_else(|| "?".into()),
                 matches_shown,
-                if remote_truncated { " (remote-truncated)" } else { "" }
+                if remote_truncated {
+                    " (remote-truncated)"
+                } else {
+                    ""
+                }
             ),
         });
         // Redact at the insertion boundary so `redact_message` in dialogue_turn
@@ -746,7 +752,9 @@ impl Actor {
     pub(super) async fn handle_patch_file(&mut self, tc: ToolCall) -> AppResult<ChatMessage> {
         let input: PatchFileInput = match serde_json::from_value(tc.input.clone()) {
             Ok(i) => i,
-            Err(e) => return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}"))),
+            Err(e) => {
+                return Ok(self.make_tool_error(&tc.id, &format!("Failed to parse input: {e}")))
+            }
         };
         if let Err(e) = validate_path(&input.path) {
             return Ok(self.make_tool_error(&tc.id, &format!("patch_file: invalid path — {e}")));
@@ -797,7 +805,10 @@ impl Actor {
             .run_file_op(
                 &tc.id,
                 build_cp_cmd(&input.path, &tmp_path),
-                format!("patch_file 1/4: copy `{}` to staging `{}`", input.path, tmp_path),
+                format!(
+                    "patch_file 1/4: copy `{}` to staging `{}`",
+                    input.path, tmp_path
+                ),
                 format!("Create {}", tmp_path),
                 30,
                 Some("patch_cp"),
@@ -829,10 +840,18 @@ impl Actor {
         let outcome = self
             .run_file_op(
                 &tc.id,
-                build_modify_cmd(interp, &tmp_path, &input.find, &input.replace, input.expected_count),
+                build_modify_cmd(
+                    interp,
+                    &tmp_path,
+                    &input.find,
+                    &input.replace,
+                    input.expected_count,
+                ),
                 format!(
                     "patch_file 2/4: replace {} occurrence(s) in `{}` (via {})",
-                    input.expected_count, tmp_path, interp.binary()
+                    input.expected_count,
+                    tmp_path,
+                    interp.binary()
                 ),
                 format!("Modify {} in place", tmp_path),
                 60,
@@ -910,7 +929,10 @@ impl Actor {
             .run_file_op(
                 &tc.id,
                 build_diff_cmd(&input.path, &tmp_path),
-                format!("patch_file 3/4: review diff of `{}` vs staged tmp", input.path),
+                format!(
+                    "patch_file 3/4: review diff of `{}` vs staged tmp",
+                    input.path
+                ),
                 "read-only (display diff for review)".into(),
                 30,
                 Some("patch_diff"),
@@ -979,7 +1001,10 @@ impl Actor {
             .run_file_op(
                 &tc.id,
                 build_mv_cmd(&tmp_path, &input.path),
-                format!("patch_file 4/4: apply via `mv {} -> {}`", tmp_path, input.path),
+                format!(
+                    "patch_file 4/4: apply via `mv {} -> {}`",
+                    tmp_path, input.path
+                ),
                 format!("Atomic rename {} -> {}", tmp_path, input.path),
                 30,
                 Some("patch_mv"),
@@ -1263,27 +1288,43 @@ mod tests {
     #[test]
     fn select_interp_python3_wins() {
         // python3 优先于 perl
-        let caps = RemoteCapabilities { python3: true, perl: true, diff: true };
+        let caps = RemoteCapabilities {
+            python3: true,
+            perl: true,
+            diff: true,
+        };
         assert_eq!(select_interpreter(caps), Some(Interpreter::Python3));
     }
 
     #[test]
     fn select_interp_python3_alone() {
-        let caps = RemoteCapabilities { python3: true, perl: false, diff: false };
+        let caps = RemoteCapabilities {
+            python3: true,
+            perl: false,
+            diff: false,
+        };
         assert_eq!(select_interpreter(caps), Some(Interpreter::Python3));
     }
 
     #[test]
     fn select_interp_perl_alone_ok_for_match() {
         // 没有 python3，perl 单独足够给 match_file。patch_file 在 handle 层另查 caps.diff。
-        let caps = RemoteCapabilities { python3: false, perl: true, diff: false };
+        let caps = RemoteCapabilities {
+            python3: false,
+            perl: true,
+            diff: false,
+        };
         assert_eq!(select_interpreter(caps), Some(Interpreter::Perl));
     }
 
     #[test]
     fn select_interp_none_without_interp() {
         // 有 diff 但没 python3 / perl —— file_ops 整体不可用
-        let caps = RemoteCapabilities { python3: false, perl: false, diff: true };
+        let caps = RemoteCapabilities {
+            python3: false,
+            perl: false,
+            diff: true,
+        };
         assert_eq!(select_interpreter(caps), None);
     }
 
@@ -1291,7 +1332,8 @@ mod tests {
 
     #[test]
     fn extract_json_basic() {
-        let pty = "shell echo\n__RSSH_JSON__\n{\"count\":3,\"matches\":[]}\n__RSSH_JSON__\nsentinel:0\n";
+        let pty =
+            "shell echo\n__RSSH_JSON__\n{\"count\":3,\"matches\":[]}\n__RSSH_JSON__\nsentinel:0\n";
         assert_eq!(
             extract_json_payload(pty),
             Some("{\"count\":3,\"matches\":[]}")
@@ -1307,7 +1349,10 @@ mod tests {
     #[test]
     fn extract_json_missing_returns_none() {
         assert_eq!(extract_json_payload("no markers here"), None);
-        assert_eq!(extract_json_payload("__RSSH_JSON__\nonly one marker\n"), None);
+        assert_eq!(
+            extract_json_payload("__RSSH_JSON__\nonly one marker\n"),
+            None
+        );
     }
 
     #[test]
@@ -1375,7 +1420,10 @@ __RSSH_JSON__\n{\"call\":\"second\"}\n__RSSH_JSON__\n";
         // 关键不变量：真换行 → `\n` 两字符序列，shell 拿到的命令是单行 ASCII，
         // 但 shell 展开后传给程序的 argv 含真实换行。
         assert_eq!(ansi_c_quote("a\nb"), "$'a\\nb'");
-        assert_eq!(ansi_c_quote("line1\nline2\nline3"), "$'line1\\nline2\\nline3'");
+        assert_eq!(
+            ansi_c_quote("line1\nline2\nline3"),
+            "$'line1\\nline2\\nline3'"
+        );
     }
 
     #[test]
@@ -1463,9 +1511,18 @@ __RSSH_JSON__\n{\"call\":\"second\"}\n__RSSH_JSON__\n";
         let got = q.bytes().filter(|&b| b == b' ').count();
         assert_eq!(orig, got, "spaces lost: {orig} → {got}, quoted={q}");
         // 行首空格也得在原位（每行的字面前缀应原样保留，不与 \n 混淆）
-        assert!(q.contains("$'  - job_name:"), "L1 leading 2 spaces dropped: {q}");
-        assert!(q.contains("\\n    scrape_interval"), "L2 leading 4 spaces dropped: {q}");
-        assert!(q.contains("\\n      - targets"), "L3 leading 6 spaces dropped: {q}");
+        assert!(
+            q.contains("$'  - job_name:"),
+            "L1 leading 2 spaces dropped: {q}"
+        );
+        assert!(
+            q.contains("\\n    scrape_interval"),
+            "L2 leading 4 spaces dropped: {q}"
+        );
+        assert!(
+            q.contains("\\n      - targets"),
+            "L3 leading 6 spaces dropped: {q}"
+        );
     }
 
     // ─── build_match_cmd / build_modify_cmd / build_cp_cmd / build_diff_cmd / build_mv_cmd ───

@@ -63,12 +63,14 @@ pub async fn forward_start_impl(state: &AppState, forward_id: String) -> AppResu
     let chain_profiles = crate::ssh::bastion::resolve_chain(&state.db, &p)?;
     let mut chain: Vec<(Profile, Credential)> = Vec::with_capacity(chain_profiles.len());
     for hop in chain_profiles {
-        let mut bc = crate::db::credential::get(&state.db, &hop.credential_id).map_err(|e| match e {
-            AppError::NotFound(_) => {
-                AppError::not_found("bastion_cred_not_found", json!({ "name": hop.name.clone() }))
-            }
-            other => other,
-        })?;
+        let mut bc =
+            crate::db::credential::get(&state.db, &hop.credential_id).map_err(|e| match e {
+                AppError::NotFound(_) => AppError::not_found(
+                    "bastion_cred_not_found",
+                    json!({ "name": hop.name.clone() }),
+                ),
+                other => other,
+            })?;
         bc.secret = state
             .secret_store
             .get(&crate::secret::cred_secret_key(&bc.id))?;

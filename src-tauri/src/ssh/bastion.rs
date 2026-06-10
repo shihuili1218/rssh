@@ -123,7 +123,10 @@ mod tests {
         insert(&db, &make_profile("mid", "mid", Some("entry")));
         let target = make_profile("t", "target", Some("mid"));
         let chain = resolve_chain(&db, &target).unwrap();
-        assert_eq!(chain.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["entry", "mid"]);
+        assert_eq!(
+            chain.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            ["entry", "mid"]
+        );
     }
 
     #[test]
@@ -154,14 +157,14 @@ mod tests {
         let n = MAX_HOPS + 2;
         // 建链：h0 ← h1 ← h2 ← ... ← h{n-1}（每个的 bastion 指向前一个）
         for i in 0..n {
-            let bastion_id = if i == 0 { None } else { Some(format!("h{}", i - 1)) };
+            let bastion_id = if i == 0 {
+                None
+            } else {
+                Some(format!("h{}", i - 1))
+            };
             insert(
                 &db,
-                &make_profile(
-                    &format!("h{i}"),
-                    &format!("h{i}"),
-                    bastion_id.as_deref(),
-                ),
+                &make_profile(&format!("h{i}"), &format!("h{i}"), bastion_id.as_deref()),
             );
         }
         let target = make_profile("t", "target", Some(&format!("h{}", n - 1)));

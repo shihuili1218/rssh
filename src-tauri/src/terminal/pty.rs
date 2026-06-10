@@ -53,9 +53,9 @@ pub struct PtyHandle {
 
 impl PtyHandle {
     pub fn write(&self, data: &[u8]) -> AppResult<()> {
-        locked(&self.writer)?
-            .write_all(data)
-            .map_err(|e| AppError::pty("pty_op_failed", serde_json::json!({ "err": e.to_string() })))
+        locked(&self.writer)?.write_all(data).map_err(|e| {
+            AppError::pty("pty_op_failed", serde_json::json!({ "err": e.to_string() }))
+        })
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> AppResult<()> {
@@ -66,7 +66,9 @@ impl PtyHandle {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| AppError::pty("pty_op_failed", serde_json::json!({ "err": e.to_string() })))
+            .map_err(|e| {
+                AppError::pty("pty_op_failed", serde_json::json!({ "err": e.to_string() }))
+            })
     }
 
     /// spawn 时实际使用的 shell 路径（用户在 UI 选的，或 default_shell 兜底）。
@@ -84,8 +86,7 @@ impl PtyHandle {
 /// 之类的中途变化得有补救手段，否则要 restart app 才看得到）。
 /// RwLock 比 OnceLock 多支持一个 write 路径 —— 读路径几乎没有竞争开销。
 /// `Option<Vec>` 区分"未初始化"和"扫出来空"两种状态：未初始化时 lazy 扫一次。
-static AVAILABLE_SHELLS: std::sync::RwLock<Option<Vec<String>>> =
-    std::sync::RwLock::new(None);
+static AVAILABLE_SHELLS: std::sync::RwLock<Option<Vec<String>>> = std::sync::RwLock::new(None);
 
 /// 启动时由 lib.rs 调一次预热。重复调跟 refresh 一样语义。
 pub fn init_available_shells() {
@@ -190,8 +191,8 @@ fn scan_unix() -> Vec<String> {
     //    - Homebrew 装 fish 在 `/opt/homebrew/bin/fish`、`/usr/local/bin/fish`
     //    - 类 Termux / NixOS 这种 `/etc/shells` 不完整或不存在的环境
     const KNOWN_UNIX: &[&str] = &[
-        "bash", "zsh", "fish", "dash", "sh", "ksh", "tcsh", "csh",
-        "nu", "xonsh", "elvish", "ion", "pwsh",
+        "bash", "zsh", "fish", "dash", "sh", "ksh", "tcsh", "csh", "nu", "xonsh", "elvish", "ion",
+        "pwsh",
     ];
     if let Ok(path_env) = std::env::var("PATH") {
         for dir in path_env.split(':').filter(|d| !d.is_empty()) {
@@ -220,8 +221,7 @@ fn scan_unix() -> Vec<String> {
     // $SHELL 排第一（用户偏好）。可能用户的 $SHELL 是 /bin/bash 但 dedup 留下
     // 的是 /usr/bin/bash —— 走 canonical 匹配，避免字符串比对漏掉。
     if let Some(pref) = preferred {
-        let pref_canon =
-            std::fs::canonicalize(&pref).unwrap_or_else(|_| PathBuf::from(&pref));
+        let pref_canon = std::fs::canonicalize(&pref).unwrap_or_else(|_| PathBuf::from(&pref));
         if let Some(idx) = shells.iter().position(|s| {
             std::fs::canonicalize(s).unwrap_or_else(|_| PathBuf::from(s)) == pref_canon
         }) {
@@ -240,8 +240,7 @@ fn scan_windows() -> Vec<String> {
 
     // 1) 已知绝对路径 —— Windows 没有 /etc/shells 等价物，硬编码常见安装位置 + 验存在。
     //    SystemRoot 通常是 C:\Windows，但企业镜像可能改过，所以读环境变量而不写死。
-    let system_root =
-        std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
     let known: &[String] = &[
         format!("{system_root}\\System32\\cmd.exe"),
         format!("{system_root}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"),
@@ -258,7 +257,12 @@ fn scan_windows() -> Vec<String> {
 
     // 2) PATH 扫已知名字 —— 捞 winget/scoop 装的 pwsh / nu / fish 等。
     const KNOWN_WIN: &[&str] = &[
-        "pwsh.exe", "bash.exe", "nu.exe", "fish.exe", "elvish.exe", "xonsh.exe",
+        "pwsh.exe",
+        "bash.exe",
+        "nu.exe",
+        "fish.exe",
+        "elvish.exe",
+        "xonsh.exe",
     ];
     if let Ok(path_env) = std::env::var("PATH") {
         for dir in path_env.split(';').filter(|d| !d.is_empty()) {
@@ -310,7 +314,10 @@ fn default_shell() -> String {
                 return s.clone();
             }
         }
-        shells.into_iter().next().unwrap_or_else(|| "cmd.exe".to_string())
+        shells
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "cmd.exe".to_string())
     }
 }
 

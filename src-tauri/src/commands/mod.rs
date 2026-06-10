@@ -6,6 +6,8 @@ pub mod lifecycle;
 pub mod profile;
 #[cfg(not(target_os = "android"))]
 pub mod pty;
+#[cfg(not(target_os = "android"))]
+pub mod serial;
 pub mod session;
 pub mod settings;
 pub mod sftp;

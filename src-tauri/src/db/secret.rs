@@ -45,7 +45,9 @@ pub fn delete(db: &Db, key: &str) -> AppResult<()> {
 pub(crate) fn list_all(db: &Db) -> AppResult<Vec<(String, String)>> {
     let conn = db.lock()?;
     let mut stmt = conn.prepare("SELECT key, value FROM secrets")?;
-    let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 

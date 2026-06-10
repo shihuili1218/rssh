@@ -11,7 +11,6 @@
 - 增加只读
 - 隐藏标题栏
 - 支持串口、telnet ？
-- 字体大小
 - ai session 历史
 - ai session tokencost
 - ai general skill支持修改

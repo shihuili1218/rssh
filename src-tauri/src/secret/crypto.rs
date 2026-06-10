@@ -76,9 +76,9 @@ pub fn decrypt(
     let body = stored
         .strip_prefix(ENC_PREFIX)
         .ok_or_else(|| AppError::other("secret_format_unknown", json!({})))?;
-    let blob = STANDARD
-        .decode(body)
-        .map_err(|e| AppError::other("secret_b64_decode_failed", json!({ "err": e.to_string() })))?;
+    let blob = STANDARD.decode(body).map_err(|e| {
+        AppError::other("secret_b64_decode_failed", json!({ "err": e.to_string() }))
+    })?;
     if blob.len() < MIN_BLOB {
         return Err(AppError::other("secret_blob_too_short", json!({})));
     }

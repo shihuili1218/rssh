@@ -11,14 +11,14 @@
 //! 两者均接受同一 `serde_json::Value` 形态：
 //! ```json
 //! { "version": 1, "profiles": [..], "credentials": [..],
-//!   "forwards": [..], "groups": [..], "skills": [..] }
+//!   "forwards": [..], "serial_profiles": [..], "groups": [..], "skills": [..] }
 //! ```
 
 use serde_json::{json, Value};
 
-use crate::db::{ai_skill, credential, forward, group, profile, Db};
+use crate::db::{ai_skill, credential, forward, group, profile, serial_profile, Db};
 use crate::error::{AppError, AppResult};
-use crate::models::{Credential, Forward, Group, Profile};
+use crate::models::{Credential, Forward, Group, Profile, SerialProfile};
 use crate::secret::{cred_secret_key, SecretStore};
 
 /// 失败项的结构化记录。`aggregate_failure` 把整个 Vec 序列化进 AppError params，
@@ -131,6 +131,26 @@ pub fn merge_import(db: &Db, ss: &dyn SecretStore, data: &Value) -> AppResult<()
             }
         }
     }
+    if let Some(arr) = data["serial_profiles"].as_array() {
+        for item in arr {
+            match serde_json::from_value::<SerialProfile>(item.clone()) {
+                Ok(s) => {
+                    if let Err(e) = serial_profile::insert(db, &s) {
+                        errors.push(ImportError {
+                            kind: "serial_profile",
+                            name: Some(s.name),
+                            code: e.code().to_string(),
+                        });
+                    }
+                }
+                Err(_) => errors.push(ImportError {
+                    kind: "serial_profile",
+                    name: None,
+                    code: "parse_failed".into(),
+                }),
+            }
+        }
+    }
     if let Some(arr) = data["groups"].as_array() {
         for item in arr {
             match serde_json::from_value::<Group>(item.clone()) {
@@ -198,6 +218,17 @@ pub fn replace_import(db: &Db, ss: &dyn SecretStore, data: &Value) -> AppResult<
     let creds: Vec<Credential> = parse_array(data, "credentials")?;
     let profiles: Vec<Profile> = parse_array(data, "profiles")?;
     let forwards: Vec<Forward> = parse_array(data, "forwards")?;
+    // serial_profiles 字段可缺省（串口功能之前的老 payload）。缺省 → 不动表，
+    // 否则 replace 一个旧 payload 会静默删光本地串口预设。语义同下面的 skills。
+    let serial_present = data
+        .get("serial_profiles")
+        .filter(|v| !v.is_null())
+        .is_some();
+    let serial_profiles: Vec<SerialProfile> = if serial_present {
+        parse_array(data, "serial_profiles")?
+    } else {
+        Vec::new()
+    };
     let groups: Vec<Group> = parse_array(data, "groups")?;
     // skills 字段可缺省（v1 老 payload）。缺省 → 不动 ai_skills 表。
     let skills_present = data.get("skills").filter(|v| !v.is_null()).is_some();
@@ -211,16 +242,16 @@ pub fn replace_import(db: &Db, ss: &dyn SecretStore, data: &Value) -> AppResult<
     // 留作 tx 成功后清理被淘汰 cred secret 用。`?` 而非 `unwrap_or_default()`：
     // list 失败（DB 锁/损坏）时，跑事务清空又写不回旧 secret = 用户密码丢光。
     // 早 fail 让 DB 维持原状。
-    let old_cred_ids: Vec<String> = credential::list(db)?
-        .into_iter()
-        .map(|c| c.id)
-        .collect();
+    let old_cred_ids: Vec<String> = credential::list(db)?.into_iter().map(|c| c.id).collect();
 
     // (2) DB 事务：clear + insert 整体原子。失败回滚，secrets 不动。
     db.with_transaction(|tx| {
         credential::clear_all_tx(tx)?;
         profile::clear_all_tx(tx)?;
         forward::clear_all_tx(tx)?;
+        if serial_present {
+            serial_profile::clear_all_tx(tx)?;
+        }
         group::clear_all_tx(tx)?;
         if skills_present {
             ai_skill::clear_all_tx(tx)?;
@@ -234,6 +265,9 @@ pub fn replace_import(db: &Db, ss: &dyn SecretStore, data: &Value) -> AppResult<
         }
         for f in &forwards {
             forward::insert_tx(tx, f)?;
+        }
+        for s in &serial_profiles {
+            serial_profile::insert_tx(tx, s)?;
         }
         for g in &groups {
             group::insert_tx(tx, g)?;
@@ -347,4 +381,3 @@ fn parse_skills(data: &Value) -> AppResult<Vec<ai_skill::UserSkill>> {
     }
     Ok(out)
 }
-

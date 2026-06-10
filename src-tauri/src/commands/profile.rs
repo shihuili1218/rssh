@@ -93,8 +93,8 @@ pub fn import_ssh_config(content: String) -> Vec<SshConfigEntry> {
 /// IO 错误（权限不足等）→ 报 AppError::Io，让前端显示。
 #[tauri::command]
 pub fn read_ssh_config_default() -> AppResult<Vec<SshConfigEntry>> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| AppError::other("home_dir_unavailable", json!({})))?;
+    let home =
+        dirs::home_dir().ok_or_else(|| AppError::other("home_dir_unavailable", json!({})))?;
     let path = home.join(".ssh").join("config");
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
@@ -200,10 +200,7 @@ fn resolve_credential_id(
     cache: &mut std::collections::HashMap<(String, String), String>,
     result: &mut SshImportResult,
 ) -> Option<String> {
-    let username = entry
-        .user
-        .clone()
-        .unwrap_or_else(current_system_user);
+    let username = entry.user.clone().unwrap_or_else(current_system_user);
 
     let cache_key = (
         username.clone(),
@@ -466,12 +463,8 @@ mod tests {
     fn key_credential_secret_lands_in_secret_store() {
         let (db, ss, dir) = fixture();
         let key = write_key(&dir, "id_ed25519", "MY-PEM-CONTENT");
-        let res = do_import_ssh_entries(
-            &db,
-            &ss,
-            vec![entry("h", Some("alice"), Some(&key))],
-        )
-        .unwrap();
+        let res =
+            do_import_ssh_entries(&db, &ss, vec![entry("h", Some("alice"), Some(&key))]).unwrap();
         assert_eq!(res.credentials_created, 1);
         let cred = &crate::db::credential::list(&db).unwrap()[0];
         let stored = ss.get(&cred_secret_key(&cred.id)).unwrap();
@@ -505,7 +498,11 @@ mod tests {
         .unwrap();
         assert_eq!(res.profiles_created, 6);
         // system_user 恰好是 "alice" 时 p5 和 p6 共用一个 cred —— 退化到 4。
-        let expected = if current_system_user() == "alice" { 4 } else { 5 };
+        let expected = if current_system_user() == "alice" {
+            4
+        } else {
+            5
+        };
         assert_eq!(res.credentials_created, expected);
     }
 }

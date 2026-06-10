@@ -65,7 +65,12 @@ pub(crate) async fn prompt_oneshot(
     // guard 在 emit 失败 / rx 错误时自动从 map 清掉 sender；正常落地是 no-op。
     let _guard = WaiterGuard { waiters, tab_id };
     app.emit(&format!("{event_prefix}:{tab_id}"), payload)
-        .map_err(|e| AppError::other("emit_failed", json!({ "channel": event_prefix, "err": e.to_string() })))?;
+        .map_err(|e| {
+            AppError::other(
+                "emit_failed",
+                json!({ "channel": event_prefix, "err": e.to_string() }),
+            )
+        })?;
     rx.await.map_err(|_| AppError::ssh(cancel_code, json!({})))
 }
 

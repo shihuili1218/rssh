@@ -2,18 +2,18 @@ mod ai;
 mod commands;
 pub mod crypto;
 pub mod db;
-pub mod error;
 pub mod emitter;
+pub mod error;
 pub mod migration;
 pub mod models;
 pub mod secret;
 mod ssh;
 pub use ssh::bastion;
+#[cfg(all(feature = "server", not(target_os = "android")))]
+pub mod server;
 mod state;
 pub mod sync;
 mod terminal;
-#[cfg(all(feature = "server", not(target_os = "android")))]
-pub mod server;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -72,6 +72,8 @@ pub fn run() {
                 sessions: Mutex::new(HashMap::new()),
                 #[cfg(not(target_os = "android"))]
                 pty_sessions: Mutex::new(HashMap::new()),
+                #[cfg(not(target_os = "android"))]
+                serial_sessions: Mutex::new(HashMap::new()),
                 sftp_sessions: Mutex::new(HashMap::new()),
                 transfer_cancels: Mutex::new(HashMap::new()),
                 active_forwards: Mutex::new(HashMap::new()),
@@ -156,6 +158,31 @@ pub fn run() {
             commands::pty::pty_resize,
             #[cfg(not(target_os = "android"))]
             commands::pty::pty_close,
+            // Serial (desktop only)
+            #[cfg(not(target_os = "android"))]
+            commands::serial::serial_list_ports,
+            #[cfg(not(target_os = "android"))]
+            commands::serial::serial_open,
+            #[cfg(not(target_os = "android"))]
+            commands::serial::serial_write,
+            #[cfg(not(target_os = "android"))]
+            commands::serial::serial_close,
+            #[cfg(not(target_os = "android"))]
+            commands::serial::serial_set_dtr,
+            #[cfg(not(target_os = "android"))]
+            commands::serial::serial_set_rts,
+            #[cfg(not(target_os = "android"))]
+            commands::serial::serial_send_break,
+            #[cfg(not(target_os = "android"))]
+            commands::serial::list_serial_profiles,
+            #[cfg(not(target_os = "android"))]
+            commands::serial::get_serial_profile,
+            #[cfg(not(target_os = "android"))]
+            commands::serial::create_serial_profile,
+            #[cfg(not(target_os = "android"))]
+            commands::serial::update_serial_profile,
+            #[cfg(not(target_os = "android"))]
+            commands::serial::delete_serial_profile,
             // SFTP
             commands::sftp::sftp_connect,
             commands::sftp::sftp_connect_session,

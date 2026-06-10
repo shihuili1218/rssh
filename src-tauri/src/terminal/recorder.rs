@@ -29,8 +29,12 @@ impl Recorder {
             height: rows,
             timestamp: chrono::Utc::now().timestamp(),
         };
-        let header_json = serde_json::to_string(&header)
-            .map_err(|e| crate::error::AppError::other("recorder_init_failed", serde_json::json!({ "err": e.to_string() })))?;
+        let header_json = serde_json::to_string(&header).map_err(|e| {
+            crate::error::AppError::other(
+                "recorder_init_failed",
+                serde_json::json!({ "err": e.to_string() }),
+            )
+        })?;
         writeln!(writer, "{header_json}")?;
 
         Ok(Self {

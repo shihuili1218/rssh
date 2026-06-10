@@ -204,7 +204,9 @@ mod tests {
     #[test]
     fn empty_table_means_redaction_off() {
         let db = Db::open_in_memory().unwrap();
-        for id in ["ip-10", "ip-172", "ip-192", "bearer", "sk-key", "aws-key", "jwt", "hex"] {
+        for id in [
+            "ip-10", "ip-172", "ip-192", "bearer", "sk-key", "aws-key", "jwt", "hex",
+        ] {
             delete(&db, id).unwrap();
         }
         let rules = compiled(&db).unwrap();

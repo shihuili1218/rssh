@@ -170,10 +170,7 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         insert(&db, &mk("c1", "one", CredentialType::Password)).unwrap();
         delete(&db, "c1").unwrap();
-        assert_eq!(
-            get(&db, "c1").unwrap_err().code(),
-            "credential_not_found"
-        );
+        assert_eq!(get(&db, "c1").unwrap_err().code(), "credential_not_found");
     }
 
     #[test]

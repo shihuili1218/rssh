@@ -253,8 +253,7 @@ pub async fn chat(
                 }
                 if let Some(tcs_arr) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                     for tc in tcs_arr {
-                        let idx =
-                            tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                        let idx = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
                         let entry = tool_calls
                             .entry(idx)
                             .or_insert_with(|| (String::new(), String::new(), String::new()));
@@ -272,8 +271,7 @@ pub async fn chat(
                                 });
                             }
                         }
-                        if let Some(args) =
-                            tc["function"].get("arguments").and_then(|a| a.as_str())
+                        if let Some(args) = tc["function"].get("arguments").and_then(|a| a.as_str())
                         {
                             if !args.is_empty() {
                                 entry.2.push_str(args);

@@ -84,7 +84,9 @@ impl HybridStore {
         }
         let k = self.mk_backend.load_or_create()?;
         // 持锁状态下 set，第一个也是唯一一个
-        self.master_key.set(k).expect("OnceLock set under init_lock cannot race");
+        self.master_key
+            .set(k)
+            .expect("OnceLock set under init_lock cannot race");
         Ok(self.master_key.get().expect("just initialized"))
     }
 }
@@ -153,7 +155,10 @@ mod tests {
         let (hs, _tmp) = make_hybrid();
         let pem = "x".repeat(3500);
         hs.set("cred:foo:secret", &pem).unwrap();
-        assert_eq!(hs.get("cred:foo:secret").unwrap().as_deref(), Some(pem.as_str()));
+        assert_eq!(
+            hs.get("cred:foo:secret").unwrap().as_deref(),
+            Some(pem.as_str())
+        );
     }
 
     #[test]
@@ -195,7 +200,10 @@ mod tests {
         let raw1 = hs.db_store.get("k").unwrap().unwrap();
         hs.set("k", "v").unwrap();
         let raw2 = hs.db_store.get("k").unwrap().unwrap();
-        assert_ne!(raw1, raw2, "随机 nonce 让同明文同 key 两次 set 产出不同密文");
+        assert_ne!(
+            raw1, raw2,
+            "随机 nonce 让同明文同 key 两次 set 产出不同密文"
+        );
         assert_eq!(hs.get("k").unwrap().as_deref(), Some("v"));
     }
 

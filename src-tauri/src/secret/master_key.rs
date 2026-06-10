@@ -201,9 +201,12 @@ fn random_master_key() -> AppResult<[u8; MASTER_KEY_LEN]> {
 }
 
 fn decode_b64_master_key(b64: &str) -> AppResult<[u8; MASTER_KEY_LEN]> {
-    let bytes = STANDARD
-        .decode(b64.as_bytes())
-        .map_err(|e| AppError::other("master_key_b64_decode_failed", json!({ "err": e.to_string() })))?;
+    let bytes = STANDARD.decode(b64.as_bytes()).map_err(|e| {
+        AppError::other(
+            "master_key_b64_decode_failed",
+            json!({ "err": e.to_string() }),
+        )
+    })?;
     bytes.try_into().map_err(|v: Vec<u8>| {
         AppError::other(
             "master_key_wrong_length",
@@ -255,7 +258,9 @@ mod tests {
         // 不同 backend 实例（模拟进程重启）读同一文件应得到同 key
         let tmp = tempdir();
         let path = tmp.path().join(FILE_NAME);
-        let k1 = FileMasterKey::with_path(path.clone()).load_or_create().unwrap();
+        let k1 = FileMasterKey::with_path(path.clone())
+            .load_or_create()
+            .unwrap();
         let k2 = FileMasterKey::with_path(path).load_or_create().unwrap();
         assert_eq!(k1, k2);
     }
@@ -297,9 +302,13 @@ mod tests {
         // mk_B 覆盖 mk_A。
         let tmp = tempdir();
         let path = tmp.path().join(FILE_NAME);
-        let mk_a = FileMasterKey::with_path(path.clone()).load_or_create().unwrap();
+        let mk_a = FileMasterKey::with_path(path.clone())
+            .load_or_create()
+            .unwrap();
         // 第二个 backend 实例（模拟另一进程同时启动），在文件已存在时不能覆盖
-        let mk_b = FileMasterKey::with_path(path.clone()).load_or_create().unwrap();
+        let mk_b = FileMasterKey::with_path(path.clone())
+            .load_or_create()
+            .unwrap();
         assert_eq!(mk_a, mk_b, "AlreadyExists 必须走读取，不得覆盖竞争对手密钥");
     }
 

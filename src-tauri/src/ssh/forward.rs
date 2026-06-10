@@ -70,7 +70,10 @@ pub struct ForwardStats {
 /// never exposed to the network.
 async fn bind_loopback(port: u16) -> AppResult<(TcpListener, Option<TcpListener>)> {
     let v4 = TcpListener::bind(("127.0.0.1", port)).await.map_err(|e| {
-        AppError::ssh("ssh_port_bind_failed", json!({ "port": port, "err": e.to_string() }))
+        AppError::ssh(
+            "ssh_port_bind_failed",
+            json!({ "port": port, "err": e.to_string() }),
+        )
     })?;
     // Bind v6 to v4's *actual* port so an ephemeral request (port 0) lands on
     // the same port for both families. If v4's port can't be read, skip v6
@@ -128,9 +131,18 @@ async fn counted_copy<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
 /// returned `ForwardedChannelSender`; the others discard it.
 async fn connect_authed(
     target: ConnTarget,
-) -> AppResult<(russh::client::Handle<client::SshHandler>, client::ForwardedChannelSender)> {
-    let ConnTarget { host, port, credential, bastion_chain, known_hosts_path, timeout_secs } =
-        target;
+) -> AppResult<(
+    russh::client::Handle<client::SshHandler>,
+    client::ForwardedChannelSender,
+)> {
+    let ConnTarget {
+        host,
+        port,
+        credential,
+        bastion_chain,
+        known_hosts_path,
+        timeout_secs,
+    } = target;
     let log: LogFn = StdArc::new(|_: String| ());
     let (mut handle, fwd_sender) = client::establish_via_chain(
         bastion_chain,

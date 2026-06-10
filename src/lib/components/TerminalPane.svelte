@@ -18,6 +18,7 @@
     import {createFoldStore, type FoldStore} from "../terminal/folds.ts";
     import {extractBlocksText} from "../terminal/block-content.ts";
     import {renderBlocksToBlob} from "../terminal/block-to-image.ts";
+    import {inputNewline, normalizeIncoming, bytesToHex, parseHexInput, parseLoginScript, backspaceBytes, normalizeOutgoing, type LoginStep} from "../terminal/serial-transforms.ts";
     import {t} from "../i18n/index.svelte.ts";
     import {ACTIONS, matchBinding, type ActionId} from "../keyboard/keymap.ts";
     import * as keymap from "../stores/keymap.svelte.ts";
@@ -98,7 +99,7 @@
 
     let {tabId, tabType, meta = {}}: {
         tabId: string;
-        tabType: "ssh" | "local";
+        tabType: "ssh" | "local" | "serial";
         meta: Record<string, string>;
     } = $props();
 
@@ -435,13 +436,161 @@
     let mobileKeyboardCleanup: (() => void) | undefined;
 
     const isLocal = $derived(tabType === "local");
-    const writeCmd = $derived(isLocal ? "pty_write" : "ssh_write");
-    const resizeCmd = $derived(isLocal ? "pty_resize" : "ssh_resize");
-    const dataEvent = $derived(isLocal ? "pty:data" : "ssh:data");
-    const closeEvent = $derived(isLocal ? "pty:close" : "ssh:close");
+    const isSsh = $derived(tabType === "ssh");
+    // Transport table — the per-tab byte-stream IPC contract lives in DATA, not in
+    // branches. Adding a transport (telnet, …) is one more row, zero code change.
+    // resize:null means the transport has no rows/cols (serial) → callers skip it.
+    const TRANSPORT: Record<"ssh" | "local" | "serial", {
+        write: string; resize: string | null; data: string; close: string; closeCmd: string;
+    }> = {
+        ssh:    { write: "ssh_write",    resize: "ssh_resize", data: "ssh:data",    close: "ssh:close",    closeCmd: "ssh_disconnect" },
+        local:  { write: "pty_write",    resize: "pty_resize", data: "pty:data",    close: "pty:close",    closeCmd: "pty_close" },
+        serial: { write: "serial_write", resize: null,         data: "serial:data", close: "serial:close", closeCmd: "serial_close" },
+    };
+    const writeCmd = $derived(TRANSPORT[tabType].write);
+    const resizeCmd = $derived(TRANSPORT[tabType].resize);
+    const dataEvent = $derived(TRANSPORT[tabType].data);
+    const closeEvent = $derived(TRANSPORT[tabType].close);
+    const closeCmd = $derived(TRANSPORT[tabType].closeCmd);
+
+    // ── Serial (Tabby-style) input/output transforms. Driven by the saved
+    //    profile's meta; null for ssh/local so those paths are untouched. ──
+    const serialOpts = $derived(tabType === "serial" ? {
+        inputNewline: meta.input_newline || "cr",
+        outputNewline: meta.output_newline || "raw",
+        localEcho: meta.local_echo === "true",
+        backspace: meta.backspace || "del",
+        slowSend: meta.slow_send === "true",
+        inputMode: meta.input_mode || "normal",
+        outputMode: meta.output_mode || "text",
+        loginScript: meta.login_script || "",
+    } : null);
+
+    function serialInputNewline(): string {
+        return inputNewline(serialOpts?.inputNewline ?? "cr");
+    }
+    function serialNormalizeOut(text: string): string {
+        return normalizeIncoming(text, serialOpts?.outputNewline ?? "raw");
+    }
+    function serialSendBytes(bytes: number[]) {
+        if (!sessionId || disconnected || !bytes.length) return;
+        if (!serialOpts?.slowSend) {
+            invoke("serial_write", { sessionId, data: bytes });
+            return;
+        }
+        // Slow devices / bootloaders: one byte at a time, ~5ms apart.
+        const sid = sessionId;
+        let i = 0;
+        const tick = () => {
+            if (i >= bytes.length || disconnected) return;
+            invoke("serial_write", { sessionId: sid, data: [bytes[i]] });
+            i += 1;
+            setTimeout(tick, 5);
+        };
+        tick();
+    }
+    function serialSendText(text: string) {
+        serialSendBytes(Array.from(new TextEncoder().encode(text)));
+    }
+
+    // Cap local input buffers (hex / line editor) so a pathological no-newline
+    // paste can't grow them without bound; reset on (re)connect (connectAndWire).
+    const SERIAL_INPUT_CAP = 8192;
+
+    // Hex input mode: accumulate typed hex (echoed), flush bytes on Enter.
+    let serialHexBuf = "";
+    function serialHexInput(data: string) {
+        for (const ch of data) {
+            if (ch === "\r" || ch === "\n") {
+                const bytes = parseHexInput(serialHexBuf);
+                serialHexBuf = "";
+                terminal.write("\r\n");
+                serialSendBytes(bytes);
+            } else if (ch === "\x7f" || ch === "\b") {
+                if (serialHexBuf) { serialHexBuf = serialHexBuf.slice(0, -1); terminal.write("\b \b"); }
+            } else if (/[0-9a-fA-F ]/.test(ch)) {
+                if (serialHexBuf.length < SERIAL_INPUT_CAP) { serialHexBuf += ch; terminal.write(ch); }
+            }
+        }
+    }
+
+    // Line-editor mode: buffer + locally echo input, send the whole line on
+    // Enter. For half-duplex / non-echoing devices. Mirrors serialHexInput.
+    // Escape sequences (arrows / Fn keys) are dropped — no in-line cursor nav.
+    let serialLineBuf = "";
+    function serialLineInput(data: string) {
+        if (data.charCodeAt(0) === 0x1b) return;
+        for (const ch of data) {
+            if (ch === "\r" || ch === "\n") {
+                terminal.write("\r\n");
+                serialSendText(serialLineBuf + serialInputNewline());
+                serialLineBuf = "";
+            } else if (ch === "\x7f" || ch === "\b") {
+                if (serialLineBuf) { serialLineBuf = serialLineBuf.slice(0, -1); terminal.write("\b \b"); }
+            } else if (ch >= " ") {
+                if (serialLineBuf.length < SERIAL_INPUT_CAP) { serialLineBuf += ch; terminal.write(ch); }
+            }
+        }
+    }
+
+    function serialOnData(data: string) {
+        // Local editors (hex / line) own their backspace and never emit the
+        // device-backspace byte, so dispatch to them BEFORE the remap below.
+        if (serialOpts?.inputMode === "hex") { serialHexInput(data); return; }
+        if (serialOpts?.inputMode === "line") { serialLineInput(data); return; }
+        // Remap the Backspace key for the device (xterm sends DEL 0x7f).
+        const bs = backspaceBytes(serialOpts?.backspace ?? "del");
+        if (bs !== "\x7f") data = data.replace(/\x7f/g, bs);
+        // Convert EVERY line break to the device EOL — handles the single Enter
+        // key AND multi-char chunks (native paste / IME), which the old
+        // `data === "\r"` check passed through raw. Echo with CRLF so multi-line
+        // input renders correctly in xterm.
+        data = normalizeOutgoing(data, serialOpts?.inputNewline ?? "cr");
+        if (serialOpts?.localEcho) terminal.write(data.replace(/\r\n|\r|\n/g, "\r\n"));
+        serialSendText(data);
+    }
+
+    // ── Login script (expect / send), run on connect. ──
+    let loginSteps: LoginStep[] = [];
+    let loginStepIdx = 0;
+    let loginBuf = "";
+    const loginDecoder = new TextDecoder("utf-8");
+    function initLoginScript() {
+        loginSteps = parseLoginScript(serialOpts?.loginScript ?? "");
+        loginStepIdx = 0;
+        loginBuf = "";
+        runLoginSends();
+    }
+    /** Fire consecutive `send` steps until the next `expect` (or the end). */
+    function runLoginSends() {
+        while (loginStepIdx < loginSteps.length && loginSteps[loginStepIdx].kind === "send") {
+            serialSendText(loginSteps[loginStepIdx].text + serialInputNewline());
+            loginStepIdx += 1;
+        }
+    }
+    function feedLoginScript(raw: Uint8Array) {
+        if (loginStepIdx >= loginSteps.length) return;
+        const step = loginSteps[loginStepIdx];
+        if (step.kind !== "expect") return;
+        // Dedicated decoder (not the display one) so we don't corrupt its stream
+        // state by decoding the same bytes twice. Cap the buffer.
+        loginBuf = (loginBuf + loginDecoder.decode(raw, { stream: true })).slice(-4096);
+        if (loginBuf.includes(step.text)) {
+            loginBuf = "";
+            loginStepIdx += 1;
+            runLoginSends();
+        }
+    }
 
     function pasteText(text: string) {
         if (!text || disconnected || !sessionId) return;
+        // Serial: convert pasted line breaks to the device's EOL and send through
+        // the serial pipeline (honors slow-send; no bracketed paste — devices
+        // don't speak it). ssh/local keep bracketed-paste behavior untouched.
+        if (tabType === "serial") {
+            serialSendText(normalizeOutgoing(text, serialOpts?.inputNewline ?? "cr"));
+            return;
+        }
         const wrapped = terminal.modes.bracketedPasteMode
             ? `\x1b[200~${text}\x1b[201~` : text;
         invoke(writeCmd, { sessionId, data: Array.from(new TextEncoder().encode(wrapped)) });
@@ -519,6 +668,13 @@
     async function wireSessionEvents(sid: string) {
         unlisteners.push(await listen<number[]>(`${dataEvent}:${sid}`, (ev) => {
             const raw = new Uint8Array(ev.payload);
+            if (serialOpts) {
+                feedLoginScript(raw);
+                if (serialOpts.outputMode === "hex") { terminal.write(bytesToHex(raw)); return; }
+                const text = serialNormalizeOut(decoder.decode(raw, { stream: true }));
+                terminal.write(hlRegex ? applyHighlights(text) : text);
+                return;
+            }
             if (hlRegex) {
                 terminal.write(applyHighlights(decoder.decode(raw, { stream: true })));
             } else {
@@ -527,6 +683,11 @@
         }));
         unlisteners.push(await listen(`${closeEvent}:${sid}`, () => {
             disconnected = true;
+            // Serial: the port just died; free its backend handle NOW so the
+            // exclusive OS port is released. Otherwise the reconnect below
+            // re-opens the same path while the stale handle still owns it and
+            // fails. ssh/local hold no exclusive OS resource, so they skip this.
+            if (tabType === "serial") invoke("serial_close", { sessionId: sid }).catch(() => {});
             terminal.write("\r\n\x1b[31m--- Disconnected ---\x1b[0m\r\n");
             terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
             setupReconnect();
@@ -539,12 +700,12 @@
         resizeDisposable?.dispose();
 
         dataDisposable = terminal.onData((data: string) => {
-            if (!disconnected) {
-                invoke(writeCmd, { sessionId: sid, data: Array.from(new TextEncoder().encode(processInput(data))) });
-            }
+            if (disconnected) return;
+            if (serialOpts) { serialOnData(data); return; }
+            invoke(writeCmd, { sessionId: sid, data: Array.from(new TextEncoder().encode(processInput(data))) });
         });
         resizeDisposable = terminal.onResize(({ cols, rows }) => {
-            if (!disconnected) invoke(resizeCmd, { sessionId: sid, cols, rows });
+            if (!disconnected && resizeCmd) invoke(resizeCmd, { sessionId: sid, cols, rows });
         });
     }
 
@@ -555,8 +716,31 @@
         unlisteners = [];
         disconnected = false;
         sessionId = null;
+        serialHexBuf = "";
+        serialLineBuf = "";
 
-        if (isLocal) {
+        if (tabType === "serial") {
+            try {
+                sessionId = await invoke<string>("serial_open", {
+                    port: meta.port,
+                    config: {
+                        baud_rate: Number(meta.baud_rate) || 115200,
+                        data_bits: Number(meta.data_bits) || 8,
+                        parity: meta.parity || "none",
+                        stop_bits: Number(meta.stop_bits) || 1,
+                        flow_control: meta.flow_control || "none",
+                        xany: meta.xany === "true",
+                    },
+                });
+            } catch (e: any) {
+                terminal.write(`\x1b[31mSerial open failed: ${e}\x1b[0m\r\n`);
+                terminal.write("\x1b[90mPress any key to retry.\x1b[0m\r\n");
+                disconnected = true;
+                return false;
+            }
+            await wireSessionEvents(sessionId);
+            initLoginScript();
+        } else if (isLocal) {
             try {
                 sessionId = await invoke<string>("pty_spawn", { cols: terminal.cols, rows: terminal.rows });
             } catch (e: any) {
@@ -610,7 +794,7 @@
         // Sync initial size
         requestAnimationFrame(() => {
             fitAddon.fit();
-            if (sessionId && !disconnected) {
+            if (sessionId && !disconnected && resizeCmd) {
                 invoke(resizeCmd, { sessionId, cols: terminal.cols, rows: terminal.rows });
             }
         });
@@ -620,7 +804,7 @@
         // 进程缓存未命中（remoteShellProbeNeeded）。命中即写 profile 缓存，供 AI 会话
         // 启动时读初始 shell。fire-and-forget，不阻塞终端就绪；重连时缓存已命中 →
         // needed=false，不重复刷探针。
-        if (!isLocal) {
+        if (isSsh) {
             const sid = sessionId!;
             void ai.remoteShellProbeNeeded(sid)
                 .then((needed) => { if (needed) return ai.probeRemoteShell(sid); })
@@ -961,7 +1145,7 @@
                 if (a.surface !== "terminal") continue;
                 if (!matchBinding(e, keymap.binding(a.id))) continue;
                 // SFTP only applies to remote sessions on desktop; elsewhere let the shell have the key.
-                if (a.id === "term.sftp" && (isLocal || app.isMobile)) return true;
+                if (a.id === "term.sftp" && (!isSsh || app.isMobile)) return true;
                 e.preventDefault();
                 runTerminalShortcut(a.id);
                 return false;
@@ -1043,7 +1227,7 @@
                 // rebind 到新 sid，让 AI actor 后续的 file_ops / SFTP 走新连接。
                 // 首次连接 (sessionForTab 为 undefined) 直接 skip。
                 const aiInfo = ai.sessionForTab(tabId);
-                if (aiInfo && aiInfo.target_id !== sid) {
+                if (aiInfo && aiInfo.target_id !== sid && tabType !== "serial") {
                     ai.rebindTarget(tabId, tabType, sid).catch((e) =>
                         console.warn("[ai] rebind on reconnect:", e),
                     );
@@ -1074,8 +1258,7 @@
             terminal?.focus();
             const writePty = (text: string) => {
                 if (sessionId && !disconnected) {
-                    const cmd = isLocal ? "pty_write" : "ssh_write";
-                    invoke(cmd, {sessionId, data: Array.from(new TextEncoder().encode(text))});
+                    invoke(writeCmd, {sessionId, data: Array.from(new TextEncoder().encode(text))});
                 }
             };
             app.registerTerminalWriter(writePty);
@@ -1124,12 +1307,18 @@
         app.unregisterTerminalArrowSender();
         app.unregisterTerminalControls(tabId);
         app.unregisterSession(tabId);
-        if (sessionId && !disconnected) {
-            if (isLocal) {
-                invoke("pty_close", { sessionId }).catch(() => {});
-            } else {
+        // Serial is exempt from the !disconnected guard: serial_close just drops
+        // the backend map entry (idempotent), so always free it on a known
+        // sessionId — otherwise an unplugged-then-closed serial tab leaks its
+        // handle until window-close/reconcile sweeps it. ssh/local keep the guard
+        // (disconnecting an already-dead session is pointless / may error).
+        if (sessionId && (!disconnected || tabType === "serial")) {
+            if (isSsh) {
                 // 把 tabId 一并传给后端做防御性 waiters 清理；漏传不致命。
                 invoke("ssh_disconnect", { sessionId, tabId }).catch(() => {});
+            } else {
+                // local PTY / serial：按 transport 选 close 命令（pty_close / serial_close）。
+                invoke(closeCmd, { sessionId }).catch(() => {});
             }
         }
         terminal?.dispose();

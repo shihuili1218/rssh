@@ -425,7 +425,12 @@ mod tests {
     #[test]
     fn key_helpers_are_pure_no_panic_on_typical_input() {
         // 跑一批典型 input，仅确认不 panic；具体形状由前面专测断言
-        let ids = ["", "a", "550e8400-e29b-41d4-a716-446655440000", "with-dashes"];
+        let ids = [
+            "",
+            "a",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "with-dashes",
+        ];
         for id in ids {
             let _ = cred_secret_key(id);
             let _ = cred_passphrase_key(id);

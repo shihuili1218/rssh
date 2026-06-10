@@ -107,6 +107,58 @@ pub struct Forward {
     pub profile_id: String,
 }
 
+/// Saved serial console — a peer of `Profile`/`Forward`. No secret, no FK: just
+/// a named port + line framing. snake_case fields match the profile/forward
+/// convention and feed the runtime `serial_open` config 1:1 (no remapping).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerialProfile {
+    pub id: String,
+    pub name: String,
+    pub port: String,
+    pub baud_rate: u32,
+    pub data_bits: u8,
+    pub parity: String,
+    pub stop_bits: u8,
+    pub flow_control: String,
+    // ── Tabby-style extras. All frontend-applied (TerminalPane transforms)
+    //    EXCEPT `xany`, which is a termios wire flag set in `serial::open`.
+    //    serde defaults keep older exported payloads (lacking these keys) importable.
+    #[serde(default)]
+    pub xany: bool,
+    #[serde(default = "default_input_newline")]
+    pub input_newline: String, // cr | lf | crlf — what Enter sends
+    #[serde(default = "default_output_newline")]
+    pub output_newline: String, // raw | cr | lf | crlf — incoming → CRLF normalization
+    #[serde(default)]
+    pub local_echo: bool,
+    #[serde(default = "default_backspace")]
+    pub backspace: String, // del | bs — what Backspace sends
+    #[serde(default)]
+    pub slow_send: bool, // send one byte at a time (slow devices / bootloaders)
+    #[serde(default = "default_input_mode")]
+    pub input_mode: String, // normal | hex
+    #[serde(default = "default_output_mode")]
+    pub output_mode: String, // text | hex
+    #[serde(default)]
+    pub login_script: String, // expect/send lines, run on connect
+}
+
+fn default_input_newline() -> String {
+    "cr".into()
+}
+fn default_output_newline() -> String {
+    "raw".into()
+}
+fn default_backspace() -> String {
+    "del".into()
+}
+fn default_input_mode() -> String {
+    "normal".into()
+}
+fn default_output_mode() -> String {
+    "text".into()
+}
+
 // --- Group ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

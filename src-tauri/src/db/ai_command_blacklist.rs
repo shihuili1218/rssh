@@ -78,7 +78,10 @@ mod tests {
         assert_eq!(d, vec!["frob".to_string(), "rm".to_string()]);
 
         // 其它类不受影响（write_verb 仍在）。
-        assert!(list(&db).unwrap().iter().any(|r| r.category == "write_verb"));
+        assert!(list(&db)
+            .unwrap()
+            .iter()
+            .any(|r| r.category == "write_verb"));
     }
 
     #[test]

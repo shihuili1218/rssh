@@ -287,8 +287,8 @@ pub const DEFERRED_EXEC: &[&str] = &["eval", "source", "."];
 ///   `run_command` 自带的 `timeout_s`。GNU g 前缀变体（gtimeout 等）由 COMMAND_ALIASES 归一。
 #[cfg(test)]
 pub const COMMAND_FORWARDERS: &[&str] = &[
-    "xargs", "nice", "time", "timeout", "nohup", "stdbuf", "setsid", "ionice", "flock",
-    "taskset", "chrt",
+    "xargs", "nice", "time", "timeout", "nohup", "stdbuf", "setsid", "ionice", "flock", "taskset",
+    "chrt",
 ];
 
 /// 全拒的脚本解释器：任意一个都可以通过 `open()` 类 API 写文件，绕过 patch_file 守护。
@@ -301,16 +301,7 @@ pub const COMMAND_FORWARDERS: &[&str] = &[
 /// 所以这里禁 perl 不影响 file_ops 的 perl 降级路径。
 #[cfg(test)]
 pub const INTERPRETERS_DENIED: &[&str] = &[
-    "python",
-    "python3",
-    "python2",
-    "perl",
-    "ruby",
-    "node",
-    "nodejs",
-    "lua",
-    "luajit",
-    "php",
+    "python", "python3", "python2", "perl", "ruby", "node", "nodejs", "lua", "luajit", "php",
 ];
 
 /// 透明 wrapper：自身不是危险命令，但会把真正的命令名推到后面。
@@ -327,8 +318,7 @@ pub const WRAPPERS: &[&str] = &["sudo", "env", "busybox", "doas"];
 
 /// `sudo` / `doas` 的带参 flag：`-u user` / `-g group` 等。validator 跳过 wrapper 时
 /// 必须把 flag 和它的 value 都吞掉，否则 `sudo -u root rm a` 会把 `root` 当真正命令头。
-const SUDO_FLAGS_WITH_ARG: &[&str] =
-    &["-u", "-g", "-U", "-C", "-h", "-T", "-D", "-p", "-r", "-t"];
+const SUDO_FLAGS_WITH_ARG: &[&str] = &["-u", "-g", "-U", "-C", "-h", "-T", "-D", "-p", "-r", "-t"];
 
 /// GNU `env` 的带参 flag：`-u VAR` / `--unset VAR` / `-C DIR` / `--chdir DIR`。
 /// 不吞 value 会让 `env -u FOO rm a` 把 `FOO` 当真正命令头，rm 全程跳过黑名单。
@@ -458,10 +448,7 @@ fn node_text<'a>(n: &tree_sitter::Node, src: &'a [u8]) -> &'a str {
 ///
 /// 唯一放行：command_name 只含单个 `word` / `raw_string` / `string` 节点（或为空 —
 /// tree-sitter 实际不会这样，保险路径）。
-fn extract_command_name(
-    name_node: &tree_sitter::Node,
-    src: &[u8],
-) -> Result<String, ShapeError> {
+fn extract_command_name(name_node: &tree_sitter::Node, src: &[u8]) -> Result<String, ShapeError> {
     let mut children: Vec<tree_sitter::Node> = Vec::new();
     let mut cur = name_node.walk();
     for c in name_node.children(&mut cur) {
@@ -469,8 +456,7 @@ fn extract_command_name(
     }
 
     if children.is_empty()
-        || (children.len() == 1
-            && matches!(children[0].kind(), "word" | "raw_string" | "string"))
+        || (children.len() == 1 && matches!(children[0].kind(), "word" | "raw_string" | "string"))
     {
         return Ok(normalize_head(node_text(name_node, src)));
     }
@@ -527,7 +513,11 @@ fn check_command(cmd: &tree_sitter::Node, src: &[u8], bl: &Blacklist) -> Result<
     Ok(())
 }
 
-fn recurse_substitutions(n: &tree_sitter::Node, src: &[u8], bl: &Blacklist) -> Result<(), ShapeError> {
+fn recurse_substitutions(
+    n: &tree_sitter::Node,
+    src: &[u8],
+    bl: &Blacklist,
+) -> Result<(), ShapeError> {
     if matches!(n.kind(), "command_substitution" | "process_substitution") {
         return walk_ast(n, src, bl);
     }
@@ -572,10 +562,7 @@ fn strip_wrappers<'a>(
                     && i < args.len()
                 {
                     i += 1; // 吞 value
-                } else if wrapper == "env"
-                    && ENV_FLAGS_WITH_ARG.contains(&t)
-                    && i < args.len()
-                {
+                } else if wrapper == "env" && ENV_FLAGS_WITH_ARG.contains(&t) && i < args.len() {
                     i += 1; // 吞 -u VAR / --unset VAR / -C DIR / --chdir DIR 的 value
                 }
                 continue;
@@ -782,10 +769,7 @@ fn check_per_command_rules(head: &str, args: &[String]) -> Result<(), ShapeError
     // 已被 canonical_head 归一到 sed / awk。
     if head == "sed"
         && arg_text.iter().any(|t| {
-            *t == "-i"
-                || t.starts_with("-i")
-                || *t == "--in-place"
-                || t.starts_with("--in-place")
+            *t == "-i" || t.starts_with("-i") || *t == "--in-place" || t.starts_with("--in-place")
         })
     {
         return Err(ShapeError::Write(
@@ -1288,13 +1272,13 @@ mod tests {
 
     #[test]
     fn shape_write_verbs_blocked() {
-        assert!(matches!(validate("tee /tmp/foo"), Err(ShapeError::Write(_))));
-        assert!(matches!(validate("cp a b"), Err(ShapeError::Write(_))));
-        assert!(matches!(validate("mv a b"), Err(ShapeError::Write(_))));
         assert!(matches!(
-            validate("ln -s a b"),
+            validate("tee /tmp/foo"),
             Err(ShapeError::Write(_))
         ));
+        assert!(matches!(validate("cp a b"), Err(ShapeError::Write(_))));
+        assert!(matches!(validate("mv a b"), Err(ShapeError::Write(_))));
+        assert!(matches!(validate("ln -s a b"), Err(ShapeError::Write(_))));
         assert!(matches!(
             validate("install -m 644 a b"),
             Err(ShapeError::Write(_))
@@ -1356,8 +1340,14 @@ mod tests {
             Err(ShapeError::Write(_))
         ));
         assert!(matches!(validate("lua s.lua"), Err(ShapeError::Write(_))));
-        assert!(matches!(validate("luajit s.lua"), Err(ShapeError::Write(_))));
-        assert!(matches!(validate("php -r 'echo 1;'"), Err(ShapeError::Write(_))));
+        assert!(matches!(
+            validate("luajit s.lua"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("php -r 'echo 1;'"),
+            Err(ShapeError::Write(_))
+        ));
         // wrapper 套也要穿透（sudo / env 等）
         assert!(matches!(
             validate("sudo perl -e 'open(F,\">x\")'"),
@@ -1388,8 +1378,7 @@ mod tests {
     fn validate_with_custom_blacklist_blocks_new_head() {
         // 自定义黑名单：把原本放行的命令加进 destructive 类 → 被拦；builtin 不认识它
         // → 放行。证明命令头判定确实跟着传入的 Blacklist 走。
-        let bl =
-            Blacklist::from_entries([("frobnicate".to_string(), BlCategory::Destructive)]);
+        let bl = Blacklist::from_entries([("frobnicate".to_string(), BlCategory::Destructive)]);
         assert!(matches!(
             validate_with("frobnicate --hard", &bl),
             Err(ShapeError::Destructive(_))
@@ -1428,7 +1417,11 @@ mod tests {
             + INTERPRETERS_DENIED.len()
             + DEFERRED_EXEC.len()
             + COMMAND_FORWARDERS.len();
-        assert_eq!(bl.0.len(), total, "重叠或遗漏：HashMap 条数 != const 表总数");
+        assert_eq!(
+            bl.0.len(),
+            total,
+            "重叠或遗漏：HashMap 条数 != const 表总数"
+        );
     }
 
     #[test]
@@ -1611,19 +1604,46 @@ mod tests {
         // 透明 wrapper 不能让真正命令名逃过审查。
         // Regression: 之前 validate 只看 pipeline 头 token，wrapper "sudo" / "env" 不在黑名单
         // → 后面的 rm/cp 等被放行，安全漏洞。
-        assert!(matches!(validate("sudo rm /tmp/x"), Err(ShapeError::Destructive(_))));
+        assert!(matches!(
+            validate("sudo rm /tmp/x"),
+            Err(ShapeError::Destructive(_))
+        ));
         assert!(matches!(validate("sudo cp a b"), Err(ShapeError::Write(_))));
-        assert!(matches!(validate("env rm -rf /tmp/x"), Err(ShapeError::Destructive(_))));
-        assert!(matches!(validate("command rm a"), Err(ShapeError::Destructive(_))));
-        assert!(matches!(validate("busybox rm a"), Err(ShapeError::Destructive(_))));
-        assert!(matches!(validate("exec rm a"), Err(ShapeError::Destructive(_))));
-        assert!(matches!(validate("doas rm a"), Err(ShapeError::Destructive(_))));
+        assert!(matches!(
+            validate("env rm -rf /tmp/x"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("command rm a"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("busybox rm a"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("exec rm a"),
+            Err(ShapeError::Destructive(_))
+        ));
+        assert!(matches!(
+            validate("doas rm a"),
+            Err(ShapeError::Destructive(_))
+        ));
         // sudo -u user 形态：-u 是 sudo 的 flag，跟着的 user 名也算前缀；后面 rm 仍要拦
-        assert!(matches!(validate("sudo -u root rm a"), Err(ShapeError::Destructive(_))));
+        assert!(matches!(
+            validate("sudo -u root rm a"),
+            Err(ShapeError::Destructive(_))
+        ));
         // sudo -E 单 flag 形态
-        assert!(matches!(validate("sudo -E cp a b"), Err(ShapeError::Write(_))));
+        assert!(matches!(
+            validate("sudo -E cp a b"),
+            Err(ShapeError::Write(_))
+        ));
         // env VAR=val 形态：env 后是 KEY=VAL，后面 cp 仍要拦
-        assert!(matches!(validate("env FOO=bar cp a b"), Err(ShapeError::Write(_))));
+        assert!(matches!(
+            validate("env FOO=bar cp a b"),
+            Err(ShapeError::Write(_))
+        ));
         // python wrapper 也覆盖
         assert!(matches!(
             validate("sudo python3 -c 'open(\"x\",\"w\")'"),
@@ -1889,12 +1909,18 @@ mod tests {
     #[test]
     fn shape_vi_variants_aliased() {
         // vim / nvim / neovim / view 都是 vi family —— ncurses TUI 在 ssh exec 下不可控。
-        assert!(matches!(validate("nvim file"), Err(ShapeError::Interactive(_))));
+        assert!(matches!(
+            validate("nvim file"),
+            Err(ShapeError::Interactive(_))
+        ));
         assert!(matches!(
             validate("neovim file"),
             Err(ShapeError::Interactive(_))
         ));
-        assert!(matches!(validate("view file"), Err(ShapeError::Interactive(_))));
+        assert!(matches!(
+            validate("view file"),
+            Err(ShapeError::Interactive(_))
+        ));
     }
 
     #[test]
@@ -1961,7 +1987,10 @@ mod tests {
         // tar / unzip / cpio 解压能写任意路径（`tar xf foo.tar -C /etc/`）。
         // 读用法（`tar tf` / `unzip -l`）在 rssh 场景罕见，LLM 诊断用 ls / file 即可。
         // 统一全拒，要求 LLM 走更精确的 ls / file。
-        assert!(matches!(validate("tar xf foo.tar"), Err(ShapeError::Write(_))));
+        assert!(matches!(
+            validate("tar xf foo.tar"),
+            Err(ShapeError::Write(_))
+        ));
         assert!(matches!(
             validate("tar xzf foo.tar.gz -C /etc/"),
             Err(ShapeError::Write(_))
@@ -2048,10 +2077,7 @@ mod tests {
             validate("'rm' -rf /"),
             Err(ShapeError::Destructive(_))
         ));
-        assert!(matches!(
-            validate("\"cp\" a b"),
-            Err(ShapeError::Write(_))
-        ));
+        assert!(matches!(validate("\"cp\" a b"), Err(ShapeError::Write(_))));
         assert!(matches!(
             validate("\\rm -rf /"),
             Err(ShapeError::Destructive(_))
@@ -2339,10 +2365,7 @@ mod tests {
             validate("ls&&rm a"),
             Err(ShapeError::Destructive(_))
         ));
-        assert!(matches!(
-            validate("ls&&cp a b"),
-            Err(ShapeError::Write(_))
-        ));
+        assert!(matches!(validate("ls&&cp a b"), Err(ShapeError::Write(_))));
         assert!(matches!(
             validate("foo||rm -rf /"),
             Err(ShapeError::Destructive(_))
@@ -2353,10 +2376,7 @@ mod tests {
             Err(ShapeError::Destructive(_))
         ));
         // 三段紧贴 + 中间嵌套
-        assert!(matches!(
-            validate("a&&b;cp x y"),
-            Err(ShapeError::Write(_))
-        ));
+        assert!(matches!(validate("a&&b;cp x y"), Err(ShapeError::Write(_))));
     }
 
     #[test]

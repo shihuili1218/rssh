@@ -73,9 +73,19 @@ tree-sitter = "0.26.9"
 tree-sitter-bash = "0.25.1"
 fontdb = "0.23.0"
 
+# Raw termios access for the serial `xany` (IXANY) flag — the serialport crate
+# doesn't expose it. Unix only; Windows has no DCB equivalent exposed here.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # PTY & native file dialogs & clipboard — 桌面平台专用
 [target.'cfg(not(target_os = "android"))'.dependencies]
 portable-pty = "0.8"
+# Serial console transport — a 3rd byte-stream alongside SSH/PTY. macOS uses
+# IOKit and Windows uses the Win32 API (no extra system dep); Linux links
+# libudev for port enumeration, so Linux CI/packaging needs `libudev-dev` at
+# build time (see build-linux.sh). Excluded on Android like portable-pty.
+serialport = "4.9.0"
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 arboard = "3"
 

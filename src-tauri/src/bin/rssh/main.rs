@@ -121,7 +121,10 @@ fn format_lib_error(e: &rssh_lib::error::AppError) -> String {
     let Ok(payload) = serde_json::from_str::<serde_json::Value>(payload_json) else {
         return s;
     };
-    let code = payload.get("code").and_then(|c| c.as_str()).unwrap_or("error");
+    let code = payload
+        .get("code")
+        .and_then(|c| c.as_str())
+        .unwrap_or("error");
     let params = payload.get("params").and_then(|p| p.as_object());
     match params {
         Some(o) if !o.is_empty() => {
@@ -164,7 +167,9 @@ fn main() {
     let result = match cli.command {
         None => commands::ls::cmd_ls(&conn, None),
         Some(Cmd::Ls { query }) => commands::ls::cmd_ls(&conn, query.as_deref()),
-        Some(Cmd::Open { target, name }) => commands::open::cmd_open(&conn, &target, name.as_deref()),
+        Some(Cmd::Open { target, name }) => {
+            commands::open::cmd_open(&conn, &target, name.as_deref())
+        }
         Some(Cmd::Add { kind }) => commands::add::cmd_add(&conn, &kind),
         Some(Cmd::Edit { kind, name }) => commands::edit::cmd_edit(&conn, &kind, &name),
         Some(Cmd::Rm { kind, name }) => commands::rm::cmd_rm(&conn, &kind, &name),

@@ -155,9 +155,7 @@ pub async fn ai_delete_skill(state: State<'_, AppState>, id: String) -> AppResul
 // 规则变更只对**新会话**生效（同 skill：建会话时 snapshot，会话期间不重读 DB）。
 
 #[tauri::command]
-pub async fn ai_list_redact_rules(
-    state: State<'_, AppState>,
-) -> AppResult<Vec<RedactRuleRecord>> {
+pub async fn ai_list_redact_rules(state: State<'_, AppState>) -> AppResult<Vec<RedactRuleRecord>> {
     redact_rules::list(&state.db)
 }
 
@@ -290,7 +288,10 @@ pub async fn ai_session_start_impl(
                 (h.ssh_handle().clone(), h.profile_id().to_string())
             };
             if auto_detect {
-                if let Some(k) = locked(&state.ai_remote_shell_cache)?.get(&profile_id).copied() {
+                if let Some(k) = locked(&state.ai_remote_shell_cache)?
+                    .get(&profile_id)
+                    .copied()
+                {
                     initial_shell = k; // cache 命中：用连接时探测的结果
                 }
                 // cache 未命中：保持 POSIX 兜底（探测还没跑完或失败，不阻塞启动）。
@@ -307,9 +308,7 @@ pub async fn ai_session_start_impl(
             None
         }
         #[cfg(target_os = "android")]
-        AiTarget::Local(_) => {
-            return Err(AppError::not_found("local_pty_not_found", json!({})))
-        }
+        AiTarget::Local(_) => return Err(AppError::not_found("local_pty_not_found", json!({}))),
     };
 
     let client = llm::build_client(&provider, api_key, endpoint)?;
@@ -443,10 +442,7 @@ pub async fn ai_session_stop(state: State<'_, AppState>, tab_id: String) -> AppR
 /// 清空 actor 的 history（保留 audit log）。
 /// 用户手动按"清理上下文"按钮触发。actor 不死，下条 message 进来时是全新对话。
 #[tauri::command]
-pub async fn ai_session_clear_context(
-    state: State<'_, AppState>,
-    tab_id: String,
-) -> AppResult<()> {
+pub async fn ai_session_clear_context(state: State<'_, AppState>, tab_id: String) -> AppResult<()> {
     let tx = locked(&state.ai_sessions)?
         .get(&tab_id)
         .map(|s| s.action_tx.clone())
@@ -536,9 +532,7 @@ pub async fn ai_session_rebind_target(
             None
         }
         #[cfg(target_os = "android")]
-        AiTarget::Local(_) => {
-            return Err(AppError::not_found("local_pty_not_found", json!({})))
-        }
+        AiTarget::Local(_) => return Err(AppError::not_found("local_pty_not_found", json!({}))),
     };
     let target_id = target.id().to_string();
 
@@ -565,10 +559,7 @@ pub async fn ai_session_rebind_target(
 /// 否则 slot 为 None，这是 no-op（不算错——用户也可能恰好在响应完结那一刻按下）。
 /// 会话本身（history / pending command / audit）全部保留。
 #[tauri::command]
-pub async fn ai_cancel_stream(
-    state: State<'_, AppState>,
-    tab_id: String,
-) -> AppResult<()> {
+pub async fn ai_cancel_stream(state: State<'_, AppState>, tab_id: String) -> AppResult<()> {
     let slot = locked(&state.ai_sessions)?
         .get(&tab_id)
         .map(|s| s.cancel_slot.clone())
@@ -774,7 +765,10 @@ pub async fn ai_list_models_impl(
     endpoint: Option<String>,
 ) -> AppResult<Vec<llm::ModelInfo>> {
     // 入参先 trim：纯空白当作"未提供"，回落到 secret_store
-    let api_key = match api_key.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+    let api_key = match api_key
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
         Some(k) => k,
         None => state
             .secret_store
@@ -785,7 +779,11 @@ pub async fn ai_list_models_impl(
     let endpoint = endpoint
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .or_else(|| crate::db::settings::get(&state.db, &key_endpoint(&provider)).ok().flatten());
+        .or_else(|| {
+            crate::db::settings::get(&state.db, &key_endpoint(&provider))
+                .ok()
+                .flatten()
+        });
     let client = llm::build_client(&provider, api_key, endpoint)?;
     client.list_models().await
 }
@@ -841,7 +839,11 @@ pub async fn ai_settings_set_impl(state: &AppState, patch: AiSettingsPatch) -> A
     }
     let active_provider = provider
         .clone()
-        .or_else(|| crate::db::settings::get(&state.db, &key_provider()).ok().flatten())
+        .or_else(|| {
+            crate::db::settings::get(&state.db, &key_provider())
+                .ok()
+                .flatten()
+        })
         .unwrap_or_else(|| "anthropic".into());
     if let Some(m) = model.as_ref() {
         crate::db::settings::set(&state.db, &key_model(&active_provider), m)?;

@@ -59,7 +59,10 @@ impl Host {
                 // false → Err, so emit-then-await prompt paths (auth / passphrase /
                 // host-key) bail at the emit step instead of parking on a waiter no
                 // client can ever answer. See the WS-close handler in server.rs.
-                if sink(event, serde_json::to_value(payload).unwrap_or(serde_json::Value::Null)) {
+                if sink(
+                    event,
+                    serde_json::to_value(payload).unwrap_or(serde_json::Value::Null),
+                ) {
                     Ok(())
                 } else {
                     Err(tauri::Error::FailedToReceiveMessage)
@@ -83,7 +86,12 @@ impl Host {
     /// Desktop-Tauri only; headless has no native windows, so it reports an
     /// error the tool surfaces to the model (same as the mobile path).
     #[cfg(desktop)]
-    pub fn open_app_window(&self, label: &str, title: &str, init_script: &str) -> Result<(), String> {
+    pub fn open_app_window(
+        &self,
+        label: &str,
+        title: &str,
+        init_script: &str,
+    ) -> Result<(), String> {
         match self {
             Host::Tauri(app) => {
                 use tauri::{WebviewUrl, WebviewWindowBuilder};

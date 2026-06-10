@@ -94,7 +94,10 @@ mod tests {
         let p = dir.path().join("known_hosts");
         write_known_hosts(
             &p,
-            &[&format!("alpha.example {SAMPLE_ED25519}"), &format!("beta.example {SAMPLE_ED25519}")],
+            &[
+                &format!("alpha.example {SAMPLE_ED25519}"),
+                &format!("beta.example {SAMPLE_ED25519}"),
+            ],
         );
         assert_eq!(remove_host("gamma.example", 22, &p).unwrap(), 0);
         // 文件未被修改：两行都还在

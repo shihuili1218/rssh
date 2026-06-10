@@ -57,8 +57,10 @@ fn add_profile(conn: &CliCtx) -> AppResult<()> {
     let init_command = prompt_optional("Init command (optional): ");
 
     let groups = rssh_lib::db::group::list(conn)?;
-    let group_id = menu_select("Group (optional):", "Group", &groups, "", |g| g.name.clone())
-        .map(|g| g.id.clone());
+    let group_id = menu_select("Group (optional):", "Group", &groups, "", |g| {
+        g.name.clone()
+    })
+    .map(|g| g.id.clone());
 
     let p = Profile {
         id: uuid::Uuid::new_v4().to_string(),
@@ -139,10 +141,7 @@ fn add_forward(conn: &CliCtx) -> AppResult<()> {
 
     let profiles = rssh_lib::db::profile::list(conn)?;
     if profiles.is_empty() {
-        return Err(AppError::config(
-            "cli_no_profiles",
-            serde_json::json!({}),
-        ));
+        return Err(AppError::config("cli_no_profiles", serde_json::json!({})));
     }
     println!("Profile:");
     for (i, p) in profiles.iter().enumerate() {

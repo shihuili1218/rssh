@@ -37,11 +37,9 @@ impl CliCtx {
                 }
             };
             // 启动一次性迁移。CLI 不阻塞执行（log warn，下次启动重试）。
-            if let Err(e) = migration::run_migrations(
-                &self.db,
-                sys.raw_keyring.as_deref(),
-                sys.store.as_ref(),
-            ) {
+            if let Err(e) =
+                migration::run_migrations(&self.db, sys.raw_keyring.as_deref(), sys.store.as_ref())
+            {
                 log::warn!("migration failed (will retry on next startup): {e}");
             }
             sys.store

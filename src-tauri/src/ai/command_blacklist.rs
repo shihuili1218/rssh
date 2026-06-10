@@ -46,7 +46,10 @@ pub fn list_grouped(db: &Db) -> AppResult<Vec<CategoryGroup>> {
 /// 整批拒绝、DB 不动（旧名单完好），不留半套。
 pub fn replace_category(db: &Db, category: &str, names: &[String]) -> AppResult<()> {
     let cat = BlCategory::from_db_str(category).ok_or_else(|| {
-        AppError::config("blacklist_unknown_category", json!({ "category": category }))
+        AppError::config(
+            "blacklist_unknown_category",
+            json!({ "category": category }),
+        )
     })?;
     let mut cleaned: Vec<String> = Vec::with_capacity(names.len());
     for raw in names {
@@ -148,8 +151,8 @@ mod tests {
         replace_category(&db, "destructive", &["rm".into(), "frob".into()]).unwrap();
 
         // 批里有非法名（含空格）→ 整批拒，DB 不动。
-        let err = replace_category(&db, "destructive", &["ok".into(), "rm -rf".into()])
-            .unwrap_err();
+        let err =
+            replace_category(&db, "destructive", &["ok".into(), "rm -rf".into()]).unwrap_err();
         assert_eq!(err.code(), "blacklist_invalid_name");
         let d = list_grouped(&db)
             .unwrap()
@@ -198,8 +201,7 @@ mod tests {
     #[test]
     fn load_fails_closed_on_bad_category() {
         let db = Db::open_in_memory().unwrap();
-        ai_command_blacklist::replace_category(&db, "bogus_cat", &["weird".to_string()])
-            .unwrap();
+        ai_command_blacklist::replace_category(&db, "bogus_cat", &["weird".to_string()]).unwrap();
         let err = load(&db).unwrap_err();
         assert_eq!(err.code(), "blacklist_unknown_category");
     }
