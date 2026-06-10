@@ -24,6 +24,19 @@ describe("extractOutput", () => {
   it("handles buffer with no newline (echo not yet terminated)", () => {
     expect(extractOutput("partial cmd")).toBe("partial cmd");
   });
+
+  // Serial path: dropEchoLine=false keeps line 1 — a bare device may not echo,
+  // so the first line is often real output, not a command echo.
+  it("keeps the first line when dropEchoLine=false (serial, no echo)", () => {
+    const buffer = "real output line 1\nreal output line 2\n";
+    expect(extractOutput(buffer, undefined, false)).toBe(
+      "real output line 1\nreal output line 2",
+    );
+  });
+
+  it("still strips ANSI + trims with dropEchoLine=false", () => {
+    expect(extractOutput("\x1b[32mok\x1b[0m\r\n", undefined, false)).toBe("ok");
+  });
 });
 
 describe("findSentinel", () => {

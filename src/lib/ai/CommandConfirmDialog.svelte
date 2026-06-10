@@ -15,11 +15,11 @@
     import { invoke } from "@tauri-apps/api/core";
     import * as ai from "./store.svelte.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
-    import type { AiSettings, CommandKind, CommandProposed, CommandResult } from "./types.ts";
+    import type { AiSettings, AiTargetKind, CommandKind, CommandProposed, CommandResult } from "./types.ts";
 
     let { tabId, targetKind, targetSessionId, cmd, result, rejected } = $props<{
         tabId: string;
-        targetKind: "ssh" | "local";
+        targetKind: AiTargetKind;
         targetSessionId: string;
         cmd: CommandProposed;
         result?: CommandResult;
@@ -30,6 +30,8 @@
     let rejectReason = $state("");
     let executing = $state(false);
     let terminating = $state(false);
+    // Serial only: the "submit output" button (distinct from terminate) is in flight.
+    let submitting = $state(false);
 
     let isPending = $derived(!result && !rejected);
     // patch 卡片视觉特化（accent 高亮 + diff 框）—— 4 个阶段任一都算
@@ -79,6 +81,9 @@
         if (
             isPending
             && !executing
+            // No danger mode on serial: a bare device (firmware / PLC / bootloader)
+            // is too sensitive to auto-paste into. run_command always asks here.
+            && targetKind !== "serial"
             && !ai.isCommandRunning(cmd.tool_call_id)
             && !_ackedToolCalls.has(cmd.tool_call_id)
             && autoApproveAllowed(ai.settings(), cmd.kind)
@@ -133,12 +138,14 @@
             alert(t("ai.cmd.alert.exec_failed", { error: errMsg(e) }));
             executing = false;
             terminating = false;
+            submitting = false;
             return;
         }
         // 成功路径：ack-only 等 result 抵达再 reset；PTY 路径 executeCommand 已等到 result。
         if (!isAckOnly) {
             executing = false;
             terminating = false;
+            submitting = false;
         }
     }
 
@@ -154,7 +161,7 @@
         rejectReason = "";
     }
 
-    /** 执行中点的"提前终止"：发 Ctrl+C；后续 finish() 会上报 early_terminated=true。 */
+    /** ssh/local 执行中点的"提前终止"：发 Ctrl+C；后续 finish() 上报 early_terminated=true。 */
     async function terminate() {
         if (terminating) return;
         terminating = true;
@@ -163,6 +170,23 @@
         } catch (e) {
             console.error("[ai] terminate failed:", e);
             terminating = false;
+        }
+    }
+
+    /**
+     * Serial-only "submit output": the user watched the device finish responding.
+     * Reports the accumulated buffer as a CLEAN result — no Ctrl+C (nothing to
+     * interrupt), not early-terminated. A dedicated button, fully separate from
+     * terminate, so neither action is overloaded onto the other.
+     */
+    async function submit() {
+        if (submitting) return;
+        submitting = true;
+        try {
+            await ai.submitCommand(cmd.tool_call_id);
+        } catch (e) {
+            console.error("[ai] submit failed:", e);
+            submitting = false;
         }
     }
 </script>
@@ -193,7 +217,14 @@
                 <button class="btn btn-approve" onclick={approve} disabled={executing}>
                     {executing ? t("ai.cmd.btn.executing") : t("ai.cmd.btn.approve")}
                 </button>
-                {#if executing && !isAckOnly}
+                {#if executing && !isAckOnly && targetKind === "serial"}
+                    <!-- Serial: a dedicated "submit output" button, fully separate from
+                         Terminate. The user clicks it when the device has finished
+                         responding; it reports the buffer as a clean result. -->
+                    <button class="btn btn-submit" onclick={submit} disabled={submitting}>
+                        {submitting ? t("ai.cmd.btn.submitting") : t("ai.cmd.btn.submit")}
+                    </button>
+                {:else if executing && !isAckOnly}
                     <!-- ack-only 命令（download_file / analyze_locally）没 PTY，
                          Terminate 发 Ctrl+C 是 no-op，不该露给用户当 affordance。 -->
                     <button class="btn btn-terminate" onclick={terminate} disabled={terminating}>
@@ -204,7 +235,7 @@
                 {/if}
             </div>
             {#if executing}
-                <div class="hint">{t("ai.cmd.hint.executing")}</div>
+                <div class="hint">{targetKind === "serial" ? t("ai.cmd.hint.executing_serial") : t("ai.cmd.hint.executing")}</div>
             {/if}
         {:else}
             <div class="reject-form">
@@ -302,6 +333,10 @@
         border: none;
     }
     .btn-terminate:disabled { opacity: 0.6; cursor: default; }
+    /* Serial "submit output" — a positive completion action, so green like approve
+       (the two never co-occur: approve shows pre-exec, submit shows during exec). */
+    .btn-submit { background: var(--success); color: var(--white); border: none; }
+    .btn-submit:disabled { opacity: 0.6; cursor: default; }
     .btn-ghost { background: transparent; border: 1px solid var(--divider); color: var(--text); }
     .reject-form { margin-top: 8px; display: flex; gap: 6px; }
     .reject-form input {

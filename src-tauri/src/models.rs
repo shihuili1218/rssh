@@ -132,11 +132,11 @@ pub struct SerialProfile {
     #[serde(default)]
     pub local_echo: bool,
     #[serde(default = "default_backspace")]
-    pub backspace: String, // del | bs — what Backspace sends
+    pub backspace: String, // del | bs | csi3 — what Backspace/Delete sends
     #[serde(default)]
     pub slow_send: bool, // send one byte at a time (slow devices / bootloaders)
     #[serde(default = "default_input_mode")]
-    pub input_mode: String, // normal | hex
+    pub input_mode: String, // normal | hex | line
     #[serde(default = "default_output_mode")]
     pub output_mode: String, // text | hex
     #[serde(default)]

@@ -84,6 +84,14 @@ export interface AiSessionInfo {
 /** 远端 shell 三家族 —— 跟 Rust 端 ShellKind 一对一镜像（lowercase wire format）。 */
 export type ShellKind = "posix" | "cmd" | "powershell";
 
+/**
+ * Which transport an AI session targets — mirrors Rust `AiTarget` kinds
+ * (lowercase wire format). Single source of truth so widening the set (e.g.
+ * adding `serial`) lights up every switch via the compiler. `serial` runs
+ * without a shell: no sentinel, no meaningful exit code, user-driven completion.
+ */
+export type AiTargetKind = "ssh" | "local" | "serial";
+
 /** 一条对话消息（前端展示用） */
 export type ChatItem =
   | { kind: "user"; text: string; at: number }

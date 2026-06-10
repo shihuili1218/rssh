@@ -23,7 +23,7 @@
     // 没连接就让按钮 disabled，避免点了没反应（aiVisible 在 AppShell 层会因 session 缺失静默不渲染）。
     let canOpenAi = $derived.by(() => {
         const tab = app.activeTab();
-        if (!tab || (tab.type !== "ssh" && tab.type !== "local")) return false;
+        if (!tab || (tab.type !== "ssh" && tab.type !== "local" && tab.type !== "serial")) return false;
         return !!app.sessionIdForTab(tab.id);
     });
 

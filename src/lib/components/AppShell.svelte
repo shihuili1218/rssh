@@ -19,6 +19,7 @@
     import StripBar from "./StripBar.svelte";
     import ChatPanel from "../ai/ChatPanel.svelte";
     import * as ai from "../ai/store.svelte.ts";
+    import type { AiTargetKind } from "../ai/types.ts";
     import {attachShortcuts, attachKeyup, type Shortcut} from "../keyboard/registry.ts";
     import {matchBinding, TAB_CYCLE} from "../keyboard/keymap.ts";
     import * as keymap from "../stores/keymap.svelte.ts";
@@ -93,7 +94,7 @@
                     // (mirrors MobileKeybar's canOpenAi guard).
                     if (ai.isOpen()) { ai.closePanel(); return; }
                     const tab = app.activeTab();
-                    const canOpen = !!tab && (tab.type === "ssh" || tab.type === "local") && !!app.sessionIdForTab(tab.id);
+                    const canOpen = !!tab && (tab.type === "ssh" || tab.type === "local" || tab.type === "serial") && !!app.sessionIdForTab(tab.id);
                     if (!canOpen) return false;
                     ai.openPanel();
                 },
@@ -272,7 +273,7 @@
     let aiVisible = $derived(
         ai.isOpen()
         && !!aiActiveTab
-        && (aiActiveTab.type === "ssh" || aiActiveTab.type === "local")
+        && (aiActiveTab.type === "ssh" || aiActiveTab.type === "local" || aiActiveTab.type === "serial")
         && !!aiSessionId
         && !app.settingsActive()
         // The Transfers popover does not affect AI panel visibility — overlay.
@@ -581,9 +582,10 @@
 
     function buildMenu(tab: Tab): CtxMenuItem[][] {
         const isTerminal = tab.type === "ssh" || tab.type === "local";
-        // Serial is also a text terminal — it gets copy/paste/search/snippets, but
-        // NOT AI (no agent on a serial line) nor open-in-new-window (a serial port
-        // is exclusive — a second window opening the same device would fail).
+        // Serial is also a text terminal — it gets copy/paste/search/snippets AND
+        // AI (the agent runs commands via manual-submit, no shell sentinel). It does
+        // NOT get open-in-new-window: a serial port is exclusive — a second window
+        // opening the same device would fail.
         const isTextTerminal = isTerminal || tab.type === "serial";
         const isSsh = tab.type === "ssh";
         const sections: CtxMenuItem[][] = [];
@@ -705,8 +707,8 @@
             {label: t("tab.context.close"), shortcut: keymap.format("tab.close"), onClick: () => app.closeTab(tab.id)},
         ]);
 
-        // AI 排障入口（ssh/local tab 才有，且需要已经连上 = 有 sessionId）
-        if (isTerminal) {
+        // AI 排障入口（ssh/local/serial tab 才有，且需要已经连上 = 有 sessionId）
+        if (isTextTerminal) {
             const sid = app.sessionIdForTab(tab.id);
             sections.push([
                 {
@@ -989,7 +991,7 @@
                      title={t("common.resize_hint")}></div>
                 <ChatPanel
                     tabId={aiActiveTab.id}
-                    targetKind={aiActiveTab.type as "ssh" | "local"}
+                    targetKind={aiActiveTab.type as AiTargetKind}
                     targetId={aiSessionId}
                 />
             </aside>

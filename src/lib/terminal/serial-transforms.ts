@@ -59,7 +59,10 @@ export type LoginStep = { kind: "expect" | "send"; text: string };
  */
 export function parseLoginScript(script: string): LoginStep[] {
   const steps: LoginStep[] = [];
-  for (const line of script.split("\n")) {
+  // Split EOL-agnostically: a CRLF-saved script must not leave a trailing "\r"
+  // in each line (it would end up inside the captured expect/send text and break
+  // the device-output match).
+  for (const line of script.split(/\r?\n/)) {
     const m = line.match(/^\s*(expect|send)\s+(.*)$/i);
     if (m) steps.push({ kind: m[1].toLowerCase() as "expect" | "send", text: m[2] });
   }

@@ -1,6 +1,6 @@
 <script lang="ts">
     import * as ai from "./store.svelte.ts";
-    import type { ChatItem } from "./types.ts";
+    import type { AiTargetKind, ChatItem } from "./types.ts";
     import CommandConfirmDialog from "./CommandConfirmDialog.svelte";
     import AuditPanel from "./AuditPanel.svelte";
     import { renderMarkdown } from "./markdown.ts";
@@ -12,7 +12,7 @@
     // 重连后 targetId 会换（前端 prop 自动跟随），tabId 不变。
     let { tabId, targetKind, targetId } = $props<{
         tabId: string;
-        targetKind: "ssh" | "local";
+        targetKind: AiTargetKind;
         targetId: string;
     }>();
 

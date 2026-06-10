@@ -21,12 +21,22 @@ export const stripAnsi = (s: string) =>
 /**
  * 1. 截到 endIndex（sentinel 路径传 marker UUID 起点；terminate/timeout 传整段）
  * 2. strip ANSI / OSC / CR
- * 3. 跳掉首行（PTY echo 的命令本身）
+ * 3. 跳掉首行（PTY echo 的命令本身）—— 仅 dropEchoLine=true 时
  * 4. trimEnd（保留前导空白，避免吃掉 `  indented output` 的对齐）
+ *
+ * `dropEchoLine` defaults to true (shell paths: the shell always echoes the
+ * pasted command as line 1). Serial passes false: a bare device may NOT echo,
+ * so dropping line 1 would silently eat real output. Keeping an echoed-command
+ * line is harmless — the LLM is told it's reading the raw device response.
  */
-export function extractOutput(rawBuffer: string, endIndex?: number): string {
+export function extractOutput(
+  rawBuffer: string,
+  endIndex?: number,
+  dropEchoLine = true,
+): string {
   const end = Math.max(0, endIndex ?? rawBuffer.length);
   const stripped = stripAnsi(rawBuffer.substring(0, end));
+  if (!dropEchoLine) return stripped.trimEnd();
   const firstNl = stripped.indexOf("\n");
   const out = firstNl >= 0 ? stripped.substring(firstNl + 1) : stripped;
   return out.trimEnd();

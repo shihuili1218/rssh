@@ -102,13 +102,16 @@ impl From<&DiagnoseSession> for AiSessionInfo {
 pub enum AiTarget {
     Ssh(String),
     Local(String),
+    /// A connected serial port. No shell behind it — the session runs with
+    /// `ShellKind::Serial` (no sentinel, no exit code; user-driven completion).
+    Serial(String),
 }
 
 impl AiTarget {
-    /// The underlying SSH session / local-PTY id, regardless of kind.
+    /// The underlying SSH session / local-PTY / serial-port id, regardless of kind.
     pub fn id(&self) -> &str {
         match self {
-            AiTarget::Ssh(id) | AiTarget::Local(id) => id,
+            AiTarget::Ssh(id) | AiTarget::Local(id) | AiTarget::Serial(id) => id,
         }
     }
 }
@@ -309,6 +312,16 @@ pub async fn ai_session_start_impl(
         }
         #[cfg(target_os = "android")]
         AiTarget::Local(_) => return Err(AppError::not_found("local_pty_not_found", json!({}))),
+        AiTarget::Serial(target_id) => {
+            // No shell to probe — a serial port is raw bytes. Validate it exists,
+            // then run with ShellKind::Serial (no sentinel, no exit code) and no
+            // ssh_handle (like Local; the front-end does the serial_write/read).
+            if !locked(&state.serial_sessions)?.contains_key(target_id) {
+                return Err(AppError::not_found("serial_session_not_found", json!({})));
+            }
+            initial_shell = super::shell::ShellKind::Serial;
+            None
+        }
     };
 
     let client = llm::build_client(&provider, api_key, endpoint)?;
@@ -533,6 +546,12 @@ pub async fn ai_session_rebind_target(
         }
         #[cfg(target_os = "android")]
         AiTarget::Local(_) => return Err(AppError::not_found("local_pty_not_found", json!({}))),
+        AiTarget::Serial(target_id) => {
+            if !locked(&state.serial_sessions)?.contains_key(target_id) {
+                return Err(AppError::not_found("serial_session_not_found", json!({})));
+            }
+            None
+        }
     };
     let target_id = target.id().to_string();
 
@@ -936,6 +955,11 @@ mod tests {
             serde_json::from_value(json!({ "kind": "local", "id": "p9" })).unwrap();
         assert!(matches!(local, AiTarget::Local(ref id) if id == "p9"));
         assert_eq!(local.id(), "p9");
+
+        let serial: AiTarget =
+            serde_json::from_value(json!({ "kind": "serial", "id": "tty0" })).unwrap();
+        assert!(matches!(serial, AiTarget::Serial(ref id) if id == "tty0"));
+        assert_eq!(serial.id(), "tty0");
     }
 
     #[test]

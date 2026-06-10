@@ -28,6 +28,12 @@ pub enum ShellKind {
     /// PowerShell 5/7 — `;` separator, `$LASTEXITCODE` exit code
     /// (NOT `$?` which is a boolean in PS), `Write-Output` for clarity.
     Powershell,
+    /// A raw serial port (UART / RS-232) — NOT a shell. No `;` separator, no
+    /// `echo`, no exit code. Behind it may be a bootloader, an MCU/RTOS console,
+    /// or an AT-command modem. Commands are pasted verbatim (no sentinel) and
+    /// completion is signaled by the user, not by marker output. Most of the
+    /// machinery on this enum (sentinel, exit code) is deliberately inert here.
+    Serial,
 }
 
 impl ShellKind {
@@ -41,6 +47,12 @@ impl ShellKind {
     /// timeout instead of seeing a sentinel. Returning both from one
     /// function makes that bug unreachable.
     pub fn sentinel_command(self, cmd: &str) -> (String, String) {
+        // Serial has no shell: no `;`/`echo`/`$?` to carry a marker. Paste the
+        // raw command; completion comes from the user (manual submit), not from
+        // a sentinel line in the output. Empty marker = nothing to grep for.
+        if self == Self::Serial {
+            return (String::new(), cmd.to_string());
+        }
         let marker = format!("__rssh_done_{}", uuid::Uuid::new_v4().simple());
         let full = self.format_sentinel(cmd, &marker);
         (marker, full)
@@ -84,6 +96,10 @@ impl ShellKind {
             Self::Powershell => format!(
                 "$LASTEXITCODE=$null; {cmd}; $ok=$?; Write-Output \"{marker}:$(if ($null -ne $LASTEXITCODE) {{$LASTEXITCODE}} elseif ($ok) {{0}} else {{1}})\""
             ),
+            // Serial: no shell to interpret a sentinel — the raw command is the
+            // whole line. Reached only via direct calls; `sentinel_command`
+            // short-circuits Serial before it gets here.
+            Self::Serial => cmd.to_string(),
         }
     }
 
@@ -95,6 +111,7 @@ impl ShellKind {
             Self::Posix => "POSIX (bash / zsh / sh)",
             Self::Cmd => "cmd.exe (Windows)",
             Self::Powershell => "PowerShell",
+            Self::Serial => "serial device",
         }
     }
 
@@ -108,6 +125,9 @@ impl ShellKind {
             Self::Posix | Self::Powershell => ";",
             // cmd.exe `;` is literal; `&` is the unconditional separator.
             Self::Cmd => "&",
+            // Serial: no shell, no statement separator — we instruct the LLM to
+            // send ONE command per line, so a newline is the only "separator".
+            Self::Serial => "\n",
         }
     }
 
@@ -117,6 +137,26 @@ impl ShellKind {
     /// single `cmd` argument. Update side-by-side with the templates in
     /// `format_sentinel` if you change conventions.
     pub fn prompt_section(self) -> String {
+        // Serial has no shell — its own guidance, not the (examples/exit_var/tips)
+        // shape the shell families share. Steers the LLM away from shell syntax,
+        // chaining, and any reliance on the (meaningless) exit code.
+        if let Self::Serial = self {
+            return "\n---\n\n# Target: serial device\n\n\
+                 This session is a **raw serial port** (UART / RS-232), NOT a shell. Behind it \
+                 may be a bootloader (U-Boot), an MCU / RTOS console, an AT-command modem, or any \
+                 embedded device. There is no POSIX or Windows shell.\n\n\
+                 - **One command per line.** Do NOT chain commands with `;`, `&&`, `||`, `|`, or any \
+                 other separator — there is no shell to parse them. Each `run_command` must carry a \
+                 single device command.\n\
+                 - **No exit code.** Serial devices report no exit status; the `exit=` field in the \
+                 result is a placeholder, NOT a success signal. Judge success ONLY from the output text.\n\
+                 - **Completion is user-driven.** Your command is pasted to the port, then the user \
+                 watches the device and submits the output once it has finished responding. Read the \
+                 returned output as the literal device response.\n\
+                 - **No shell or filesystem features.** No pipes, redirects, `$(...)`, globbing, or file \
+                 operations exist on a bare serial device. Use only plain device commands via run_command.\n"
+                .to_string();
+        }
         let (examples, exit_var, tips) = match self {
             Self::Posix => (
                 "`ps aux`, `df -h`, `which python3`, `cat /etc/os-release`",
@@ -140,6 +180,7 @@ impl ShellKind {
                  Variables are `$Name`. Use cmdlets (`Get-X` / `Set-X`) over external binaries when both exist. \
                  Redirect to `$null` (PS) not `/dev/null`.",
             ),
+            Self::Serial => unreachable!("serial handled by the early return above"),
         };
         format!(
             "\n---\n\n# Target shell\n\n\
@@ -340,6 +381,39 @@ mod tests {
     }
 
     #[test]
+    fn serial_sentinel_is_raw_command_no_marker() {
+        // Serial has no shell — sentinel_command must NOT wrap the command and
+        // must return an empty marker. The front-end greps for nothing; the user
+        // signals completion manually. This is the whole point of the variant.
+        let (marker, full) = ShellKind::Serial.sentinel_command("printenv");
+        assert_eq!(marker, "");
+        assert_eq!(full, "printenv");
+    }
+
+    #[test]
+    fn serial_format_sentinel_is_passthrough() {
+        // Direct call (edge): the raw command is the entire line, marker ignored.
+        assert_eq!(
+            ShellKind::Serial.format_sentinel("reset", "__rssh_done_x"),
+            "reset"
+        );
+    }
+
+    #[test]
+    fn serial_prompt_section_steers_off_shell_syntax() {
+        // The LLM picks behavior from this section. For serial it MUST: declare
+        // the serial environment, forbid command chaining, and warn the exit code
+        // is meaningless. If a refactor strips these, the LLM reverts to POSIX
+        // guesses on a device that has no shell.
+        let p = ShellKind::Serial.prompt_section();
+        assert!(p.contains("serial"));
+        assert!(p.contains("One command per line"));
+        assert!(p.contains("No exit code"));
+        // must show the separators it forbids
+        assert!(p.contains(';') && p.contains("&&"));
+    }
+
+    #[test]
     fn serde_lowercase_roundtrip() {
         // Wire format: lowercase strings. Front-end sends "posix"/"cmd"/
         // "powershell" via the Tauri command; serde rename_all matches.
@@ -351,5 +425,10 @@ mod tests {
         assert_eq!(s, ShellKind::Powershell);
 
         assert_eq!(serde_json::to_string(&ShellKind::Cmd).unwrap(), "\"cmd\"");
+
+        // Serial joins the wire vocabulary as "serial".
+        let se: ShellKind = serde_json::from_str("\"serial\"").unwrap();
+        assert_eq!(se, ShellKind::Serial);
+        assert_eq!(serde_json::to_string(&ShellKind::Serial).unwrap(), "\"serial\"");
     }
 }

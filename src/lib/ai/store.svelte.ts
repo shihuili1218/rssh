@@ -14,6 +14,7 @@ import { PROBE_COMMAND, classifyProbeBuffer } from "./shell-probe.ts";
 import type {
   AiSessionInfo,
   AiSettings,
+  AiTargetKind,
   AuditLog,
   ChatItem,
   CommandProposed,
@@ -55,7 +56,7 @@ let _settings = $state<AiSettings | null>(null);
  * 按 tab_id 索引（不按 target_id）——重连后 target_id 变了 kind 不变，
  * 用 tab_id 才能保证 internal_command 路由不丢。
  */
-const _targetKindByTab: Record<string, "ssh" | "local"> = {};
+const _targetKindByTab: Record<string, AiTargetKind> = {};
 
 const _unlistenersByTab: Record<string, UnlistenFn[]> = {};
 
@@ -105,7 +106,7 @@ function pushChat(tab_id: string, item: ChatItem) {
 
 export async function startSession(args: {
   tabId: string;
-  targetKind: "ssh" | "local";
+  targetKind: AiTargetKind;
   targetId: string;
   skill: string;
   provider: string;
@@ -166,7 +167,7 @@ export async function clearContext(tab_id: string): Promise<void> {
 /** SSH 重连后调用：让 actor 内部把 target_id + ssh_handle 切到新 SSH 连接。 */
 export async function rebindTarget(
   tab_id: string,
-  target_kind: "ssh" | "local",
+  target_kind: AiTargetKind,
   target_id: string,
 ): Promise<void> {
   await invoke("ai_session_rebind_target", {
@@ -325,13 +326,15 @@ type Execution = {
   toolCallId: string;
   tabId: string;
   targetSessionId: string;
-  targetKind: "ssh" | "local";
+  targetKind: AiTargetKind;
   buffer: CappedBuffer;
   resolved: boolean;
   userInterrupted: boolean;
   unlisten: UnlistenFn | null;
   timer: number | null;
   terminate: () => Promise<void>;
+  /** Serial only: user says "done" — report the buffer as a clean result. */
+  submit: () => Promise<void>;
 };
 
 /**
@@ -354,13 +357,22 @@ export function isCommandRunning(tool_call_id: string): boolean {
 export async function executeCommand(
   tab_id: string,
   proposed: CommandProposed,
-  target_kind: "ssh" | "local",
+  target_kind: AiTargetKind,
   target_session_id: string,
 ): Promise<void> {
-  const writeCmd = target_kind === "ssh" ? "ssh_write" : "pty_write";
-  const dataEvent = target_kind === "ssh"
-    ? `ssh:data:${target_session_id}`
-    : `pty:data:${target_session_id}`;
+  // Transport per kind. Record<AiTargetKind, …> so adding a kind is a compile
+  // error here until routed — no silent fall-through to the wrong write command.
+  const TRANSPORT: Record<AiTargetKind, { write: string; data: string }> = {
+    ssh:    { write: "ssh_write",    data: "ssh:data" },
+    local:  { write: "pty_write",    data: "pty:data" },
+    serial: { write: "serial_write", data: "serial:data" },
+  };
+  const writeCmd = TRANSPORT[target_kind].write;
+  const dataEvent = `${TRANSPORT[target_kind].data}:${target_session_id}`;
+  // Serial may not echo the command back (depends on the device / local-echo),
+  // so dropping the first line would silently eat real output. Keep the whole
+  // buffer for serial; an echoed-command line is harmless noise the LLM ignores.
+  const dropEcho = target_kind !== "serial";
 
   // Returned Promise resolves only when finish() actually runs, so the
   // UI's "executing" state can cover the whole execution window — not
@@ -387,7 +399,15 @@ export async function executeCommand(
       // "I clicked terminate but Ctrl+C never went out" report path.
       void invoke(writeCmd, { sessionId: target_session_id, data: ctrlC })
           .catch((err) => console.warn("[ai] terminate Ctrl+C failed:", err));
-      await finish(extractOutput(exec.buffer.view()), -1, false);
+      await finish(extractOutput(exec.buffer.view(), undefined, dropEcho), -1, false);
+    },
+    submit: async () => {
+      if (exec.resolved) return;
+      // Serial completion: the user watched the device and says "done". Report
+      // the accumulated output as a NORMAL result — no Ctrl+C (nothing to
+      // interrupt), not flagged early-terminated, exit 0 as the placeholder
+      // (serial has no exit code; the LLM is told via prompt to judge by output).
+      await finish(extractOutput(exec.buffer.view(), undefined, dropEcho), 0, false);
     },
   };
 
@@ -416,6 +436,9 @@ export async function executeCommand(
     if (exec.resolved) return;
     const chunk = new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(e.payload));
     exec.buffer.append(chunk);
+    // Serial has no sentinel — just accumulate. Completion comes from the user
+    // (submit, wired to the terminate button) or the safety timeout below.
+    if (target_kind === "serial") return;
     const hit = findSentinel(exec.buffer.view(), proposed.sentinel);
     if (hit) void finish(hit.output, hit.exitCode, false);
   });
@@ -437,7 +460,7 @@ export async function executeCommand(
   }
 
   exec.timer = window.setTimeout(() => {
-    void finish(extractOutput(exec.buffer.view()), -1, true);
+    void finish(extractOutput(exec.buffer.view(), undefined, dropEcho), -1, true);
   }, Math.max(1000, proposed.timeout_s * 1000)) as unknown as number;
 
   return done;
@@ -447,6 +470,17 @@ export async function executeCommand(
 export async function terminateCommand(tool_call_id: string): Promise<void> {
   const exec = _runningExecutions.get(tool_call_id);
   if (exec) await exec.terminate();
+}
+
+/**
+ * Serial completion by tool_call_id: the user signals the command is done, so
+ * report the accumulated output as a clean result (no Ctrl+C, not early-
+ * terminated). Wired to the same button as terminate — on serial the button
+ * means "submit output", on ssh/local it means "interrupt".
+ */
+export async function submitCommand(tool_call_id: string): Promise<void> {
+  const exec = _runningExecutions.get(tool_call_id);
+  if (exec) await exec.submit();
 }
 
 export async function rejectCommand(tab_id: string, tool_call_id: string, reason: string) {

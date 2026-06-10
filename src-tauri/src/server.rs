@@ -1272,6 +1272,15 @@ fn ai_rebind(state: &AppState, args: Value) -> Result<Value, Value> {
             }
             None
         }
+        AiTarget::Serial(id) => {
+            if !locked(&state.serial_sessions)
+                .map_err(err_value)?
+                .contains_key(id)
+            {
+                return Err(json!("serial_session_not_found"));
+            }
+            None
+        }
     };
     let target_id = target.id().to_string();
     let tx = {

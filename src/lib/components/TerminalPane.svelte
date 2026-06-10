@@ -475,15 +475,18 @@
     function serialSendBytes(bytes: number[]) {
         if (!sessionId || disconnected || !bytes.length) return;
         if (!serialOpts?.slowSend) {
-            invoke("serial_write", { sessionId, data: bytes });
+            invoke(writeCmd, { sessionId, data: bytes }).catch(() => {});
             return;
         }
         // Slow devices / bootloaders: one byte at a time, ~5ms apart.
         const sid = sessionId;
         let i = 0;
         const tick = () => {
-            if (i >= bytes.length || disconnected) return;
-            invoke("serial_write", { sessionId: sid, data: [bytes[i]] });
+            // Stop when finished, disconnected, OR the session was swapped out by a
+            // fast reconnect — otherwise queued ticks keep writing to the stale sid.
+            // .catch swallows the reject that a closed session raises mid-loop.
+            if (i >= bytes.length || disconnected || sessionId !== sid) return;
+            invoke(writeCmd, { sessionId: sid, data: [bytes[i]] }).catch(() => {});
             i += 1;
             setTimeout(tick, 5);
         };

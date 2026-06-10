@@ -79,6 +79,15 @@ describe("parseLoginScript", () => {
     expect(parseLoginScript("")).toEqual([]);
     expect(parseLoginScript("nonsense\n   ")).toEqual([]);
   });
+  it("is EOL-agnostic: CRLF scripts leave no trailing \\r in captured text", () => {
+    const steps = parseLoginScript("expect login:\r\nsend root\r\nexpect password:\r\nsend secret");
+    expect(steps).toEqual([
+      { kind: "expect", text: "login:" },
+      { kind: "send", text: "root" },
+      { kind: "expect", text: "password:" },
+      { kind: "send", text: "secret" },
+    ]);
+  });
 });
 
 describe("backspaceBytes", () => {
