@@ -584,15 +584,18 @@
 
     function pasteText(text: string) {
         if (!text || disconnected || !sessionId) return;
-        // Serial: convert pasted line breaks to the device's EOL and send through
-        // the serial pipeline (honors slow-send; no bracketed paste — devices
-        // don't speak it). ssh/local keep bracketed-paste behavior untouched.
+        // Serial speaks the device's EOL and has no bracketed paste — route
+        // through the serial pipeline (which also honors slow-send).
         if (tabType === "serial") {
             serialSendText(normalizeOutgoing(text, serialOpts?.inputNewline ?? "cr"));
             return;
         }
+        // Collapse every line break to a single CR before sending: the PTY's
+        // ICRNL turns each CR into one \n, so a raw CRLF would double (#98).
+        // (xterm's prepareTextForTerminal does this; we bypass terminal.paste().)
+        const normalized = text.replace(/\r?\n/g, "\r");
         const wrapped = terminal.modes.bracketedPasteMode
-            ? `\x1b[200~${text}\x1b[201~` : text;
+            ? `\x1b[200~${normalized}\x1b[201~` : normalized;
         invoke(writeCmd, { sessionId, data: Array.from(new TextEncoder().encode(wrapped)) });
     }
 
