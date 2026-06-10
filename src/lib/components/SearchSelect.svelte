@@ -124,7 +124,14 @@
     function onFocusOut(e: FocusEvent) {
         if (!open) return;
         const next = e.relatedTarget as Node | null;
-        if (next && (triggerEl?.contains(next) || panelEl?.contains(next))) return;
+        // No relatedTarget = focus didn't move to another focusable element. On
+        // macOS WebView, clicking an option <button> does NOT focus it, so the
+        // search box blurs with relatedTarget=null — closing here would unmount
+        // the option before its click runs and the pick would be lost. Genuine
+        // outside clicks are caught by onWindowClick; real Tab-out always carries
+        // a relatedTarget, so this only suppresses the spurious close.
+        if (!next) return;
+        if (triggerEl?.contains(next) || panelEl?.contains(next)) return;
         close();
     }
 
