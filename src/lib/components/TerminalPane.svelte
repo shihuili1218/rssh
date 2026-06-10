@@ -442,8 +442,9 @@
 
     function pasteText(text: string) {
         if (!text || disconnected || !sessionId) return;
+        const normalized = text.replace(/\r?\n/g, "\r");
         const wrapped = terminal.modes.bracketedPasteMode
-            ? `\x1b[200~${text}\x1b[201~` : text;
+            ? `\x1b[200~${normalized}\x1b[201~` : normalized;
         invoke(writeCmd, { sessionId, data: Array.from(new TextEncoder().encode(wrapped)) });
     }
 
