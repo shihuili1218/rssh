@@ -76,6 +76,23 @@ export function backspaceBytes(mode: string): string {
 }
 
 /**
+ * Remap the editing keys to the device's delete byte: Backspace (xterm sends
+ * DEL 0x7f) and Delete (xterm sends VT220 "CSI 3~", i.e. ESC [ 3 ~).
+ *
+ * In the default `del` mode BOTH keys pass through unchanged — correct for a
+ * VT/readline peer, where Backspace erases left and Delete (CSI 3~) erases
+ * right. A bare device understands only ONE delete code and treats CSI 3~ as
+ * junk (echoing a stray `~`); so in `bs`/`csi3` mode BOTH keys emit that single
+ * configured byte — pressing either Backspace or Delete deletes. Arrow keys and
+ * other CSI sequences (`\x1b[A`, `\x1b[5~`, …) are left untouched.
+ */
+export function remapEditingKeys(data: string, mode: string): string {
+  const bs = backspaceBytes(mode);
+  if (bs === "\x7f") return data; // del mode: leave Backspace & Delete as-is
+  return data.replace(/\x7f/g, bs).replace(/\x1b\[3~/g, bs);
+}
+
+/**
  * Convert every line break in transmitted text to the configured EOL. Applies to
  * the Enter key AND to pasted multi-line content, so a device that only accepts
  * CR still gets CR when you paste an LF-terminated script. `mode` is the same

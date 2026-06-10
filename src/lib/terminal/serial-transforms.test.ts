@@ -6,6 +6,7 @@ import {
   parseHexInput,
   parseLoginScript,
   backspaceBytes,
+  remapEditingKeys,
   normalizeOutgoing,
 } from "./serial-transforms";
 
@@ -98,5 +99,26 @@ describe("normalizeOutgoing", () => {
   it("leaves text without line breaks untouched", () => {
     expect(normalizeOutgoing("plain text", "cr")).toBe("plain text");
     expect(normalizeOutgoing("", "crlf")).toBe("");
+  });
+});
+
+describe("remapEditingKeys", () => {
+  it("del mode: leaves Backspace (DEL) and Delete (CSI 3~) untouched", () => {
+    expect(remapEditingKeys("a\x7fb", "del")).toBe("a\x7fb");
+    expect(remapEditingKeys("a\x1b[3~b", "del")).toBe("a\x1b[3~b");
+  });
+  it("bs mode: BOTH Backspace and Delete become BS (0x08)", () => {
+    expect(remapEditingKeys("a\x7fb", "bs")).toBe("a\x08b");
+    expect(remapEditingKeys("a\x1b[3~b", "bs")).toBe("a\x08b");
+    expect(remapEditingKeys("\x7f\x1b[3~", "bs")).toBe("\x08\x08");
+  });
+  it("csi3 mode: BOTH keys become CSI 3~", () => {
+    expect(remapEditingKeys("a\x7fb", "csi3")).toBe("a\x1b[3~b");
+    expect(remapEditingKeys("a\x1b[3~b", "csi3")).toBe("a\x1b[3~b");
+  });
+  it("never touches arrow / page keys or ordinary text", () => {
+    expect(remapEditingKeys("\x1b[A\x1b[B", "bs")).toBe("\x1b[A\x1b[B"); // arrows
+    expect(remapEditingKeys("\x1b[5~", "bs")).toBe("\x1b[5~"); // PageUp ≠ Delete
+    expect(remapEditingKeys("hello", "bs")).toBe("hello");
   });
 });

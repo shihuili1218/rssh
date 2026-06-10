@@ -18,7 +18,7 @@
     import {createFoldStore, type FoldStore} from "../terminal/folds.ts";
     import {extractBlocksText} from "../terminal/block-content.ts";
     import {renderBlocksToBlob} from "../terminal/block-to-image.ts";
-    import {inputNewline, normalizeIncoming, bytesToHex, parseHexInput, parseLoginScript, backspaceBytes, normalizeOutgoing, type LoginStep} from "../terminal/serial-transforms.ts";
+    import {inputNewline, normalizeIncoming, bytesToHex, parseHexInput, parseLoginScript, remapEditingKeys, normalizeOutgoing, type LoginStep} from "../terminal/serial-transforms.ts";
     import {t} from "../i18n/index.svelte.ts";
     import {ACTIONS, matchBinding, type ActionId} from "../keyboard/keymap.ts";
     import * as keymap from "../stores/keymap.svelte.ts";
@@ -538,9 +538,11 @@
         // device-backspace byte, so dispatch to them BEFORE the remap below.
         if (serialOpts?.inputMode === "hex") { serialHexInput(data); return; }
         if (serialOpts?.inputMode === "line") { serialLineInput(data); return; }
-        // Remap the Backspace key for the device (xterm sends DEL 0x7f).
-        const bs = backspaceBytes(serialOpts?.backspace ?? "del");
-        if (bs !== "\x7f") data = data.replace(/\x7f/g, bs);
+        // Remap the editing keys (Backspace 0x7f / Delete CSI 3~) to the
+        // device's delete byte. del mode leaves both as-is (VT/readline peer);
+        // bs/csi3 make BOTH keys emit the one byte the device knows, so Delete
+        // deletes instead of echoing a stray `~`.
+        data = remapEditingKeys(data, serialOpts?.backspace ?? "del");
         // Convert EVERY line break to the device EOL — handles the single Enter
         // key AND multi-char chunks (native paste / IME), which the old
         // `data === "\r"` check passed through raw. Echo with CRLF so multi-line
