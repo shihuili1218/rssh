@@ -582,14 +582,25 @@
         }
     }
 
-    function pasteText(text: string) {
+    /** Inject user text as input (snippet / broadcast, and the serial paste
+     *  path). Serial: convert every line break to the device's configured EOL
+     *  and honor slow-send. ssh/local: write raw — the PTY owns its own line
+     *  discipline. Control sequences (arrows / Esc / Tab) must NOT come through
+     *  here — they go raw via the registered terminal writer (writePty). */
+    function sendText(text: string) {
         if (!text || disconnected || !sessionId) return;
-        // Serial speaks the device's EOL and has no bracketed paste — route
-        // through the serial pipeline (which also honors slow-send).
         if (tabType === "serial") {
             serialSendText(normalizeOutgoing(text, serialOpts?.inputNewline ?? "cr"));
             return;
         }
+        invoke(writeCmd, { sessionId, data: Array.from(new TextEncoder().encode(text)) });
+    }
+
+    function pasteText(text: string) {
+        if (!text || disconnected || !sessionId) return;
+        // Serial has no bracketed paste and speaks the device's EOL — that's
+        // exactly sendText's job, so reuse it (newline transform + slow-send).
+        if (tabType === "serial") { sendText(text); return; }
         // Collapse every line break to a single CR before sending: the PTY's
         // ICRNL turns each CR into one \n, so a raw CRLF would double (#98).
         // (xterm's prepareTextForTerminal does this; we bypass terminal.paste().)
@@ -1120,6 +1131,7 @@
         app.registerTerminalControls(tabId, {
             getSelection: () => terminal.getSelection(),
             paste: pasteText,
+            sendText,
             focus: () => terminal.focus(),
         });
 

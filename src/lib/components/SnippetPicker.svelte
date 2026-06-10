@@ -25,7 +25,10 @@
   onDestroy(() => app.terminalFocus(app.activeTabId()));
 
   function select(s: Snippet) {
-    app.sendToTerminal(s.command);
+    // sendTextToActiveTerminal (not sendToTerminal): a snippet is line-oriented
+    // user text, so serial must apply its EOL transform. sendToTerminal is for
+    // raw control bytes only.
+    app.sendTextToActiveTerminal(s.command);
     app.closeSnippetPicker();
   }
 

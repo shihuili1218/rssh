@@ -299,6 +299,11 @@ export function sendArrow(dir: ArrowDir, mod: number) { _terminalArrowSender?.(d
 interface TerminalControls {
   getSelection(): string;
   paste(text: string): void;
+  /** Inject user text as input (snippet / broadcast). The pane applies its own
+   *  transport rules — serial EOL transform + slow-send — so callers here stay
+   *  transport-agnostic. NOT for control bytes (arrows/Esc/Tab): those are raw,
+   *  see sendToTerminal. */
+  sendText(text: string): void;
   focus(): void;
 }
 const _terminalControls = new Map<string, TerminalControls>();
@@ -313,6 +318,12 @@ export function terminalGetSelection(tabId: string): string {
 }
 export function terminalPaste(tabId: string, text: string) {
   _terminalControls.get(tabId)?.paste(text);
+}
+/** Snippet picker (and any "run this text" action): send user text to the
+ *  active terminal honoring its EOL. Distinct from sendToTerminal, which is for
+ *  raw control sequences and must never transform line endings. */
+export function sendTextToActiveTerminal(text: string) {
+  _terminalControls.get(_activeTabId)?.sendText(text);
 }
 /** Return keyboard focus to a tab's terminal — used by modals (snippet picker,
  *  search) that steal focus and must hand it back on close, else focus falls
@@ -403,12 +414,11 @@ export function sessionIdForTab(tabId: string): string | undefined {
 }
 
 export function broadcastToSessions(tabIds: string[], text: string) {
-  const data = Array.from(new TextEncoder().encode(text));
+  // Route through each pane's sendText (registered while mounted — all tabs
+  // mount, only the active one is visible). The pane owns its transport + the
+  // serial EOL/slow-send transform, so no per-type invoke switch belongs here.
   for (const tabId of tabIds) {
-    const s = _sessions.find(x => x.tabId === tabId);
-    if (!s) continue;
-    const cmd = s.type === "local" ? "pty_write" : s.type === "serial" ? "serial_write" : "ssh_write";
-    invoke(cmd, { sessionId: s.sessionId, data });
+    _terminalControls.get(tabId)?.sendText(text);
   }
 }
 
