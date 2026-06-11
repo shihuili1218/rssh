@@ -80,6 +80,36 @@ fn save_credential_secrets(state: &State<AppState>, c: &Credential) -> Result<()
     Ok(())
 }
 
+/// 弹原生 Open 对话框选私钥文件（默认目录 ~/.ssh），返回文件内容供凭证表单填入。
+/// 用户取消返回 None。Android 无 rfd 依赖，返回未实现错误（前端按 isMobile 隐藏入口）。
+#[tauri::command]
+pub async fn pick_private_key_file() -> AppResult<Option<String>> {
+    #[cfg(target_os = "android")]
+    {
+        Err(AppError::other("android_no_dialog", json!({})))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let default_dir = dirs::home_dir()
+            .map(|h| h.join(".ssh"))
+            .filter(|p| p.is_dir())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let pick = rfd::AsyncFileDialog::new()
+            .set_directory(default_dir)
+            .pick_file()
+            .await;
+        let Some(handle) = pick else { return Ok(None) };
+        let path = handle.path();
+        // A private key is a few KB of text; a fat-fingered pick of some huge
+        // file must not be stuffed into the keychain.
+        let size = std::fs::metadata(path)?.len();
+        if size > 1024 * 1024 {
+            return Err(AppError::other("key_file_too_large", json!({ "size": size })));
+        }
+        Ok(Some(std::fs::read_to_string(path)?))
+    }
+}
+
 #[tauri::command]
 pub fn import_ssh_config(content: String) -> Vec<SshConfigEntry> {
     crate::ssh::config::parse(&content)
@@ -89,14 +119,15 @@ pub fn import_ssh_config(content: String) -> Vec<SshConfigEntry> {
 // SSH config 自动读取 + 选择性导入
 // ---------------------------------------------------------------------------
 
-/// 读 `~/.ssh/config` 并解析。文件不存在 → 返回空 Vec（不是 error，正常场景）。
+/// 读 `~/.ssh/config` 并解析，`Include` 指令递归展开（相对路径基准 ~/.ssh）。
+/// 文件不存在 → 返回空 Vec（不是 error，正常场景）。
 /// IO 错误（权限不足等）→ 报 AppError::Io，让前端显示。
 #[tauri::command]
 pub fn read_ssh_config_default() -> AppResult<Vec<SshConfigEntry>> {
     let home =
         dirs::home_dir().ok_or_else(|| AppError::other("home_dir_unavailable", json!({})))?;
-    let path = home.join(".ssh").join("config");
-    let content = match std::fs::read_to_string(&path) {
+    let ssh_dir = home.join(".ssh");
+    let content = match crate::ssh::config::load_with_includes(&ssh_dir.join("config"), &ssh_dir) {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e.into()),

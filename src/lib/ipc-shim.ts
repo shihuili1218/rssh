@@ -250,6 +250,16 @@ export function installTauriShim(): void {
             await wsInvoke("import_config", { json: await files[0].text() });
             return files[0].name;
         },
+        // Private keys carry no reliable extension (id_rsa, *.pem, *.key…) —
+        // no accept filter. Content is read client-side; never hits the wire.
+        pick_private_key_file: async () => {
+            const files = await pickLocalFiles("", false);
+            if (!files || !files[0]) return null;
+            // Same 1 MiB cap (and wire shape → same i18n) as the desktop command.
+            if (files[0].size > 1024 * 1024)
+                throw `__rssh_err__|${JSON.stringify({ code: "key_file_too_large", params: { size: files[0].size } })}`;
+            return files[0].text();
+        },
         ai_audit_save_pick: async (a) => {
             const audit = await wsInvoke("ai_audit_get", { tabId: a.tabId });
             const name = `rssh-audit-${fileStamp()}.json`;
@@ -283,6 +293,7 @@ export function installTauriShim(): void {
         export_config_to_file: "IDE 插件中暂不支持导出配置到文件，请在 RSSH 桌面版中操作。",
         import_config_from_file: "IDE 插件中暂不支持从文件导入配置，请在 RSSH 桌面版中操作。",
         ai_audit_save_pick: "IDE 插件中暂不支持保存审计记录到文件，请在 RSSH 桌面版中操作。",
+        pick_private_key_file: "IDE 插件中暂不支持选择私钥文件，请粘贴私钥内容，或在 RSSH 桌面版中操作。",
     };
 
     function invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {

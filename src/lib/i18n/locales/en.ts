@@ -296,6 +296,7 @@ const en = {
   "credential.type.interactive": "Keyboard Interactive",
   "credential.password": "Password",
   "credential.private_key": "Private Key",
+  "credential.pick_key_file": "Choose key file…",
   "credential.encrypted_key_hint": "If the private key is encrypted, you will be prompted in the terminal for the passphrase at connect time (cached for this process only, never written to disk).",
   "credential.agent_hint": "Tries the local SSH agent first ($SSH_AUTH_SOCK / Pageant).\nIf the agent is unreachable or all identities are rejected, falls back to ~/.ssh/id_rsa, id_ecdsa, id_ecdsa_sk, id_ed25519, id_ed25519_sk.\nEncrypted default keys will trigger an in-terminal passphrase prompt (cached for this process only).",
   "credential.sync_to_remote": "SYNC TO REMOTE",
@@ -543,6 +544,7 @@ const en = {
 
   // ── Backend errors (translated by error code) ──
   "error.unknown": "{message}",
+  "error.key_file_too_large": "File is too large to be a private key ({size} bytes, max 1 MB).",
   "error.redact_invalid_regex": "Invalid regex: {error}",
   "error.redact_zero_width_pattern": "Pattern matches empty / zero-width text — it would over-redact everything. Make it match at least one character.",
   "error.blacklist_unknown_category": "Unknown blacklist category: {category}",

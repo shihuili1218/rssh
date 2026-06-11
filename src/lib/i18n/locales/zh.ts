@@ -298,6 +298,7 @@ const zh: Messages = {
   "credential.type.interactive": "键盘交互",
   "credential.password": "密码",
   "credential.private_key": "私钥",
+  "credential.pick_key_file": "选择私钥文件…",
   "credential.encrypted_key_hint": "若私钥已加密，连接时会在终端内提示输入 passphrase（仅本进程缓存，不落盘）。",
   "credential.agent_hint": "优先使用本地 SSH agent（$SSH_AUTH_SOCK / Pageant）中已加载的 key。\nAgent 不可达或全部 identity 被拒绝时，将回退尝试 ~/.ssh/id_rsa、id_ecdsa、id_ecdsa_sk、id_ed25519、id_ed25519_sk。\n如默认私钥已加密，会在终端内提示输入 passphrase（仅本进程缓存）。",
   "credential.sync_to_remote": "同步到远端",
@@ -545,6 +546,7 @@ const zh: Messages = {
 
   // ── 后端错误（按错误码翻译） ──
   "error.unknown": "{message}",
+  "error.key_file_too_large": "文件过大，不像私钥（{size} 字节，上限 1 MB）。",
   "error.redact_invalid_regex": "正则非法: {error}",
   "error.redact_zero_width_pattern": "正则会匹配空串 / 零宽位置，将导致全文过度脱敏。请让它至少匹配一个字符。",
   "error.blacklist_unknown_category": "未知黑名单分类: {category}",
