@@ -72,6 +72,7 @@
         try {
             let id: string;
             if (meta.sessionId) {
+                // Reuse existing SSH connection — no re-authentication needed
                 id = await invoke<string>("sftp_connect_session", { sessionId: meta.sessionId });
             } else {
                 id = await invoke<string>("sftp_connect", {
@@ -100,6 +101,7 @@
         error = "";
         try {
             entries = await invoke<RemoteEntry[]>("sftp_list", {sftpId, path});
+            // Clear selection on directory change — selection has no meaning across directories.
             selected = new Set();
             cwd = path;
             pathInput = path;
@@ -269,7 +271,11 @@
     });
 
     function onDocumentKeydown(e: KeyboardEvent) {
-        if (e.key === "Escape" && ctxMenu) closeCtxMenu();
+        if (e.key === "Escape" && ctxMenu) {
+            e.preventDefault();
+            e.stopPropagation();
+            closeCtxMenu();
+        }
     }
 
     onMount(() => {
@@ -294,41 +300,74 @@
         closeCtxMenu();
     }
 
+    /** Queue downloads for a set of entries into a local directory.
+     *  Walks directories, queues individual files, and collects walk errors
+     *  so the caller can display them. */
+    async function queueDownloads(items: RemoteEntry[], dir: string): Promise<{ queued: number; walkErrors: string[] }> {
+        let queued = 0;
+        // Accumulate per-tree walk failures so users see every failed dir,
+        // not just the last one.
+        const walkErrors: string[] = [];
+        for (const e of items) {
+            const remote = joinRemote(cwd, e.name);
+            if (e.is_dir) {
+                // Expand each subtree into N independent Transfers. A walk
+                // failure only skips that subtree; other selected entries
+                // continue to be queued.
+                try {
+                    const walked = await invoke<WalkEntry[]>("sftp_walk_remote_dir", {
+                        sftpId, remoteRoot: remote,
+                    });
+                    for (const w of walked) {
+                        await transfers.startDownload({
+                            sessionId: meta.sessionId,
+                            remotePath: joinRemote(remote, w.rel_path),
+                            localPath:  joinLocal(dir, e.name, w.rel_path),
+                            sizeHint:   w.size,
+                        });
+                        queued++;
+                    }
+                } catch (err) {
+                    walkErrors.push(`${e.name}: ${errMsg(err)}`);
+                }
+            } else {
+                await transfers.startDownload({
+                    sessionId: meta.sessionId,
+                    remotePath: remote,
+                    localPath:  joinLocal(dir, e.name),
+                    sizeHint:   e.size,
+                });
+                queued++;
+            }
+        }
+        return { queued, walkErrors };
+    }
+
     async function downloadEntry(entry: RemoteEntry) {
         closeCtxMenu();
         error = "";
         notice = "";
         if (!meta.sessionId) { error = "Missing SSH session"; return; }
         try {
-            const remote = entryPath(entry);
             if (entry.is_dir) {
                 const dir = await invoke<string | null>("sftp_pick_folder");
                 if (!dir) return;
-                let queued = 0;
-                const walked = await invoke<WalkEntry[]>("sftp_walk_remote_dir", { sftpId, remoteRoot: remote });
-                for (const w of walked) {
-                    await transfers.startDownload({
-                        sessionId: meta.sessionId,
-                        remotePath: joinRemote(remote, w.rel_path),
-                        localPath:  joinLocal(dir, entry.name, w.rel_path),
-                        sizeHint:   w.size,
-                    });
-                    queued++;
-                }
+                const { queued, walkErrors } = await queueDownloads([entry], dir);
+                if (walkErrors.length > 0) error = `${t("sftp.walk_failed")}\n${walkErrors.join("\n")}`;
                 if (queued > 0) notice = t("sftp.queued_n", { n: queued });
             } else if (app.isMobile) {
                 const dir = await invoke<string | null>("sftp_pick_folder");
                 if (!dir) return;
                 await transfers.startDownload({
                     sessionId: meta.sessionId,
-                    remotePath: remote,
+                    remotePath: entryPath(entry),
                     localPath:  joinLocal(dir, entry.name),
                     sizeHint:   entry.size,
                 });
                 notice = t("sftp.queued_n", { n: 1 });
             } else {
                 const saved = await invoke<string | null>("sftp_save_file", {
-                    sftpId, remotePath: remote, defaultName: entry.name,
+                    sftpId, remotePath: entryPath(entry), defaultName: entry.name,
                 });
                 if (saved) notice = t("sftp.queued_n", { n: 1 });
             }
@@ -364,13 +403,14 @@
 
     async function doRename() {
         if (!renameEntry || !renameValue.trim()) return;
+        if (renameValue.trim().includes("/")) return;
         const oldPath = entryPath(renameEntry);
         const newPath = joinRemote(cwd, renameValue.trim());
-        renameEntry = null;
-        renameValue = "";
         error = "";
         try {
             await invoke("sftp_rename", { sftpId, oldPath, newPath });
+            renameEntry = null;
+            renameValue = "";
             await listDir(cwd);
         } catch (e: any) {
             error = errMsg(e);
@@ -383,11 +423,11 @@
         propsStat = null;
         const path = entryPath(entry);
         invoke<FileStat>("sftp_stat", { sftpId, path })
-            .then(stat => { propsStat = stat; propsLoading = false; })
-            .catch((e: any) => { error = errMsg(e); propsLoading = false; propsStat = null; });
+            .then(stat => { if (propsLoading) { propsStat = stat; propsLoading = false; } })
+            .catch((e: any) => { if (propsLoading) { error = errMsg(e); propsLoading = false; } });
     }
 
-    function closeProperties() { propsStat = null; }
+    function closeProperties() { propsStat = null; propsLoading = false; }
 
     // ── Download selected ──
 
@@ -400,37 +440,7 @@
         try {
             const dir = await invoke<string | null>("sftp_pick_folder");
             if (!dir) return;
-            let queued = 0;
-            const walkErrors: string[] = [];
-            for (const e of items) {
-                const remote = joinRemote(cwd, e.name);
-                if (e.is_dir) {
-                    try {
-                        const walked = await invoke<WalkEntry[]>("sftp_walk_remote_dir", {
-                            sftpId, remoteRoot: remote,
-                        });
-                        for (const w of walked) {
-                            await transfers.startDownload({
-                                sessionId: meta.sessionId,
-                                remotePath: joinRemote(remote, w.rel_path),
-                                localPath:  joinLocal(dir, e.name, w.rel_path),
-                                sizeHint:   w.size,
-                            });
-                            queued++;
-                        }
-                    } catch (err) {
-                        walkErrors.push(`${e.name}: ${errMsg(err)}`);
-                    }
-                } else {
-                    await transfers.startDownload({
-                        sessionId: meta.sessionId,
-                        remotePath: remote,
-                        localPath:  joinLocal(dir, e.name),
-                        sizeHint:   e.size,
-                    });
-                    queued++;
-                }
-            }
+            const { queued, walkErrors } = await queueDownloads(items, dir);
             if (walkErrors.length > 0) error = `${t("sftp.walk_failed")}\n${walkErrors.join("\n")}`;
             if (queued > 0) notice = t("sftp.queued_n", { n: queued });
             selected = new Set();
@@ -485,7 +495,7 @@
 
 </script>
 
-<div class="sftp" oncontextmenu={onSftpContextMenu}>
+<div class="sftp">
     <div class="toolbar">
         <span class="title">SFTP</span>
         <span class="grow"></span>
@@ -495,6 +505,8 @@
         <button class="btn btn-sm" onclick={goUp}>{t("sftp.up")}</button>
         <button class="btn btn-sm" onclick={() => listDir(cwd)}>{t("sftp.refresh")}</button>
         <div class="upload-wrap" bind:this={uploadWrapEl}>
+            <!-- The dialog commands `sftp_pick_*` are not registered on Android
+                 (rfd has no folder/multi-file picker there); gate the entry. -->
             <button class="btn btn-sm" disabled={!sftpId || app.isMobile} onclick={toggleUploadMenu} aria-haspopup="menu" aria-expanded={uploadMenuOpen}>
                 {t("sftp.upload")} <span class="caret">▾</span>
             </button>
@@ -531,7 +543,7 @@
     {#if loading}
         <p class="loading">{t("sftp.loading")}</p>
     {:else}
-        <div class="file-list">
+        <div class="file-list" oncontextmenu={onSftpContextMenu}>
             <div class="file-row file-header">
                 <span class="cell-check">
                     <input
@@ -579,7 +591,7 @@
 {#if ctxMenu}
     <div class="ctx-backdrop"
          onclick={closeCtxMenu}
-         onmousedown={(e) => { if (e.button === 2) { e.preventDefault(); closeCtxMenu(); } }}
+         oncontextmenu={(e) => { e.preventDefault(); closeCtxMenu(); }}
          role="presentation"></div>
     <div class="ctx-menu surface-raised"
          class:ready={ctxReady}
@@ -615,6 +627,7 @@
             <input
                 type="text"
                 class="modal-input"
+                bind:this={renameInputEl}
                 bind:value={renameValue}
                 onkeydown={(e) => { if (e.key === "Enter") doRename(); if (e.key === "Escape") renameEntry = null; }}
             />
@@ -673,6 +686,7 @@
         box-sizing: border-box;
         overflow-y: auto;
         container-type: inline-size;
+        /* aside 把 SFTP 收成侧边栏；不再做 max-width 居中。窄宽度下让按钮换行而不是溢出。 */
     }
 
     .toolbar {
@@ -860,7 +874,7 @@
         display: flex;
         align-items: center;
         gap: 6px;
-        min-width: 0;
+        min-width: 0; /* let .file-label ellipsis-truncate */
         padding: 0;
     }
     .file-label {
@@ -891,6 +905,8 @@
         white-space: nowrap;
     }
 
+    /* Narrow widths: drop the mtime column first. Size always stays — for
+       multi-file downloads users care most about file size. */
     @container (max-width: 360px) {
         .file-row {
             grid-template-columns: 24px 1fr 60px;

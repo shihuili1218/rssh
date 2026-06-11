@@ -22,13 +22,8 @@ pub struct RemoteEntry {
     pub is_dir: bool,
     pub is_symlink: bool,
     pub size: u64,
-    /// unix epoch seconds; 0 means the server did not provide an mtime
+    /// unix epoch seconds; 0 means the server did not provide the mtime
     pub mtime: u64,
-    pub uid: Option<u32>,
-    pub gid: Option<u32>,
-    pub user: Option<String>,
-    pub group: Option<String>,
-    pub permissions: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -37,10 +32,15 @@ pub struct FileStat {
     pub is_dir: bool,
     pub size: u64,
     pub mtime: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub uid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub gid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub permissions: Option<u32>,
 }
 
@@ -182,11 +182,6 @@ impl SftpHandle {
                     is_symlink: ft.is_symlink(),
                     size: meta.size.unwrap_or(0),
                     mtime: meta.mtime.map(u64::from).unwrap_or(0),
-                    uid: meta.uid,
-                    gid: meta.gid,
-                    user: meta.user.clone(),
-                    group: meta.group.clone(),
-                    permissions: meta.permissions,
                 }
             })
             .collect();
@@ -304,6 +299,41 @@ impl SftpHandle {
             .remove_dir(path)
             .await
             .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "remove_dir", "err": e.to_string() })))
+    }
+
+    /// Recursively delete a directory: remove all files and subdirectories
+    /// bottom-up, then remove the directory itself.
+    pub async fn remove_dir_all(&self, root: &str) -> AppResult<()> {
+        // Collect files via walk_files (BFS, only files returned).
+        let files = self.walk_files(root).await?;
+        // Delete every file first.
+        for f in &files {
+            let full = join_remote(root, &f.rel_path);
+            self.remove_file(&full).await?;
+        }
+        // Collect directories via BFS, then delete deepest-first.
+        let mut dirs: Vec<String> = Vec::new();
+        let mut queue: VecDeque<String> = VecDeque::new();
+        queue.push_back(root.trim_end_matches('/').to_string());
+        while let Some(dir) = queue.pop_front() {
+            let entries = self.sftp.read_dir(&dir).await.map_err(|e| {
+                AppError::sftp("sftp_io_failed", json!({ "op": "read_dir", "path": dir, "err": e.to_string() }))
+            })?;
+            for e in entries {
+                if e.file_type().is_dir() {
+                    let full = join_remote(&dir, &e.file_name());
+                    queue.push_back(full.clone());
+                    dirs.push(full);
+                }
+            }
+        }
+        // Sort deepest-first: more '/' segments = deeper.
+        dirs.sort_by(|a, b| b.matches('/').cmp(&a.matches('/')));
+        for d in &dirs {
+            self.remove_dir(d).await?;
+        }
+        // Finally remove the root.
+        self.remove_dir(root).await
     }
 
     pub async fn rename(&self, old: &str, new: &str) -> AppResult<()> {
