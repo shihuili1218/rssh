@@ -80,6 +80,11 @@ export interface RemoteEntry {
     size: number;
     /** unix epoch seconds; 0 means server didn't provide mtime */
     mtime: number;
+    uid?: number;
+    gid?: number;
+    user?: string;
+    group?: string;
+    permissions?: number;
 }
 
 /* ═══════════════════════════════════════════════════════

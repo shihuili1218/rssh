@@ -770,6 +770,20 @@ async fn dispatch_async(
             }
             Ok(Value::Null)
         }
+        "sftp_remove" => {
+            let h = sftp_handle(state, &arg::<String>(&args, "sftpId")?)?;
+            let path: String = arg(&args, "path")?;
+            let is_dir: bool = arg(&args, "isDir")?;
+            if is_dir { ok(h.remove_dir(&path).await) } else { ok(h.remove_file(&path).await) }
+        }
+        "sftp_rename" => {
+            let h = sftp_handle(state, &arg::<String>(&args, "sftpId")?)?;
+            ok(h.rename(&arg::<String>(&args, "oldPath")?, &arg::<String>(&args, "newPath")?).await)
+        }
+        "sftp_stat" => {
+            let h = sftp_handle(state, &arg::<String>(&args, "sftpId")?)?;
+            ok(h.stat(&arg::<String>(&args, "path")?).await)
+        }
         "sftp_download_to" => {
             let sftp = sftp_handle(state, &arg::<String>(&args, "sftpId")?)?;
             let remote_path: String = arg(&args, "remotePath")?;

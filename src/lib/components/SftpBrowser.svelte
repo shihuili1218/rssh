@@ -9,6 +9,19 @@
     /** Mirrors the backend WalkEntry; rel_path is always '/'-separated. */
     interface WalkEntry { rel_path: string; size: number; }
 
+    /** Mirrors the backend FileStat. */
+    interface FileStat {
+        name: string;
+        is_dir: boolean;
+        size: number;
+        mtime: number;
+        uid?: number;
+        gid?: number;
+        user?: string;
+        group?: string;
+        permissions?: number;
+    }
+
     let {meta}: { meta: Record<string, string> } = $props();
 
     let sftpId = $state<string | null>(null);
@@ -30,6 +43,21 @@
      *  effect; the attribute form does not reliably sync the DOM property. */
     let selectAllEl: HTMLInputElement | undefined;
 
+    /** Context menu state. */
+    let ctxMenu = $state<{ x: number; y: number; entry: RemoteEntry } | null>(null);
+    let ctxMenuEl: HTMLDivElement | undefined;
+
+    /** Properties dialog state. */
+    let propsStat = $state<FileStat | null>(null);
+    let propsLoading = $state(false);
+
+    /** Rename dialog state. */
+    let renameEntry = $state<RemoteEntry | null>(null);
+    let renameValue = $state("");
+
+    /** Delete confirm state. */
+    let deleteEntry = $state<RemoteEntry | null>(null);
+
     const selectedCount = $derived(selected.size);
     const allSelected = $derived(entries.length > 0 && selected.size === entries.length);
     const someSelected = $derived(selected.size > 0 && selected.size < entries.length);
@@ -38,7 +66,6 @@
         try {
             let id: string;
             if (meta.sessionId) {
-                // Reuse existing SSH connection — no re-authentication needed
                 id = await invoke<string>("sftp_connect_session", { sessionId: meta.sessionId });
             } else {
                 id = await invoke<string>("sftp_connect", {
@@ -67,7 +94,6 @@
         error = "";
         try {
             entries = await invoke<RemoteEntry[]>("sftp_list", {sftpId, path});
-            // Clear selection on directory change — selection has no meaning across directories.
             selected = new Set();
             cwd = path;
             pathInput = path;
@@ -165,6 +191,13 @@
         return `${yy}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
     }
 
+    function formatPermissions(perm: number | undefined): string {
+        if (perm === undefined || perm === null) return "—";
+        const p = perm & 0o777;
+        const rwx = (v: number) => (v & 4 ? "r" : "-") + (v & 2 ? "w" : "-") + (v & 1 ? "x" : "-");
+        return rwx((p >> 6) & 7) + rwx((p >> 3) & 7) + rwx(p & 7);
+    }
+
     function toggleSelected(name: string) {
         const next = new Set(selected);
         if (next.has(name)) next.delete(name);
@@ -199,6 +232,139 @@
         if (selectAllEl) selectAllEl.indeterminate = someSelected;
     });
 
+    // ── Context menu ──
+
+    function onContextMenu(e: MouseEvent, entry: RemoteEntry) {
+        e.preventDefault();
+        ctxMenu = { x: e.clientX, y: e.clientY, entry };
+    }
+
+    function closeCtxMenu() { ctxMenu = null; }
+
+    $effect(() => {
+        if (ctxMenu) {
+            const handler = (e: MouseEvent) => {
+                if (ctxMenuEl && !ctxMenuEl.contains(e.target as Node)) closeCtxMenu();
+            };
+            window.addEventListener("mousedown", handler);
+            window.addEventListener("contextmenu", handler);
+            return () => {
+                window.removeEventListener("mousedown", handler);
+                window.removeEventListener("contextmenu", handler);
+            };
+        }
+    });
+
+    function onAuxClick(e: MouseEvent, entry: RemoteEntry) {
+        if (e.button === 1) {
+            e.preventDefault();
+            copyPathToTerminal(entry);
+        }
+    }
+
+    function entryPath(entry: RemoteEntry): string {
+        return joinRemote(cwd, entry.name);
+    }
+
+    function copyPath(entry: RemoteEntry) {
+        app.writeClipboard(entryPath(entry));
+        closeCtxMenu();
+    }
+
+    function copyPathToTerminal(entry: RemoteEntry) {
+        app.sendToTerminal(entryPath(entry) + " ");
+        closeCtxMenu();
+    }
+
+    async function downloadEntry(entry: RemoteEntry) {
+        closeCtxMenu();
+        error = "";
+        notice = "";
+        if (!meta.sessionId) { error = "Missing SSH session"; return; }
+        try {
+            const dir = await invoke<string | null>("sftp_pick_folder");
+            if (!dir) return;
+            const remote = entryPath(entry);
+            let queued = 0;
+            if (entry.is_dir) {
+                const walked = await invoke<WalkEntry[]>("sftp_walk_remote_dir", { sftpId, remoteRoot: remote });
+                for (const w of walked) {
+                    await transfers.startDownload({
+                        sessionId: meta.sessionId,
+                        remotePath: joinRemote(remote, w.rel_path),
+                        localPath:  joinLocal(dir, entry.name, w.rel_path),
+                        sizeHint:   w.size,
+                    });
+                    queued++;
+                }
+            } else {
+                await transfers.startDownload({
+                    sessionId: meta.sessionId,
+                    remotePath: remote,
+                    localPath:  joinLocal(dir, entry.name),
+                    sizeHint:   entry.size,
+                });
+                queued++;
+            }
+            if (queued > 0) notice = t("sftp.queued_n", { n: queued });
+        } catch (err: any) {
+            error = errMsg(err);
+        }
+    }
+
+    function confirmDelete(entry: RemoteEntry) {
+        closeCtxMenu();
+        deleteEntry = entry;
+    }
+
+    async function doDelete() {
+        if (!deleteEntry) return;
+        const entry = deleteEntry;
+        deleteEntry = null;
+        error = "";
+        try {
+            await invoke("sftp_remove", { sftpId, path: entryPath(entry), isDir: entry.is_dir });
+            await listDir(cwd);
+        } catch (e: any) {
+            error = errMsg(e);
+        }
+    }
+
+    function startRename(entry: RemoteEntry) {
+        closeCtxMenu();
+        renameEntry = entry;
+        renameValue = entry.name;
+    }
+
+    async function doRename() {
+        if (!renameEntry || !renameValue.trim()) return;
+        const oldPath = entryPath(renameEntry);
+        const newPath = joinRemote(cwd, renameValue.trim());
+        renameEntry = null;
+        renameValue = "";
+        error = "";
+        try {
+            await invoke("sftp_rename", { sftpId, oldPath, newPath });
+            await listDir(cwd);
+        } catch (e: any) {
+            error = errMsg(e);
+        }
+    }
+
+    function showProperties(entry: RemoteEntry) {
+        closeCtxMenu();
+        propsLoading = true;
+        propsStat = null;
+        const path = entryPath(entry);
+        invoke<FileStat>("sftp_stat", { sftpId, path })
+            .then(stat => { propsStat = stat; propsLoading = false; })
+            .catch((e: any) => { error = errMsg(e); propsLoading = false; propsStat = null; });
+    }
+
+    function closeProperties() { propsStat = null; }
+
+    // ── Download selected ──
+
     async function downloadSelected() {
         error = "";
         notice = "";
@@ -209,15 +375,10 @@
             const dir = await invoke<string | null>("sftp_pick_folder");
             if (!dir) return;
             let queued = 0;
-            // Accumulate per-tree walk failures so users see every failed dir,
-            // not just the last one.
             const walkErrors: string[] = [];
             for (const e of items) {
                 const remote = joinRemote(cwd, e.name);
                 if (e.is_dir) {
-                    // Expand each subtree into N independent Transfers. A walk
-                    // failure only skips that subtree; other selected entries
-                    // continue to be queued.
                     try {
                         const walked = await invoke<WalkEntry[]>("sftp_walk_remote_dir", {
                             sftpId, remoteRoot: remote,
@@ -308,8 +469,6 @@
         <button class="btn btn-sm" onclick={goUp}>{t("sftp.up")}</button>
         <button class="btn btn-sm" onclick={() => listDir(cwd)}>{t("sftp.refresh")}</button>
         <div class="upload-wrap" bind:this={uploadWrapEl}>
-            <!-- The dialog commands `sftp_pick_*` are not registered on Android
-                 (rfd has no folder/multi-file picker there); gate the entry. -->
             <button class="btn btn-sm" disabled={!sftpId || app.isMobile} onclick={toggleUploadMenu} aria-haspopup="menu" aria-expanded={uploadMenuOpen}>
                 {t("sftp.upload")} <span class="caret">▾</span>
             </button>
@@ -363,7 +522,13 @@
                 <span class="cell-mtime h-label">{t("sftp.column.modified")}</span>
             </div>
             {#each entries as e (e.name)}
-                <div class="file-row" class:dir={e.is_dir} class:selected={selected.has(e.name)}>
+                <div
+                    class="file-row"
+                    class:dir={e.is_dir}
+                    class:selected={selected.has(e.name)}
+                    oncontextmenu={(ev) => onContextMenu(ev, e)}
+                    onauxclick={(ev) => onAuxClick(ev, e)}
+                >
                     <span class="cell-check">
                         <input
                             type="checkbox"
@@ -386,6 +551,93 @@
     {/if}
 </div>
 
+{#if ctxMenu}
+    <div class="ctx-overlay" onclick={closeCtxMenu}></div>
+    <div
+        class="ctx-menu"
+        bind:this={ctxMenuEl}
+        style:left="{ctxMenu.x}px; top:{ctxMenu.y}px"
+        role="menu"
+    >
+        <button role="menuitem" onclick={() => downloadEntry(ctxMenu!.entry)}>{t("sftp.ctx.download")}</button>
+        <button role="menuitem" onclick={() => confirmDelete(ctxMenu!.entry)}>{t("sftp.ctx.delete")}</button>
+        <button role="menuitem" onclick={() => startRename(ctxMenu!.entry)}>{t("sftp.ctx.rename")}</button>
+        <div class="ctx-divider"></div>
+        <button role="menuitem" onclick={() => copyPath(ctxMenu!.entry)}>{t("sftp.ctx.copy_path")}</button>
+        <button role="menuitem" onclick={() => copyPathToTerminal(ctxMenu!.entry)}>{t("sftp.ctx.copy_path_terminal")}</button>
+        <div class="ctx-divider"></div>
+        <button role="menuitem" onclick={() => showProperties(ctxMenu!.entry)}>{t("sftp.ctx.properties")}</button>
+    </div>
+{/if}
+
+{#if deleteEntry}
+    <div class="modal-overlay" onclick={() => { deleteEntry = null; }}>
+        <div class="modal-card" onclick={(e) => e.stopPropagation()}>
+            <p class="modal-text">{t("sftp.delete.confirm", { name: deleteEntry.name })}</p>
+            <div class="modal-actions">
+                <button class="btn btn-sm" onclick={() => { deleteEntry = null; }}>{t("common.cancel")}</button>
+                <button class="btn btn-sm btn-danger" onclick={doDelete}>{t("common.delete")}</button>
+            </div>
+        </div>
+    </div>
+{/if}
+
+{#if renameEntry}
+    <div class="modal-overlay" onclick={() => { renameEntry = null; }}>
+        <div class="modal-card" onclick={(e) => e.stopPropagation()}>
+            <p class="modal-title">{t("sftp.rename.title")}</p>
+            <input
+                type="text"
+                class="modal-input"
+                bind:value={renameValue}
+                onkeydown={(e) => { if (e.key === "Enter") doRename(); if (e.key === "Escape") renameEntry = null; }}
+            />
+            <div class="modal-actions">
+                <button class="btn btn-sm" onclick={() => { renameEntry = null; }}>{t("common.cancel")}</button>
+                <button class="btn btn-sm" onclick={doRename}>{t("sftp.rename.title")}</button>
+            </div>
+        </div>
+    </div>
+{/if}
+
+{#if propsStat || propsLoading}
+    <div class="modal-overlay" onclick={closeProperties}>
+        <div class="modal-card props-card" onclick={(e) => e.stopPropagation()}>
+            {#if propsLoading}
+                <p class="loading">{t("common.loading")}</p>
+            {:else if propsStat}
+                <p class="props-filename">{propsStat.name}</p>
+                <div class="props-spacer"></div>
+                {#if !propsStat.is_dir}
+                    <div class="props-row">
+                        <span class="props-label">{t("sftp.props.size")}</span>
+                        <span class="props-value">{formatSize(propsStat.size)}</span>
+                    </div>
+                {/if}
+                <div class="props-row">
+                    <span class="props-label">{t("sftp.props.modified")}</span>
+                    <span class="props-value">{formatMtime(propsStat.mtime)}</span>
+                </div>
+                <div class="props-row">
+                    <span class="props-label">{t("sftp.props.owner")}</span>
+                    <span class="props-value">{propsStat.user ?? (propsStat.uid !== undefined && propsStat.uid !== null ? String(propsStat.uid) : "—")}</span>
+                </div>
+                <div class="props-row">
+                    <span class="props-label">{t("sftp.props.group")}</span>
+                    <span class="props-value">{propsStat.group ?? (propsStat.gid !== undefined && propsStat.gid !== null ? String(propsStat.gid) : "—")}</span>
+                </div>
+                <div class="props-row">
+                    <span class="props-label">{t("sftp.props.permissions")}</span>
+                    <span class="props-value">{formatPermissions(propsStat.permissions)}</span>
+                </div>
+            {/if}
+            <div class="props-ok">
+                <button class="btn btn-sm" onclick={closeProperties}>{t("sftp.props.ok")}</button>
+            </div>
+        </div>
+    </div>
+{/if}
+
 <style>
     .sftp {
         display: flex;
@@ -395,7 +647,6 @@
         box-sizing: border-box;
         overflow-y: auto;
         container-type: inline-size;
-        /* aside 把 SFTP 收成侧边栏；不再做 max-width 居中。窄宽度下让按钮换行而不是溢出。 */
     }
 
     .toolbar {
@@ -583,7 +834,7 @@
         display: flex;
         align-items: center;
         gap: 6px;
-        min-width: 0; /* let .file-label ellipsis-truncate */
+        min-width: 0;
         padding: 0;
     }
     .file-label {
@@ -614,8 +865,6 @@
         white-space: nowrap;
     }
 
-    /* Narrow widths: drop the mtime column first. Size always stays — for
-       multi-file downloads users care most about file size. */
     @container (max-width: 360px) {
         .file-row {
             grid-template-columns: 24px 1fr 60px;
@@ -627,6 +876,154 @@
         text-align: center;
         color: var(--text-dim);
         padding: 24px;
+    }
+
+    /* ── Context menu ── */
+
+    .ctx-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 99;
+    }
+
+    .ctx-menu {
+        position: fixed;
+        z-index: 100;
+        background: var(--surface);
+        border: 1px solid var(--divider);
+        border-radius: var(--radius-sm);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+        min-width: 180px;
+        padding: 4px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .ctx-menu button {
+        background: transparent;
+        border: none;
+        text-align: left;
+        font: inherit;
+        font-size: 12px;
+        color: var(--text);
+        padding: 6px 12px;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        white-space: nowrap;
+    }
+    .ctx-menu button:hover {
+        background: var(--accent-soft);
+    }
+
+    .ctx-divider {
+        height: 1px;
+        background: var(--divider);
+        margin: 2px 4px;
+    }
+
+    /* ── Modal overlay ── */
+
+    .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.4);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 200;
+    }
+
+    .modal-card {
+        background: var(--surface);
+        border: 1px solid var(--divider);
+        border-radius: 8px;
+        padding: 20px 24px;
+        min-width: 280px;
+        max-width: 90vw;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    }
+
+    .modal-text {
+        font-size: 13px;
+        margin: 0 0 16px;
+        line-height: 1.5;
+    }
+
+    .modal-title {
+        font-size: 13px;
+        font-weight: 600;
+        margin: 0 0 12px;
+    }
+
+    .modal-input {
+        width: 100%;
+        box-sizing: border-box;
+        font-family: monospace;
+        font-size: 12px;
+        padding: 6px 8px;
+        border: 1px solid var(--divider);
+        border-radius: var(--radius-sm);
+        background: var(--bg);
+        color: var(--text);
+        outline: none;
+        margin-bottom: 12px;
+    }
+    .modal-input:focus {
+        border-color: var(--accent);
+    }
+
+    .modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+    }
+
+    .btn-danger {
+        color: var(--error) !important;
+    }
+
+    /* ── Properties dialog ── */
+
+    .props-card {
+        min-width: 300px;
+    }
+
+    .props-filename {
+        font-size: 14px;
+        font-weight: 600;
+        margin: 0 0 4px;
+        word-break: break-all;
+    }
+
+    .props-spacer {
+        height: 12px;
+    }
+
+    .props-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        padding: 4px 0;
+        font-size: 12px;
+    }
+
+    .props-label {
+        color: var(--text-sub);
+        flex-shrink: 0;
+        margin-right: 16px;
+    }
+
+    .props-value {
+        color: var(--text);
+        text-align: right;
+        word-break: break-all;
+    }
+
+    .props-ok {
+        display: flex;
+        justify-content: center;
+        margin-top: 16px;
     }
 
 </style>

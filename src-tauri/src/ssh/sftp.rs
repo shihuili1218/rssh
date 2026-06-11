@@ -24,6 +24,24 @@ pub struct RemoteEntry {
     pub size: u64,
     /// unix epoch seconds; 0 means the server did not provide an mtime
     pub mtime: u64,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+    pub user: Option<String>,
+    pub group: Option<String>,
+    pub permissions: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FileStat {
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub mtime: u64,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+    pub user: Option<String>,
+    pub group: Option<String>,
+    pub permissions: Option<u32>,
 }
 
 /// Flat walk output. `rel_path` is always '/'-separated (even when the host is
@@ -164,6 +182,11 @@ impl SftpHandle {
                     is_symlink: ft.is_symlink(),
                     size: meta.size.unwrap_or(0),
                     mtime: meta.mtime.map(u64::from).unwrap_or(0),
+                    uid: meta.uid,
+                    gid: meta.gid,
+                    user: meta.user.clone(),
+                    group: meta.group.clone(),
+                    permissions: meta.permissions,
                 }
             })
             .collect();
@@ -266,6 +289,47 @@ impl SftpHandle {
                 "sftp_io_failed",
                 json!({ "op": "create_dir", "err": e.to_string() }),
             )
+        })
+    }
+
+    pub async fn remove_file(&self, path: &str) -> AppResult<()> {
+        self.sftp
+            .remove_file(path)
+            .await
+            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "remove_file", "err": e.to_string() })))
+    }
+
+    pub async fn remove_dir(&self, path: &str) -> AppResult<()> {
+        self.sftp
+            .remove_dir(path)
+            .await
+            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "remove_dir", "err": e.to_string() })))
+    }
+
+    pub async fn rename(&self, old: &str, new: &str) -> AppResult<()> {
+        self.sftp
+            .rename(old, new)
+            .await
+            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "rename", "err": e.to_string() })))
+    }
+
+    pub async fn stat(&self, path: &str) -> AppResult<FileStat> {
+        let meta = self
+            .sftp
+            .metadata(path)
+            .await
+            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "metadata", "err": e.to_string() })))?;
+        let name = path.rsplit('/').next().unwrap_or(path).to_string();
+        Ok(FileStat {
+            name,
+            is_dir: meta.file_type().is_dir(),
+            size: meta.size.unwrap_or(0),
+            mtime: meta.mtime.map(u64::from).unwrap_or(0),
+            uid: meta.uid,
+            gid: meta.gid,
+            user: meta.user.clone(),
+            group: meta.group.clone(),
+            permissions: meta.permissions,
         })
     }
 

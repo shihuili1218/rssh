@@ -8,7 +8,7 @@ use tauri::State;
 
 use crate::error::{locked, AppError, AppResult};
 use crate::models::{Credential, CredentialType};
-use crate::ssh::sftp::{RemoteEntry, SftpHandle, WalkEntry};
+use crate::ssh::sftp::{FileStat, RemoteEntry, SftpHandle, WalkEntry};
 use crate::state::AppState;
 
 /// Maximum recursion depth for the local walker. Mirrors the remote-side cap.
@@ -388,6 +388,42 @@ pub async fn sftp_upload_from(
     sftp.upload_streaming(&local, &remote_path, &host, &transfer_id, cancel)
         .await
         .map(|_| ())
+}
+
+#[tauri::command]
+pub async fn sftp_remove(
+    state: State<'_, AppState>,
+    sftp_id: String,
+    path: String,
+    is_dir: bool,
+) -> AppResult<()> {
+    let h = get_sftp(&state, &sftp_id)?;
+    if is_dir {
+        h.remove_dir(&path).await
+    } else {
+        h.remove_file(&path).await
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_rename(
+    state: State<'_, AppState>,
+    sftp_id: String,
+    old_path: String,
+    new_path: String,
+) -> AppResult<()> {
+    let h = get_sftp(&state, &sftp_id)?;
+    h.rename(&old_path, &new_path).await
+}
+
+#[tauri::command]
+pub async fn sftp_stat(
+    state: State<'_, AppState>,
+    sftp_id: String,
+    path: String,
+) -> AppResult<FileStat> {
+    let h = get_sftp(&state, &sftp_id)?;
+    h.stat(&path).await
 }
 
 /// 用户在传输页点"取消"调用：把 transfer_id 对应的 cancel flag 置 1，

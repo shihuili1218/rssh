@@ -212,6 +212,9 @@ pub fn run() {
             #[cfg(not(target_os = "android"))]
             commands::sftp::sftp_upload_from,
             commands::sftp::sftp_cancel_transfer,
+            commands::sftp::sftp_remove,
+            commands::sftp::sftp_rename,
+            commands::sftp::sftp_stat,
             // CLI install
             commands::cli::cli_status,
             commands::cli::cli_install,
