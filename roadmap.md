@@ -10,4 +10,4 @@
 - 支持telnet ？
 - ai session 历史
 - ai session tokencost
-- ai general skill支持修改
+- 设置同步
