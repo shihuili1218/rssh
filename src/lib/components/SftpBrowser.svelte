@@ -552,7 +552,6 @@
                     class:dir={e.is_dir}
                     class:selected={selected.has(e.name)}
                     oncontextmenu={(ev) => onContextMenu(ev, e)}
-                    onmousedown={(ev) => { if (ev.button === 2) { ev.preventDefault(); onContextMenu(ev, e); } }}
                     onauxclick={(ev) => onAuxClick(ev, e)}
                 >
                     <span class="cell-check">
@@ -580,7 +579,7 @@
 {#if ctxMenu}
     <div class="ctx-backdrop"
          onclick={closeCtxMenu}
-         oncontextmenu={(e) => { e.preventDefault(); closeCtxMenu(); }}
+         onmousedown={(e) => { if (e.button === 2) { e.preventDefault(); closeCtxMenu(); } }}
          role="presentation"></div>
     <div class="ctx-menu surface-raised"
          class:ready={ctxReady}
