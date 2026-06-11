@@ -21,6 +21,8 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
+# `Include` glob expansion when reading ~/.ssh/config (issue #96)
+glob = "0.3"
 log = "0.4"
 env_logger = "0.11"
 

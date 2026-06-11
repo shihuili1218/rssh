@@ -298,6 +298,7 @@ const zh: Messages = {
   "credential.type.interactive": "键盘交互",
   "credential.password": "密码",
   "credential.private_key": "私钥",
+  "credential.pick_key_file": "选择私钥文件…",
   "credential.encrypted_key_hint": "若私钥已加密，连接时会在终端内提示输入 passphrase（仅本进程缓存，不落盘）。",
   "credential.agent_hint": "优先使用本地 SSH agent（$SSH_AUTH_SOCK / Pageant）中已加载的 key。\nAgent 不可达或全部 identity 被拒绝时，将回退尝试 ~/.ssh/id_rsa、id_ecdsa、id_ecdsa_sk、id_ed25519、id_ed25519_sk。\n如默认私钥已加密，会在终端内提示输入 passphrase（仅本进程缓存）。",
   "credential.sync_to_remote": "同步到远端",

@@ -87,6 +87,61 @@ pub fn parse(content: &str) -> Vec<SshConfigEntry> {
     entries
 }
 
+/// Maximum `Include` nesting depth — same cap as OpenSSH's
+/// MAX_INCLUDE_DEPTH. Also bounds self/cyclic includes.
+const MAX_INCLUDE_DEPTH: usize = 16;
+
+/// Read an ssh config file and splice the contents of `Include` directives
+/// in place, recursively. `base` is the directory non-absolute patterns
+/// resolve against (OpenSSH semantics: `~/.ssh` for user configs).
+///
+/// Missing or unreadable included files are skipped, like a glob with no
+/// matches. IO errors on the root file propagate to the caller.
+pub fn load_with_includes(path: &std::path::Path, base: &std::path::Path) -> std::io::Result<String> {
+    let content = std::fs::read_to_string(path)?;
+    let mut out = String::new();
+    splice_includes(&content, base, 0, &mut out);
+    Ok(out)
+}
+
+fn splice_includes(content: &str, base: &std::path::Path, depth: usize, out: &mut String) {
+    for line in content.lines() {
+        match include_patterns(line) {
+            Some(patterns) if depth < MAX_INCLUDE_DEPTH => {
+                for pat in patterns.split_whitespace() {
+                    splice_pattern(pat.trim_matches('"'), base, depth, out);
+                }
+            }
+            _ => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+}
+
+/// `Include p1 p2 …` → Some("p1 p2 …"); anything else → None.
+fn include_patterns(line: &str) -> Option<&str> {
+    let (key, value) = line.trim().split_once(char::is_whitespace)?;
+    key.eq_ignore_ascii_case("include").then_some(value.trim())
+}
+
+fn splice_pattern(pattern: &str, base: &std::path::Path, depth: usize, out: &mut String) {
+    let expanded = expand_tilde(pattern);
+    let full = if std::path::Path::new(&expanded).is_absolute() {
+        expanded
+    } else {
+        base.join(&expanded).to_string_lossy().into_owned()
+    };
+    // glob yields matches in alphabetical order; a bad pattern means no files.
+    let Ok(paths) = glob::glob(&full) else { return };
+    for path in paths.flatten() {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            splice_includes(&content, base, depth + 1, out);
+        }
+    }
+}
+
 fn expand_tilde(path: &str) -> String {
     if let Some(rest) = path.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
@@ -228,5 +283,102 @@ Host two
     fn parse_empty_input() {
         assert!(parse("").is_empty());
         assert!(parse("\n\n# only comment\n").is_empty());
+    }
+
+    // ── Include expansion ──────────────────────────────────────────────
+
+    use std::fs;
+    use std::path::Path;
+
+    fn write(dir: &Path, rel: &str, content: &str) -> std::path::PathBuf {
+        let p = dir.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(&p, content).unwrap();
+        p
+    }
+
+    fn aliases(entries: &[SshConfigEntry]) -> Vec<&str> {
+        entries.iter().map(|e| e.host_alias.as_str()).collect()
+    }
+
+    #[test]
+    fn include_splices_glob_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "config.d/alpha", "Host alpha\n    HostName 10.0.0.1\n");
+        write(dir.path(), "config.d/beta", "Host beta\n    HostName 10.0.0.2\n");
+        let root = write(
+            dir.path(),
+            "config",
+            "Host main\n    HostName main.example\n\nInclude config.d/*\n",
+        );
+        let content = load_with_includes(&root, dir.path()).unwrap();
+        let entries = parse(&content);
+        assert_eq!(aliases(&entries), ["main", "alpha", "beta"]);
+    }
+
+    #[test]
+    fn include_nested_two_levels() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "level2", "Host deep\n    HostName deep.example\n");
+        write(dir.path(), "level1", "Include level2\nHost mid\n    HostName mid.example\n");
+        let root = write(dir.path(), "config", "Include level1\n");
+        let content = load_with_includes(&root, dir.path()).unwrap();
+        assert_eq!(aliases(&parse(&content)), ["deep", "mid"]);
+    }
+
+    #[test]
+    fn include_missing_target_is_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = write(
+            dir.path(),
+            "config",
+            "Include nope/*\nInclude absent-file\nHost real\n    HostName r.example\n",
+        );
+        let content = load_with_includes(&root, dir.path()).unwrap();
+        assert_eq!(aliases(&parse(&content)), ["real"]);
+    }
+
+    #[test]
+    fn include_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let abs = write(other.path(), "extra", "Host abs\n    HostName abs.example\n");
+        let root = write(dir.path(), "config", &format!("Include {}\n", abs.display()));
+        let content = load_with_includes(&root, dir.path()).unwrap();
+        assert_eq!(aliases(&parse(&content)), ["abs"]);
+    }
+
+    #[test]
+    fn include_self_reference_terminates() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = write(dir.path(), "config", "Include config\nHost x\n    HostName x.example\n");
+        // Must not loop forever; depth cap bounds the recursion.
+        let content = load_with_includes(&root, dir.path()).unwrap();
+        assert!(parse(&content).iter().all(|e| e.host_alias == "x"));
+    }
+
+    #[test]
+    fn include_multiple_patterns_on_one_line() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "a", "Host a\n    HostName a.example\n");
+        write(dir.path(), "b", "Host b\n    HostName b.example\n");
+        let root = write(dir.path(), "config", "Include a b\n");
+        let content = load_with_includes(&root, dir.path()).unwrap();
+        assert_eq!(aliases(&parse(&content)), ["a", "b"]);
+    }
+
+    #[test]
+    fn no_include_content_passes_through_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = "Host one\n    HostName 1.example\n\n# comment\n";
+        let root = write(dir.path(), "config", src);
+        assert_eq!(load_with_includes(&root, dir.path()).unwrap(), src);
+    }
+
+    #[test]
+    fn include_root_missing_is_io_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = load_with_includes(&dir.path().join("config"), dir.path()).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 }

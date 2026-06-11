@@ -5078,6 +5078,7 @@ dependencies = [
  "fontdb",
  "futures-util",
  "getrandom 0.2.17",
+ "glob",
  "include_dir",
  "keyring",
  "libc",

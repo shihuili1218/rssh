@@ -103,6 +103,7 @@ pub fn run() {
             commands::profile::import_ssh_config,
             commands::profile::read_ssh_config_default,
             commands::profile::import_ssh_entries,
+            commands::profile::pick_private_key_file,
             // groups
             commands::group::list_groups,
             commands::group::create_group,

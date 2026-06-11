@@ -12,6 +12,7 @@
   let credentialType = $state("password"); let secret = $state("");
   let saveToRemote = $state(false);
   let saving = $state(false);
+  let picking = $state(false);
 
   /** 翻译跟着 locale 变，必须 $derived。 */
   let credentialTypeOptions = $derived([
@@ -30,6 +31,17 @@
       saveToRemote = c.save_to_remote;
     }
   });
+
+  /** Desktop: native dialog at ~/.ssh; browser: <input type=file> via the
+   *  ipc-shim. null = user cancelled — leave the textarea alone. */
+  async function pickKeyFile() {
+    picking = true;
+    try {
+      const content = await invoke<string | null>("pick_private_key_file");
+      if (content != null) secret = content;
+    } catch (e: any) { toast.error(errMsg(e)); }
+    finally { picking = false; }
+  }
 
   async function save() {
     saving = true;
@@ -63,6 +75,11 @@
     {:else if credentialType === "key"}
       <label>{t("credential.private_key")}</label>
       <textarea bind:value={secret} rows="6" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+      {#if !app.isMobile}
+        <button class="btn btn-sm pick-key" onclick={pickKeyFile} disabled={picking}>
+          {t("credential.pick_key_file")}
+        </button>
+      {/if}
       <p class="hint">{t("credential.encrypted_key_hint")}</p>
     {:else if credentialType === "agent"}
       <p class="hint agent-hint">{t("credential.agent_hint")}</p>
@@ -86,6 +103,7 @@
 <style>
   .page { padding: 24px; }
   .form { display: flex; flex-direction: column; gap: 10px; }
+  .pick-key { align-self: flex-start; }
   textarea { font-family: monospace; font-size: 12px; resize: vertical; }
   .hint { font-size: 13px; color: var(--text-dim); margin: 4px 0; line-height: 1.55; }
   .agent-hint { white-space: pre-line; }
