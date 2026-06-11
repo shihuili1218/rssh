@@ -45,11 +45,10 @@
 
     /** Context menu state. */
     let ctxMenu = $state<{ x: number; y: number; entry: RemoteEntry } | null>(null);
-    /** Timestamp of when the context menu was last opened — prevents the
-     *  document mousedown listener and overlay click from immediately closing
-     *  it during the same user interaction (right-click mousedown → menu opens
-     *  → mouseup → click on overlay would otherwise close it instantly). */
-    let ctxMenuOpenedAt = 0;
+    let ctxMenuEl: HTMLDivElement | undefined;
+    let ctxDx = $state(0);
+    let ctxDy = $state(0);
+    let ctxReady = $state(false);
 
     /** Properties dialog state. */
     let propsStat = $state<FileStat | null>(null);
@@ -244,36 +243,40 @@
     function onContextMenu(e: MouseEvent, entry: RemoteEntry) {
         e.preventDefault();
         e.stopPropagation();
-        ctxMenuOpenedAt = Date.now();
+        ctxDx = 0;
+        ctxDy = 0;
+        ctxReady = false;
         ctxMenu = { x: e.clientX, y: e.clientY, entry };
     }
 
-    function closeCtxMenu() { ctxMenu = null; }
+    function closeCtxMenu() { ctxMenu = null; ctxReady = false; }
 
     function onSftpContextMenu(e: MouseEvent) {
         e.preventDefault();
     }
 
+    function onCtxMenuMount() {
+        if (!ctxMenuEl) return;
+        const r = ctxMenuEl.getBoundingClientRect();
+        if (r.right > window.innerWidth) ctxDx = window.innerWidth - r.right - 4;
+        if (r.bottom > window.innerHeight) ctxDy = window.innerHeight - r.bottom - 4;
+        ctxReady = true;
+    }
+
+    $effect(() => {
+        if (ctxMenu && ctxMenuEl) onCtxMenuMount();
+    });
+
     function onDocumentKeydown(e: KeyboardEvent) {
         if (e.key === "Escape" && ctxMenu) closeCtxMenu();
     }
 
-    function onDocumentMousedown(e: MouseEvent) {
-        if (!ctxMenu) return;
-        if (Date.now() - ctxMenuOpenedAt < 400) return;
-        const target = e.target as Node;
-        const menuEl = document.querySelector("[data-ctx-menu]");
-        if (menuEl && !menuEl.contains(target)) closeCtxMenu();
-    }
-
     onMount(() => {
         document.addEventListener("keydown", onDocumentKeydown);
-        document.addEventListener("mousedown", onDocumentMousedown);
     });
 
     onDestroy(() => {
         document.removeEventListener("keydown", onDocumentKeydown);
-        document.removeEventListener("mousedown", onDocumentMousedown);
     });
 
     function onAuxClick(e: MouseEvent, entry: RemoteEntry) {
@@ -575,26 +578,22 @@
 </div>
 
 {#if ctxMenu}
-    <!-- svelte-ignore a11y-click-events-have-key-events -->
-    <div class="ctx-overlay" role="presentation"
-         onclick={() => { if (Date.now() - ctxMenuOpenedAt > 400) closeCtxMenu(); }}
-         onmousedown={() => { if (Date.now() - ctxMenuOpenedAt > 400) closeCtxMenu(); }}
-         oncontextmenu={(e) => { e.preventDefault(); if (Date.now() - ctxMenuOpenedAt > 400) closeCtxMenu(); }}>
-    </div>
-    <div
-        class="ctx-menu"
-        data-ctx-menu
-        style:left="{ctxMenu.x}px; top:{ctxMenu.y}px"
-        role="menu"
-    >
-        <button role="menuitem" onclick={() => downloadEntry(ctxMenu!.entry)}>{t("sftp.ctx.download")}</button>
-        <button role="menuitem" onclick={() => confirmDelete(ctxMenu!.entry)}>{t("sftp.ctx.delete")}</button>
-        <button role="menuitem" onclick={() => startRename(ctxMenu!.entry)}>{t("sftp.ctx.rename")}</button>
-        <div class="ctx-divider"></div>
-        <button role="menuitem" onclick={() => copyPath(ctxMenu!.entry)}>{t("sftp.ctx.copy_path")}</button>
-        <button role="menuitem" onclick={() => copyPathToTerminal(ctxMenu!.entry)}>{t("sftp.ctx.copy_path_terminal")}</button>
-        <div class="ctx-divider"></div>
-        <button role="menuitem" onclick={() => showProperties(ctxMenu!.entry)}>{t("sftp.ctx.properties")}</button>
+    <div class="ctx-backdrop"
+         onclick={closeCtxMenu}
+         oncontextmenu={(e) => { e.preventDefault(); closeCtxMenu(); }}
+         role="presentation"></div>
+    <div class="ctx-menu surface-raised"
+         class:ready={ctxReady}
+         bind:this={ctxMenuEl}
+         style="left: {ctxMenu.x + ctxDx}px; top: {ctxMenu.y + ctxDy}px;">
+        <button class="ctx-item" onclick={() => downloadEntry(ctxMenu!.entry)}>{t("sftp.ctx.download")}</button>
+        <button class="ctx-item" onclick={() => confirmDelete(ctxMenu!.entry)}>{t("sftp.ctx.delete")}</button>
+        <button class="ctx-item" onclick={() => startRename(ctxMenu!.entry)}>{t("sftp.ctx.rename")}</button>
+        <div class="ctx-sep"></div>
+        <button class="ctx-item" onclick={() => copyPath(ctxMenu!.entry)}>{t("sftp.ctx.copy_path")}</button>
+        <button class="ctx-item" onclick={() => copyPathToTerminal(ctxMenu!.entry)}>{t("sftp.ctx.copy_path_terminal")}</button>
+        <div class="ctx-sep"></div>
+        <button class="ctx-item" onclick={() => showProperties(ctxMenu!.entry)}>{t("sftp.ctx.properties")}</button>
     </div>
 {/if}
 
@@ -906,48 +905,55 @@
         padding: 24px;
     }
 
-    /* ── Context menu ── */
+    /* ── Context menu (matches TabContextMenu style) ── */
 
-    .ctx-overlay {
+    .ctx-backdrop {
         position: fixed;
         inset: 0;
-        z-index: 9998;
+        z-index: 500;
     }
 
     .ctx-menu {
         position: fixed;
-        z-index: 9999;
-        background: var(--surface);
-        border: 1px solid var(--divider);
-        border-radius: var(--radius-sm);
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+        z-index: 501;
         min-width: 180px;
-        padding: 4px;
+        padding: calc(4px * var(--density));
+        background: var(--bg);
+        box-shadow: var(--raised);
+        border-radius: var(--radius);
         display: flex;
         flex-direction: column;
-        gap: 2px;
+        gap: 1px;
+        visibility: hidden;
+    }
+    .ctx-menu.ready {
+        visibility: visible;
     }
 
-    .ctx-menu button {
-        background: transparent;
+    .ctx-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        padding: 7px 12px;
         border: none;
-        text-align: left;
-        font: inherit;
-        font-size: 12px;
-        color: var(--text);
-        padding: 6px 12px;
         border-radius: var(--radius-sm);
+        background: transparent;
+        color: var(--text);
+        font-family: inherit;
+        font-size: 13px;
+        text-align: left;
         cursor: pointer;
         white-space: nowrap;
     }
-    .ctx-menu button:hover {
-        background: var(--accent-soft);
+    .ctx-item:hover:not(:disabled) {
+        background: var(--surface);
     }
 
-    .ctx-divider {
+    .ctx-sep {
         height: 1px;
         background: var(--divider);
-        margin: 2px 4px;
+        margin: 4px 6px;
     }
 
     /* ── Modal overlay ── */
@@ -959,7 +965,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        z-index: 10000;
+        z-index: 600;
     }
 
     .modal-card {
