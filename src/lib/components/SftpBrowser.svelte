@@ -1,5 +1,5 @@
 <script lang="ts">
-    import {onDestroy, onMount} from "svelte";
+    import {onDestroy, onMount, tick} from "svelte";
     import {invoke} from "@tauri-apps/api/core";
     import * as app from "../stores/app.svelte.ts";
     import * as transfers from "../stores/transfers.svelte.ts";
@@ -45,7 +45,9 @@
 
     /** Context menu state. */
     let ctxMenu = $state<{ x: number; y: number; entry: RemoteEntry } | null>(null);
-    let ctxMenuEl: HTMLDivElement | undefined;
+    /** True during the same event that opened the context menu — prevents the
+     *  document mousedown listener from immediately closing it. */
+    let ctxJustOpened = false;
 
     /** Properties dialog state. */
     let propsStat = $state<FileStat | null>(null);
@@ -57,6 +59,9 @@
 
     /** Delete confirm state. */
     let deleteEntry = $state<RemoteEntry | null>(null);
+
+    /** Renames the input after mount so it can receive focus. */
+    let renameInputEl: HTMLInputElement | undefined;
 
     const selectedCount = $derived(selected.size);
     const allSelected = $derived(entries.length > 0 && selected.size === entries.length);
@@ -236,23 +241,37 @@
 
     function onContextMenu(e: MouseEvent, entry: RemoteEntry) {
         e.preventDefault();
+        e.stopPropagation();
+        ctxJustOpened = true;
+        requestAnimationFrame(() => { ctxJustOpened = false; });
         ctxMenu = { x: e.clientX, y: e.clientY, entry };
     }
 
     function closeCtxMenu() { ctxMenu = null; }
 
-    $effect(() => {
-        if (ctxMenu) {
-            const handler = (e: MouseEvent) => {
-                if (ctxMenuEl && !ctxMenuEl.contains(e.target as Node)) closeCtxMenu();
-            };
-            window.addEventListener("mousedown", handler);
-            window.addEventListener("contextmenu", handler);
-            return () => {
-                window.removeEventListener("mousedown", handler);
-                window.removeEventListener("contextmenu", handler);
-            };
-        }
+    function onSftpContextMenu(e: MouseEvent) {
+        e.preventDefault();
+    }
+
+    function onDocumentKeydown(e: KeyboardEvent) {
+        if (e.key === "Escape" && ctxMenu) closeCtxMenu();
+    }
+
+    function onDocumentMousedown(e: MouseEvent) {
+        if (!ctxMenu || ctxJustOpened) return;
+        const target = e.target as Node;
+        const menuEl = document.querySelector("[data-ctx-menu]");
+        if (menuEl && !menuEl.contains(target)) closeCtxMenu();
+    }
+
+    onMount(() => {
+        document.addEventListener("keydown", onDocumentKeydown);
+        document.addEventListener("mousedown", onDocumentMousedown);
+    });
+
+    onDestroy(() => {
+        document.removeEventListener("keydown", onDocumentKeydown);
+        document.removeEventListener("mousedown", onDocumentMousedown);
     });
 
     function onAuxClick(e: MouseEvent, entry: RemoteEntry) {
@@ -334,6 +353,7 @@
         closeCtxMenu();
         renameEntry = entry;
         renameValue = entry.name;
+        tick().then(() => { renameInputEl?.focus(); renameInputEl?.select(); });
     }
 
     async function doRename() {
@@ -459,7 +479,7 @@
 
 </script>
 
-<div class="sftp">
+<div class="sftp" oncontextmenu={onSftpContextMenu}>
     <div class="toolbar">
         <span class="title">SFTP</span>
         <span class="grow"></span>
@@ -527,6 +547,7 @@
                     class:dir={e.is_dir}
                     class:selected={selected.has(e.name)}
                     oncontextmenu={(ev) => onContextMenu(ev, e)}
+                    onmousedown={(ev) => { if (ev.button === 2) { ev.preventDefault(); onContextMenu(ev, e); } }}
                     onauxclick={(ev) => onAuxClick(ev, e)}
                 >
                     <span class="cell-check">
@@ -552,10 +573,14 @@
 </div>
 
 {#if ctxMenu}
-    <div class="ctx-overlay" onclick={closeCtxMenu}></div>
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div class="ctx-overlay" role="presentation"
+         onclick={closeCtxMenu}
+         oncontextmenu={(e) => { e.preventDefault(); closeCtxMenu(); }}>
+    </div>
     <div
         class="ctx-menu"
-        bind:this={ctxMenuEl}
+        data-ctx-menu
         style:left="{ctxMenu.x}px; top:{ctxMenu.y}px"
         role="menu"
     >
@@ -883,12 +908,12 @@
     .ctx-overlay {
         position: fixed;
         inset: 0;
-        z-index: 99;
+        z-index: 9998;
     }
 
     .ctx-menu {
         position: fixed;
-        z-index: 100;
+        z-index: 9999;
         background: var(--surface);
         border: 1px solid var(--divider);
         border-radius: var(--radius-sm);
@@ -931,7 +956,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        z-index: 200;
+        z-index: 10000;
     }
 
     .modal-card {
