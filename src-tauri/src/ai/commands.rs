@@ -312,6 +312,7 @@ pub async fn ai_session_start_impl(
         }
         #[cfg(target_os = "android")]
         AiTarget::Local(_) => return Err(AppError::not_found("local_pty_not_found", json!({}))),
+        #[cfg(not(target_os = "android"))]
         AiTarget::Serial(target_id) => {
             // No shell to probe — a serial port is raw bytes. Validate it exists,
             // then run with ShellKind::Serial (no sentinel, no exit code) and no
@@ -321,6 +322,10 @@ pub async fn ai_session_start_impl(
             }
             initial_shell = super::shell::ShellKind::Serial;
             None
+        }
+        #[cfg(target_os = "android")]
+        AiTarget::Serial(_) => {
+            return Err(AppError::not_found("serial_session_not_found", json!({})))
         }
     };
 
@@ -546,11 +551,16 @@ pub async fn ai_session_rebind_target(
         }
         #[cfg(target_os = "android")]
         AiTarget::Local(_) => return Err(AppError::not_found("local_pty_not_found", json!({}))),
+        #[cfg(not(target_os = "android"))]
         AiTarget::Serial(target_id) => {
             if !locked(&state.serial_sessions)?.contains_key(target_id) {
                 return Err(AppError::not_found("serial_session_not_found", json!({})));
             }
             None
+        }
+        #[cfg(target_os = "android")]
+        AiTarget::Serial(_) => {
+            return Err(AppError::not_found("serial_session_not_found", json!({})))
         }
     };
     let target_id = target.id().to_string();

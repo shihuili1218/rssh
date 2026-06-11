@@ -1,16 +1,13 @@
-- slip window
-- 补齐cli功能（group...）cli-first
+- 补齐cli功能（group...）cli-first，rssh status CLI 子命令 — 列当前活跃 SSH session / forward / SFTP
 - Host key / known_hosts 可视化
-- rssh status CLI 子命令 — 列当前活跃 SSH session / forward / SFTP
 - 拆分线程，现在所有会话的所有操作都在一个线程上执行。改成线程池（注意： SFTP 重连场景、后续 Handle 操作），暂时没有瓶颈
-- ai 增加命令黑名单
 - lszrz ❌
 - 命令片段搜索最近命令
 - 无活动锁定密码
 - 选中某一行打上颜色
 - 增加只读
 - 隐藏标题栏
-- 支持串口、telnet ？
+- 支持telnet ？
 - ai session 历史
 - ai session tokencost
 - ai general skill支持修改
