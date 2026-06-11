@@ -46,11 +46,13 @@
   async function save() {
     saving = true;
     try {
+      // Trim paste artifacts off every text field; a whitespace-only secret
+      // collapses to null (= no secret), same as before.
       const credential = {
         id: id ?? crypto.randomUUID(),
-        name, username,
+        name: name.trim(), username: username.trim(),
         type: credentialType,
-        secret: secret || null,
+        secret: secret.trim() || null,
         save_to_remote: saveToRemote,
       };
       if (id) await invoke("update_credential", { credential });
@@ -94,7 +96,7 @@
         <span class="slider"></span>
       </label>
     </div>
-    <button class="btn btn-accent" onclick={save} disabled={saving || !name || !username}>
+    <button class="btn btn-accent" onclick={save} disabled={saving || !name.trim() || !username.trim()}>
       {saving ? t("common.saving") : t("common.save")}
     </button>
   </div>
