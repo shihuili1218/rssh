@@ -243,6 +243,7 @@
     function onContextMenu(e: MouseEvent, entry: RemoteEntry) {
         e.preventDefault();
         e.stopPropagation();
+        if (selected.has(entry.name)) return;
         ctxDx = 0;
         ctxDy = 0;
         ctxReady = false;
@@ -306,11 +307,11 @@
         notice = "";
         if (!meta.sessionId) { error = "Missing SSH session"; return; }
         try {
-            const dir = await invoke<string | null>("sftp_pick_folder");
-            if (!dir) return;
             const remote = entryPath(entry);
-            let queued = 0;
             if (entry.is_dir) {
+                const dir = await invoke<string | null>("sftp_pick_folder");
+                if (!dir) return;
+                let queued = 0;
                 const walked = await invoke<WalkEntry[]>("sftp_walk_remote_dir", { sftpId, remoteRoot: remote });
                 for (const w of walked) {
                     await transfers.startDownload({
@@ -321,16 +322,23 @@
                     });
                     queued++;
                 }
-            } else {
+                if (queued > 0) notice = t("sftp.queued_n", { n: queued });
+            } else if (app.isMobile) {
+                const dir = await invoke<string | null>("sftp_pick_folder");
+                if (!dir) return;
                 await transfers.startDownload({
                     sessionId: meta.sessionId,
                     remotePath: remote,
                     localPath:  joinLocal(dir, entry.name),
                     sizeHint:   entry.size,
                 });
-                queued++;
+                notice = t("sftp.queued_n", { n: 1 });
+            } else {
+                const saved = await invoke<string | null>("sftp_save_file", {
+                    sftpId, remotePath: remote, defaultName: entry.name,
+                });
+                if (saved) notice = t("sftp.queued_n", { n: 1 });
             }
-            if (queued > 0) notice = t("sftp.queued_n", { n: queued });
         } catch (err: any) {
             error = errMsg(err);
         }
@@ -1055,7 +1063,7 @@
 
     .props-ok {
         display: flex;
-        justify-content: center;
+        justify-content: flex-end;
         margin-top: 16px;
     }
 
