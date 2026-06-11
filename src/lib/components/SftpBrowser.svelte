@@ -280,13 +280,6 @@
         document.removeEventListener("keydown", onDocumentKeydown);
     });
 
-    function onAuxClick(e: MouseEvent, entry: RemoteEntry) {
-        if (e.button === 1) {
-            e.preventDefault();
-            copyPathToTerminal(entry);
-        }
-    }
-
     function entryPath(entry: RemoteEntry): string {
         return joinRemote(cwd, entry.name);
     }
@@ -560,7 +553,6 @@
                     class:dir={e.is_dir}
                     class:selected={selected.has(e.name)}
                     oncontextmenu={(ev) => onContextMenu(ev, e)}
-                    onauxclick={(ev) => onAuxClick(ev, e)}
                 >
                     <span class="cell-check">
                         <input
