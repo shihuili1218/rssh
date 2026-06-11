@@ -546,6 +546,7 @@ const zh: Messages = {
 
   // ── 后端错误（按错误码翻译） ──
   "error.unknown": "{message}",
+  "error.key_file_too_large": "文件过大，不像私钥（{size} 字节，上限 1 MB）。",
   "error.redact_invalid_regex": "正则非法: {error}",
   "error.redact_zero_width_pattern": "正则会匹配空串 / 零宽位置，将导致全文过度脱敏。请让它至少匹配一个字符。",
   "error.blacklist_unknown_category": "未知黑名单分类: {category}",

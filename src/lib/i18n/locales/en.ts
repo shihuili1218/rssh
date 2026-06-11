@@ -544,6 +544,7 @@ const en = {
 
   // ── Backend errors (translated by error code) ──
   "error.unknown": "{message}",
+  "error.key_file_too_large": "File is too large to be a private key ({size} bytes, max 1 MB).",
   "error.redact_invalid_regex": "Invalid regex: {error}",
   "error.redact_zero_width_pattern": "Pattern matches empty / zero-width text — it would over-redact everything. Make it match at least one character.",
   "error.blacklist_unknown_category": "Unknown blacklist category: {category}",

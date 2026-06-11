@@ -46,13 +46,14 @@
   async function save() {
     saving = true;
     try {
-      // Trim paste artifacts off every text field; a whitespace-only secret
-      // collapses to null (= no secret), same as before.
+      // Trim paste artifacts off name/username, and off the secret only for
+      // keys (PEM is whitespace-tolerant); passwords may legitimately start
+      // or end with spaces. Empty string still collapses to null (= no secret).
       const credential = {
         id: id ?? crypto.randomUUID(),
         name: name.trim(), username: username.trim(),
         type: credentialType,
-        secret: secret.trim() || null,
+        secret: (credentialType === "key" ? secret.trim() : secret) || null,
         save_to_remote: saveToRemote,
       };
       if (id) await invoke("update_credential", { credential });

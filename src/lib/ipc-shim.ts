@@ -255,6 +255,9 @@ export function installTauriShim(): void {
         pick_private_key_file: async () => {
             const files = await pickLocalFiles("", false);
             if (!files || !files[0]) return null;
+            // Same 1 MiB cap (and wire shape → same i18n) as the desktop command.
+            if (files[0].size > 1024 * 1024)
+                throw `__rssh_err__|${JSON.stringify({ code: "key_file_too_large", params: { size: files[0].size } })}`;
             return files[0].text();
         },
         ai_audit_save_pick: async (a) => {

@@ -88,7 +88,7 @@ pub fn parse(content: &str) -> Vec<SshConfigEntry> {
 }
 
 /// Maximum `Include` nesting depth — same cap as OpenSSH's
-/// MAX_INCLUDE_DEPTH. Also bounds self/cyclic includes.
+/// MAX_INCLUDE_DEPTH.
 const MAX_INCLUDE_DEPTH: usize = 16;
 
 /// Read an ssh config file and splice the contents of `Include` directives
@@ -96,20 +96,29 @@ const MAX_INCLUDE_DEPTH: usize = 16;
 /// resolve against (OpenSSH semantics: `~/.ssh` for user configs).
 ///
 /// Missing or unreadable included files are skipped, like a glob with no
-/// matches. IO errors on the root file propagate to the caller.
+/// matches. A file already on the active include chain is skipped too, so
+/// cycles don't duplicate content. IO errors on the root file propagate.
 pub fn load_with_includes(path: &std::path::Path, base: &std::path::Path) -> std::io::Result<String> {
     let content = std::fs::read_to_string(path)?;
     let mut out = String::new();
-    splice_includes(&content, base, 0, &mut out);
+    let mut chain = vec![canonical(path)];
+    splice_includes(&content, base, &mut chain, &mut out);
     Ok(out)
 }
 
-fn splice_includes(content: &str, base: &std::path::Path, depth: usize, out: &mut String) {
+/// `chain` holds the canonicalized files currently being expanded, root first —
+/// membership detects cycles, length bounds the depth.
+fn splice_includes(
+    content: &str,
+    base: &std::path::Path,
+    chain: &mut Vec<std::path::PathBuf>,
+    out: &mut String,
+) {
     for line in content.lines() {
         match include_patterns(line) {
-            Some(patterns) if depth < MAX_INCLUDE_DEPTH => {
-                for pat in patterns.split_whitespace() {
-                    splice_pattern(pat.trim_matches('"'), base, depth, out);
+            Some(patterns) if chain.len() <= MAX_INCLUDE_DEPTH => {
+                for pat in split_include_patterns(patterns) {
+                    splice_pattern(&pat, base, chain, out);
                 }
             }
             _ => {
@@ -126,20 +135,59 @@ fn include_patterns(line: &str) -> Option<&str> {
     key.eq_ignore_ascii_case("include").then_some(value.trim())
 }
 
-fn splice_pattern(pattern: &str, base: &std::path::Path, depth: usize, out: &mut String) {
+/// Whitespace-separated patterns; double quotes keep embedded spaces
+/// (`Include "My Keys/*.conf"`), matching OpenSSH's argument lexer.
+fn split_include_patterns(value: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    for c in value.chars() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            c if c.is_whitespace() && !in_quotes => {
+                if !cur.is_empty() {
+                    tokens.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        tokens.push(cur);
+    }
+    tokens
+}
+
+fn splice_pattern(
+    pattern: &str,
+    base: &std::path::Path,
+    chain: &mut Vec<std::path::PathBuf>,
+    out: &mut String,
+) {
     let expanded = expand_tilde(pattern);
     let full = if std::path::Path::new(&expanded).is_absolute() {
         expanded
     } else {
         base.join(&expanded).to_string_lossy().into_owned()
     };
-    // glob yields matches in alphabetical order; a bad pattern means no files.
+    // glob 0.3 documents alphabetical yield order; a bad pattern means no files.
     let Ok(paths) = glob::glob(&full) else { return };
     for path in paths.flatten() {
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            splice_includes(&content, base, depth + 1, out);
+        let cpath = canonical(&path);
+        if chain.contains(&cpath) {
+            continue; // cycle — this file is an ancestor of itself
         }
+        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        chain.push(cpath);
+        splice_includes(&content, base, chain, out);
+        chain.pop();
     }
+}
+
+/// Symlink-stable identity for cycle detection; unresolvable paths fall back
+/// to themselves (they failed read_to_string anyway).
+fn canonical(p: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
 fn expand_tilde(path: &str) -> String {
@@ -349,12 +397,32 @@ Host two
     }
 
     #[test]
-    fn include_self_reference_terminates() {
+    fn include_self_reference_is_skipped() {
         let dir = tempfile::tempdir().unwrap();
         let root = write(dir.path(), "config", "Include config\nHost x\n    HostName x.example\n");
-        // Must not loop forever; depth cap bounds the recursion.
+        // A file already on the active include chain is not expanded again.
         let content = load_with_includes(&root, dir.path()).unwrap();
-        assert!(parse(&content).iter().all(|e| e.host_alias == "x"));
+        assert_eq!(aliases(&parse(&content)), ["x"]);
+    }
+
+    #[test]
+    fn include_mutual_cycle_expands_each_file_once() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "a", "Include b\nHost a\n    HostName a.example\n");
+        write(dir.path(), "b", "Include a\nHost b\n    HostName b.example\n");
+        let root = write(dir.path(), "config", "Include a\n");
+        let content = load_with_includes(&root, dir.path()).unwrap();
+        assert_eq!(aliases(&parse(&content)), ["b", "a"]);
+    }
+
+    #[test]
+    fn include_quoted_pattern_with_spaces() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "my keys/host.conf", "Host quoted\n    HostName q.example\n");
+        write(dir.path(), "plain", "Host plain\n    HostName p.example\n");
+        let root = write(dir.path(), "config", "Include \"my keys/*.conf\" plain\n");
+        let content = load_with_includes(&root, dir.path()).unwrap();
+        assert_eq!(aliases(&parse(&content)), ["quoted", "plain"]);
     }
 
     #[test]
