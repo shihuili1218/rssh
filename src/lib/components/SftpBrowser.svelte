@@ -45,9 +45,11 @@
 
     /** Context menu state. */
     let ctxMenu = $state<{ x: number; y: number; entry: RemoteEntry } | null>(null);
-    /** True during the same event that opened the context menu — prevents the
-     *  document mousedown listener from immediately closing it. */
-    let ctxJustOpened = false;
+    /** Timestamp of when the context menu was last opened — prevents the
+     *  document mousedown listener and overlay click from immediately closing
+     *  it during the same user interaction (right-click mousedown → menu opens
+     *  → mouseup → click on overlay would otherwise close it instantly). */
+    let ctxMenuOpenedAt = 0;
 
     /** Properties dialog state. */
     let propsStat = $state<FileStat | null>(null);
@@ -242,8 +244,7 @@
     function onContextMenu(e: MouseEvent, entry: RemoteEntry) {
         e.preventDefault();
         e.stopPropagation();
-        ctxJustOpened = true;
-        requestAnimationFrame(() => { ctxJustOpened = false; });
+        ctxMenuOpenedAt = Date.now();
         ctxMenu = { x: e.clientX, y: e.clientY, entry };
     }
 
@@ -258,7 +259,8 @@
     }
 
     function onDocumentMousedown(e: MouseEvent) {
-        if (!ctxMenu || ctxJustOpened) return;
+        if (!ctxMenu) return;
+        if (Date.now() - ctxMenuOpenedAt < 400) return;
         const target = e.target as Node;
         const menuEl = document.querySelector("[data-ctx-menu]");
         if (menuEl && !menuEl.contains(target)) closeCtxMenu();
@@ -291,7 +293,7 @@
     }
 
     function copyPathToTerminal(entry: RemoteEntry) {
-        app.sendToTerminal(entryPath(entry) + " ");
+        app.sendToTerminal(entryPath(entry));
         closeCtxMenu();
     }
 
@@ -575,8 +577,9 @@
 {#if ctxMenu}
     <!-- svelte-ignore a11y-click-events-have-key-events -->
     <div class="ctx-overlay" role="presentation"
-         onclick={closeCtxMenu}
-         oncontextmenu={(e) => { e.preventDefault(); closeCtxMenu(); }}>
+         onclick={() => { if (Date.now() - ctxMenuOpenedAt > 400) closeCtxMenu(); }}
+         onmousedown={() => { if (Date.now() - ctxMenuOpenedAt > 400) closeCtxMenu(); }}
+         oncontextmenu={(e) => { e.preventDefault(); if (Date.now() - ctxMenuOpenedAt > 400) closeCtxMenu(); }}>
     </div>
     <div
         class="ctx-menu"
