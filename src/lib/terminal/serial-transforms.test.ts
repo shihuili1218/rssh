@@ -61,6 +61,11 @@ describe("parseHexInput", () => {
     expect(parseHexInput("zz")).toEqual([]);
     expect(parseHexInput("")).toEqual([]);
   });
+  it("rejects a partially-valid pair instead of parseInt's lenient prefix", () => {
+    // parseInt("0g", 16) === 0 — without strict validation this would send 0x00.
+    expect(parseHexInput("0g")).toEqual([]);
+    expect(parseHexInput("ag0f")).toEqual([0x0f]); // "ag" rejected, "0f" kept
+  });
 });
 
 describe("parseLoginScript", () => {

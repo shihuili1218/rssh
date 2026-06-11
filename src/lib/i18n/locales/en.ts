@@ -318,7 +318,6 @@ const en = {
   "forward.active_connections": "Active connections",
   "serial.new": "+ New",
   "serial.empty": "No saved serial consoles",
-  "serial.connect": "Connect",
   "serial.name_placeholder": "Router console",
   "serial.port": "Port",
   "serial.baud": "Baud rate",
@@ -433,6 +432,7 @@ const en = {
   "ai.cmd.warn.truncated": "Truncated {bytes}B",
   "ai.cmd.empty_output": "(empty output)",
   "ai.cmd.alert.exec_failed": "Execute failed: {error}",
+  "ai.cmd.alert.submit_failed": "Submit failed: {error}",
   "ai.cmd.patch.tag": "[AI patch]",
   "ai.cmd.proposed.tag": "[AI proposed]",
 

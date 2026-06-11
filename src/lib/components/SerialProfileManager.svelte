@@ -40,7 +40,6 @@
         <div class="item-sub">{s.port} · {s.baud_rate} {framing(s)}</div>
       </div>
       <div class="item-actions">
-        <button class="btn btn-sm btn-accent" onclick={() => app.connectSerialProfile(s)}>{t("serial.connect")}</button>
         <button class="btn btn-sm" onclick={() => app.navigate("serial-profile-edit", s.id)}>{t("common.edit")}</button>
         <button class="btn btn-sm btn-danger" onclick={() => remove(s.id)} disabled={deleting === s.id}>
           {deleting === s.id ? "..." : t("common.delete")}

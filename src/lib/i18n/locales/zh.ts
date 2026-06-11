@@ -320,7 +320,6 @@ const zh: Messages = {
   "forward.active_connections": "活跃连接",
   "serial.new": "+ 新建",
   "serial.empty": "暂无已保存的串口控制台",
-  "serial.connect": "连接",
   "serial.name_placeholder": "路由器控制台",
   "serial.port": "端口",
   "serial.baud": "波特率",
@@ -435,6 +434,7 @@ const zh: Messages = {
   "ai.cmd.warn.truncated": "截断 {bytes}B",
   "ai.cmd.empty_output": "(空输出)",
   "ai.cmd.alert.exec_failed": "执行失败: {error}",
+  "ai.cmd.alert.submit_failed": "提交失败: {error}",
   "ai.cmd.patch.tag": "[AI 改文件]",
   "ai.cmd.proposed.tag": "[AI 提议]",
 

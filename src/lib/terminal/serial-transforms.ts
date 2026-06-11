@@ -45,8 +45,12 @@ export function parseHexInput(hex: string): number[] {
   const clean = hex.replace(/\s+/g, "");
   const out: number[] = [];
   for (let i = 0; i + 1 < clean.length; i += 2) {
-    const b = parseInt(clean.slice(i, i + 2), 16);
-    if (!isNaN(b)) out.push(b);
+    const pair = clean.slice(i, i + 2);
+    // Strict hex only. parseInt("0g", 16) returns 0 (it stops at the first bad
+    // char instead of failing), which would silently send a wrong byte to the
+    // device — so validate the whole pair before accepting it.
+    if (!/^[0-9a-fA-F]{2}$/.test(pair)) continue;
+    out.push(parseInt(pair, 16));
   }
   return out;
 }

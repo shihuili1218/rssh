@@ -185,7 +185,10 @@
         try {
             await ai.submitCommand(cmd.tool_call_id);
         } catch (e) {
+            // Match approve()'s feedback — otherwise a failed submit looks like a
+            // dead button (user clicked, nothing happened, no clue why).
             console.error("[ai] submit failed:", e);
+            alert(t("ai.cmd.alert.submit_failed", { error: errMsg(e) }));
             submitting = false;
         }
     }

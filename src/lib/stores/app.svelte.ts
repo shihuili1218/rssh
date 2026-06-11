@@ -589,7 +589,13 @@ export async function loadForwards(): Promise<Forward[]> {
 export async function loadSerialProfiles(): Promise<SerialProfile[]> {
   // Desktop-only: the command isn't registered on Android. Degrade to [] rather
   // than rejecting, so callers (e.g. HomeScreen's Promise.all) don't break on mobile.
-  return invoke<SerialProfile[]>("list_serial_profiles").catch(() => []);
+  // On desktop the command IS registered, so a failure is a real problem (DB /
+  // serialization) — log it so it's diagnosable instead of silently showing "no
+  // profiles". Mobile stays quiet (expected "not registered").
+  return invoke<SerialProfile[]>("list_serial_profiles").catch((e) => {
+    if (!isMobile) console.warn("[serial] list_serial_profiles failed:", e);
+    return [];
+  });
 }
 export async function loadSnippets(): Promise<Snippet[]> {
   return invoke<Snippet[]>("load_snippets");

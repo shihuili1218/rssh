@@ -253,7 +253,7 @@
           {@const cred = credentialFor(p)}
           <div class="card-wrap">
             <button
-              class="card-btn neu-raised"
+              class="card-btn surface-raised"
               class:selected={navSection === "profile" && navIdx === section.offset + i}
               onclick={() => connectProfile(p)}
             >
@@ -281,7 +281,7 @@
       {#each forwards as f, i (f.id)}
         {@const fp = profileFor(f)}
         <button
-          class="card-btn neu-raised"
+          class="card-btn surface-raised"
           class:selected={navSection === "forward" && navIdx === i}
           onclick={() => openForward(f)}
         >
@@ -301,7 +301,7 @@
     <div class="grid" bind:this={serialGridEl}>
       {#each serialProfiles as s, i (s.id)}
         <button
-          class="card-btn neu-raised"
+          class="card-btn surface-raised"
           class:selected={navSection === "serial" && navIdx === i}
           onclick={() => app.connectSerialProfile(s)}
         >
