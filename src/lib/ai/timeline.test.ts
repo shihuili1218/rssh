@@ -63,6 +63,7 @@ describe("restoreTimeline", () => {
       { kind: "command", cmd: { id: 7, cmd: "x" } },    // id not a string
       { kind: "user", at: 2 },                          // no text
       { kind: "assistant", text: "no id", at: 3 },      // no id
+      { kind: "note", text: "no timestamp" },           // no at → "Invalid Date"
       { kind: "note", text: "ok", at: 4 },
     ]);
     expect(items).toEqual([{ kind: "note", text: "ok", at: 4 }]);

@@ -1319,11 +1319,18 @@ fn ai_rebind(state: &AppState, args: Value) -> Result<Value, Value> {
         }
     };
     let target_id = target.id().to_string();
+    // Same conversation-scope guard as the Tauri command — a cross-scope
+    // rebind would append this transcript into another scope's stored row.
+    let new_target_key =
+        crate::ai::commands::conversation_target_key(state, &target).map_err(err_value)?;
     let tx = {
         let mut g = locked(&state.ai_sessions).map_err(err_value)?;
         let s = g
             .get_mut(&tab_id)
             .ok_or_else(|| json!("ai_session_not_found"))?;
+        if s.target_key != new_target_key {
+            return Err(json!("conversation_target_mismatch"));
+        }
         s.target_id = target_id.clone();
         s.action_tx.clone()
     };

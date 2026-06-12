@@ -17,9 +17,13 @@ function isStr(v: unknown): v is string {
 }
 
 /** Per-kind shape check — the fields the templates dereference unconditionally
- *  (renderMarkdown(text), CommandConfirmDialog's cmd.*). A known kind with a
- *  mangled body must be dropped here, not crash the panel at render time. */
+ *  (renderMarkdown(text), fmt(at), CommandConfirmDialog's cmd.*). A known kind
+ *  with a mangled body must be dropped here, not crash the panel at render
+ *  time. Deliberately NOT a full schema: blobs are written by our own
+ *  serializer, this guards against crashes and visible junk ("Invalid Date"),
+ *  not against every cosmetic defect of a hand-corrupted row. */
 function isRenderable(item: ChatItem): boolean {
+  if (typeof item.at !== "number") return false;
   switch (item.kind) {
     case "user":
     case "error":

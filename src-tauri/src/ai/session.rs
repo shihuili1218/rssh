@@ -120,6 +120,11 @@ pub struct DiagnoseSession {
     /// Persistent identity in ai_conversations (resume reuses the old id).
     /// The front-end keys its timeline autosaves on this.
     pub conversation_id: String,
+    /// Conversation scope ("ssh:<profile_id>" / "local" / "serial:<port>").
+    /// Fixed for the actor lifetime: rebind rejects a target whose key
+    /// differs, so a conversation row can never accumulate another scope's
+    /// transcript. Checked by commands layer, never read by the actor.
+    pub target_key: String,
 }
 
 pub struct SessionConfig {
@@ -162,6 +167,9 @@ pub struct SessionConfig {
     /// (commands layer) — autosaves are UPDATE-only, see db::ai_conversation.
     pub db: Arc<crate::db::Db>,
     pub conversation_id: String,
+    /// See DiagnoseSession.target_key — threaded through for the rebind scope
+    /// guard; the actor itself never reads it.
+    pub target_key: String,
     /// Resumed conversations are born with their persisted history; new ones empty.
     pub initial_history: Vec<ChatMessage>,
 }
@@ -230,6 +238,7 @@ pub fn start(mut cfg: SessionConfig, app: crate::emitter::Host) -> AppResult<Pen
         audit: audit.clone(),
         cancel_slot: cancel_slot.clone(),
         conversation_id: cfg.conversation_id.clone(),
+        target_key: cfg.target_key.clone(),
     };
 
     let initial_history = std::mem::take(&mut cfg.initial_history);

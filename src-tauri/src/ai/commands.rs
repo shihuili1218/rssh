@@ -355,6 +355,7 @@ pub async fn ai_session_start_impl(
     //    defensive — the picker UI only lists matching conversations, but a
     //    stale front-end cache must not graft an SSH history onto a serial port.
     let target_key = conversation_target_key(state, &target)?;
+    let is_new_conversation = resume.is_none();
     let (conversation_id, initial_history) = match resume {
         Some(id) => {
             // One live actor per conversation — a second resume would mean two
@@ -408,6 +409,7 @@ pub async fn ai_session_start_impl(
         shell_kind: initial_shell,
         db: state.db.clone(),
         conversation_id,
+        target_key: target_key.clone(),
         initial_history,
     };
 
@@ -438,15 +440,20 @@ pub async fn ai_session_start_impl(
         }
         g.insert(tab_id, pending.launch());
     }
-    // Create the conversation row only after winning the slot — a racing
-    // loser must not litter the picker with an empty row. Autosaves are
-    // UPDATE-only, so without this row they no-op. Failure is logged, not
-    // fatal: the session is already live, and killing it over a persistence
-    // miss would be backwards.
-    if let Err(e) =
-        crate::db::ai_conversation::create(&state.db, &info.conversation_id, &target_key)
-    {
-        log::warn!("conversation row create failed: {e}");
+    // Create the conversation row only for NEW conversations, and only after
+    // winning the slot — a racing loser must not litter the picker with an
+    // empty row. Resume must NOT create: its row already exists, and an
+    // unconditional INSERT OR IGNORE here would resurrect a conversation
+    // deleted in the load→insert window, breaking the anti-resurrection
+    // invariant (autosaves are UPDATE-only precisely to uphold it).
+    // Failure is logged, not fatal: the session is already live, and killing
+    // it over a persistence miss would be backwards.
+    if is_new_conversation {
+        if let Err(e) =
+            crate::db::ai_conversation::create(&state.db, &info.conversation_id, &target_key)
+        {
+            log::warn!("conversation row create failed: {e}");
+        }
     }
     Ok(info)
 }
@@ -627,6 +634,12 @@ pub async fn ai_session_rebind_target(
         }
     };
     let target_id = target.id().to_string();
+    // Conversation scope guard: the persisted conversation row is keyed by
+    // target_key, fixed at session start. A rebind within the same scope
+    // (SSH reconnect to the same profile) passes; a cross-scope rebind would
+    // silently append this transcript into another scope's stored
+    // conversation, so it is rejected outright.
+    let new_target_key = conversation_target_key(&state, &target)?;
 
     // 锁里一次完成：拿 action_tx + 同步更新 stored target_id。
     // 不更新 stored 那一份的话，ai_list_sessions / AiSessionInfo::from 会一直
@@ -636,6 +649,12 @@ pub async fn ai_session_rebind_target(
         let s = g
             .get_mut(&tab_id)
             .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
+        if s.target_key != new_target_key {
+            return Err(AppError::other(
+                "conversation_target_mismatch",
+                json!({ "expected": s.target_key, "actual": new_target_key }),
+            ));
+        }
         s.target_id = target_id.clone();
         s.action_tx.clone()
     };
@@ -750,7 +769,7 @@ pub async fn ai_list_sessions(state: State<'_, AppState>) -> AppResult<Vec<AiSes
 /// Requires a live target (same precondition as session start itself): the
 /// profile id / port name live on the connected handle, and both the picker
 /// and resume only make sense on a connected tab.
-fn conversation_target_key(state: &AppState, target: &AiTarget) -> AppResult<String> {
+pub(crate) fn conversation_target_key(state: &AppState, target: &AiTarget) -> AppResult<String> {
     Ok(match target {
         AiTarget::Ssh(id) => {
             let g = locked(&state.sessions)?;
