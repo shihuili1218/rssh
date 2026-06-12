@@ -79,6 +79,16 @@ export interface AiSessionInfo {
   skill: string;
   model: string;
   provider: LlmProvider;
+  /** ai_conversations 行 id —— timeline 自动保存按它写库；resume 沿用旧 id。 */
+  conversation_id: string;
+}
+
+/** 历史对话列表项（无 blob，给 picker 用）。时间戳为 epoch 毫秒。 */
+export interface ConversationMeta {
+  id: string;
+  title: string;
+  created_at: number;
+  updated_at: number;
 }
 
 /** 远端 shell 三家族 —— 跟 Rust 端 ShellKind 一对一镜像（lowercase wire format）。 */

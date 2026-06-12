@@ -11,6 +11,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { t, locale as currentLocale } from "../i18n/index.svelte.ts";
 import { extractOutput, findSentinel } from "./pty-output.ts";
 import { PROBE_COMMAND, classifyProbeBuffer } from "./shell-probe.ts";
+import { restoreTimeline } from "./timeline.ts";
 import type {
   AiSessionInfo,
   AiSettings,
@@ -20,6 +21,7 @@ import type {
   CommandProposed,
   CategoryGroup,
   CommandResult,
+  ConversationMeta,
   LlmProvider,
   ModelInfo,
   RedactRuleRecord,
@@ -110,18 +112,78 @@ export function tokenUsage(tab_id: string): TokenUsage {
 function pushChat(tab_id: string, item: ChatItem) {
   const arr = _chatByTab[tab_id] ?? [];
   _chatByTab[tab_id] = [...arr, item];
+  schedulePersist(tab_id);
+}
+
+// ─── Timeline 自动保存 ─────────────────────────────────────────────
+// 后端 actor 自己保存 LLM history；UI timeline 归前端管，在每个改动 chat
+// 数组的事件后落库。300ms 防抖把一轮 turn 的事件突发（user_message →
+// command_proposed → completed → message_end）合并成一两次写。
+// fire-and-forget：持久化是旁路功能，写失败只记 console，不打断对话。
+
+const _persistTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+
+function schedulePersist(tab_id: string) {
+  if (!_sessionByTab[tab_id]) return;
+  clearTimeout(_persistTimers[tab_id]);
+  _persistTimers[tab_id] = setTimeout(() => {
+    delete _persistTimers[tab_id];
+    const id = _sessionByTab[tab_id]?.conversation_id;
+    const items = _chatByTab[tab_id];
+    if (!id || !items) return;
+    invoke("ai_conversation_save_timeline", { id, timeline: JSON.stringify(items) })
+      .catch((e) => console.error("[ai] persist timeline:", e));
+  }, 300);
+}
+
+/** 该 profile / 端口下持久化过的历史对话，最近活跃在前。 */
+export async function listConversations(
+  target_kind: AiTargetKind,
+  target_id: string,
+): Promise<ConversationMeta[]> {
+  return invoke<ConversationMeta[]>("ai_conversations_list", {
+    target: { kind: target_kind, id: target_id },
+  });
+}
+
+export async function deleteConversation(id: string): Promise<void> {
+  await invoke("ai_conversation_delete", { id });
 }
 
 // ─── Lifecycle ────────────────────────────────────────────────────
 
-export async function startSession(args: {
+export interface StartSessionArgs {
   tabId: string;
   targetKind: AiTargetKind;
   targetId: string;
   skill: string;
   provider: string;
   model: string;
-}): Promise<AiSessionInfo> {
+}
+
+export async function startSession(args: StartSessionArgs): Promise<AiSessionInfo> {
+  return launchSession(args, null);
+}
+
+/** 恢复持久化的对话：actor 带旧 history 出生，UI 灌回存储的 timeline。 */
+export async function resumeSession(
+  args: StartSessionArgs,
+  conversationId: string,
+): Promise<AiSessionInfo> {
+  return launchSession(args, conversationId);
+}
+
+async function launchSession(
+  args: StartSessionArgs,
+  resumeId: string | null,
+): Promise<AiSessionInfo> {
+  // timeline 先取后启动：取失败就整体失败，不会出现"LLM 记得、UI 一片空白"
+  // 的半恢复状态。新对话跳过，timeline 就是空数组。
+  let timeline: ChatItem[] = [];
+  if (resumeId) {
+    const json = await invoke<string>("ai_conversation_timeline", { id: resumeId });
+    timeline = restoreTimeline(json, t("ai.history.stale_command"));
+  }
   const info = await invoke<AiSessionInfo>("ai_session_start", {
     tabId: args.tabId,
     target: { kind: args.targetKind, id: args.targetId },
@@ -129,12 +191,13 @@ export async function startSession(args: {
     provider: args.provider,
     model: args.model,
     locale: currentLocale(),
+    resume: resumeId,
   });
   // info.tab_id 后端权威 —— 跟 args.tabId 一定一致（后端按入参 insert），但用
   // 后端返回值就消除"未来后端 normalize tab_id"导致 cache miss 的隐患。
   _sessionByTab[info.tab_id] = info;
   _targetKindByTab[info.tab_id] = args.targetKind;
-  _chatByTab[info.tab_id] = [];
+  _chatByTab[info.tab_id] = timeline;
   _activeTabId = info.tab_id;
   await attachListeners(info);
   return info;
@@ -152,6 +215,19 @@ export async function stopSession(tab_id: string) {
   for (const exec of Array.from(_runningExecutions.values())) {
     if (exec.tabId === tab_id && !exec.resolved) {
       await exec.terminate();
+    }
+  }
+
+  // Flush a pending timeline save synchronously-ish: cancel the timer and
+  // fire the write now, before session state is torn down.
+  if (_persistTimers[tab_id]) {
+    clearTimeout(_persistTimers[tab_id]);
+    delete _persistTimers[tab_id];
+    const id = _sessionByTab[tab_id]?.conversation_id;
+    const items = _chatByTab[tab_id];
+    if (id && items) {
+      invoke("ai_conversation_save_timeline", { id, timeline: JSON.stringify(items) })
+        .catch((e) => console.error("[ai] persist timeline:", e));
     }
   }
 
@@ -635,6 +711,7 @@ async function attachListeners(info: AiSessionInfo) {
           };
           _chatByTab[tab] = [...arr.slice(0, i), replaced, ...arr.slice(i + 1)];
         }
+        schedulePersist(tab);
         return;
       }
     }
@@ -723,6 +800,7 @@ async function attachListeners(info: AiSessionInfo) {
       if (item.kind === "command" && item.cmd.id === e.payload.id) {
         const replaced: ChatItem = { ...item, result: e.payload };
         _chatByTab[tab] = [...arr.slice(0, i), replaced, ...arr.slice(i + 1)];
+        schedulePersist(tab);
         break;
       }
     }
@@ -739,6 +817,7 @@ async function attachListeners(info: AiSessionInfo) {
       if (item.kind === "command" && item.cmd.id === e.payload.id) {
         const replaced: ChatItem = { ...item, rejected: { reason: e.payload.reason } };
         _chatByTab[tab] = [...arr.slice(0, i), replaced, ...arr.slice(i + 1)];
+        schedulePersist(tab);
         break;
       }
     }
@@ -754,6 +833,8 @@ async function attachListeners(info: AiSessionInfo) {
     _chatByTab[tab] = [];
     _pendingByTab[tab] = null;
     _keyboardLockedByTab[tab] = false;
+    // 存储的 timeline 跟着清空 —— 镜像后端（它也清空了存储的 history）。
+    schedulePersist(tab);
   }));
 
   u.push(await listen<{}>(`ai:session_ended:${tab}`, () => {

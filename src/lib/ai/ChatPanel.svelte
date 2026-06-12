@@ -1,6 +1,6 @@
 <script lang="ts">
     import * as ai from "./store.svelte.ts";
-    import type { AiTargetKind, ChatItem } from "./types.ts";
+    import type { AiTargetKind, ChatItem, ConversationMeta } from "./types.ts";
     import CommandConfirmDialog from "./CommandConfirmDialog.svelte";
     import AuditPanel from "./AuditPanel.svelte";
     import { renderMarkdown } from "./markdown.ts";
@@ -35,6 +35,10 @@
     // 本会话累计 token 用量（actor 生命周期，清上下文不归零——花掉的钱不会退）。
     let tokens = $derived(ai.tokenUsage(tabId));
 
+    // 该 profile 下持久化的历史对话 —— 仅会话未启动时展示（picker）。
+    // null = 还没加载完，与空数组（确无历史）区分，避免列表闪现。
+    let conversations = $state<ConversationMeta[] | null>(null);
+
     onMount(async () => {
         // 只拉 settings（提示词标题的 danger 旗等要它）。不在这里预启 session ——
         // shell 探测已移到 SSH 连接成功时跑（TerminalPane），开 panel 不再为探测拉
@@ -42,6 +46,25 @@
         if (!ai.settings()) {
             try { await ai.loadSettings(); } catch { /* 静默 */ }
         }
+    });
+
+    // 历史对话随当前 target 重新加载 —— AppShell 复用同一个 ChatPanel 实例，
+    // 切 tab 只换 props 不重挂载，onMount 不会再跑，必须用 $effect 跟踪。
+    // seq 守卫：快速连续切 tab 时丢弃迟到的旧响应，避免 A 的列表盖到 B 头上。
+    let convSeq = 0;
+    $effect(() => {
+        const kind = targetKind;
+        const id = targetId;
+        if (session) return; // 会话已存在：picker 不展示，无需拉取
+        conversations = null;
+        const seq = ++convSeq;
+        ai.listConversations(kind, id)
+            .then((list) => { if (seq === convSeq) conversations = list; })
+            .catch((e) => {
+                // 列表加载失败不挡新对话 —— picker 缺席即可。
+                console.error("[ai] list conversations:", e);
+                if (seq === convSeq) conversations = [];
+            });
     });
 
     $effect(() => {
@@ -78,6 +101,42 @@
         } finally {
             ensureInFlight = null;
         }
+    }
+
+    /** 点历史对话：actor 带旧 history 出生，UI 灌回存储的 timeline，直接可续聊。 */
+    async function resumeConversation(id: string) {
+        if (busy || session) return;
+        banner = null;
+        busy = true;
+        try {
+            const settings = ai.settings() ?? await ai.loadSettings();
+            if (!settings.has_api_key) {
+                throw new Error(t("ai.error.no_api_key"));
+            }
+            await ai.resumeSession({
+                tabId, targetKind, targetId, skill: "general",
+                provider: settings.provider, model: settings.model,
+            }, id);
+        } catch (e: any) {
+            console.error("[ai] resume failed:", e);
+            banner = errMsg(e);
+        } finally {
+            busy = false;
+        }
+    }
+
+    async function deleteConversation(id: string) {
+        try {
+            await ai.deleteConversation(id);
+            conversations = (conversations ?? []).filter((c) => c.id !== id);
+        } catch (e) {
+            console.error("[ai] delete conversation:", e);
+            banner = errMsg(e);
+        }
+    }
+
+    function fmtDate(ms: number) {
+        return new Date(ms).toLocaleString();
     }
 
     async function send() {
@@ -241,6 +300,22 @@
                     <p class="hint">{t("ai.placeholder.example_hint")}</p>
                     <p class="hint">{t("ai.placeholder.confirm_hint")}</p>
                 </div>
+                {#if conversations && conversations.length > 0}
+                    <div class="history">
+                        <div class="history-title">{t("ai.history.title")}</div>
+                        {#each conversations as c (c.id)}
+                            <div class="history-row">
+                                <button class="history-item" onclick={() => resumeConversation(c.id)}
+                                        disabled={busy} title={t("ai.history.resume_tip")}>
+                                    <span class="history-name">{c.title || t("ai.history.untitled")}</span>
+                                    <span class="history-time">{fmtDate(c.updated_at)}</span>
+                                </button>
+                                <button class="btn-icon history-del" onclick={() => deleteConversation(c.id)}
+                                        title={t("ai.history.delete")} aria-label={t("ai.history.delete")}>×</button>
+                            </div>
+                        {/each}
+                    </div>
+                {/if}
             {/if}
         </div>
 
@@ -362,8 +437,36 @@
         color: var(--text-dim);
         line-height: 1.6;
     }
-    .placeholder.dim { font-size: 13px; padding: 32px; }
+    .placeholder.dim { font-size: 13px; padding: 32px 32px 8px; }
     .hint { font-size: 12px; }
+
+    /* 历史对话 picker —— 仅空状态（无会话）时出现在欢迎语下方。 */
+    .history { padding: 0 16px; display: flex; flex-direction: column; gap: 2px; }
+    .history-title {
+        font-size: 11px; font-weight: 600; color: var(--text-dim);
+        text-transform: uppercase; letter-spacing: 0.05em;
+        margin: 8px 0 4px;
+    }
+    .history-row { display: flex; align-items: center; gap: 2px; }
+    .history-item {
+        flex: 1; min-width: 0;
+        display: flex; align-items: baseline; gap: 8px;
+        padding: 5px 8px;
+        background: transparent; border: none; cursor: pointer;
+        border-radius: 4px; color: var(--text);
+        text-align: left; font-size: 12.5px;
+    }
+    .history-item:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+    .history-item:disabled { opacity: 0.5; cursor: default; }
+    .history-name {
+        flex: 1; min-width: 0;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .history-time {
+        font-size: 10.5px; color: var(--text-dim);
+        font-family: monospace; flex-shrink: 0;
+    }
+    .history-del { font-size: 14px; padding: 2px 5px; color: var(--text-dim); }
 
     .chat {
         flex: 1; overflow-y: auto; padding: 6px;

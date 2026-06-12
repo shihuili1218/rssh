@@ -78,6 +78,9 @@ pub struct AiSessionInfo {
     pub skill: String,
     pub model: String,
     pub provider: String,
+    /// Persistent row id in ai_conversations — the front-end keys its
+    /// timeline autosaves on this.
+    pub conversation_id: String,
 }
 
 impl From<&DiagnoseSession> for AiSessionInfo {
@@ -88,6 +91,7 @@ impl From<&DiagnoseSession> for AiSessionInfo {
             skill: s.skill.clone(),
             model: s.model.clone(),
             provider: s.provider.clone(),
+            conversation_id: s.conversation_id.clone(),
         }
     }
 }
@@ -221,6 +225,7 @@ pub async fn ai_session_start(
     provider: String,
     model: String,
     locale: Option<String>,
+    resume: Option<String>,
 ) -> AppResult<AiSessionInfo> {
     ai_session_start_impl(
         &state,
@@ -231,6 +236,7 @@ pub async fn ai_session_start(
         provider,
         model,
         locale,
+        resume,
     )
     .await
 }
@@ -246,6 +252,7 @@ pub async fn ai_session_start_impl(
     provider: String,
     model: String,
     locale: Option<String>,
+    resume: Option<String>,
 ) -> AppResult<AiSessionInfo> {
     {
         let g = locked(&state.ai_sessions)?;
@@ -343,6 +350,41 @@ pub async fn ai_session_start_impl(
     let system_prompt = skills::build_catalog_prompt(&state.db, locale_lbl, is_mobile)?;
     let user_skills_cache = skills::list_user(&state.db)?;
 
+    // 3. Conversation identity. Resume revives a persisted history under its
+    //    old id; otherwise a fresh id with empty history. The target check is
+    //    defensive — the picker UI only lists matching conversations, but a
+    //    stale front-end cache must not graft an SSH history onto a serial port.
+    let target_key = conversation_target_key(state, &target)?;
+    let (conversation_id, initial_history) = match resume {
+        Some(id) => {
+            // One live actor per conversation — a second resume would mean two
+            // writers autosaving over each other (last-writer-wins). Best-effort
+            // check (a concurrent double-resume can still race past it between
+            // this lock and the insert below); the common path it guards is
+            // "user clicks the same history entry in two tabs".
+            if locked(&state.ai_sessions)?
+                .values()
+                .any(|s| s.conversation_id == id)
+            {
+                return Err(AppError::other("conversation_in_use", json!({})));
+            }
+            let row = crate::db::ai_conversation::get(&state.db, &id)?
+                .ok_or_else(|| AppError::not_found("conversation_not_found", json!({})))?;
+            if row.target_key != target_key {
+                return Err(AppError::other(
+                    "conversation_target_mismatch",
+                    json!({ "expected": row.target_key, "actual": target_key }),
+                ));
+            }
+            let history: Vec<llm::ChatMessage> =
+                serde_json::from_str(&row.history_json).map_err(|e| {
+                    AppError::other("conversation_corrupt", json!({ "error": e.to_string() }))
+                })?;
+            (id, history)
+        }
+        None => (uuid::Uuid::new_v4().to_string(), Vec::new()),
+    };
+
     let cfg = session::SessionConfig {
         tab_id: tab_id.clone(),
         target_id: target.id().to_string(),
@@ -364,6 +406,9 @@ pub async fn ai_session_start_impl(
         // 本地 PTY: 上面从 PtyHandle.shell_path 推断（确定值）；
         // 远端 SSH: 连接时探测命中过则用缓存值，否则 POSIX 默认（写一次，会话期不变）。
         shell_kind: initial_shell,
+        db: state.db.clone(),
+        conversation_id,
+        initial_history,
     };
 
     // 并发 start 防御：上方的 contains_key 检查到这里的 insert 之间夹着
@@ -383,7 +428,25 @@ pub async fn ai_session_start_impl(
                 json!({ "tab_id": tab_id }),
             ));
         }
+        // Same-lock-as-insert recheck closes the resume race the early check
+        // can't (two resumes of one conversation passing it concurrently).
+        // Fresh sessions carry a new uuid, so the scan is a no-op for them.
+        if g.values()
+            .any(|s| s.conversation_id == info.conversation_id)
+        {
+            return Err(AppError::other("conversation_in_use", json!({})));
+        }
         g.insert(tab_id, pending.launch());
+    }
+    // Create the conversation row only after winning the slot — a racing
+    // loser must not litter the picker with an empty row. Autosaves are
+    // UPDATE-only, so without this row they no-op. Failure is logged, not
+    // fatal: the session is already live, and killing it over a persistence
+    // miss would be backwards.
+    if let Err(e) =
+        crate::db::ai_conversation::create(&state.db, &info.conversation_id, &target_key)
+    {
+        log::warn!("conversation row create failed: {e}");
     }
     Ok(info)
 }
@@ -679,6 +742,95 @@ pub async fn ai_audit_get(
 pub async fn ai_list_sessions(state: State<'_, AppState>) -> AppResult<Vec<AiSessionInfo>> {
     let g = locked(&state.ai_sessions)?;
     Ok(g.values().map(AiSessionInfo::from).collect())
+}
+
+// ─── 对话持久化 ────────────────────────────────────────────────────
+
+/// Conversation grouping key — "ssh:<profile_id>" / "local" / "serial:<port>".
+/// Requires a live target (same precondition as session start itself): the
+/// profile id / port name live on the connected handle, and both the picker
+/// and resume only make sense on a connected tab.
+fn conversation_target_key(state: &AppState, target: &AiTarget) -> AppResult<String> {
+    Ok(match target {
+        AiTarget::Ssh(id) => {
+            let g = locked(&state.sessions)?;
+            let h = g
+                .get(id)
+                .ok_or_else(|| AppError::not_found("ssh_session_not_found", json!({})))?;
+            format!("ssh:{}", h.profile_id())
+        }
+        AiTarget::Local(_) => "local".to_string(),
+        #[cfg(not(target_os = "android"))]
+        AiTarget::Serial(id) => {
+            let g = locked(&state.serial_sessions)?;
+            let h = g
+                .get(id)
+                .ok_or_else(|| AppError::not_found("serial_session_not_found", json!({})))?;
+            format!("serial:{}", h.port_name())
+        }
+        #[cfg(target_os = "android")]
+        AiTarget::Serial(_) => {
+            return Err(AppError::not_found("serial_session_not_found", json!({})))
+        }
+    })
+}
+
+/// Persisted conversations for the panel's picker, most recent first.
+/// Metadata only — blobs never cross IPC here.
+#[tauri::command]
+pub async fn ai_conversations_list(
+    state: State<'_, AppState>,
+    target: AiTarget,
+) -> AppResult<Vec<crate::db::ai_conversation::ConversationMeta>> {
+    ai_conversations_list_impl(&state, &target)
+}
+
+pub fn ai_conversations_list_impl(
+    state: &AppState,
+    target: &AiTarget,
+) -> AppResult<Vec<crate::db::ai_conversation::ConversationMeta>> {
+    let key = conversation_target_key(state, target)?;
+    crate::db::ai_conversation::list(&state.db, &key)
+}
+
+/// The UI blob for one conversation — fetched once on resume, parsed by the
+/// front-end into ChatItem[].
+#[tauri::command]
+pub async fn ai_conversation_timeline(state: State<'_, AppState>, id: String) -> AppResult<String> {
+    ai_conversation_timeline_impl(&state, &id)
+}
+
+pub fn ai_conversation_timeline_impl(state: &AppState, id: &str) -> AppResult<String> {
+    let row = crate::db::ai_conversation::get(&state.db, id)?
+        .ok_or_else(|| AppError::not_found("conversation_not_found", json!({})))?;
+    Ok(row.timeline_json)
+}
+
+/// Front-end autosave of its chat timeline (the actor saves history itself).
+#[tauri::command]
+pub async fn ai_conversation_save_timeline(
+    state: State<'_, AppState>,
+    id: String,
+    timeline: String,
+) -> AppResult<()> {
+    crate::db::ai_conversation::set_timeline(&state.db, &id, &timeline)
+}
+
+#[tauri::command]
+pub async fn ai_conversation_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    ai_conversation_delete_impl(&state, &id)
+}
+
+pub fn ai_conversation_delete_impl(state: &AppState, id: &str) -> AppResult<()> {
+    // A conversation owned by a live actor must not be deleted out from under
+    // it — the actor's next autosave would resurrect the row half-formed.
+    if locked(&state.ai_sessions)?
+        .values()
+        .any(|s| s.conversation_id == id)
+    {
+        return Err(AppError::other("conversation_in_use", json!({})));
+    }
+    crate::db::ai_conversation::delete(&state.db, id)
 }
 
 // ─── 设置（BYOK） ──────────────────────────────────────────────────

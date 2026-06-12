@@ -8,6 +8,4 @@
 - 增加只读
 - 隐藏标题栏
 - 支持telnet ？
-- ai session 历史
-- ai session tokencost
 - 设置同步

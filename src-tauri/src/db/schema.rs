@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::error::AppResult;
 
-const SCHEMA_VERSION: u32 = 16;
+const SCHEMA_VERSION: u32 = 17;
 
 pub fn migrate(conn: &Connection) -> AppResult<()> {
     let version: u32 = conn
@@ -250,6 +250,37 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
             // Ignore "duplicate column" if a partial run already added some.
             let _ = conn.execute_batch(stmt);
         }
+    }
+
+    if version < 17 {
+        // AI conversation persistence — two blobs per conversation, mirroring the
+        // deliberate data fork in ai::session: history_json is the LLM's truth
+        // (Vec<ChatMessage>, resume + continue), timeline_json is the UI's truth
+        // (ChatItem[], re-render bubbles/cards verbatim). Reconstructing one from
+        // the other is lossy reverse-engineering; storing both is dumb and clear.
+        //
+        // target_key groups conversations per terminal identity:
+        //   "ssh:<profile_id>" / "local" / "serial:<port_name>"
+        // One string, no kind column, no special cases.
+        //
+        // history_json holds UNREDACTED terminal output — same trust domain as
+        // the credentials/secrets tables in this same local DB; redaction stays
+        // at the LLM boundary (see docs/ai-diagnose-design.md).
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS ai_conversations (
+                id            TEXT PRIMARY KEY,
+                target_key    TEXT NOT NULL,
+                title         TEXT NOT NULL DEFAULT '',
+                history_json  TEXT NOT NULL DEFAULT '[]',
+                timeline_json TEXT NOT NULL DEFAULT '[]',
+                created_at    INTEGER NOT NULL DEFAULT 0,
+                updated_at    INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_ai_conversations_target
+                ON ai_conversations(target_key, updated_at);
+            ",
+        )?;
     }
 
     if version < SCHEMA_VERSION {
