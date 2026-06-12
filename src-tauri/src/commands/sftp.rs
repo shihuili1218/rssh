@@ -395,14 +395,9 @@ pub async fn sftp_remove(
     state: State<'_, AppState>,
     sftp_id: String,
     path: String,
-    is_dir: bool,
 ) -> AppResult<()> {
     let h = get_sftp(&state, &sftp_id)?;
-    if is_dir {
-        h.remove_dir_all(&path).await
-    } else {
-        h.remove_file(&path).await
-    }
+    h.remove(&path).await
 }
 
 #[tauri::command]

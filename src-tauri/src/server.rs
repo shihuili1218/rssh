@@ -772,9 +772,7 @@ async fn dispatch_async(
         }
         "sftp_remove" => {
             let h = sftp_handle(state, &arg::<String>(&args, "sftpId")?)?;
-            let path: String = arg(&args, "path")?;
-            let is_dir: bool = arg(&args, "isDir")?;
-            if is_dir { ok(h.remove_dir_all(&path).await) } else { ok(h.remove_file(&path).await) }
+            ok(h.remove(&arg::<String>(&args, "path")?).await)
         }
         "sftp_rename" => {
             let h = sftp_handle(state, &arg::<String>(&args, "sftpId")?)?;

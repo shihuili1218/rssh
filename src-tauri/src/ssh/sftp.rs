@@ -301,25 +301,48 @@ impl SftpHandle {
             .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "remove_dir", "err": e.to_string() })))
     }
 
+    /// Delete a file or a directory tree. LSTAT decides which — the frontend's
+    /// listing can be stale (e.g. a deploy swapped a real dir for a symlink
+    /// since the last refresh), and recursing through a symlink would delete
+    /// the *target's* contents. Anything that is not a real directory — file,
+    /// symlink, special — is removed by name.
+    pub async fn remove(&self, path: &str) -> AppResult<()> {
+        let meta = self.sftp.symlink_metadata(path).await.map_err(|e| {
+            AppError::sftp("sftp_io_failed", json!({ "op": "lstat", "err": e.to_string() }))
+        })?;
+        if meta.file_type().is_dir() {
+            self.remove_dir_all(path).await
+        } else {
+            self.remove_file(path).await
+        }
+    }
+
     /// Recursively delete a directory tree.
     ///
     /// Single BFS over `read_dir`: real directories are queued for traversal
     /// and recorded for bottom-up removal; everything else — regular files,
     /// symlinks (even symlinks to directories) and special files — is removed
     /// on the spot, because SFTP REMOVE deletes the name itself, never the
-    /// target.
-    pub async fn remove_dir_all(&self, root: &str) -> AppResult<()> {
+    /// target. Depth is capped like `walk_files`, so a hostile server (or a
+    /// bind-mount cycle) cannot make the walk run forever.
+    async fn remove_dir_all(&self, root: &str) -> AppResult<()> {
         let mut dirs: Vec<String> = Vec::new();
-        let mut queue: VecDeque<String> = VecDeque::new();
-        queue.push_back(root.trim_end_matches('/').to_string());
-        while let Some(dir) = queue.pop_front() {
+        let mut queue: VecDeque<(String, u32)> = VecDeque::new();
+        queue.push_back((root.trim_end_matches('/').to_string(), 0));
+        while let Some((dir, depth)) = queue.pop_front() {
+            if depth >= WALK_DEPTH_CAP {
+                return Err(AppError::sftp(
+                    "sftp_tree_too_deep",
+                    json!({ "path": dir, "depth": depth, "limit": WALK_DEPTH_CAP }),
+                ));
+            }
             let entries = self.sftp.read_dir(&dir).await.map_err(|e| {
                 AppError::sftp("sftp_io_failed", json!({ "op": "read_dir", "path": dir, "err": e.to_string() }))
             })?;
             for e in entries {
                 let full = join_remote(&dir, &e.file_name());
                 if e.file_type().is_dir() {
-                    queue.push_back(full.clone());
+                    queue.push_back((full.clone(), depth + 1));
                     dirs.push(full);
                 } else {
                     self.remove_file(&full).await?;

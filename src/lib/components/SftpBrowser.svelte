@@ -296,7 +296,11 @@
     }
 
     function copyPathToTerminal(entry: RemoteEntry) {
-        app.sendToTerminal(entryPath(entry));
+        // Remote filenames may legally contain control characters, including
+        // newlines — sent raw to the shell, a hostile name like "x\nrm -rf ~\n"
+        // would execute immediately. Strip C0 controls + DEL before sending.
+        const path = entryPath(entry).replace(/[\x00-\x1f\x7f]/g, "");
+        app.sendTextToActiveTerminal(path);
         closeCtxMenu();
     }
 
@@ -387,7 +391,7 @@
         deleteEntry = null;
         error = "";
         try {
-            await invoke("sftp_remove", { sftpId, path: entryPath(entry), isDir: entry.is_dir });
+            await invoke("sftp_remove", { sftpId, path: entryPath(entry) });
             await listDir(cwd);
         } catch (e: any) {
             error = errMsg(e);
