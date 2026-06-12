@@ -999,6 +999,7 @@ async fn dispatch_async(
         "ai_conversation_timeline" => ok(crate::ai::commands::ai_conversation_timeline_impl(
             state,
             &arg::<String>(&args, "id")?,
+            &arg(&args, "target")?,
         )),
         "ai_conversation_save_timeline" => ok(crate::db::ai_conversation::set_timeline(
             &state.db,

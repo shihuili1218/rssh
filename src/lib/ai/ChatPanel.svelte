@@ -58,13 +58,16 @@
         if (session) return; // 会话已存在：picker 不展示，无需拉取
         conversations = null;
         const seq = ++convSeq;
+        // 两个回调都同时 gate seq + session：用户开面板后立刻发消息，会话先
+        // 起来、列表请求后返回 —— 此时 picker 已无意义，迟到的失败不该在活跃
+        // 对话里弹错误 banner（seq 不增长，单靠它挡不住这条路径）。
         ai.listConversations(kind, id)
-            .then((list) => { if (seq === convSeq) conversations = list; })
+            .then((list) => { if (seq === convSeq && !session) conversations = list; })
             .catch((e) => {
                 // 加载失败不挡新对话，但必须上 banner —— 静默置空会让"有历史但
                 // 后端抽风"看起来跟"确无历史"一模一样，用户以为记录丢了。
                 console.error("[ai] list conversations:", e);
-                if (seq === convSeq) {
+                if (seq === convSeq && !session) {
                     conversations = [];
                     banner = errMsg(e);
                 }
@@ -107,13 +110,13 @@
         }
     }
 
-    // 同一行的 resume / delete 互斥：删除进行中点恢复（或反过来）会产生
-    // 可避免的 not_found 报错。busy 已挡 resume 自身的重入。
+    // 同一行的 resume / delete 互斥：删除进行中点恢复同一行会产生可避免的
+    // not_found 报错。按行互斥（不全局禁）—— 删 A 的几十毫秒里恢复 B 是合法操作。
     let deletingId = $state<string | null>(null);
 
     /** 点历史对话：actor 带旧 history 出生，UI 灌回存储的 timeline，直接可续聊。 */
     async function resumeConversation(id: string) {
-        if (busy || session || deletingId) return;
+        if (busy || session || deletingId === id) return;
         banner = null;
         busy = true;
         try {
@@ -318,12 +321,12 @@
                         {#each conversations as c (c.id)}
                             <div class="history-row">
                                 <button class="history-item" onclick={() => resumeConversation(c.id)}
-                                        disabled={busy || deletingId !== null} title={t("ai.history.resume_tip")}>
+                                        disabled={busy || deletingId === c.id} title={t("ai.history.resume_tip")}>
                                     <span class="history-name">{c.title || t("ai.history.untitled")}</span>
                                     <span class="history-time">{fmtDate(c.updated_at)}</span>
                                 </button>
                                 <button class="btn-icon history-del" onclick={() => deleteConversation(c.id)}
-                                        disabled={busy || deletingId !== null}
+                                        disabled={busy || deletingId === c.id}
                                         title={t("ai.history.delete")} aria-label={t("ai.history.delete")}>×</button>
                             </div>
                         {/each}

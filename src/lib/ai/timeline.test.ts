@@ -57,6 +57,13 @@ describe("restoreTimeline", () => {
     expect(items).toEqual([{ kind: "user", text: "kept", at: 2 }]);
   });
 
+  it("strips a non-string diff instead of crashing the diff renderer", () => {
+    const [c] = roundtrip([
+      { kind: "command", cmd: { id: "c1", cmd: "ls", diff: 42 }, at: 1, rejected: { reason: "no" } },
+    ]);
+    expect(c.kind === "command" && c.cmd.diff).toBeUndefined();
+  });
+
   it("drops known kinds with mangled bodies instead of crashing render", () => {
     const items = roundtrip([
       { kind: "command", at: 1 },                       // no cmd object

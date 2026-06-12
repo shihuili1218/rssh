@@ -181,7 +181,10 @@ async function launchSession(
   // 的半恢复状态。新对话跳过，timeline 就是空数组。
   let timeline: ChatItem[] = [];
   if (resumeId) {
-    const json = await invoke<string>("ai_conversation_timeline", { id: resumeId });
+    const json = await invoke<string>("ai_conversation_timeline", {
+      id: resumeId,
+      target: { kind: args.targetKind, id: args.targetId },
+    });
     timeline = restoreTimeline(json, t("ai.history.stale_command"));
   }
   const info = await invoke<AiSessionInfo>("ai_session_start", {

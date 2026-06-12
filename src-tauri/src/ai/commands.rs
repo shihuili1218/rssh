@@ -815,13 +815,31 @@ pub fn ai_conversations_list_impl(
 /// The UI blob for one conversation — fetched once on resume, parsed by the
 /// front-end into ChatItem[].
 #[tauri::command]
-pub async fn ai_conversation_timeline(state: State<'_, AppState>, id: String) -> AppResult<String> {
-    ai_conversation_timeline_impl(&state, &id)
+pub async fn ai_conversation_timeline(
+    state: State<'_, AppState>,
+    id: String,
+    target: AiTarget,
+) -> AppResult<String> {
+    ai_conversation_timeline_impl(&state, &id, &target)
 }
 
-pub fn ai_conversation_timeline_impl(state: &AppState, id: &str) -> AppResult<String> {
+/// Takes the caller's target and enforces the same scope check resume itself
+/// does: this fetch is the first half of the resume flow, and the data must
+/// not be readable across scopes when the second half would reject the id.
+pub fn ai_conversation_timeline_impl(
+    state: &AppState,
+    id: &str,
+    target: &AiTarget,
+) -> AppResult<String> {
     let row = crate::db::ai_conversation::get(&state.db, id)?
         .ok_or_else(|| AppError::not_found("conversation_not_found", json!({})))?;
+    let key = conversation_target_key(state, target)?;
+    if row.target_key != key {
+        return Err(AppError::other(
+            "conversation_target_mismatch",
+            json!({ "expected": row.target_key, "actual": key }),
+        ));
+    }
     Ok(row.timeline_json)
 }
 

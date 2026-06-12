@@ -57,8 +57,20 @@ export function restoreTimeline(json: string, staleCommandReason: string): ChatI
     if (!isRenderable(item)) continue;
     if (item.kind === "assistant") {
       item.streaming = false;
-    } else if (item.kind === "command" && !item.result && !item.rejected) {
-      item.rejected = { reason: staleCommandReason };
+    } else if (item.kind === "command") {
+      // The one method-call crash vector in CommandConfirmDialog: a truthy
+      // non-string diff hits `cmd.diff.split()`. Strip rather than drop —
+      // the card is still meaningful without its diff preview. Every other
+      // cmd/result/rejected field is either plain-rendered (Svelte renders
+      // undefined as "") or crash-safe, and the action-button branch is
+      // unreachable for restored cards (stale-marking below guarantees
+      // result|rejected).
+      if (item.cmd.diff !== undefined && !isStr(item.cmd.diff)) {
+        delete item.cmd.diff;
+      }
+      if (!item.result && !item.rejected) {
+        item.rejected = { reason: staleCommandReason };
+      }
     }
     items.push(item);
   }
