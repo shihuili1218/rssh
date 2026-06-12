@@ -325,8 +325,10 @@
                                     <span class="history-name">{c.title || t("ai.history.untitled")}</span>
                                     <span class="history-time">{fmtDate(c.updated_at)}</span>
                                 </button>
+                                <!-- 删除全局互斥（deletingId 只能追踪一个 in-flight），禁用范围
+                                     必须跟守卫一致：删除进行中所有删除按钮都禁，恢复按钮仍按行。 -->
                                 <button class="btn-icon history-del" onclick={() => deleteConversation(c.id)}
-                                        disabled={busy || deletingId === c.id}
+                                        disabled={busy || deletingId !== null}
                                         title={t("ai.history.delete")} aria-label={t("ai.history.delete")}>×</button>
                             </div>
                         {/each}

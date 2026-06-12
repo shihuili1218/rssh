@@ -56,6 +56,11 @@ export function restoreTimeline(json: string, staleCommandReason: string): ChatI
     const item = raw as ChatItem;
     if (!isRenderable(item)) continue;
     if (item.kind === "assistant") {
+      // Mirror the live assistant_message_end rule: an empty non-cancelled
+      // bubble (the placeholder pushed at message_start, persisted by a
+      // mid-stream crash, or a pure tool-use turn) is removed there — restore
+      // must drop it too, or it renders as a permanent "…".
+      if (!item.text && !item.cancelled) continue;
       item.streaming = false;
     } else if (item.kind === "command") {
       // The one method-call crash vector in CommandConfirmDialog: a truthy

@@ -31,6 +31,15 @@ describe("restoreTimeline", () => {
     expect(a.kind === "assistant" && a.streaming).toBe(false);
   });
 
+  it("drops an empty non-cancelled assistant placeholder, keeps a cancelled one", () => {
+    const items = roundtrip([
+      { kind: "assistant", id: "a1", text: "", at: 1, streaming: true },
+      { kind: "assistant", id: "a2", text: "", at: 2, streaming: false, cancelled: true },
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0].kind === "assistant" && items[0].id).toBe("a2");
+  });
+
   it("marks an unresolved command card as stale-rejected", () => {
     const [c] = roundtrip([
       { kind: "command", cmd: { id: "c1", cmd: "ls" }, at: 1 },
