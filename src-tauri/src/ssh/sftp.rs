@@ -301,6 +301,13 @@ impl SftpHandle {
             .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "remove_dir", "err": e.to_string() })))
     }
 
+    /// Recursively delete a directory tree.
+    ///
+    /// Single BFS over `read_dir`: real directories are queued for traversal
+    /// and recorded for bottom-up removal; everything else — regular files,
+    /// symlinks (even symlinks to directories) and special files — is removed
+    /// on the spot, because SFTP REMOVE deletes the name itself, never the
+    /// target.
     pub async fn remove_dir_all(&self, root: &str) -> AppResult<()> {
         let mut dirs: Vec<String> = Vec::new();
         let mut queue: VecDeque<String> = VecDeque::new();
@@ -311,10 +318,7 @@ impl SftpHandle {
             })?;
             for e in entries {
                 let full = join_remote(&dir, &e.file_name());
-                let ft = e.file_type();
-                if ft.is_symlink() {
-                    self.remove_file(&full).await?;
-                } else if ft.is_dir() {
+                if e.file_type().is_dir() {
                     queue.push_back(full.clone());
                     dirs.push(full);
                 } else {
@@ -322,8 +326,8 @@ impl SftpHandle {
                 }
             }
         }
-        dirs.sort_by(|a, b| b.matches('/').cmp(&a.matches('/')));
-        for d in &dirs {
+        // BFS order puts parents before children, so reverse = deepest-first.
+        for d in dirs.iter().rev() {
             self.remove_dir(d).await?;
         }
         self.remove_dir(root).await
