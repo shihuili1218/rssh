@@ -377,15 +377,15 @@ const en = {
   "serial.ctl.break": "Send break",
 
   // ── AI Diagnose: ChatPanel ──
-  "ai.title": "AI Diagnose",
   "ai.title.danger_suffix": "DANGER MODE",
   "ai.title.danger_tip": "Auto-approve is ON — AI commands run without confirmation",
-  "ai.toolbar.audit": "✎𓂃Audit",
-  "ai.toolbar.back_to_chat": "← Chat",
+  "ai.toolbar.audit": "View audit log",
+  "ai.toolbar.back_to_chat": "Back to chat",
   "ai.toolbar.clear_context": "Clear context (keep audit log)",
   "ai.toolbar.clear_confirm_title": "Clear context?",
   "ai.toolbar.clear_confirm": "Clear the current conversation context?\nThe session stays open, but the AI will no longer remember anything you said before. Audit log is preserved.",
   "ai.toolbar.clear_confirm_action": "Clear",
+  "ai.toolbar.tokens_tip": "Session tokens: {tin} in / {tout} out (clearing context doesn't reset)",
   "ai.toolbar.close_panel": "Close panel (session preserved)",
   "ai.toolbar.close_session": "Close and end session",
   "ai.error.no_api_key": "Configure your API key in Settings → AI Diagnose first",

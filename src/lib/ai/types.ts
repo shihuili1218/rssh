@@ -92,6 +92,12 @@ export type ShellKind = "posix" | "cmd" | "powershell";
  */
 export type AiTargetKind = "ssh" | "local" | "serial";
 
+/** Cumulative token spend for one AI session (actor lifetime). */
+export interface TokenUsage {
+  tokens_in: number;
+  tokens_out: number;
+}
+
 /** 一条对话消息（前端展示用） */
 export type ChatItem =
   | { kind: "user"; text: string; at: number }

@@ -4,6 +4,7 @@
     import CommandConfirmDialog from "./CommandConfirmDialog.svelte";
     import AuditPanel from "./AuditPanel.svelte";
     import { renderMarkdown } from "./markdown.ts";
+    import { formatTokenCount } from "./tokens.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import { onMount } from "svelte";
 
@@ -31,6 +32,8 @@
     // 危险模式标记 —— 用户在 AI Settings 里切换后，标题旁的红色后缀立刻同步。
     // 走 ai.settings() 读 store 的 $state，自动响应式（不需要手动 loadSettings 触发）。
     let dangerMode = $derived(ai.settings()?.danger_mode === true);
+    // 本会话累计 token 用量（actor 生命周期，清上下文不归零——花掉的钱不会退）。
+    let tokens = $derived(ai.tokenUsage(tabId));
 
     onMount(async () => {
         // 只拉 settings（提示词标题的 danger 旗等要它）。不在这里预启 session ——
@@ -149,28 +152,41 @@
 
 <div class="ai-panel">
     <div class="toolbar">
-        <span class="title">{t("ai.title")}</span>
         {#if dangerMode}
             <span class="title-danger" title={t("ai.title.danger_tip")}>{t("ai.title.danger_suffix")}</span>
         {/if}
-        {#if session}
-            <button class="btn btn-ghost btn-sm audit-toggle" onclick={() => (auditOpen = !auditOpen)}>
-                {auditOpen ? t("ai.toolbar.back_to_chat") : t("ai.toolbar.audit")}
-            </button>
-        {/if}
         <span class="grow"></span>
-        {#if session}
-            <!-- 清理上下文：仅会话存在时露出。SVG 扫帚图标（22×22）跟"×"视觉重心对齐。 -->
-            <button class="btn-icon" onclick={openClearDialog} title={t("ai.toolbar.clear_context")} aria-label={t("ai.toolbar.clear_context")}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M19.36 2.72l1.42 1.42-5.72 5.71-1.42-1.42 5.72-5.71z"/>
-                    <path d="M14.13 8.05l-6.36 6.36c-.78.78-2.05.78-2.83 0l-.71-.71c-.39-.39-.39-1.02 0-1.41l7.07-7.07c.39-.39 1.02-.39 1.41 0l.71.71c.78.78.78 2.04 0 2.82"/>
-                    <path d="M12 14l-3 7"/>
-                    <path d="M9 14l-1.5 7"/>
-                    <path d="M6 14l0 7"/>
-                </svg>
-            </button>
-        {/if}
+        <span class="tokens" title={t("ai.toolbar.tokens_tip", { tin: tokens.tokens_in, tout: tokens.tokens_out })}>
+            ↑{formatTokenCount(tokens.tokens_in)} ↓{formatTokenCount(tokens.tokens_out)}
+        </span>
+        <!-- Audit log toggle: file-text icon in chat view, chat bubble in audit view (= go back).
+             Toolbar controls render unconditionally (stable layout); they disable until the
+             session lazy-starts on first send — no actor, nothing to audit or clear. -->
+        <button class="btn-icon" onclick={() => (auditOpen = !auditOpen)} disabled={!session}
+                title={auditOpen ? t("ai.toolbar.back_to_chat") : t("ai.toolbar.audit")}
+                aria-label={auditOpen ? t("ai.toolbar.back_to_chat") : t("ai.toolbar.audit")}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                {#if auditOpen}
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                {:else}
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                    <line x1="16" y1="13" x2="8" y2="13"/>
+                    <line x1="16" y1="17" x2="8" y2="17"/>
+                    <polyline points="10 9 8 9"/>
+                {/if}
+            </svg>
+        </button>
+        <!-- 清理上下文：SVG 扫帚图标（22×22）跟"×"视觉重心对齐。 -->
+        <button class="btn-icon" onclick={openClearDialog} disabled={!session} title={t("ai.toolbar.clear_context")} aria-label={t("ai.toolbar.clear_context")}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M19.36 2.72l1.42 1.42-5.72 5.71-1.42-1.42 5.72-5.71z"/>
+                <path d="M14.13 8.05l-6.36 6.36c-.78.78-2.05.78-2.83 0l-.71-.71c-.39-.39-.39-1.02 0-1.41l7.07-7.07c.39-.39 1.02-.39 1.41 0l.71.71c.78.78.78 2.04 0 2.82"/>
+                <path d="M12 14l-3 7"/>
+                <path d="M9 14l-1.5 7"/>
+                <path d="M6 14l0 7"/>
+            </svg>
+        </button>
         <button class="btn-icon" onclick={closePanel} title={t("ai.toolbar.close_panel")} aria-label={t("ai.toolbar.close_panel")}>×</button>
     </div>
 
@@ -286,7 +302,6 @@
         padding: 8px; border-bottom: 1px solid var(--divider);
         flex-shrink: 0;
     }
-    .title { font-weight: 600; font-size: 13px; }
     .title-danger {
         font-size: 11px;
         font-weight: 600;
@@ -297,13 +312,11 @@
         background: color-mix(in srgb, var(--error) 8%, transparent);
     }
     .grow { flex: 1; }
-    /* 审计/对话同一颗按钮，label 在两种语言下宽度不一（"✎𓂃审计" vs "← 对话"，
-       "✎𓂃Audit" vs "← Chat"）。固定宽高让它在 toggle 时不抖动，也跟工具栏其他
-       元素的视觉重心稳定一致。padding 归零交给 .btn 的 flex 居中处理。 */
-    .audit-toggle {
-        width: calc(88px * var(--density));
-        height: calc(30px * var(--density));
-        padding: 0;
+    .tokens {
+        font-size: 10.5px;
+        font-family: monospace;
+        color: var(--text-dim);
+        white-space: nowrap;
         flex-shrink: 0;
     }
     .btn-primary { background: var(--accent); color: var(--white); border-color: var(--accent); }
@@ -328,6 +341,11 @@
         background: color-mix(in srgb, var(--text) 8%, transparent);
         color: var(--text);
     }
+    .btn-icon:disabled {
+        opacity: 0.35;
+        cursor: default;
+    }
+    .btn-icon:disabled:hover { background: transparent; }
     .banner {
         display: flex; align-items: center; gap: 8px;
         padding: 8px 12px;

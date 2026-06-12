@@ -379,15 +379,15 @@ const zh: Messages = {
   "serial.ctl.break": "发送 Break",
 
   // ── AI 排障：ChatPanel ──
-  "ai.title": "AI 排障",
   "ai.title.danger_suffix": "危险模式",
   "ai.title.danger_tip": "已开启自动执行 —— AI 提议的命令将跳过确认直接运行",
-  "ai.toolbar.audit": "✎𓂃审计",
-  "ai.toolbar.back_to_chat": "← 对话",
+  "ai.toolbar.audit": "查看审计日志",
+  "ai.toolbar.back_to_chat": "返回对话",
   "ai.toolbar.clear_context": "清理上下文（保留审计日志）",
   "ai.toolbar.clear_confirm_title": "清空上下文？",
   "ai.toolbar.clear_confirm": "清空当前对话上下文？\n会话本身保留，但 AI 不再记得之前说过什么。审计日志保留。",
   "ai.toolbar.clear_confirm_action": "清空",
+  "ai.toolbar.tokens_tip": "本会话累计 token：输入 {tin} / 输出 {tout}（清理上下文不重置）",
   "ai.toolbar.close_panel": "关闭面板（会话保留）",
   "ai.toolbar.close_session": "关闭并结束会话",
   "ai.error.no_api_key": "请先到 设置 → AI 排障 配置 API key",

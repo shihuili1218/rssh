@@ -25,6 +25,7 @@ import type {
   RedactRuleRecord,
   ShellKind,
   SkillRecord,
+  TokenUsage,
 } from "./types.ts";
 
 // ─── Position ────────────────────────────────────────────────────
@@ -47,6 +48,12 @@ let _sessionByTab = $state<Record<string, AiSessionInfo>>({});
 let _chatByTab = $state<Record<string, ChatItem[]>>({});
 let _pendingByTab = $state<Record<string, CommandProposed | null>>({});
 let _keyboardLockedByTab = $state<Record<string, boolean>>({});
+/**
+ * tab_id → cumulative token spend for the actor's lifetime. Deliberately NOT
+ * reset on context_cleared — clearing the conversation doesn't refund tokens
+ * already billed; the counter tracks money, not context size.
+ */
+let _tokensByTab = $state<Record<string, TokenUsage>>({});
 let _settings = $state<AiSettings | null>(null);
 /**
  * tab_id → 终端类型映射。internal_command 自动执行时需要知道走 ssh_write
@@ -95,6 +102,9 @@ export function pendingCommand(tab_id: string): CommandProposed | null {
 }
 export function isKeyboardLocked(tab_id: string): boolean {
   return _keyboardLockedByTab[tab_id] === true;
+}
+export function tokenUsage(tab_id: string): TokenUsage {
+  return _tokensByTab[tab_id] ?? { tokens_in: 0, tokens_out: 0 };
 }
 
 function pushChat(tab_id: string, item: ChatItem) {
@@ -152,6 +162,7 @@ export async function stopSession(tab_id: string) {
   delete _keyboardLockedByTab[tab_id];
   delete _targetKindByTab[tab_id];
   delete _chatByTab[tab_id];
+  delete _tokensByTab[tab_id];
   if (_activeTabId === tab_id) _activeTabId = null;
 }
 
@@ -585,7 +596,19 @@ async function attachListeners(info: AiSessionInfo) {
     }
   }));
 
-  u.push(await listen<{ id: string; text: string; cancelled?: boolean }>(`ai:assistant_message_end:${tab}`, (e) => {
+  u.push(await listen<{
+    id: string; text: string; cancelled?: boolean;
+    tokens_in?: number | null; tokens_out?: number | null;
+  }>(`ai:assistant_message_end:${tab}`, (e) => {
+    // Accumulate spend before any bubble bookkeeping: pure tool_use turns
+    // (empty text, bubble removed below) still billed their tokens.
+    // Cancelled streams emit without token fields — nothing to add.
+    const tin = e.payload.tokens_in ?? 0;
+    const tout = e.payload.tokens_out ?? 0;
+    if (tin > 0 || tout > 0) {
+      const cur = _tokensByTab[tab] ?? { tokens_in: 0, tokens_out: 0 };
+      _tokensByTab[tab] = { tokens_in: cur.tokens_in + tin, tokens_out: cur.tokens_out + tout };
+    }
     const arr = _chatByTab[tab] ?? [];
     for (let i = arr.length - 1; i >= 0; i--) {
       const item = arr[i];

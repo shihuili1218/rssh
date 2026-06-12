@@ -446,6 +446,10 @@ impl Actor {
                     //   被打断"，下轮别假定其有效。LLM 看的是后端 system prompt 风格
                     //   （英文），marker 跟着英文走更自然。
                     let partial = captured.lock().map(|g| g.clone()).unwrap_or_default();
+                    // No tokens_in/out here — known under-count. OpenAI-style
+                    // streams deliver usage only in the final chunk, which a
+                    // dropped future never receives; the panel's session total
+                    // therefore omits cancelled turns.
                     self.emit(
                         "assistant_message_end",
                         json!({ "id": msg_id, "text": partial, "cancelled": true }),
@@ -471,9 +475,17 @@ impl Actor {
                 }
             };
 
+            // tokens_in/out ride on the end event so the panel can show
+            // session spend. Pure tool_use turns (empty text) also emit —
+            // their tokens cost money too, the front-end must not miss them.
             self.emit(
                 "assistant_message_end",
-                json!({ "id": msg_id, "text": resp.text }),
+                json!({
+                    "id": msg_id,
+                    "text": resp.text,
+                    "tokens_in": resp.tokens_in,
+                    "tokens_out": resp.tokens_out,
+                }),
             );
 
             self.audit_push(AuditKind::LlmResponse {
