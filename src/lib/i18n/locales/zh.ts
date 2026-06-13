@@ -842,7 +842,7 @@ const zh: Messages = {
   "github.sync_ai": "AI 平台（模型 / 端点）",
   "github.sync_ai_key": "AI API 密钥",
   "github.sync_profiles": "主机（按分组）",
-  "github.sync_profiles_hint": "只同步勾选分组内的主机；全部不勾选则同步所有主机。",
+  "github.sync_profiles_hint": "只同步勾选分组内的主机；全部勾选才同步所有主机（含未分组），全部不勾选则不同步任何主机。",
   "serial.port_device_hint": "端口名是本机设备专属；换设备后需重新选择。",
   // 导入 / 导出
   "import_export.export_title": "导出配置",

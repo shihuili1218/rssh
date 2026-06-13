@@ -96,11 +96,16 @@ pub fn export_ai_settings(
         if model.is_empty() && !has_endpoint && !has_key {
             continue; // never-configured provider — nothing to sync
         }
-        let mut obj = json!({
-            "provider": p,
-            "model": model,
-            "endpoint": endpoint,
-        });
+        // Only emit fields the user actually set. An empty "" would, on the
+        // additive-merge import side, overwrite a populated model/endpoint on
+        // another device — a destructive clear. Absent = "leave remote as-is".
+        let mut obj = json!({ "provider": p });
+        if !model.is_empty() {
+            obj["model"] = json!(model);
+        }
+        if has_endpoint {
+            obj["endpoint"] = json!(endpoint);
+        }
         if include_keys && has_key {
             obj["api_key"] = json!(api_key);
         }
@@ -141,10 +146,14 @@ pub fn import_ai_settings(
             }
         }
     }
+    // Allowlist active_provider too — provider rows above are filtered, so
+    // accepting an unsupported active value would point ai_provider at a
+    // backend with no config row (broken AI until the user fixes it manually).
     if let Some(active) = ai
         .get("active_provider")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
+        .filter(|s| SYNC_PROVIDERS.contains(s))
     {
         crate::db::settings::set(db, &key_provider(), active)?;
     }

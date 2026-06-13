@@ -24,7 +24,7 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use crate::db::ai_command_blacklist::{self, BlacklistRow};
-use crate::db::ai_redact_rule::{self, RedactRuleRow};
+use crate::db::ai_redact_rule::RedactRuleRow;
 use crate::db::{credential, forward, group, highlight, profile, serial_profile, snippet, Db};
 use crate::error::{AppError, AppResult};
 use crate::models::{Credential, Forward, Group, HighlightRule, Profile, SerialProfile, Snippet};
@@ -239,10 +239,19 @@ pub fn merge_import(
         for item in arr {
             match serde_json::from_value::<RedactRuleRow>(item.clone()) {
                 Ok(r) => {
-                    if let Err(e) = ai_redact_rule::upsert(db, &r) {
+                    // Validating save (compilable + non-zero-width), never the raw
+                    // upsert: a bad synced regex would otherwise persist and brick
+                    // AI sessions on this device (compiled() is fail-closed). An
+                    // invalid rule is rejected into `errors`, not written.
+                    let rec = crate::ai::redact_rules::RedactRuleRecord {
+                        id: r.id.clone(),
+                        pattern: r.pattern,
+                        replacement: r.replacement,
+                    };
+                    if let Err(e) = crate::ai::redact_rules::save(db, &rec) {
                         errors.push(ImportError {
                             kind: "ai_redact_rule",
-                            name: Some(r.id),
+                            name: Some(rec.id),
                             code: e.code().to_string(),
                         });
                     }
@@ -566,10 +575,26 @@ mod tests {
             "ai_redact_rules": [{"id": "u1", "pattern": "secret", "replacement": "<X>"}],
         });
         merge_import(&db, &ss, dir.path(), &data).unwrap();
-        let rules = ai_redact_rule::list(&db).unwrap();
+        let rules = crate::db::ai_redact_rule::list(&db).unwrap();
         assert!(rules
             .iter()
             .any(|r| r.id == "u1" && r.replacement == "<X>"));
+    }
+
+    #[test]
+    fn merge_redact_rule_rejects_invalid_regex() {
+        let (db, ss, dir) = fixture();
+        // A bad regex must NOT reach the DB — compiled() is fail-closed, so a
+        // synced invalid rule would otherwise brick AI sessions on this device.
+        let data = json!({
+            "version": 1,
+            "ai_redact_rules": [{"id": "bad", "pattern": "(", "replacement": "<X>"}],
+        });
+        // Surfaced as an aggregate import failure (not silently swallowed)…
+        merge_import(&db, &ss, dir.path(), &data).unwrap_err();
+        // …and the bad rule never reached the DB.
+        let rules = crate::db::ai_redact_rule::list(&db).unwrap();
+        assert!(!rules.iter().any(|r| r.id == "bad"), "invalid regex not persisted");
     }
 
     #[test]
@@ -586,7 +611,7 @@ mod tests {
         assert!(rows
             .iter()
             .any(|r| r.name == "frobnicate" && r.category == "destructive"));
-        assert!(rows.len() >= before + 1, "additive, defaults kept");
+        assert!(rows.len() > before, "additive, defaults kept");
     }
 
     #[test]
@@ -662,6 +687,26 @@ mod tests {
     }
 
     #[test]
+    fn merge_rejects_unsupported_active_provider() {
+        let (db, ss, dir) = fixture();
+        crate::db::settings::set(&db, "ai_provider", "anthropic").unwrap();
+        // active_provider must clear the same allowlist as provider rows —
+        // otherwise ai_provider points at a backend with no config row.
+        let data = json!({
+            "version": 1,
+            "ai": { "active_provider": "bogus", "providers": [] },
+        });
+        merge_import(&db, &ss, dir.path(), &data).unwrap();
+        assert_eq!(
+            crate::db::settings::get(&db, "ai_provider")
+                .unwrap()
+                .as_deref(),
+            Some("anthropic"),
+            "unsupported active_provider rejected, prior value kept"
+        );
+    }
+
+    #[test]
     fn export_ai_settings_omits_local_only_prefs() {
         let (db, ss, _dir) = fixture();
         crate::db::settings::set(&db, "ai_anthropic_model", "claude-x").unwrap();
@@ -671,6 +716,26 @@ mod tests {
         assert!(s.contains("anthropic"));
         assert!(!s.contains("danger_mode"), "danger_mode not synced");
         assert!(!s.contains("auto_run"), "auto_run not synced");
+    }
+
+    #[test]
+    fn export_ai_omits_empty_model_and_endpoint() {
+        let (db, ss, _dir) = fixture();
+        // Only an API key configured — model/endpoint unset. Export must NOT
+        // emit empty "model"/"endpoint": importing "" would wipe a populated
+        // value on another device (a destructive clear; additive-merge forbids).
+        ss.set(&crate::secret::setting_key("ai_anthropic_key"), "sk-zzz")
+            .unwrap();
+        let ai = crate::ai::commands::export_ai_settings(&db, &ss, true).unwrap();
+        let prov = ai["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["provider"] == "anthropic")
+            .expect("key-only provider still exported");
+        assert!(prov.get("model").is_none(), "empty model not emitted");
+        assert!(prov.get("endpoint").is_none(), "empty endpoint not emitted");
+        assert_eq!(prov["api_key"], "sk-zzz");
     }
 
     #[test]

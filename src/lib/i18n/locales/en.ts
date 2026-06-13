@@ -840,7 +840,7 @@ const en = {
   "github.sync_ai": "AI providers (model / endpoint)",
   "github.sync_ai_key": "AI API keys",
   "github.sync_profiles": "Profiles (by group)",
-  "github.sync_profiles_hint": "Only profiles in the checked groups are synced. Leave all unchecked to sync every profile.",
+  "github.sync_profiles_hint": "Only profiles in checked groups are synced. Check all groups to sync every profile; leave all unchecked to sync none.",
   "serial.port_device_hint": "Port name is specific to this device; on another machine you'll need to reselect it.",
   // Import / Export
   "import_export.export_title": "Export Config",

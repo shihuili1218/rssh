@@ -43,8 +43,14 @@ pub fn cmd_config(conn: &CliCtx, action: ConfigCmd) -> AppResult<()> {
 ///
 /// `respect_save_to_remote = true` (push path) sets the secret of
 /// `save_to_remote=false` credentials to None; the local export path passes
-/// false so every secret lands in the encrypted file.
-fn build_config_json(conn: &CliCtx, respect_save_to_remote: bool) -> AppResult<String> {
+/// false so every secret lands in the encrypted file. `include_ai_keys` gates
+/// plaintext AI provider keys the same way the GUI push honors the
+/// `sync_include_ai_key` toggle — push reads the setting, local export passes true.
+fn build_config_json(
+    conn: &CliCtx,
+    respect_save_to_remote: bool,
+    include_ai_keys: bool,
+) -> AppResult<String> {
     let profiles = rssh_lib::db::profile::list(conn)?;
     let mut credentials = rssh_lib::db::credential::list(conn)?;
     for c in credentials.iter_mut() {
@@ -75,7 +81,7 @@ fn build_config_json(conn: &CliCtx, respect_save_to_remote: bool) -> AppResult<S
     let ai_redact_rules = rssh_lib::db::ai_redact_rule::list(conn)?;
     let ai_command_blacklist = rssh_lib::db::ai_command_blacklist::list(conn)?;
     let ss: &dyn SecretStore = conn.secret_store().as_ref();
-    let ai = rssh_lib::ai::commands::export_ai_settings(conn, ss, true)?;
+    let ai = rssh_lib::ai::commands::export_ai_settings(conn, ss, include_ai_keys)?;
     Ok(serde_json::to_string_pretty(&serde_json::json!({
         "version": 1,
         "exported_at": chrono::Utc::now().to_rfc3339(),
@@ -103,8 +109,8 @@ fn import_config_json(conn: &CliCtx, json: &str) -> AppResult<()> {
 }
 
 fn config_export(conn: &CliCtx, file: &str) -> AppResult<()> {
-    // 本地 export：所有 secret 都加密落盘，不看 save_to_remote。
-    let json = build_config_json(conn, false)?;
+    // 本地 export：所有 secret 都加密落盘，不看 save_to_remote；AI key 一并保留。
+    let json = build_config_json(conn, false, true)?;
     let pw = read_password("Encryption password: ");
     let pw2 = read_password("Confirm password: ");
     if pw != pw2 {
@@ -167,8 +173,11 @@ fn config_push(conn: &CliCtx) -> AppResult<()> {
         .unwrap_or_else(|| die("GitHub repo not set"));
     let branch = rssh_lib::db::settings::get(conn, "github_branch")?.unwrap_or("main".into());
 
-    // push 路径：尊重 save_to_remote — 不同步的凭证 secret 置 None。
-    let mut json_data = build_config_json(conn, true)?;
+    // push 路径：尊重 save_to_remote（不同步的凭证 secret 置 None）+ sync_include_ai_key
+    // 闸门（GUI 关了就别从 CLI 把 key 漏到同一个 repo）。absent / 非 "0" = 开。
+    let include_ai_keys = rssh_lib::db::settings::get(conn, "sync_include_ai_key")?
+        .is_none_or(|v| v != "0");
+    let mut json_data = build_config_json(conn, true, include_ai_keys)?;
 
     let pw = read_password("Encryption password: ");
     let encrypted = rssh_lib::crypto::encrypt(&json_data, &pw)?;

@@ -47,6 +47,7 @@ fn collect_credentials_with_secrets(db: &Db, ss: &dyn SecretStore) -> AppResult<
 /// Per-category sync toggles + the profile group filter. All booleans default
 /// to ON (absent setting = included) so turning on sync keeps today's
 /// "sync everything" behavior; the user opts OUT per category.
+#[derive(Debug)]
 struct SyncPrefs {
     credentials: bool,
     forwards: bool,
@@ -79,9 +80,13 @@ fn read_sync_prefs(db: &Db) -> AppResult<SyncPrefs> {
     };
     // Empty string / absent → None → all profiles (incl. ungrouped); this is
     // the "all groups selected" default. A JSON array → that exact set
-    // (an empty array means sync no profiles). Malformed → None (fail safe).
+    // (an empty array means sync no profiles). Malformed → error, never None:
+    // silently falling back to None would widen a deliberately-narrowed export
+    // back to every profile (a privacy leak), which is fail-OPEN, not safe.
     let profile_group_ids = match crate::db::settings::get(db, "sync_profile_group_ids")? {
-        Some(s) if !s.trim().is_empty() => serde_json::from_str::<Vec<String>>(&s).ok(),
+        Some(s) if !s.trim().is_empty() => Some(serde_json::from_str::<Vec<String>>(&s).map_err(
+            |e| AppError::config("sync_profile_group_ids_invalid", json!({ "err": e.to_string() })),
+        )?),
         _ => None,
     };
     Ok(SyncPrefs {
@@ -496,6 +501,16 @@ mod tests {
         let prefs = read_sync_prefs(&db).unwrap();
         let v = build_payload(&db, &ss, dir.path(), &ExportMode::GitHubPush(prefs)).unwrap();
         assert_eq!(v["profiles"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn malformed_group_filter_errors_not_fail_open() {
+        // A corrupted setting must error, never silently fall back to None
+        // (= "sync all"), which would widen a narrowed export to every profile.
+        let (db, _ss, _dir) = fixture();
+        crate::db::settings::set(&db, "sync_profile_group_ids", "{not json").unwrap();
+        let err = read_sync_prefs(&db).unwrap_err();
+        assert_eq!(err.code(), "sync_profile_group_ids_invalid");
     }
 
     #[test]

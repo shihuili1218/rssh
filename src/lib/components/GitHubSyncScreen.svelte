@@ -55,7 +55,16 @@
         if (gjson === null || gjson === "") {
             selectedGroups = groups.map((g) => g.id);
         } else {
-            try { selectedGroups = JSON.parse(gjson); } catch { selectedGroups = groups.map((g) => g.id); }
+            // Validate shape before trusting it — a non-array (corrupted setting)
+            // would make selectedGroups.includes() throw at render time.
+            try {
+                const parsed: unknown = JSON.parse(gjson);
+                selectedGroups = Array.isArray(parsed) && parsed.every((v) => typeof v === "string")
+                    ? parsed
+                    : groups.map((g) => g.id);
+            } catch {
+                selectedGroups = groups.map((g) => g.id);
+            }
         }
     });
 
