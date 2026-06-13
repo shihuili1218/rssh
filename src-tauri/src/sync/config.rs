@@ -926,6 +926,28 @@ mod tests {
     }
 
     #[test]
+    fn export_ai_treats_whitespace_as_unset_and_trims() {
+        let (db, ss, _dir) = fixture();
+        // Whitespace-only model/endpoint are "effectively unset" — not exported
+        // (they'd hide the official-endpoint placeholder + risk a destructive
+        // merge). A real key is trimmed before export.
+        crate::db::settings::set(&db, "ai_anthropic_model", "   ").unwrap();
+        crate::db::settings::set(&db, "ai_anthropic_endpoint", "\t").unwrap();
+        ss.set(&crate::secret::setting_key("ai_anthropic_key"), "  sk-zzz  ")
+            .unwrap();
+        let ai = crate::ai::commands::export_ai_settings(&db, &ss, true).unwrap();
+        let prov = ai["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["provider"] == "anthropic")
+            .expect("provider present via key");
+        assert!(prov.get("model").is_none(), "whitespace model not emitted");
+        assert!(prov.get("endpoint").is_none(), "whitespace endpoint not emitted");
+        assert_eq!(prov["api_key"], "sk-zzz", "key trimmed on export");
+    }
+
+    #[test]
     fn merge_old_payload_without_new_keys_is_noop() {
         let (db, ss, dir) = fixture();
         highlight::insert(

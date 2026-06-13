@@ -55,18 +55,20 @@
         if (gjson === null || gjson === "") {
             selectedGroups = groups.map((g) => g.id);
         } else {
-            // Validate shape, then normalize against existing groups: drop stale
-            // ids (deleted groups) and de-dup. A ghost id would otherwise inflate
-            // the count so the "all selected" check (length === groups.length)
-            // misfires and silently widens/narrows what gets synced.
             const valid = new Set(groups.map((g) => g.id));
-            try {
-                const parsed: unknown = JSON.parse(gjson);
-                selectedGroups = Array.isArray(parsed)
-                    ? [...new Set(parsed.filter((v): v is string => typeof v === "string" && valid.has(v)))]
-                    : groups.map((g) => g.id);
-            } catch {
+            let parsed: unknown;
+            try { parsed = JSON.parse(gjson); } catch { parsed = undefined; }
+            if (Array.isArray(parsed) && parsed.every((v) => typeof v === "string")) {
+                // Valid string array (what the backend can parse). Drop stale ids
+                // (deleted groups) + de-dup so the "all selected" check stays
+                // accurate; the backend tolerates stale ids, so leave it persisted.
+                selectedGroups = [...new Set((parsed as string[]).filter((v) => valid.has(v)))];
+            } else {
+                // Corrupted value the backend rejects on push (not a string array)
+                // → every push/pull would fail in a silent loop. Reset to "all" AND
+                // repair the persisted setting so the screen and the next push agree.
                 selectedGroups = groups.map((g) => g.id);
+                await invoke("set_setting", { key: "sync_profile_group_ids", value: "" });
             }
         }
     });

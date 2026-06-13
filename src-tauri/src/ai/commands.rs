@@ -88,25 +88,27 @@ pub fn export_ai_settings(
 ) -> AppResult<serde_json::Value> {
     let mut providers = Vec::new();
     for p in SYNC_PROVIDERS {
+        // Trim and treat blank/whitespace as unset — only ever emit what the user
+        // actually configured. A blank value would otherwise overwrite a populated
+        // field on another device (additive merge forbids destructive clears) and
+        // suppress the official-endpoint placeholder there.
         let model = crate::db::settings::get(db, &key_model(p))?.unwrap_or_default();
-        let endpoint = crate::db::settings::get(db, &key_endpoint(p))?;
-        let api_key = ss.get(&key_api_key(p))?;
-        let has_endpoint = endpoint.as_deref().is_some_and(|s| !s.is_empty());
-        let has_key = api_key.as_deref().is_some_and(|s| !s.is_empty());
-        if model.is_empty() && !has_endpoint && !has_key {
+        let model = model.trim();
+        let endpoint = crate::db::settings::get(db, &key_endpoint(p))?.unwrap_or_default();
+        let endpoint = endpoint.trim();
+        let api_key = ss.get(&key_api_key(p))?.unwrap_or_default();
+        let api_key = api_key.trim();
+        if model.is_empty() && endpoint.is_empty() && api_key.is_empty() {
             continue; // never-configured provider — nothing to sync
         }
-        // Only emit fields the user actually set. An empty "" would, on the
-        // additive-merge import side, overwrite a populated model/endpoint on
-        // another device — a destructive clear. Absent = "leave remote as-is".
         let mut obj = json!({ "provider": p });
         if !model.is_empty() {
             obj["model"] = json!(model);
         }
-        if has_endpoint {
+        if !endpoint.is_empty() {
             obj["endpoint"] = json!(endpoint);
         }
-        if include_keys && has_key {
+        if include_keys && !api_key.is_empty() {
             obj["api_key"] = json!(api_key);
         }
         providers.push(obj);
@@ -131,12 +133,13 @@ pub fn import_ai_settings(
             if !SYNC_PROVIDERS.contains(&name) {
                 continue; // refuse to write keys for unknown providers
             }
-            // Empty string == "not set" → no-op, never overwrite. Additive merge
-            // must not let a blank (old/hand-edited/corrupted payload) wipe a
-            // configured value; matches the api_key/active_provider handling.
+            // Trim, then blank/whitespace == "not set" → no-op, never overwrite.
+            // Additive merge must not let a blank (old/hand-edited/corrupted
+            // payload) wipe a configured value; matches api_key/active_provider.
             if let Some(m) = entry
                 .get("model")
                 .and_then(|v| v.as_str())
+                .map(str::trim)
                 .filter(|s| !s.is_empty())
             {
                 crate::db::settings::set(db, &key_model(name), m)?;
@@ -144,6 +147,7 @@ pub fn import_ai_settings(
             if let Some(e) = entry
                 .get("endpoint")
                 .and_then(|v| v.as_str())
+                .map(str::trim)
                 .filter(|s| !s.is_empty())
             {
                 crate::db::settings::set(db, &key_endpoint(name), e)?;
@@ -151,6 +155,7 @@ pub fn import_ai_settings(
             if let Some(k) = entry
                 .get("api_key")
                 .and_then(|v| v.as_str())
+                .map(str::trim)
                 .filter(|s| !s.is_empty())
             {
                 ss.set(&key_api_key(name), k)?;
