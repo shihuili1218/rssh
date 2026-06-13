@@ -84,11 +84,13 @@
     </div>
   </div>
 
-  <label class="field" class:disabled={!formIsRegex}>
-    <span class="label-text">{t("highlight.name")}</span>
-    <input type="text" bind:value={formName} placeholder={t("highlight.name_placeholder")}
-      disabled={!formIsRegex} onkeydown={handleKeydown} />
-  </label>
+  {#if formIsRegex}
+    <label class="field">
+      <span class="label-text">{t("highlight.name")}</span>
+      <input type="text" bind:value={formName} placeholder={t("highlight.name_placeholder")}
+        onkeydown={handleKeydown} />
+    </label>
+  {/if}
 
   <div class="color-actions-row">
     <label class="color-picker">
@@ -137,12 +139,6 @@
     white-space: nowrap; flex-shrink: 0;
   }
 
-  .field.disabled .label-text { color: var(--text-dim); }
-  .field input:disabled {
-    opacity: 0.55;
-    background: color-mix(in srgb, var(--surface) 70%, var(--divider));
-    cursor: not-allowed;
-  }
   .inline-form input[type="text"] {
     width: 100%; box-sizing: border-box;
   }
