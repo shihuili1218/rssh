@@ -5,7 +5,7 @@
 
 use clap::Subcommand;
 use rssh_lib::error::{AppError, AppResult};
-use rssh_lib::secret::{cred_secret_key, setting_key, SecretStore};
+use rssh_lib::secret::{setting_key, SecretStore};
 
 use crate::ctx::CliCtx;
 use crate::helpers::{die, prompt_default, prompt_secret_default, read_password};
@@ -34,72 +34,6 @@ pub fn cmd_config(conn: &CliCtx, action: ConfigCmd) -> AppResult<()> {
     }
 }
 
-/// 构造 export / push 共用的 JSON 形态。
-///
-/// The shape must cover the GUI export field set (profiles / credentials /
-/// forwards / groups / serial_profiles / skills) so a CLI backup carries every
-/// category. Under merge semantics a missing key is simply not synced (it never
-/// wipes the other side), but parity keeps CLI ↔ GUI round-trips lossless.
-///
-/// `respect_save_to_remote = true` (push path) sets the secret of
-/// `save_to_remote=false` credentials to None; the local export path passes
-/// false so every secret lands in the encrypted file. `include_ai_keys` gates
-/// plaintext AI provider keys the same way the GUI push honors the
-/// `sync_include_ai_key` toggle — push reads the setting, local export passes true.
-fn build_config_json(
-    conn: &CliCtx,
-    respect_save_to_remote: bool,
-    include_ai_keys: bool,
-) -> AppResult<String> {
-    let profiles = rssh_lib::db::profile::list(conn)?;
-    let mut credentials = rssh_lib::db::credential::list(conn)?;
-    for c in credentials.iter_mut() {
-        c.secret = conn.secret_store().get(&cred_secret_key(&c.id))?;
-        if respect_save_to_remote && !c.save_to_remote {
-            c.secret = None;
-        }
-    }
-    let forwards = rssh_lib::db::forward::list(conn)?;
-    let serial_profiles = rssh_lib::db::serial_profile::list(conn)?;
-    let groups = rssh_lib::db::group::list(conn)?;
-    // ai_skill 表只有 user 自定义条目，builtin "general" 不入表。
-    // SkillRecord wire format 需要 builtin 字段，inline 拼出来避免依赖 ai 模块。
-    let skills: Vec<serde_json::Value> = rssh_lib::db::ai_skill::list(conn)?
-        .into_iter()
-        .map(|u| {
-            serde_json::json!({
-                "id": u.id,
-                "name": u.name,
-                "description": u.description,
-                "content": u.content,
-                "builtin": false,
-            })
-        })
-        .collect();
-    let highlights = rssh_lib::db::highlight::list(conn)?;
-    let snippets = rssh_lib::db::snippet::load(&conn.data_dir)?;
-    let ai_redact_rules = rssh_lib::db::ai_redact_rule::list(conn)?;
-    let ai_command_blacklist = rssh_lib::db::ai_command_blacklist::list(conn)?;
-    let ss: &dyn SecretStore = conn.secret_store().as_ref();
-    let ai = rssh_lib::ai::commands::export_ai_settings(conn, ss, include_ai_keys)?;
-    Ok(serde_json::to_string_pretty(&serde_json::json!({
-        "version": 1,
-        "exported_at": chrono::Utc::now().to_rfc3339(),
-        "profiles": profiles,
-        "credentials": credentials,
-        "forwards": forwards,
-        "serial_profiles": serial_profiles,
-        "groups": groups,
-        "skills": skills,
-        "highlights": highlights,
-        "snippets": snippets,
-        "ai_redact_rules": ai_redact_rules,
-        "ai_command_blacklist": ai_command_blacklist,
-        "ai": ai,
-    }))
-    .unwrap_or_else(|e| die(format!("Serialization failed: {e}"))))
-}
-
 /// Parse JSON then delegate to the shared sync logic (same path as the GUI).
 fn import_config_json(conn: &CliCtx, json: &str) -> AppResult<()> {
     let data: serde_json::Value =
@@ -109,8 +43,17 @@ fn import_config_json(conn: &CliCtx, json: &str) -> AppResult<()> {
 }
 
 fn config_export(conn: &CliCtx, file: &str) -> AppResult<()> {
-    // 本地 export：所有 secret 都加密落盘，不看 save_to_remote；AI key 一并保留。
-    let json = build_config_json(conn, false, true)?;
+    // 本地 export：全量备份（每个类别 + 所有 secret），不看开关 —— 跟 GUI 本地导出
+    // 用同一个 build_payload，CLI ↔ GUI 形态永不漂移。
+    let ss: &dyn SecretStore = conn.secret_store().as_ref();
+    let payload = rssh_lib::sync::config::build_payload(
+        conn,
+        ss,
+        &conn.data_dir,
+        &rssh_lib::sync::config::ExportMode::LocalBackup,
+    )?;
+    let json = serde_json::to_string_pretty(&payload)
+        .unwrap_or_else(|e| die(format!("Serialization failed: {e}")));
     let pw = read_password("Encryption password: ");
     let pw2 = read_password("Confirm password: ");
     if pw != pw2 {
@@ -173,11 +116,18 @@ fn config_push(conn: &CliCtx) -> AppResult<()> {
         .unwrap_or_else(|| die("GitHub repo not set"));
     let branch = rssh_lib::db::settings::get(conn, "github_branch")?.unwrap_or("main".into());
 
-    // push 路径：尊重 save_to_remote（不同步的凭证 secret 置 None）+ sync_include_ai_key
-    // 闸门（GUI 关了就别从 CLI 把 key 漏到同一个 repo）。absent / 非 "0" = 开。
-    let include_ai_keys = rssh_lib::db::settings::get(conn, "sync_include_ai_key")?
-        .is_none_or(|v| v != "0");
-    let mut json_data = build_config_json(conn, true, include_ai_keys)?;
+    // push 路径：跟 GUI push 用同一个 build_payload —— 尊重所有同步开关 + group 过滤
+    // + save_to_remote scrub + AI-key 闸门。GUI 里关掉的类别，CLI 也不会漏到同一 repo。
+    let ss: &dyn SecretStore = conn.secret_store().as_ref();
+    let prefs = rssh_lib::sync::config::read_sync_prefs(conn)?;
+    let payload = rssh_lib::sync::config::build_payload(
+        conn,
+        ss,
+        &conn.data_dir,
+        &rssh_lib::sync::config::ExportMode::GitHubPush(prefs),
+    )?;
+    let mut json_data = serde_json::to_string_pretty(&payload)
+        .unwrap_or_else(|e| die(format!("Serialization failed: {e}")));
 
     let pw = read_password("Encryption password: ");
     let encrypted = rssh_lib::crypto::encrypt(&json_data, &pw)?;

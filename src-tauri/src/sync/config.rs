@@ -24,7 +24,7 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use crate::db::ai_command_blacklist::{self, BlacklistRow};
-use crate::db::ai_redact_rule::RedactRuleRow;
+use crate::db::ai_redact_rule::{self, RedactRuleRow};
 use crate::db::{credential, forward, group, highlight, profile, serial_profile, snippet, Db};
 use crate::error::{AppError, AppResult};
 use crate::models::{Credential, Forward, Group, HighlightRule, Profile, SerialProfile, Snippet};
@@ -347,6 +347,169 @@ fn parse_skill(item: &Value) -> AppResult<Option<crate::db::ai_skill::UserSkill>
         description: s.description,
         content: s.content,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Export — the counterpart to merge_import. One builder for every transport
+// (GUI commands + headless server + `rssh` CLI) so the on-disk/on-GitHub shape
+// can never drift between them.
+// ---------------------------------------------------------------------------
+
+/// Per-category sync toggles + the profile group filter. All booleans default
+/// to ON (absent setting = included) so turning on sync keeps today's
+/// "sync everything" behavior; the user opts OUT per category.
+#[derive(Debug)]
+pub struct SyncPrefs {
+    credentials: bool,
+    forwards: bool,
+    groups: bool,
+    serial: bool,
+    skills: bool,
+    highlights: bool,
+    snippets: bool,
+    ai_redact: bool,
+    ai_blacklist: bool,
+    ai: bool,
+    ai_key: bool,
+    /// `None` = all profiles; `Some(ids)` = only profiles in those groups.
+    profile_group_ids: Option<Vec<String>>,
+}
+
+/// What flavor of payload to build.
+pub enum ExportMode {
+    /// Full local backup: every category, every secret, no toggles.
+    LocalBackup,
+    /// GitHub push: apply per-category toggles + group filter; scrub the secret
+    /// of credentials flagged local-only.
+    GitHubPush(SyncPrefs),
+}
+
+/// Read the per-category toggles + profile group filter from settings. Both the
+/// GUI push and `rssh config push` feed the result into `build_payload` so the
+/// same opt-outs apply no matter which transport pushes to the shared repo.
+pub fn read_sync_prefs(db: &Db) -> AppResult<SyncPrefs> {
+    // Absent or any value other than "0" → on. Only an explicit "0" disables.
+    let flag = |key: &str| -> AppResult<bool> {
+        Ok(crate::db::settings::get(db, key)?.is_none_or(|v| v != "0"))
+    };
+    // Empty string / absent → None → all profiles (incl. ungrouped); this is
+    // the "all groups selected" default. A JSON array → that exact set
+    // (an empty array means sync no profiles). Malformed → error, never None:
+    // silently falling back to None would widen a deliberately-narrowed export
+    // back to every profile (a privacy leak), which is fail-OPEN, not safe.
+    let profile_group_ids = match crate::db::settings::get(db, "sync_profile_group_ids")? {
+        Some(s) if !s.trim().is_empty() => Some(serde_json::from_str::<Vec<String>>(&s).map_err(
+            |e| AppError::config("sync_profile_group_ids_invalid", json!({ "err": e.to_string() })),
+        )?),
+        _ => None,
+    };
+    Ok(SyncPrefs {
+        credentials: flag("sync_include_credentials")?,
+        forwards: flag("sync_include_forwards")?,
+        groups: flag("sync_include_groups")?,
+        serial: flag("sync_include_serial")?,
+        skills: flag("sync_include_skills")?,
+        highlights: flag("sync_include_highlights")?,
+        ai_redact: flag("sync_include_ai_redact")?,
+        ai_blacklist: flag("sync_include_ai_blacklist")?,
+        snippets: flag("sync_include_snippets")?,
+        ai: flag("sync_include_ai")?,
+        ai_key: flag("sync_include_ai_key")?,
+        profile_group_ids,
+    })
+}
+
+fn to_val<T: serde::Serialize>(v: T) -> AppResult<Value> {
+    serde_json::to_value(v).map_err(|e| AppError::other("serde_failed", json!({ "err": e.to_string() })))
+}
+
+fn collect_credentials_with_secrets(
+    db: &Db,
+    ss: &dyn SecretStore,
+) -> AppResult<Vec<crate::models::Credential>> {
+    let mut creds = credential::list(db)?;
+    for c in creds.iter_mut() {
+        c.secret = ss.get(&cred_secret_key(&c.id))?;
+    }
+    Ok(creds)
+}
+
+/// Build the export payload as a JSON value — the single source of truth for
+/// the sync shape, shared by local export AND GitHub push (GUI *and* CLI) so the
+/// JSON can't drift between them. On push, a disabled category's key is simply
+/// omitted (absence = "not synced"); merge_import then leaves that local table
+/// alone. `data_dir` feeds the file-backed `snippets` category.
+pub fn build_payload(
+    db: &Db,
+    ss: &dyn SecretStore,
+    data_dir: &Path,
+    mode: &ExportMode,
+) -> AppResult<Value> {
+    let prefs = match mode {
+        ExportMode::GitHubPush(p) => Some(p),
+        ExportMode::LocalBackup => None,
+    };
+    let on = |pick: fn(&SyncPrefs) -> bool| prefs.is_none_or(pick);
+
+    let mut out = serde_json::Map::new();
+    out.insert("version".into(), json!(1));
+    out.insert("exported_at".into(), json!(chrono::Utc::now().to_rfc3339()));
+
+    // profiles — always present, filtered to the selected groups on push.
+    let mut profiles = profile::list(db)?;
+    if let Some(gids) = prefs.and_then(|p| p.profile_group_ids.as_ref()) {
+        let set: std::collections::HashSet<&str> = gids.iter().map(String::as_str).collect();
+        profiles.retain(|pr| pr.group_id.as_deref().is_some_and(|g| set.contains(g)));
+    }
+    out.insert("profiles".into(), to_val(profiles)?);
+
+    if on(|p| p.credentials) {
+        let mut credentials = collect_credentials_with_secrets(db, ss)?;
+        if prefs.is_some() {
+            for c in credentials.iter_mut() {
+                if !c.save_to_remote {
+                    c.secret = None;
+                }
+            }
+        }
+        out.insert("credentials".into(), to_val(credentials)?);
+    }
+    if on(|p| p.forwards) {
+        out.insert("forwards".into(), to_val(forward::list(db)?)?);
+    }
+    if on(|p| p.groups) {
+        out.insert("groups".into(), to_val(group::list(db)?)?);
+    }
+    if on(|p| p.serial) {
+        out.insert("serial_profiles".into(), to_val(serial_profile::list(db)?)?);
+    }
+    if on(|p| p.skills) {
+        out.insert("skills".into(), to_val(crate::ai::skills::list_user(db)?)?);
+    }
+    if on(|p| p.highlights) {
+        out.insert("highlights".into(), to_val(highlight::list(db)?)?);
+    }
+    if on(|p| p.snippets) {
+        out.insert("snippets".into(), to_val(snippet::load(data_dir)?)?);
+    }
+    if on(|p| p.ai_redact) {
+        out.insert("ai_redact_rules".into(), to_val(ai_redact_rule::list(db)?)?);
+    }
+    if on(|p| p.ai_blacklist) {
+        out.insert(
+            "ai_command_blacklist".into(),
+            to_val(ai_command_blacklist::list(db)?)?,
+        );
+    }
+    if on(|p| p.ai) {
+        let include_keys = on(|p| p.ai_key);
+        out.insert(
+            "ai".into(),
+            crate::ai::commands::export_ai_settings(db, ss, include_keys)?,
+        );
+    }
+
+    Ok(Value::Object(out))
 }
 
 #[cfg(test)]

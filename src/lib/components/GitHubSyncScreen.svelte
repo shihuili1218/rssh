@@ -55,12 +55,15 @@
         if (gjson === null || gjson === "") {
             selectedGroups = groups.map((g) => g.id);
         } else {
-            // Validate shape before trusting it — a non-array (corrupted setting)
-            // would make selectedGroups.includes() throw at render time.
+            // Validate shape, then normalize against existing groups: drop stale
+            // ids (deleted groups) and de-dup. A ghost id would otherwise inflate
+            // the count so the "all selected" check (length === groups.length)
+            // misfires and silently widens/narrows what gets synced.
+            const valid = new Set(groups.map((g) => g.id));
             try {
                 const parsed: unknown = JSON.parse(gjson);
-                selectedGroups = Array.isArray(parsed) && parsed.every((v) => typeof v === "string")
-                    ? parsed
+                selectedGroups = Array.isArray(parsed)
+                    ? [...new Set(parsed.filter((v): v is string => typeof v === "string" && valid.has(v)))]
                     : groups.map((g) => g.id);
             } catch {
                 selectedGroups = groups.map((g) => g.id);
