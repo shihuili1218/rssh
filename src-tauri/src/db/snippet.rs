@@ -29,3 +29,20 @@ pub fn save(data_dir: &Path, snippets: &[Snippet]) -> AppResult<()> {
     std::fs::write(path, data)?;
     Ok(())
 }
+
+/// Additive merge by name (the sync identity): load the file, overwrite the
+/// command of any snippet whose name matches an incoming one, append new names,
+/// keep local-only snippets, then save. Never deletes. Used by merge_import.
+pub fn merge_by_name(data_dir: &Path, incoming: &[Snippet]) -> AppResult<()> {
+    if incoming.is_empty() {
+        return Ok(());
+    }
+    let mut current = load(data_dir)?;
+    for inc in incoming {
+        match current.iter_mut().find(|s| s.name == inc.name) {
+            Some(existing) => existing.command = inc.command.clone(),
+            None => current.push(inc.clone()),
+        }
+    }
+    save(data_dir, &current)
+}

@@ -116,6 +116,7 @@
     <label>{t("serial.port")}</label>
     <input type="text" bind:value={port} placeholder="/dev/cu.usbserial-…" list="serial-ports-list" />
     <datalist id="serial-ports-list">{#each ports as p}<option value={p}></option>{/each}</datalist>
+    <p class="port-hint">{t("serial.port_device_hint")}</p>
     <label>{t("serial.baud")}</label>
     <input type="number" bind:value={baudRate} min="1" />
     <div class="row3">
@@ -160,4 +161,5 @@
   .check { display: flex; align-items: center; gap: 8px; }
   textarea { font-family: monospace; resize: vertical; }
   .form :global(.section-label) { margin-top: 10px; }
+  .port-hint { margin: -4px 0 2px; font-size: 11px; color: var(--text-dim); line-height: 1.4; }
 </style>

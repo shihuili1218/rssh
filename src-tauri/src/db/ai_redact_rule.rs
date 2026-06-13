@@ -7,7 +7,7 @@ use crate::error::AppResult;
 
 use super::Db;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RedactRuleRow {
     pub id: String,
     pub pattern: String,

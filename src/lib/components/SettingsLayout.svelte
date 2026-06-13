@@ -3,6 +3,7 @@
   import * as app from "../stores/app.svelte.ts";
   import * as updates from "../stores/updates.svelte.ts";
   import { t, locale, setLocale, AVAILABLE_LOCALES, type Locale } from "../i18n/index.svelte.ts";
+  import type { MessageKey } from "../i18n/locales/en";
   import ProfileManager from "./ProfileManager.svelte";
   import ProfileEditor from "./ProfileEditor.svelte";
   import CredentialManager from "./CredentialManager.svelte";
@@ -30,7 +31,7 @@
   /** locale 下拉选项 —— AVAILABLE_LOCALES 是常量，不需要 $derived。 */
   const localeOptions = AVAILABLE_LOCALES.map((l) => ({ value: l.code, label: l.label }));
 
-  type MenuItem = { id: app.SettingsPage; label: string; section: string };
+  type MenuItem = { id: app.SettingsPage; label: string; section: MessageKey };
 
   type PageRoute = { component: Component<any>; needsId?: boolean };
   const routes: Partial<Record<app.SettingsPage, PageRoute>> = {
@@ -70,22 +71,23 @@
 
   // 注：菜单数据用 t() 直接调用，配合 $derived 触发响应式更新
   let allMenu = $derived<MenuItem[]>([
-    { id: "profiles", label: t("settings.section.profiles"), section: "Connections" },
-    { id: "credentials", label: t("settings.section.credentials"), section: "Connections" },
-    { id: "forwards", label: t("settings.section.forwards"), section: "Connections" },
-    { id: "serial-profiles", label: t("settings.section.serial"), section: "Connections" },
-    { id: "groups", label: t("settings.section.groups"), section: "Connections" },
-    { id: "import-export", label: t("settings.section.import_export"), section: "Connections" },
-    { id: "github-sync", label: t("settings.section.github_sync"), section: "Connections" },
-    { id: "shell-settings", label: t("settings.section.shell"), section: "Sessions" },
-    { id: "recording-settings", label: t("settings.section.recording"), section: "Sessions" },
-    { id: "appearance", label: t("settings.section.appearance"), section: "Appearance" },
-    { id: "highlights", label: t("settings.section.highlights"), section: "Appearance" },
-    { id: "snippets", label: t("settings.section.snippets"), section: "Appearance" },
-    { id: "ai", label: t("settings.section.ai"), section: "Help" },
-    { id: "cli", label: t("settings.section.cli"), section: "Help" },
-    { id: "shortcuts", label: t("settings.section.shortcuts"), section: "Help" },
-    { id: "about", label: t("settings.section.about"), section: "Help" },
+    { id: "profiles", label: t("settings.section.profiles"), section: "settings.group.connections" },
+    { id: "credentials", label: t("settings.section.credentials"), section: "settings.group.connections" },
+    { id: "forwards", label: t("settings.section.forwards"), section: "settings.group.connections" },
+    { id: "serial-profiles", label: t("settings.section.serial"), section: "settings.group.connections" },
+    { id: "groups", label: t("settings.section.groups"), section: "settings.group.connections" },
+    { id: "import-export", label: t("settings.section.import_export"), section: "settings.group.connections" },
+    { id: "shell-settings", label: t("settings.section.shell"), section: "settings.group.sessions" },
+    { id: "recording-settings", label: t("settings.section.recording"), section: "settings.group.sessions" },
+    { id: "appearance", label: t("settings.section.appearance"), section: "settings.group.appearance" },
+    { id: "highlights", label: t("settings.section.highlights"), section: "settings.group.appearance" },
+    { id: "snippets", label: t("settings.section.snippets"), section: "settings.group.appearance" },
+    // Advanced: power features beyond a plain terminal (sync, AI, CLI).
+    { id: "github-sync", label: t("settings.section.github_sync"), section: "settings.group.advanced" },
+    { id: "ai", label: t("settings.section.ai"), section: "settings.group.advanced" },
+    { id: "cli", label: t("settings.section.cli"), section: "settings.group.advanced" },
+    { id: "shortcuts", label: t("settings.section.shortcuts"), section: "settings.group.help" },
+    { id: "about", label: t("settings.section.about"), section: "settings.group.help" },
   ]);
 
   // import-export 走 rfd 原生文件对话框，rfd 没 Android backend，
@@ -101,7 +103,7 @@
 
   let sections = $derived((() => {
     const seen = new Set<string>();
-    return menu.reduce<{ section: string; items: MenuItem[] }[]>((acc, m) => {
+    return menu.reduce<{ section: MessageKey; items: MenuItem[] }[]>((acc, m) => {
       if (!seen.has(m.section)) {
         seen.add(m.section);
         acc.push({ section: m.section, items: [] });
@@ -129,7 +131,7 @@
   <nav class="settings-menu">
     <div class="menu-header">{t("settings.title")}</div>
     {#each sections as s}
-      <div class="section-label">{s.section}</div>
+      <div class="section-label">{t(s.section)}</div>
       {#each s.items as item}
         <button
           class="menu-item surface-raised-sm"

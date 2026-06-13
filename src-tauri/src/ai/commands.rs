@@ -66,6 +66,91 @@ fn key_auto_detect_remote_shell() -> String {
     "ai_auto_detect_remote_shell".into()
 }
 
+// ─── Sync (export/import of provider settings) ─────────────────────
+//
+// Providers eligible for sync. Per-provider config (model/endpoint/api_key) is
+// emitted as a list so multiple platforms round-trip. `danger_mode` and the
+// `auto_*` family are deliberately NOT synced — they are per-device safety
+// preferences, not portable config.
+
+/// Providers whose `{model, endpoint, api_key}` participate in GitHub sync.
+pub const SYNC_PROVIDERS: &[&str] = &["anthropic", "openai", "deepseek", "glm"];
+
+/// Build the `ai` payload section: `{ active_provider, providers: [...] }`.
+/// Only providers the user has actually configured (any non-empty field) are
+/// included. `include_keys` gates the plaintext `api_key` field (the AI-key
+/// sync toggle); the value comes from the SecretStore decrypted, and the whole
+/// payload is encrypted as one blob before leaving the device.
+pub fn export_ai_settings(
+    db: &crate::db::Db,
+    ss: &dyn crate::secret::SecretStore,
+    include_keys: bool,
+) -> AppResult<serde_json::Value> {
+    let mut providers = Vec::new();
+    for p in SYNC_PROVIDERS {
+        let model = crate::db::settings::get(db, &key_model(p))?.unwrap_or_default();
+        let endpoint = crate::db::settings::get(db, &key_endpoint(p))?;
+        let api_key = ss.get(&key_api_key(p))?;
+        let has_endpoint = endpoint.as_deref().is_some_and(|s| !s.is_empty());
+        let has_key = api_key.as_deref().is_some_and(|s| !s.is_empty());
+        if model.is_empty() && !has_endpoint && !has_key {
+            continue; // never-configured provider — nothing to sync
+        }
+        let mut obj = json!({
+            "provider": p,
+            "model": model,
+            "endpoint": endpoint,
+        });
+        if include_keys && has_key {
+            obj["api_key"] = json!(api_key);
+        }
+        providers.push(obj);
+    }
+    let active = crate::db::settings::get(db, &key_provider())?;
+    Ok(json!({ "active_provider": active, "providers": providers }))
+}
+
+/// Apply an `ai` payload section. Additive: only provided fields are written,
+/// nothing is deleted. Unknown providers are ignored so a payload can't write
+/// arbitrary setting keys. `api_key` is written to the SecretStore.
+pub fn import_ai_settings(
+    db: &crate::db::Db,
+    ss: &dyn crate::secret::SecretStore,
+    ai: &serde_json::Value,
+) -> AppResult<()> {
+    if let Some(arr) = ai.get("providers").and_then(|v| v.as_array()) {
+        for entry in arr {
+            let Some(name) = entry.get("provider").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if !SYNC_PROVIDERS.contains(&name) {
+                continue; // refuse to write keys for unknown providers
+            }
+            if let Some(m) = entry.get("model").and_then(|v| v.as_str()) {
+                crate::db::settings::set(db, &key_model(name), m)?;
+            }
+            if let Some(e) = entry.get("endpoint").and_then(|v| v.as_str()) {
+                crate::db::settings::set(db, &key_endpoint(name), e)?;
+            }
+            if let Some(k) = entry
+                .get("api_key")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                ss.set(&key_api_key(name), k)?;
+            }
+        }
+    }
+    if let Some(active) = ai
+        .get("active_provider")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        crate::db::settings::set(db, &key_provider(), active)?;
+    }
+    Ok(())
+}
+
 // ─── 命令 ──────────────────────────────────────────────────────────
 
 #[derive(Serialize)]

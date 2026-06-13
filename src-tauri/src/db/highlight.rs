@@ -69,6 +69,25 @@ pub fn update(db: &Db, old_keyword: &str, rule: &HighlightRule) -> AppResult<()>
     Ok(())
 }
 
+/// Upsert addressed by keyword — the sync identity. The autoincrement `id` is
+/// local-only and never synced (it would collide across devices). Updates
+/// color/enabled when the keyword exists, inserts otherwise. Used by
+/// merge_import; additive, never deletes.
+pub fn upsert_by_keyword(db: &Db, rule: &HighlightRule) -> AppResult<()> {
+    let conn = db.lock()?;
+    let affected = conn.execute(
+        "UPDATE highlights SET color = ?2, enabled = ?3 WHERE keyword = ?1",
+        params![rule.keyword, rule.color, rule.enabled],
+    )?;
+    if affected == 0 {
+        conn.execute(
+            "INSERT INTO highlights (keyword, color, enabled) VALUES (?1, ?2, ?3)",
+            params![rule.keyword, rule.color, rule.enabled],
+        )?;
+    }
+    Ok(())
+}
+
 pub fn reset_defaults(db: &Db) -> AppResult<()> {
     let conn = db.lock()?;
     conn.execute("DELETE FROM highlights", [])?;

@@ -2,6 +2,7 @@
     import {onMount} from "svelte";
     import {invoke} from "@tauri-apps/api/core";
     import { t, errMsg } from "../i18n/index.svelte.ts";
+    import type { MessageKey } from "../i18n/locales/en";
 
     let githubToken = $state("");
     let githubRepo = $state("");
@@ -16,11 +17,65 @@
     let pw2 = $state("");
     let pwError = $state("");
 
+    /* Per-category sync toggles (push-side filter). Stored in settings as
+       "1"/"0"; absent = on. A disabled item is simply not uploaded. */
+    const SYNC_ITEMS: { key: string; label: MessageKey }[] = [
+        { key: "sync_include_credentials", label: "github.sync_credentials" },
+        { key: "sync_include_forwards", label: "github.sync_forwards" },
+        { key: "sync_include_groups", label: "github.sync_groups" },
+        { key: "sync_include_serial", label: "github.sync_serial" },
+        { key: "sync_include_highlights", label: "github.sync_highlights" },
+        { key: "sync_include_snippets", label: "github.sync_snippets" },
+        { key: "sync_include_skills", label: "github.sync_skills" },
+        { key: "sync_include_ai_redact", label: "github.sync_ai_redact" },
+        { key: "sync_include_ai_blacklist", label: "github.sync_ai_blacklist" },
+        { key: "sync_include_ai", label: "github.sync_ai" },
+        { key: "sync_include_ai_key", label: "github.sync_ai_key" },
+    ];
+    let flags = $state<Record<string, boolean>>({});
+    let groups = $state<{ id: string; name: string; color: string }[]>([]);
+    // Group ids whose profiles sync. Default = all selected. When all are
+    // selected we persist "" (= no filter, syncs everything incl. ungrouped);
+    // a strict subset persists as a JSON array; an empty array syncs nothing.
+    let selectedGroups = $state<string[]>([]);
+
     onMount(async () => {
         githubToken = await invoke<string | null>("get_setting", {key: "github_token"}) ?? "";
         githubRepo = await invoke<string | null>("get_setting", {key: "github_repo"}) ?? "";
         githubBranch = await invoke<string | null>("get_setting", {key: "github_branch"}) ?? "main";
+
+        // Load sync toggles (absent = on) + the profile group selection.
+        for (const it of SYNC_ITEMS) {
+            const v = await invoke<string | null>("get_setting", {key: it.key});
+            flags[it.key] = v === null || v !== "0";
+        }
+        groups = await invoke<{ id: string; name: string; color: string }[]>("list_groups").catch(() => []);
+        const gjson = await invoke<string | null>("get_setting", {key: "sync_profile_group_ids"});
+        // Empty/absent = all groups selected (default). Otherwise the saved subset.
+        if (gjson === null || gjson === "") {
+            selectedGroups = groups.map((g) => g.id);
+        } else {
+            try { selectedGroups = JSON.parse(gjson); } catch { selectedGroups = groups.map((g) => g.id); }
+        }
     });
+
+    async function setFlag(key: string, val: boolean) {
+        flags[key] = val;
+        await invoke("set_setting", {key, value: val ? "1" : "0"});
+    }
+
+    async function toggleGroup(id: string, checked: boolean) {
+        selectedGroups = checked
+            ? [...selectedGroups, id]
+            : selectedGroups.filter((g) => g !== id);
+        // All selected → persist "" (no filter, syncs everything incl. ungrouped
+        // and any future groups). Otherwise the explicit subset ("[]" = none).
+        const allSelected = groups.length > 0 && selectedGroups.length === groups.length;
+        await invoke("set_setting", {
+            key: "sync_profile_group_ids",
+            value: allSelected ? "" : JSON.stringify(selectedGroups),
+        });
+    }
 
     async function saveSettings() {
         await invoke("set_setting", {key: "github_token", value: githubToken});
@@ -90,15 +145,61 @@
             <input id="gh-branch" type="text" bind:value={githubBranch} placeholder="main"/>
         </div>
 
-        <!-- Save 跟 Push 同属"主操作"，用同样的 btn-accent 样式。
-             Pull 用默认 btn（secondary）跟 sshell buildSecondaryButton 对齐。 -->
+        <!-- Save is the only action in this card; Push/Pull live with the sync items. -->
         <button class="btn btn-accent btn-sm save-btn" onclick={saveSettings}>⛰ {t("common.save")}</button>
+    </div>
+
+    <!-- Sync items: group chips on top, one switch per category, then actions. -->
+    <div class="card surface-raised sync-card">
+<!--        <div class="sync-title">{t("github.sync_section")}</div>-->
+<!--        <p class="pat-hint">{t("github.sync_hint")}</p>-->
+
+        <!-- Profiles: pick groups like tags. All selected by default. -->
+        <div class="sync-head">
+            <div class="sync-head-body">
+                <div class="sync-row-title">{t("github.sync_profiles")}</div>
+                <div class="sync-row-desc">{t("github.sync_profiles_hint")}</div>
+            </div>
+        </div>
+        {#if groups.length}
+            <div class="chips">
+                {#each groups as g (g.id)}
+                    {@const sel = selectedGroups.includes(g.id)}
+                    <button type="button" class="chip" class:selected={sel}
+                            style={g.color ? `--chip: ${g.color}` : ""}
+                            aria-pressed={sel}
+                            onclick={() => toggleGroup(g.id, !sel)}>
+                        <span class="chip-dot" style={g.color ? `background: ${g.color}` : ""}></span>
+                        {g.name}
+                    </button>
+                {/each}
+            </div>
+        {/if}
+
+        <div class="card-divider"></div>
+
+        <!-- One switch per category, a divider between each. -->
+        {#each SYNC_ITEMS as it, i (it.key)}
+            <div class="sync-head">
+                <div class="sync-head-body">
+                    <div class="sync-row-title">{t(it.label)}</div>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" checked={flags[it.key] ?? true}
+                           onchange={(e) => setFlag(it.key, e.currentTarget.checked)}
+                           aria-label={t(it.label)}/>
+                    <span class="slider"></span>
+                </label>
+            </div>
+            {#if i < SYNC_ITEMS.length - 1}<div class="card-divider"></div>{/if}
+        {/each}
+
+        <div class="card-divider"></div>
 
         <div class="btn-row">
             <button class="btn btn-accent btn-sm" onclick={() => askPassword("push")} disabled={syncing}>𓍼 ོ☁︎ {t("github.push")}</button>
             <button class="btn btn-sm" onclick={() => askPassword("pull")} disabled={syncing}>༄ {t("github.pull")}</button>
         </div>
-
         {#if msg}
             <div class="msg">{msg}</div>
         {/if}
@@ -141,6 +242,11 @@
         gap: 12px;
     }
 
+    /* 同步项卡片：与上方 token 卡片拉开间距。 */
+    .sync-card {
+        margin-top: 16px;
+    }
+
     /* PAT 说明：跟 sshell 对齐 —— 11px / text-dim / 行高 1.5。
        不用 11.5/12 因为内容多行密集，11+1.5 行高最易扫读。 */
     .pat-hint {
@@ -174,6 +280,70 @@
     .btn-row {
         display: flex;
         gap: 8px;
+    }
+
+    /* Row: title (+ optional desc) left, control (switch) right —
+       same "head-body + control" structure as ShellSettings' mouse card. */
+    .sync-head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    .sync-head-body {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+    .sync-row-title {
+        font-size: 13px;
+        color: var(--text);
+    }
+    .sync-row-desc {
+        font-size: 11px;
+        color: var(--text-dim);
+        line-height: 1.5;
+    }
+
+    /* Card-internal divider spanning the full card width (negative margin
+       cancels the 18px card padding). Same as ShellSettings. */
+    .card-divider {
+        height: 1px;
+        background: var(--divider);
+        margin: 2px -18px;
+    }
+
+    /* Group selection rendered as tag chips. The dot always shows the group's
+       own color; selected chips are highlighted with a tint of that color
+       (falls back to --accent for colorless groups). */
+    .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        padding: 3px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--text-sub);
+        cursor: pointer;
+    }
+    .chip-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--text-dim);
+        flex: none;
+    }
+    .chip.selected {
+        border-color: var(--chip, var(--accent));
+        background: color-mix(in srgb, var(--chip, var(--accent)) 18%, transparent);
+        color: var(--text);
     }
 
     .msg {
