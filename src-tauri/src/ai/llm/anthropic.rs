@@ -29,9 +29,16 @@ pub struct AnthropicClient {
 
 impl AnthropicClient {
     pub fn new(api_key: String, endpoint: Option<String>) -> Self {
+        // Empty / whitespace endpoint == "use the official default", matching the
+        // normalization the OpenAI-compatible vendors get from resolve_chat_endpoint.
+        // (Anthropic posts to a `/messages` URL, so it can't share that helper.)
+        let endpoint = endpoint
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
         Self {
             api_key,
-            endpoint: endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string()),
+            endpoint,
             http: reqwest::Client::new(),
         }
     }
@@ -326,5 +333,26 @@ impl LlmClient for AnthropicClient {
             tokens_out,
             reasoning_content: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_or_blank_endpoint_falls_back_to_default() {
+        // None / "" / whitespace all mean "use the official endpoint" — a stored
+        // empty setting must never become a POST to an empty URL.
+        for ep in [None, Some(String::new()), Some("   ".to_string())] {
+            let c = AnthropicClient::new("k".into(), ep);
+            assert_eq!(c.endpoint, DEFAULT_ENDPOINT);
+        }
+    }
+
+    #[test]
+    fn custom_endpoint_is_trimmed_and_kept() {
+        let c = AnthropicClient::new("k".into(), Some("  https://proxy/v1/messages  ".into()));
+        assert_eq!(c.endpoint, "https://proxy/v1/messages");
     }
 }

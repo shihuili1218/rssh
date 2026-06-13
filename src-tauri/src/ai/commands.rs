@@ -131,10 +131,21 @@ pub fn import_ai_settings(
             if !SYNC_PROVIDERS.contains(&name) {
                 continue; // refuse to write keys for unknown providers
             }
-            if let Some(m) = entry.get("model").and_then(|v| v.as_str()) {
+            // Empty string == "not set" → no-op, never overwrite. Additive merge
+            // must not let a blank (old/hand-edited/corrupted payload) wipe a
+            // configured value; matches the api_key/active_provider handling.
+            if let Some(m) = entry
+                .get("model")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
                 crate::db::settings::set(db, &key_model(name), m)?;
             }
-            if let Some(e) = entry.get("endpoint").and_then(|v| v.as_str()) {
+            if let Some(e) = entry
+                .get("endpoint")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
                 crate::db::settings::set(db, &key_endpoint(name), e)?;
             }
             if let Some(k) = entry

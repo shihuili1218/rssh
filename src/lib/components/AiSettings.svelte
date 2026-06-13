@@ -26,6 +26,17 @@
     let provider = $state<LlmProvider>("anthropic");
     let model = $state("");
     let endpoint = $state("");
+    // Official endpoint per provider — mirrors the Rust vendor defaults. Shown as
+    // the placeholder so a blank field visibly resolves to the official API.
+    // Display-only: the request always uses the backend default, so a stale value
+    // here is purely cosmetic (no correctness coupling).
+    const OFFICIAL_ENDPOINT: Record<LlmProvider, string> = {
+        anthropic: "https://api.anthropic.com/v1/messages",
+        openai: "https://api.openai.com/v1",
+        deepseek: "https://api.deepseek.com/v1",
+        glm: "https://open.bigmodel.cn/api/paas/v4",
+    };
+    let endpointPlaceholder = $derived(OFFICIAL_ENDPOINT[provider] ?? "");
     let apiKey = $state("");
     let hasKey = $state(false);
     let savingByok = $state(false);
@@ -543,7 +554,7 @@
         </div>
         <div class="row">
             <label for="ai-endpoint">{t("ai.settings.label.endpoint")}</label>
-            <input id="ai-endpoint" type="text" bind:value={endpoint} placeholder={t("ai.settings.placeholder.endpoint")}/>
+            <input id="ai-endpoint" type="text" bind:value={endpoint} placeholder={endpointPlaceholder}/>
         </div>
         <div class="row">
             <label for="ai-apikey">{t("ai.settings.label.api_key")}</label>

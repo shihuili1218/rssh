@@ -870,6 +870,30 @@ mod tests {
     }
 
     #[test]
+    fn merge_ai_empty_model_endpoint_keeps_local() {
+        let (db, ss, dir) = fixture();
+        crate::db::settings::set(&db, "ai_anthropic_model", "claude-x").unwrap();
+        crate::db::settings::set(&db, "ai_anthropic_endpoint", "https://local").unwrap();
+        // A blank model/endpoint in the payload (old/hand-edited) must be a
+        // no-op, not a destructive clear — additive merge.
+        let data = json!({
+            "version": 1,
+            "ai": { "providers": [{"provider": "anthropic", "model": "", "endpoint": ""}] },
+        });
+        merge_import(&db, &ss, dir.path(), &data).unwrap();
+        assert_eq!(
+            crate::db::settings::get(&db, "ai_anthropic_model").unwrap().as_deref(),
+            Some("claude-x"),
+            "empty model did not overwrite local"
+        );
+        assert_eq!(
+            crate::db::settings::get(&db, "ai_anthropic_endpoint").unwrap().as_deref(),
+            Some("https://local"),
+            "empty endpoint did not overwrite local"
+        );
+    }
+
+    #[test]
     fn export_ai_settings_omits_local_only_prefs() {
         let (db, ss, _dir) = fixture();
         crate::db::settings::set(&db, "ai_anthropic_model", "claude-x").unwrap();
