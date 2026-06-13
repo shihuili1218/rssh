@@ -111,15 +111,15 @@
           <span class="color-swatch" style="background: {h.color}"></span>
           <div class="item-text">
             <div class="item-name" title={h.keyword}>{displayTitle(h)}</div>
-            {#if !(h.is_regex && h.name)}
+            <div class="item-meta">
               <div class="item-sub">{h.color}</div>
-            {/if}
-            {#if h.is_regex || h.is_case_sensitive}
-              <div class="item-tags">
-                {#if h.is_regex}<span class="tag">RegEx</span>{/if}
-                {#if h.is_case_sensitive}<span class="tag">Aa</span>{/if}
-              </div>
-            {/if}
+              {#if h.is_regex || h.is_case_sensitive}
+                <div class="item-tags">
+                  {#if h.is_regex}<span class="tag">{t("highlight.tag_regex")}</span>{/if}
+                  {#if h.is_case_sensitive}<span class="tag">{t("highlight.tag_case_sensitive")}</span>{/if}
+                </div>
+              {/if}
+            </div>
           </div>
         </div>
         <div class="item-actions">
@@ -151,13 +151,14 @@
     font-weight: 600; font-size: 14px; font-family: monospace;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  .item-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .item-sub { font-size: 12px; color: var(--text-sub); font-family: monospace; }
   .item-actions { display: flex; gap: 10px; flex-shrink: 0; }
   .color-swatch {
     width: 20px; height: 20px; border-radius: 4px; flex-shrink: 0;
     border: 1px solid var(--divider);
   }
-  .item-tags { display: flex; gap: 6px; margin-top: 4px; }
+  .item-tags { display: flex; gap: 6px; }
   .tag {
     font-size: 10px; font-weight: 600; color: var(--text-dim);
     border: 1px solid var(--divider); border-radius: 3px;

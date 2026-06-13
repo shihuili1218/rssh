@@ -780,6 +780,8 @@ const zh: Messages = {
   "highlight.name_placeholder": "如：日期 / IP / 错误级别",
   "highlight.regex": "正则表达式",
   "highlight.case_sensitive": "区分大小写",
+  "highlight.tag_regex": "正则",
+  "highlight.tag_case_sensitive": "大小写",
   // 录制
   "recording.enable": "启用录制",
   "recording.enable_desc": "自动以 Asciinema v2（.cast）格式录制 SSH 会话。",

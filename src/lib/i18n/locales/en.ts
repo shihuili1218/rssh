@@ -778,6 +778,8 @@ const en = {
   "highlight.name_placeholder": "e.g. Date / IP / Error level",
   "highlight.regex": "Regex",
   "highlight.case_sensitive": "Case sensitive",
+  "highlight.tag_regex": "RegEx",
+  "highlight.tag_case_sensitive": "Aa",
   // Recording
   "recording.enable": "ENABLE RECORDING",
   "recording.enable_desc": "Automatically record SSH sessions as Asciinema v2 (.cast) files.",
