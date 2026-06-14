@@ -27,9 +27,12 @@
  *   - block.start 死亡（scrollback 修剪到该 block 之前）— 通过监听
  *     tracker.onChange 检测 block 从 tracker 消失来代理
  *
- * ⚠️ 私有 API 警告：依赖 _core.buffer 的 lines/ybase/ydisp/y/getBlankLine/
- *    addMarker。package.json 已锁 "@xterm/xterm": "5.5.0"。升级 xterm 必须
- *    重跑 folds.test.ts 全套验证。
+ * ⚠️ Private-API warning: depends on _core.buffer's lines/ybase/ydisp/y/
+ *    getBlankLine/addMarker, plus _core._viewport.queueSync (scrollbar resync).
+ *    package.json pins "@xterm/xterm": "6.0.0". Any xterm bump must re-run
+ *    folds.test.ts — but that test uses a FAKE terminal (it verifies this
+ *    file's logic, not the real xterm internals), so a version bump also
+ *    requires re-checking these private hooks against the new build by hand.
  */
 import type { Terminal, IDisposable, IMarker } from "@xterm/xterm";
 import type { CommandBlockTracker } from "./command-blocks";
@@ -84,19 +87,22 @@ interface PrivateBuffer {
 }
 
 interface PrivateViewport {
-  syncScrollArea(immediate?: boolean): void;
+  queueSync(yDisp?: number): void;
 }
 
 function getBuf(term: Terminal): PrivateBuffer {
   return (term as unknown as { _core: { buffer: PrivateBuffer } })._core.buffer;
 }
 
-/** xterm.Viewport 缓存了 lines.length，不对外暴露失效信号。我们直接 splice
- *  绕过了 _onScroll 事件，Viewport 不知道 scrollback 变长 → 滚动条计算错误，
- *  用户表现为"unfold 后不能向上滚"。手动喊它重算。 */
+/** The viewport derives its scroll height from buffer.lines.length and only
+ *  resyncs on the core's scroll/resize events. We splice buffer.lines directly,
+ *  bypassing those events, so the scrollbar would otherwise go stale ("can't
+ *  scroll up after unfold"). queueSync() recomputes it on the next render frame,
+ *  and folds always calls term.refresh() right after, which drives that frame.
+ *  (xterm 6.0 renamed _core.viewport.syncScrollArea → _core._viewport.queueSync.) */
 function syncViewport(term: Terminal): void {
-  const vp = (term as unknown as { _core: { viewport?: PrivateViewport } })._core.viewport;
-  vp?.syncScrollArea(true);
+  const vp = (term as unknown as { _core: { _viewport?: PrivateViewport } })._core._viewport;
+  vp?.queueSync();
 }
 
 export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): FoldStore {
