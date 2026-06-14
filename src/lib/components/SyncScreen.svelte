@@ -11,6 +11,7 @@
     let githubBranch = $state("main");
     let githubSyncing = $state(false);
     let githubMsg = $state("");
+    let githubSaveMsg = $state("");
 
     /* ── WebDAV source state ─────────────────────────────────────────────── */
     let webdavEnabled = $state(false);
@@ -19,6 +20,7 @@
     let webdavPassword = $state("");
     let webdavSyncing = $state(false);
     let webdavMsg = $state("");
+    let webdavSaveMsg = $state("");
 
     /* ── Shared sync content toggles ──────────────────────────────────────── */
     const SYNC_ITEMS: { key: string; label: MessageKey }[] = [
@@ -90,8 +92,8 @@
         await invoke("set_setting", { key: "github_repo", value: githubRepo });
         await invoke("set_setting", { key: "github_branch", value: githubBranch });
         await invoke("set_setting", { key: "sync_github_enabled", value: githubEnabled ? "1" : "0" });
-        githubMsg = t("github.saved");
-        setTimeout(() => githubMsg = "", 2000);
+        githubSaveMsg = t("github.saved");
+        setTimeout(() => githubSaveMsg = "", 2000);
     }
 
     async function saveWebdavSettings() {
@@ -99,8 +101,8 @@
         await invoke("set_setting", { key: "webdav_username", value: webdavUsername });
         await invoke("set_setting", { key: "webdav_password", value: webdavPassword });
         await invoke("set_setting", { key: "sync_webdav_enabled", value: webdavEnabled ? "1" : "0" });
-        webdavMsg = t("webdav.saved");
-        setTimeout(() => webdavMsg = "", 2000);
+        webdavSaveMsg = t("webdav.saved");
+        setTimeout(() => webdavSaveMsg = "", 2000);
     }
 
     async function setFlag(key: string, val: boolean) {
@@ -234,6 +236,9 @@
                 <input id="gh-branch" type="text" bind:value={githubBranch} placeholder="main"/>
             </div>
             <button class="btn btn-accent btn-sm save-btn" onclick={saveGithubSettings}>⛰ {t("common.save")}</button>
+            {#if githubSaveMsg}
+                <div class="msg">{githubSaveMsg}</div>
+            {/if}
         {/if}
     </div>
 
@@ -261,6 +266,9 @@
                 <input id="wd-password" type="password" bind:value={webdavPassword}/>
             </div>
             <button class="btn btn-accent btn-sm save-btn" onclick={saveWebdavSettings}>⛰ {t("common.save")}</button>
+            {#if webdavSaveMsg}
+                <div class="msg">{webdavSaveMsg}</div>
+            {/if}
         {/if}
     </div>
 
