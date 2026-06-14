@@ -54,11 +54,7 @@
         githubRepo = await invoke<string | null>("get_setting", { key: "github_repo" }) ?? "";
         githubBranch = await invoke<string | null>("get_setting", { key: "github_branch" }) ?? "main";
         const ghEnabled = await invoke<string | null>("get_setting", { key: "sync_github_enabled" });
-        if (ghEnabled === "0") {
-            githubEnabled = false;
-        } else if (ghEnabled === "1" || (githubToken && githubRepo)) {
-            githubEnabled = true;
-        }
+        githubEnabled = ghEnabled !== "0";
 
         /* WebDAV */
         webdavUrl = await invoke<string | null>("get_setting", { key: "webdav_url" }) ?? "";
@@ -214,18 +210,12 @@
         <div class="source-head">
             <h4>GitHub</h4>
             <label class="switch">
-                <input type="checkbox" bind:checked={githubEnabled} onchange={() => onEnableChange("github")} />
+                <input type="checkbox" bind:checked={githubEnabled} onchange={() => onEnableChange("github")} aria-label={t("sync.enable_github")} />
                 <span class="slider"></span>
-                <span class="switch-label">{t("sync.enable_github")}</span>
             </label>
         </div>
 
         {#if githubEnabled}
-            <p class="pat-hint">
-                {t("github.pat_hint1")}<br/>
-                {t("github.pat_hint2")}<br/>
-                {t("github.pat_hint3")}
-            </p>
             <div class="field">
                 <label for="gh-token">{t("github.token")}</label>
                 <input id="gh-token" type="password" bind:value={githubToken} placeholder="ghp_xxxx"/>
@@ -250,9 +240,8 @@
         <div class="source-head">
             <h4>WebDAV</h4>
             <label class="switch">
-                <input type="checkbox" bind:checked={webdavEnabled} onchange={() => onEnableChange("webdav")} />
+                <input type="checkbox" bind:checked={webdavEnabled} onchange={() => onEnableChange("webdav")} aria-label={t("sync.enable_webdav")} />
                 <span class="slider"></span>
-                <span class="switch-label">{t("sync.enable_webdav")}</span>
             </label>
         </div>
 
@@ -378,19 +367,6 @@
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-    }
-
-    .switch-label {
-        margin-left: 8px;
-        font-size: 12px;
-        color: var(--text-sub);
-    }
-
-    .pat-hint {
-        margin: 0;
-        font-size: 11px;
-        color: var(--text-dim);
-        line-height: 1.5;
     }
 
     .field {

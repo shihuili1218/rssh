@@ -858,9 +858,6 @@ const en = {
   "sync.categories.profiles": "Profiles (by group)",
   "sync.categories.profiles_hint": "Only profiles in checked groups are synced. Check all groups to sync every profile; leave all unchecked to sync none.",
   // GitHub sync
-  "github.pat_hint1": "Create a PAT at github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens.",
-  "github.pat_hint2": "Repository access: Select \"Only select repositories\" (instead of \"All repositories\")",
-  "github.pat_hint3": "with \"Contents\" read & write permission.",
   "github.token": "Personal Access Token",
   "github.repo": "Repository (owner/repo)",
   "github.branch": "Branch",

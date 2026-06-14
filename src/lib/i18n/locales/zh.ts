@@ -861,9 +861,6 @@ const zh: Messages = {
   "sync.categories.profiles": "主机（按分组）",
   "sync.categories.profiles_hint": "只同步勾选分组内的主机；全部勾选才同步所有主机（含未分组），全部不勾选则不同步任何主机。",
   // GitHub 同步
-  "github.pat_hint1": "在 github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens 创建一个 PAT。",
-  "github.pat_hint2": "仓库访问：选择 “Only select repositories”（而非 “All repositories”）",
-  "github.pat_hint3": "并授予 “Contents” 读写权限。",
   "github.token": "个人访问令牌（PAT）",
   "github.repo": "仓库（owner/repo）",
   "github.branch": "分支",
