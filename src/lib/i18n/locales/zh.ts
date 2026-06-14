@@ -785,6 +785,8 @@ const zh: Messages = {
   "highlight.case_sensitive": "区分大小写",
   "highlight.tag_regex": "正则",
   "highlight.tag_case_sensitive": "大小写",
+  "highlight.enabled": "启用",
+  "highlight.regex_hint": "复杂模式（如 (a+)+ 这类嵌套量词）可能拖慢终端输出。",
   // 录制
   "recording.enable": "启用录制",
   "recording.enable_desc": "自动以 Asciinema v2（.cast）格式录制 SSH 会话。",

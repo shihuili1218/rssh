@@ -90,6 +90,7 @@
       <input type="text" bind:value={formName} placeholder={t("highlight.name_placeholder")}
         onkeydown={handleKeydown} />
     </label>
+    <p class="hint">{t("highlight.regex_hint")}</p>
   {/if}
 
   <div class="color-actions-row">
@@ -159,6 +160,10 @@
 
   .form-actions {
     display: flex; gap: 10px; margin-left: auto; align-items: center;
+  }
+
+  .hint {
+    font-size: 11px; color: var(--text-dim); margin: 0;
   }
 
   .form-error {

@@ -162,16 +162,16 @@ export function highlightPlain(plain: string, compiled: CompiledHighlightRule[])
 
     const parts: string[] = [];
     let pos = 0;
-    let lastEnd = -1;
 
+    // Matches are sorted by start; `pos` is the end of the last emitted match.
+    // Any match starting before it overlaps an earlier (higher-priority) one — skip it.
     for (const m of matches) {
-        if (m.start < pos || m.start < lastEnd) continue;
+        if (m.start < pos) continue;
         parts.push(plain.slice(pos, m.start));
         parts.push(ansiColor(m.color));
         parts.push(plain.slice(m.start, m.end));
         parts.push(RST);
         pos = m.end;
-        lastEnd = m.end;
     }
 
     parts.push(plain.slice(pos));

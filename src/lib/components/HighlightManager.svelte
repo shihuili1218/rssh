@@ -69,6 +69,19 @@
     } catch (e: any) { toast.error(`${t("toast.error.save")}: ${errMsg(e)}`); }
   }
 
+  // Flip enabled in place — reuses update_highlight so no extra backend command.
+  // refresh() runs regardless: it re-syncs the (controlled) checkbox to the DB
+  // truth, so a rejected toggle snaps back instead of lying.
+  async function toggleEnabled(h: HighlightRule) {
+    try {
+      await invoke("update_highlight", {
+        oldKeyword: h.keyword,
+        rule: { ...h, enabled: !h.enabled },
+      });
+    } catch (e: any) { toast.error(`${t("toast.error.save")}: ${errMsg(e)}`); }
+    await refresh();
+  }
+
   async function remove(keyword: string) {
     try {
       await invoke("remove_highlight", { keyword });
@@ -107,7 +120,7 @@
       <HighlightRuleForm rule={h} onSave={saveEdit} onCancel={cancelForm} />
     {:else}
       <div class="card item-row">
-        <div class="item-info">
+        <div class="item-info" class:dimmed={!h.enabled}>
           <span class="color-swatch" style="background: {h.color}"></span>
           <div class="item-text">
             <div class="item-name" title={h.keyword}>{displayTitle(h)}</div>
@@ -123,6 +136,10 @@
           </div>
         </div>
         <div class="item-actions">
+          <label class="switch" title={t("highlight.enabled")}>
+            <input type="checkbox" checked={h.enabled} onchange={() => toggleEnabled(h)} />
+            <span class="slider"></span>
+          </label>
           <button class="btn btn-sm" onclick={() => startEdit(h)}>{t("common.edit")}</button>
           <button class="btn btn-sm btn-danger" onclick={() => remove(h.keyword)}>{t("common.delete")}</button>
         </div>
@@ -146,6 +163,7 @@
     gap: 12px;
   }
   .item-info { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+  .item-info.dimmed { opacity: 0.45; }
   .item-text { min-width: 0; }
   .item-name {
     font-weight: 600; font-size: 14px; font-family: monospace;
@@ -153,7 +171,7 @@
   }
   .item-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .item-sub { font-size: 12px; color: var(--text-sub); font-family: monospace; }
-  .item-actions { display: flex; gap: 10px; flex-shrink: 0; }
+  .item-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
   .color-swatch {
     width: 20px; height: 20px; border-radius: 4px; flex-shrink: 0;
     border: 1px solid var(--divider);

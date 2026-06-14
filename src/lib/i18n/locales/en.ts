@@ -783,6 +783,8 @@ const en = {
   "highlight.case_sensitive": "Case sensitive",
   "highlight.tag_regex": "RegEx",
   "highlight.tag_case_sensitive": "Aa",
+  "highlight.enabled": "Enabled",
+  "highlight.regex_hint": "Complex patterns (e.g. nested quantifiers like (a+)+) may slow terminal output.",
   // Recording
   "recording.enable": "ENABLE RECORDING",
   "recording.enable_desc": "Automatically record SSH sessions as Asciinema v2 (.cast) files.",
