@@ -1383,7 +1383,7 @@
             </div>
         </div>
     {/if}
-    <div class="term-wrap" class:no-block-bar={!app.commandBlockBar()}>
+    <div class="term-wrap" class:is-mobile={app.isMobile} class:no-block-bar={!app.commandBlockBar()}>
         <div class="xterm-host" bind:this={containerEl}></div>
         {#if app.commandBlockBar()}
             <svg class="block-bar" aria-hidden="true">
@@ -1477,6 +1477,18 @@
     }
     .term-wrap.no-block-bar :global(.xterm) {
         padding: 4px;
+    }
+
+    /* Mobile: hide xterm's inline .composition-view (the black box pinned at
+       the cursor) — the soft keyboard's own candidate bar already shows the
+       IME composing text, so it's redundant (Sogou flashes it on backspace).
+       MUST be visibility:hidden, NOT display:none: xterm sizes the hidden input
+       textarea from this element's getBoundingClientRect() (updateComposition-
+       Elements), so display:none zeroes that rect, collapses the textarea, and
+       breaks IME input entirely (Sogou can't type). visibility:hidden keeps the
+       layout box (real rect, input works) while hiding the paint. */
+    .term-wrap.is-mobile :global(.composition-view) {
+        visibility: hidden !important;
     }
 
     /* Overlay painted inside the enlarged left padding. SVG itself ignores
