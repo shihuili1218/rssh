@@ -23,15 +23,6 @@ fn validate_rule(rule: &HighlightRule) -> AppResult<()> {
             serde_json::json!({ "max": 100 }),
         ));
     }
-    if rule.color.len() != 7
-        || !rule.color.starts_with('#')
-        || !rule.color[1..].chars().all(|c| c.is_ascii_hexdigit())
-    {
-        return Err(AppError::config(
-            "highlight_invalid_color",
-            serde_json::json!({}),
-        ));
-    }
     Ok(())
 }
 

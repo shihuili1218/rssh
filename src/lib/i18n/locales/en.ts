@@ -700,7 +700,6 @@ const en = {
   "error.highlight_empty_keyword": "Highlight keyword cannot be empty",
   "error.highlight_name_for_regex_only": "Name is only allowed for regex highlight rules",
   "error.highlight_name_too_long": "Highlight name must not exceed {max} characters",
-  "error.highlight_invalid_color": "Highlight color must be a valid hex code (#RRGGBB)",
   "error.pty_op_failed": "PTY operation failed: {err}",
   "error.keyring_failed": "Keyring {op} failed: {err}",
   "error.emit_failed": "Emit event failed ({channel}): {err}",

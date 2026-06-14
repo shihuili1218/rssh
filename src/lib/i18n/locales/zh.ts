@@ -702,7 +702,6 @@ const zh: Messages = {
   "error.highlight_empty_keyword": "高亮关键字不能为空",
   "error.highlight_name_for_regex_only": "只有正则高亮规则才能填写名称",
   "error.highlight_name_too_long": "高亮名称不能超过 {max} 个字符",
-  "error.highlight_invalid_color": "高亮颜色必须是有效的十六进制色值（#RRGGBB）",
   "error.pty_op_failed": "PTY 操作失败：{err}",
   "error.keyring_failed": "Keyring {op} 失败：{err}",
   "error.emit_failed": "发送事件失败（{channel}）：{err}",
