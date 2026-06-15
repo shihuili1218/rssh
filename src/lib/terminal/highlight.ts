@@ -161,11 +161,13 @@ export function findMatches(text: string, compiled: CompiledHighlightRule[]): Hi
 
 /**
  * One buffer line reduced to what the highlighter needs:
- *   - `text`: the displayed characters, one entry per visible glyph
- *   - `cellAt`: cellAt[i] is the starting cell column of text[i]; it has
- *     length text.length+1 so cellAt[text.length] is the end column. Wide
- *     (CJK) glyphs advance the column by 2, so char offsets and cell columns
- *     diverge — this map is what keeps decorations aligned to the real cells.
+ *   - `text`: the line's visible text as a JS string (UTF-16 code units), which
+ *     is what findMatches/RegExp index into
+ *   - `cellAt`: cellAt[i] is the cell column of the UTF-16 unit text[i]; it has
+ *     length text.length+1 so cellAt[text.length] is the end column. String
+ *     offset and cell column diverge two ways: a wide (CJK) glyph spans 2
+ *     columns, and one glyph (emoji/combining marks) can be several UTF-16 units
+ *     that all map to the same column — this map keeps decorations on real cells.
  */
 export interface LineCells {
     text: string;
