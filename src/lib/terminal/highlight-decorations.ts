@@ -1,5 +1,5 @@
-import type { IBufferLine, IDecoration, IDisposable, Terminal } from "@xterm/xterm";
-import { planLine, type CompiledHighlightRule, type LineCells } from "./highlight.ts";
+import type { IBufferLine, IDecoration, IDisposable, IMarker, Terminal } from "@xterm/xterm";
+import { planLine, type CompiledHighlightRule, type LineCells, type LineDecoration } from "./highlight.ts";
 
 /**
  * Read one buffer line into {@link LineCells}: the displayed text plus a map
@@ -39,6 +39,50 @@ export function readLineCells(line: Pick<IBufferLine, "getCell" | "length">): Li
     return { text, cellAt };
 }
 
+/** A visible line reduced to its highlight plan plus a signature of that plan. */
+export interface VisibleLine {
+    line: number;
+    sig: string;
+    plan: LineDecoration[];
+}
+
+export interface ReconcilePlan {
+    disposeLines: number[];
+    createLines: VisibleLine[];
+}
+
+/**
+ * Diff the desired highlights for the visible lines against what is already
+ * decorated (line → current signature). Pure so the keep/recreate/dispose/
+ * create decision is unit-tested without xterm.
+ *
+ *   - same signature        → keep (no DOM churn — the whole point of this)
+ *   - different signature    → dispose old, create new (if it still matches)
+ *   - matches gone (empty)   → dispose old
+ *   - new match              → create
+ */
+export function reconcile(visible: VisibleLine[], existing: Map<number, string>): ReconcilePlan {
+    const disposeLines: number[] = [];
+    const createLines: VisibleLine[] = [];
+    for (const v of visible) {
+        const cur = existing.get(v.line);
+        if (cur !== undefined && cur === v.sig) continue;
+        if (cur !== undefined) disposeLines.push(v.line);
+        if (v.plan.length) createLines.push(v);
+    }
+    return { disposeLines, createLines };
+}
+
+interface LineEntry {
+    marker: IMarker;
+    sig: string;
+    items: IDecoration[];
+}
+
+function sigOf(plan: LineDecoration[]): string {
+    return plan.map((d) => `${d.x}:${d.width}:${d.color}`).join(",");
+}
+
 /**
  * Live keyword highlighting as an xterm decoration layer.
  *
@@ -49,6 +93,12 @@ export function readLineCells(line: Pick<IBufferLine, "getCell" | "length">): Li
  * already parsed the stream into a styled cell grid; highlighting belongs on
  * top of that grid, not back in the raw bytes.
  *
+ * Decorations are PERSISTENT and anchored to markers: a decorated line keeps its
+ * highlight as it scrolls (the marker tracks it) and we touch only the lines
+ * whose content actually changed. Absolute line indices shift when scrollback is
+ * trimmed, so the marker — not a line number — is the stable identity; we read
+ * `marker.line` each pass and prune entries whose marker was disposed (trimmed).
+ *
  * Scope: only the normal screen is highlighted. TUI apps (vim, htop, claude's
  * UI) run in the alternate buffer and redraw constantly — decorating them is
  * both expensive and exactly where the old approach corrupted output.
@@ -56,32 +106,36 @@ export function readLineCells(line: Pick<IBufferLine, "getCell" | "length">): Li
  * Triggers are onWriteParsed/onScroll/onResize/onBufferChange (not onRender):
  * registering a decoration schedules a render, so triggering off onRender would
  * feed back on itself. Those four fire only on real content/position changes.
+ * Resize and buffer switches reflow geometry, so they force a full rebuild.
  */
 export class HighlightDecorator {
     private compiled: CompiledHighlightRule[] = [];
-    private items: IDecoration[] = [];
+    private entries: LineEntry[] = []; // one per currently-decorated line
     private disposables: IDisposable[] = [];
     private scheduled = false;
+    private fullRebuild = true;
     private disposed = false;
 
     constructor(private term: Terminal) {
-        const schedule = () => this.schedule();
+        const onContent = () => this.schedule(false);
+        const onReflow = () => this.schedule(true);
         this.disposables.push(
-            term.onWriteParsed(schedule),
-            term.onScroll(schedule),
-            term.onResize(schedule),
-            term.buffer.onBufferChange(schedule),
+            term.onWriteParsed(onContent),
+            term.onScroll(onContent),
+            term.onResize(onReflow),
+            term.buffer.onBufferChange(onReflow),
         );
     }
 
-    /** Replace the active rule set and repaint. */
+    /** Replace the active rule set and repaint everything. */
     setRules(compiled: CompiledHighlightRule[]): void {
         this.compiled = compiled;
-        this.schedule();
+        this.schedule(true);
     }
 
     /** Coalesce bursts of triggers into one repaint per animation frame. */
-    private schedule(): void {
+    private schedule(full: boolean): void {
+        if (full) this.fullRebuild = true;
         if (this.scheduled || this.disposed) return;
         this.scheduled = true;
         requestAnimationFrame(() => {
@@ -90,47 +144,99 @@ export class HighlightDecorator {
         });
     }
 
-    private clear(): void {
-        for (const d of this.items) {
-            const marker = d.marker;
-            d.dispose();
-            marker.dispose();
+    private clearAll(): void {
+        for (const e of this.entries) {
+            for (const d of e.items) d.dispose();
+            e.marker.dispose();
         }
-        this.items.length = 0;
+        this.entries.length = 0;
     }
 
     private repaint(): void {
-        this.clear();
+        // Reflow (resize / buffer switch / rule change) invalidates cell columns,
+        // so drop everything and rebuild from scratch.
+        if (this.fullRebuild) {
+            this.clearAll();
+            this.fullRebuild = false;
+        }
         const buf = this.term.buffer.active;
-        if (buf.type === "alternate" || !this.compiled.length) return;
+        if (buf.type === "alternate" || !this.compiled.length) {
+            this.clearAll();
+            return;
+        }
 
-        const cursorAbs = buf.baseY + buf.cursorY;
-        for (let row = 0; row < this.term.rows; row++) {
-            const absLine = buf.viewportY + row;
+        // Index live entries by their CURRENT line; prune any whose marker was
+        // disposed (its line scrolled out of the scrollback buffer).
+        const byLine = new Map<number, LineEntry>();
+        const live: LineEntry[] = [];
+        for (const e of this.entries) {
+            if (e.marker.isDisposed || e.marker.line === -1) {
+                for (const d of e.items) d.dispose();
+                continue;
+            }
+            byLine.set(e.marker.line, e);
+            live.push(e);
+        }
+
+        // Plan the visible viewport, then diff against what is already there.
+        const visStart = buf.viewportY;
+        const visEnd = buf.viewportY + this.term.rows;
+        const visible: VisibleLine[] = [];
+        for (let absLine = visStart; absLine < visEnd; absLine++) {
             const line = buf.getLine(absLine);
             if (!line) continue;
             const plan = planLine(readLineCells(line), this.compiled);
-            for (const d of plan) this.decorate(absLine - cursorAbs, d.x, d.width, d.color);
+            visible.push({ line: absLine, sig: sigOf(plan), plan });
         }
+        const { disposeLines, createLines } = reconcile(
+            visible,
+            new Map(Array.from(byLine, ([l, e]) => [l, e.sig])),
+        );
+
+        const removed = new Set<LineEntry>();
+        for (const l of disposeLines) {
+            const e = byLine.get(l);
+            if (!e) continue;
+            for (const d of e.items) d.dispose();
+            e.marker.dispose();
+            removed.add(e);
+        }
+
+        const cursorAbs = buf.baseY + buf.cursorY;
+        const created: LineEntry[] = [];
+        for (const v of createLines) {
+            const entry = this.createEntry(v.line - cursorAbs, v.plan, v.sig);
+            if (entry) created.push(entry);
+        }
+
+        this.entries = live.filter((e) => !removed.has(e)).concat(created);
     }
 
-    private decorate(offset: number, x: number, width: number, color: string): void {
+    /** Register one marker for a line and a decoration per match on it. */
+    private createEntry(offset: number, plan: LineDecoration[], sig: string): LineEntry | null {
         const marker = this.term.registerMarker(offset);
-        if (!marker || marker.line === -1) return;
-        const dec = this.term.registerDecoration({
-            marker,
-            x,
-            width,
-            foregroundColor: color,
-            layer: "top",
-        });
-        if (dec) this.items.push(dec);
-        else marker.dispose();
+        if (!marker || marker.line === -1) return null;
+        const items: IDecoration[] = [];
+        for (const d of plan) {
+            const dec = this.term.registerDecoration({
+                marker,
+                x: d.x,
+                width: d.width,
+                foregroundColor: d.color,
+                layer: "top",
+            });
+            if (dec) items.push(dec);
+        }
+        if (!items.length) {
+            marker.dispose();
+            return null;
+        }
+        return { marker, sig, items };
     }
 
     dispose(): void {
         this.disposed = true;
-        this.clear();
+        this.clearAll();
         for (const d of this.disposables) d.dispose();
         this.disposables.length = 0;
     }

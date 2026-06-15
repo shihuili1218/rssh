@@ -1,5 +1,7 @@
-import { describe, it, expect } from "vitest";
-import { readLineCells } from "./highlight-decorations.ts";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { HighlightDecorator, readLineCells, reconcile } from "./highlight-decorations.ts";
+import { compileHighlightRules } from "./highlight.ts";
+import type { HighlightRule } from "../stores/app.svelte.ts";
 
 /**
  * Build a fake IBufferLine from [chars, width] pairs. This is a data-only
@@ -73,5 +75,186 @@ describe("readLineCells", () => {
             text: "e" + ACUTE + "x",
             cellAt: [0, 0, 1, 2],
         });
+    });
+});
+
+describe("reconcile", () => {
+    const plan = (color = "#fff") => [{ x: 0, width: 5, color }];
+
+    it("keeps a line whose signature is unchanged (no churn)", () => {
+        expect(reconcile(
+            [{ line: 10, sig: "a", plan: plan() }],
+            new Map([[10, "a"]]),
+        )).toEqual({ disposeLines: [], createLines: [] });
+    });
+
+    it("recreates a line whose signature changed", () => {
+        const v = { line: 10, sig: "b", plan: plan() };
+        expect(reconcile([v], new Map([[10, "a"]]))).toEqual({
+            disposeLines: [10],
+            createLines: [v],
+        });
+    });
+
+    it("disposes a line that lost all its matches", () => {
+        expect(reconcile(
+            [{ line: 10, sig: "", plan: [] }],
+            new Map([[10, "a"]]),
+        )).toEqual({ disposeLines: [10], createLines: [] });
+    });
+
+    it("creates a newly matched line", () => {
+        const v = { line: 12, sig: "a", plan: plan() };
+        expect(reconcile([v], new Map())).toEqual({
+            disposeLines: [],
+            createLines: [v],
+        });
+    });
+
+    it("ignores a new line that has no matches", () => {
+        expect(reconcile(
+            [{ line: 12, sig: "", plan: [] }],
+            new Map(),
+        )).toEqual({ disposeLines: [], createLines: [] });
+    });
+});
+
+/* ─────────────────────────────────────────────────────────────
+ * Fake xterm.js Terminal — the minimal subset HighlightDecorator
+ * uses, with a controllable rAF so repaints are deterministic.
+ * Data-only double: we feed buffer/marker/decoration data exactly
+ * as xterm would and assert our own create/dispose bookkeeping.
+ * ───────────────────────────────────────────────────────────── */
+function asciiLine(s: string) {
+    return {
+        length: s.length,
+        getCell: (x: number) =>
+            x < s.length ? { getChars: () => s[x], getWidth: () => 1 } : undefined,
+    };
+}
+
+function fakeTerm() {
+    const buf = { type: "normal" as "normal" | "alternate", baseY: 0, cursorY: 0, viewportY: 0 };
+    let rows = 3;
+    const lines = new Map<number, string>();
+    const ev = { write: new Set<() => void>(), scroll: new Set<() => void>(), resize: new Set<() => void>(), bufc: new Set<(b: any) => void>() };
+    const sub = (set: Set<any>) => (fn: any) => { set.add(fn); return { dispose: () => set.delete(fn) }; };
+    const markers: any[] = [];
+    const decos: any[] = [];
+
+    const term = {
+        get rows() { return rows; },
+        onWriteParsed: sub(ev.write),
+        onScroll: sub(ev.scroll),
+        onResize: sub(ev.resize),
+        buffer: {
+            get active() {
+                return {
+                    type: buf.type, baseY: buf.baseY, cursorY: buf.cursorY, viewportY: buf.viewportY,
+                    getLine: (y: number) => (lines.has(y) ? asciiLine(lines.get(y)!) : undefined),
+                };
+            },
+            onBufferChange: sub(ev.bufc),
+        },
+        registerMarker(offset: number) {
+            const od: Array<() => void> = [];
+            const m = {
+                id: markers.length + 1, line: buf.baseY + buf.cursorY + offset, isDisposed: false,
+                onDispose(fn: () => void) { od.push(fn); return { dispose() {} }; },
+                dispose() { if (this.isDisposed) return; this.isDisposed = true; od.forEach((f) => f()); },
+            };
+            markers.push(m);
+            return m;
+        },
+        registerDecoration({ marker }: any) {
+            const d = { marker, isDisposed: false, dispose() { this.isDisposed = true; } };
+            decos.push(d);
+            return d;
+        },
+    };
+
+    const rafq: Array<() => void> = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: () => void) => { rafq.push(cb); return rafq.length; });
+
+    return {
+        term: term as any,
+        setLine(absLine: number, text: string) { lines.set(absLine, text); },
+        clearLine(absLine: number) { lines.delete(absLine); },
+        fireWrite() { ev.write.forEach((f) => f()); },
+        fireResize() { ev.resize.forEach((f) => f()); },
+        setBuffer(t: "normal" | "alternate") { buf.type = t; ev.bufc.forEach((f) => f({ type: t })); },
+        flush() { const q = rafq.splice(0); q.forEach((cb) => cb()); },
+        markers,
+        activeDecos: () => decos.filter((d) => !d.isDisposed).length,
+        createdDecos: () => decos.length,
+    };
+}
+
+function rule(keyword: string): HighlightRule {
+    return { keyword, name: "", color: "#FF6B6B", enabled: true, is_regex: false, is_case_sensitive: false };
+}
+
+describe("HighlightDecorator lifecycle", () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it("creates one decoration for a matched visible line", () => {
+        const f = fakeTerm();
+        const d = new HighlightDecorator(f.term);
+        f.setLine(0, "ERROR here");
+        d.setRules(compileHighlightRules([rule("ERROR")]));
+        f.flush();
+        expect(f.activeDecos()).toBe(1);
+        expect(f.createdDecos()).toBe(1);
+    });
+
+    it("keeps decorations across an unchanged repaint (no churn)", () => {
+        const f = fakeTerm();
+        const d = new HighlightDecorator(f.term);
+        f.setLine(0, "ERROR here");
+        d.setRules(compileHighlightRules([rule("ERROR")]));
+        f.flush();
+        f.fireWrite(); // content unchanged
+        f.flush();
+        expect(f.createdDecos()).toBe(1); // not recreated
+        expect(f.activeDecos()).toBe(1);
+    });
+
+    it("recreates when a line's matches change", () => {
+        const f = fakeTerm();
+        const d = new HighlightDecorator(f.term);
+        f.setLine(0, "ERROR here");
+        d.setRules(compileHighlightRules([rule("ERROR")]));
+        f.flush();
+        f.setLine(0, "all clear now"); // ERROR gone
+        f.fireWrite();
+        f.flush();
+        expect(f.activeDecos()).toBe(0); // old disposed, nothing to recreate
+    });
+
+    it("disposes all decorations when switching to the alternate buffer", () => {
+        const f = fakeTerm();
+        const d = new HighlightDecorator(f.term);
+        f.setLine(0, "ERROR here");
+        d.setRules(compileHighlightRules([rule("ERROR")]));
+        f.flush();
+        expect(f.activeDecos()).toBe(1);
+        f.setBuffer("alternate");
+        f.flush();
+        expect(f.activeDecos()).toBe(0);
+    });
+
+    it("prunes an entry whose marker was trimmed from scrollback", () => {
+        const f = fakeTerm();
+        const d = new HighlightDecorator(f.term);
+        f.setLine(0, "ERROR here");
+        d.setRules(compileHighlightRules([rule("ERROR")]));
+        f.flush();
+        // Simulate the line scrolling out of scrollback: xterm disposes the
+        // marker and the line is gone from the buffer.
+        f.markers[0].dispose();
+        f.clearLine(0);
+        f.fireWrite();
+        f.flush();
+        expect(f.activeDecos()).toBe(0);
     });
 });
