@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import type { HighlightRule } from "../stores/app.svelte.ts";
 import {
-    ansiColor,
     compileHighlightRules,
-    highlightPlain,
+    findMatches,
+    planLine,
     validateHighlightRule,
 } from "./highlight.ts";
 
@@ -22,17 +22,9 @@ function rule(
     };
 }
 
-const RST = "\x1b[0m";
-
-describe("ansiColor", () => {
-    it("returns 24-bit ANSI sequence for hex color", () => {
-        expect(ansiColor("#FF6B6B")).toBe("\x1b[38;2;255;107;107m");
-    });
-
-    it("returns empty string for invalid hex", () => {
-        expect(ansiColor("red")).toBe("");
-    });
-});
+function matches(text: string, rules: HighlightRule[]) {
+    return findMatches(text, compileHighlightRules(rules));
+}
 
 describe("validateHighlightRule", () => {
     it("accepts valid regex", () => {
@@ -64,83 +56,112 @@ describe("validateHighlightRule", () => {
     });
 });
 
-describe("highlightPlain", () => {
-    it("highlights date regex from issue #102", () => {
+describe("findMatches", () => {
+    it("finds date regex from issue #102", () => {
         const input = "log: 2026-06-09 09:05:02 done";
         const r = rule(
             "\\d{4}[-/]\\d{2}[-/]\\d{2}\\s\\d{2}:\\d{2}:\\d{2}",
             { is_regex: true, color: "#6EDAA0" }
         );
-        const out = highlightPlain(input, compileHighlightRules([r]));
-        const color = ansiColor("#6EDAA0");
-        expect(out).toBe(
-            `log: ${color}2026-06-09 09:05:02${RST} done`
-        );
-        expect(out).toContain("2026-06-09 09:05:02");
+        expect(matches(input, [r])).toEqual([
+            { start: 5, end: 24, color: "#6EDAA0" },
+        ]);
     });
 
     it("matches literal keyword case-insensitively by default", () => {
-        const out = highlightPlain("error ERROR", compileHighlightRules([
-            rule("ERROR"),
-        ]));
-        const color = ansiColor("#FF6B6B");
-        expect(out).toBe(`${color}error${RST} ${color}ERROR${RST}`);
+        expect(matches("error ERROR", [rule("ERROR")])).toEqual([
+            { start: 0, end: 5, color: "#FF6B6B" },
+            { start: 6, end: 11, color: "#FF6B6B" },
+        ]);
     });
 
     it("respects literal case sensitivity when enabled", () => {
-        const out = highlightPlain("error ERROR", compileHighlightRules([
-            rule("ERROR", { is_case_sensitive: true }),
-        ]));
-        const color = ansiColor("#FF6B6B");
-        expect(out).toBe(`error ${color}ERROR${RST}`);
+        expect(matches("error ERROR", [rule("ERROR", { is_case_sensitive: true })])).toEqual([
+            { start: 6, end: 11, color: "#FF6B6B" },
+        ]);
     });
 
     it("matches regex case-insensitively by default", () => {
-        const out = highlightPlain("ABC abc", compileHighlightRules([
-            rule("[a-z]+", { is_regex: true }),
-        ]));
-        const color = ansiColor("#FF6B6B");
-        expect(out).toBe(`${color}ABC${RST} ${color}abc${RST}`);
+        expect(matches("ABC abc", [rule("[a-z]+", { is_regex: true })])).toEqual([
+            { start: 0, end: 3, color: "#FF6B6B" },
+            { start: 4, end: 7, color: "#FF6B6B" },
+        ]);
     });
 
     it("respects regex case sensitivity when enabled", () => {
-        const out = highlightPlain("ABC abc", compileHighlightRules([
-            rule("[a-z]+", { is_regex: true, is_case_sensitive: true }),
-        ]));
-        const color = ansiColor("#FF6B6B");
-        expect(out).toBe(`ABC ${color}abc${RST}`);
+        expect(matches("ABC abc", [rule("[a-z]+", { is_regex: true, is_case_sensitive: true })])).toEqual([
+            { start: 4, end: 7, color: "#FF6B6B" },
+        ]);
     });
 
     it("treats regex alternation as a single rule", () => {
-        const out = highlightPlain("foo bar", compileHighlightRules([
-            rule("foo|bar", { is_regex: true }),
-        ]));
-        const color = ansiColor("#FF6B6B");
-        expect(out).toBe(`${color}foo${RST} ${color}bar${RST}`);
+        expect(matches("foo bar", [rule("foo|bar", { is_regex: true })])).toEqual([
+            { start: 0, end: 3, color: "#FF6B6B" },
+            { start: 4, end: 7, color: "#FF6B6B" },
+        ]);
     });
 
     it("skips disabled and invalid rules without throwing", () => {
-        const out = highlightPlain("hello", compileHighlightRules([
+        expect(matches("hello", [
             rule("(\\d+", { is_regex: true }),
             rule("hello"),
-        ]));
-        const color = ansiColor("#FF6B6B");
-        expect(out).toBe(`${color}hello${RST}`);
+        ])).toEqual([{ start: 0, end: 5, color: "#FF6B6B" }]);
     });
 
     it("keeps the first rule when multiple rules overlap at same position", () => {
-        const out = highlightPlain("ERRORs", compileHighlightRules([
+        expect(matches("ERRORs", [
+            rule("ERROR", { color: "#FF0000" }),
+            rule("[A-Z]+", { is_regex: true, color: "#00FF00" }),
+        ])).toEqual([{ start: 0, end: 5, color: "#FF0000" }]);
+    });
+
+    it("returns no matches when no rules are enabled", () => {
+        expect(matches("nothing here", [rule("ERROR", { enabled: false })])).toEqual([]);
+    });
+});
+
+describe("planLine", () => {
+    // Identity cell map: each char occupies exactly one cell (ASCII).
+    function ascii(text: string) {
+        const cellAt = Array.from({ length: text.length + 1 }, (_, i) => i);
+        return { text, cellAt };
+    }
+
+    it("maps an ASCII match to its cell column and width", () => {
+        const plan = planLine(ascii("ERROR ok"), compileHighlightRules([rule("ERROR")]));
+        expect(plan).toEqual([{ x: 0, width: 5, color: "#FF6B6B" }]);
+    });
+
+    it("accounts for wide (CJK) characters before the match", () => {
+        // "你ERROR": 你 occupies cells 0-1, so E starts at cell column 2.
+        const cells = { text: "你ERROR", cellAt: [0, 2, 3, 4, 5, 6, 7] };
+        const plan = planLine(cells, compileHighlightRules([rule("ERROR")]));
+        expect(plan).toEqual([{ x: 2, width: 5, color: "#FF6B6B" }]);
+    });
+
+    it("gives a wide-character match a 2-cell width", () => {
+        const cells = { text: "你好", cellAt: [0, 2, 4] };
+        const plan = planLine(cells, compileHighlightRules([rule("你")]));
+        expect(plan).toEqual([{ x: 0, width: 2, color: "#FF6B6B" }]);
+    });
+
+    it("resolves overlaps by rule priority like findMatches", () => {
+        const plan = planLine(ascii("ERRORs"), compileHighlightRules([
             rule("ERROR", { color: "#FF0000" }),
             rule("[A-Z]+", { is_regex: true, color: "#00FF00" }),
         ]));
-        const firstColor = ansiColor("#FF0000");
-        expect(out).toBe(`${firstColor}ERROR${RST}s`);
+        expect(plan).toEqual([{ x: 0, width: 5, color: "#FF0000" }]);
     });
 
-    it("returns plain text when no rules are enabled", () => {
-        const input = "nothing here";
-        expect(highlightPlain(input, compileHighlightRules([
-            rule("ERROR", { enabled: false }),
-        ]))).toBe(input);
+    it("returns nothing when no rule matches", () => {
+        expect(planLine(ascii("clean line"), compileHighlightRules([rule("ERROR")]))).toEqual([]);
+    });
+
+    it("drops a match that maps to zero cell width", () => {
+        // A match whose start and end resolve to the same cell column (e.g. a
+        // regex matching one half of a surrogate pair) would otherwise produce
+        // an invalid 0-width decoration.
+        const cells = { text: "ab", cellAt: [0, 0, 1] };
+        expect(planLine(cells, compileHighlightRules([rule("a")]))).toEqual([]);
     });
 });

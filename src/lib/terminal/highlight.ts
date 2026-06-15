@@ -1,17 +1,5 @@
 import type { HighlightRule } from "../stores/app.svelte.ts";
 
-const RST = "\x1b[0m";
-
-/** Hex color → ANSI 24-bit true color escape. */
-export function ansiColor(hex: string): string {
-    const h = hex.replace("#", "");
-    if (h.length !== 6) return "";
-    const r = parseInt(h.slice(0, 2), 16);
-    const g = parseInt(h.slice(2, 4), 16);
-    const b = parseInt(h.slice(4, 6), 16);
-    return `\x1b[38;2;${r};${g};${b}m`;
-}
-
 export interface CompiledHighlightRule {
     keyword: string;
     color: string;
@@ -120,30 +108,32 @@ export function compileHighlightRules(rules: HighlightRule[]): CompiledHighlight
     });
 }
 
-interface Match {
+export interface HighlightMatch {
     start: number;
     end: number;
     color: string;
-    index: number;
+}
+
+interface RawMatch extends HighlightMatch {
+    index: number; // rule list position, kept only to resolve overlap priority
 }
 
 /**
- * Apply highlight rules to a plain-text segment (no ANSI escape sequences).
- * Rules are processed in list order; when multiple rules match the same start
- * position, the first one wins and overlapping matches are skipped.
+ * Find highlight matches in a plain-text string. Returns matches sorted by
+ * start position with overlaps resolved in favour of the earlier rule in the
+ * list. Callers turn these ranges into xterm decorations — this function never
+ * touches the byte stream, so it cannot corrupt the program's own SGR state.
  */
-export function highlightPlain(plain: string, compiled: CompiledHighlightRule[]): string {
+export function findMatches(text: string, compiled: CompiledHighlightRule[]): HighlightMatch[] {
     const enabled = compiled.filter((c) => c.enabled && c.keyword && c.regex);
-    if (!enabled.length) return plain;
+    if (!enabled.length) return [];
 
-    const matches: Match[] = [];
-
+    const raw: RawMatch[] = [];
     for (let i = 0; i < enabled.length; i++) {
-        const rule = enabled[i];
-        const re = rule.regex!;
+        const re = enabled[i].regex!;
         re.lastIndex = 0;
         let m: RegExpExecArray | null;
-        while ((m = re.exec(plain)) !== null) {
+        while ((m = re.exec(text)) !== null) {
             const start = m.index;
             const end = start + m[0].length;
             if (end === start) {
@@ -151,29 +141,57 @@ export function highlightPlain(plain: string, compiled: CompiledHighlightRule[])
                 re.lastIndex = start + 1;
                 continue;
             }
-            matches.push({ start, end, color: rule.color, index: i });
+            raw.push({ start, end, color: enabled[i].color, index: i });
         }
     }
 
-    matches.sort((a, b) => {
-        if (a.start !== b.start) return a.start - b.start;
-        return a.index - b.index;
-    });
+    raw.sort((a, b) => (a.start !== b.start ? a.start - b.start : a.index - b.index));
 
-    const parts: string[] = [];
+    const out: HighlightMatch[] = [];
     let pos = 0;
-
-    // Matches are sorted by start; `pos` is the end of the last emitted match.
+    // Matches are sorted by start; `pos` is the end of the last kept match.
     // Any match starting before it overlaps an earlier (higher-priority) one — skip it.
-    for (const m of matches) {
+    for (const m of raw) {
         if (m.start < pos) continue;
-        parts.push(plain.slice(pos, m.start));
-        parts.push(ansiColor(m.color));
-        parts.push(plain.slice(m.start, m.end));
-        parts.push(RST);
+        out.push({ start: m.start, end: m.end, color: m.color });
         pos = m.end;
     }
+    return out;
+}
 
-    parts.push(plain.slice(pos));
-    return parts.join("");
+/**
+ * One buffer line reduced to what the highlighter needs:
+ *   - `text`: the displayed characters, one entry per visible glyph
+ *   - `cellAt`: cellAt[i] is the starting cell column of text[i]; it has
+ *     length text.length+1 so cellAt[text.length] is the end column. Wide
+ *     (CJK) glyphs advance the column by 2, so char offsets and cell columns
+ *     diverge — this map is what keeps decorations aligned to the real cells.
+ */
+export interface LineCells {
+    text: string;
+    cellAt: number[];
+}
+
+/** A decoration to place on a single line: cell column, width in cells, color. */
+export interface LineDecoration {
+    x: number;
+    width: number;
+    color: string;
+}
+
+/**
+ * Turn one line's matches into cell-positioned decorations. Pure: the xterm
+ * coupling (reading the buffer into LineCells, registering decorations) stays
+ * in the caller so this stays unit-testable.
+ */
+export function planLine(cells: LineCells, compiled: CompiledHighlightRule[]): LineDecoration[] {
+    return findMatches(cells.text, compiled)
+        .map((m) => ({
+            x: cells.cellAt[m.start],
+            width: cells.cellAt[m.end] - cells.cellAt[m.start],
+            color: m.color,
+        }))
+        // A 0-width span (a match resolving to no full cell) is not a valid
+        // decoration; xterm's width defaults to 1, so drop these outright.
+        .filter((d) => d.width > 0);
 }

@@ -19,7 +19,8 @@
     import {extractBlocksText} from "../terminal/block-content.ts";
     import {renderBlocksToBlob} from "../terminal/block-to-image.ts";
     import {inputNewline, normalizeIncoming, bytesToHex, parseHexInput, parseLoginScript, remapEditingKeys, normalizeOutgoing, type LoginStep} from "../terminal/serial-transforms.ts";
-    import {compileHighlightRules, highlightPlain, type CompiledHighlightRule} from "../terminal/highlight.ts";
+    import {compileHighlightRules, type CompiledHighlightRule} from "../terminal/highlight.ts";
+    import {HighlightDecorator} from "../terminal/highlight-decorations.ts";
     import {t} from "../i18n/index.svelte.ts";
     import {ACTIONS, matchBinding, type ActionId} from "../keyboard/keymap.ts";
     import * as keymap from "../stores/keymap.svelte.ts";
@@ -28,6 +29,7 @@
     let hlRules = $state<HighlightRule[]>([]);
     let hlCompiled = $state<CompiledHighlightRule[]>([]);
     let hlEverLoaded = false;
+    let highlightDecorator: HighlightDecorator | undefined;
 
     function buildCompiledRules(rules: HighlightRule[]) {
         hlCompiled = compileHighlightRules(rules);
@@ -46,32 +48,21 @@
             try {
                 hlRules = await app.loadHighlights();
                 buildCompiledRules(hlRules);
-                paintTick++;
             } catch { /* DB read failure is non-fatal — old rules stay */ }
         })();
     });
 
-    function applyHighlights(text: string): string {
-        if (!hlCompiled.length) return text;
-        // DCS (\x1bP, sixel) / APC (\x1b_) 数据段不能被高亮替换碰，会撕碎图像帧。
-        if (text.indexOf('\x1bP') >= 0 || text.indexOf('\x1b_') >= 0) return text;
-        const escRe = /\x1b(?:\[[0-9;?]*[A-Za-z@`]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[^\[\]])/g;
-        let out = '', pos = 0, m;
-        while ((m = escRe.exec(text)) !== null) {
-            if (m.index > pos) out += highlightPlain(text.slice(pos, m.index), hlCompiled);
-            out += m[0];
-            pos = escRe.lastIndex;
-        }
-        const rest = text.slice(pos);
-        const esc = rest.indexOf('\x1b');
-        if (esc < 0) {
-            out += highlightPlain(rest, hlCompiled);
-        } else {
-            if (esc > 0) out += highlightPlain(rest.slice(0, esc), hlCompiled);
-            out += rest.slice(esc);
-        }
-        return out;
-    }
+    // Push compiled rules to the decoration layer whenever they change. The
+    // decorator repaints the visible buffer, so an edit re-highlights existing
+    // scrollback too — something the old write-time byte rewrite could never do.
+    // Read hlCompiled UNCONDITIONALLY first: `decorator?.setRules(hlCompiled)`
+    // short-circuits the whole expression (incl. the argument) while the
+    // decorator is still undefined on first run, so hlCompiled would never be
+    // tracked and the effect would never re-fire when rules load.
+    $effect(() => {
+        const rules = hlCompiled;
+        highlightDecorator?.setRules(rules);
+    });
 
     let {tabId, tabType, meta = {}}: {
         tabId: string;
@@ -666,15 +657,12 @@
             if (serialOpts) {
                 feedLoginScript(raw);
                 if (serialOpts.outputMode === "hex") { terminal.write(bytesToHex(raw)); return; }
-                const text = serialNormalizeOut(decoder.decode(raw, { stream: true }));
-                terminal.write(hlCompiled.length ? applyHighlights(text) : text);
+                terminal.write(serialNormalizeOut(decoder.decode(raw, { stream: true })));
                 return;
             }
-            if (hlCompiled.length) {
-                terminal.write(applyHighlights(decoder.decode(raw, { stream: true })));
-            } else {
-                terminal.write(raw);
-            }
+            // Write the raw bytes untouched — keyword highlighting is a decoration
+            // layer over the parsed grid (HighlightDecorator), not a byte rewrite.
+            terminal.write(raw);
         }));
         unlisteners.push(await listen(`${closeEvent}:${sid}`, () => {
             disconnected = true;
@@ -1086,6 +1074,9 @@
         }));
         terminal.open(containerEl);
         terminal.unicode.activeVersion = "11";
+        // Keyword highlighting lives here: a decoration layer over the parsed
+        // cell grid. The reactive $effect above feeds it the compiled rules.
+        highlightDecorator = new HighlightDecorator(terminal);
         fitAddon.fit();
 
         // Terminal font: the chosen family (prepended to the base stack) and
@@ -1317,6 +1308,7 @@
                 invoke(closeCmd, { sessionId }).catch(() => {});
             }
         }
+        highlightDecorator?.dispose();
         terminal?.dispose();
     });
 </script>
