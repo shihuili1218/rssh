@@ -694,6 +694,7 @@ const zh: Messages = {
   "error.github_api_error": "GitHub API 错误：{msg}",
   "error.webdav_url_missing": "未配置 WebDAV URL",
   "error.webdav_url_invalid": "WebDAV URL 格式无效：{err}",
+  "error.webdav_url_format_invalid": "WebDAV URL 格式无效",
   "error.webdav_push_failed": "WebDAV push 失败：{err}",
   "error.webdav_pull_failed": "WebDAV pull 失败：{err}",
   "error.webdav_not_found": "WebDAV 服务器上未找到备份",

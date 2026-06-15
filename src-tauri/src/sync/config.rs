@@ -1,7 +1,8 @@
 //! Config sync: incremental merge (upsert by identity), never destructive.
 //!
 //! **merge_import** is the single import entry point for every path — file
-//! `import` / `rssh config import` AND `github_pull` / `rssh config pull`.
+//! `import` / `rssh config import` AND `github_pull` / `webdav_pull` /
+//! `rssh config github pull` / `rssh config webdav pull`.
 //! It does NOT clear local data: each entity is upserted by its identity key,
 //! local-only entities survive, and a delete on one device is never propagated
 //! to another (additive semantics — the deliberate trade-off chosen for sync).
@@ -385,9 +386,9 @@ pub enum ExportMode {
 }
 
 /// Read the per-category toggles + profile group filter from settings. The GUI
-/// and `rssh config push` both feed the result into `build_payload` so the
-/// same opt-outs apply no matter which remote transport pushes to the shared
-/// repo / WebDAV endpoint.
+/// and `rssh config github push` / `rssh config webdav push` both feed the
+/// result into `build_payload` so the same opt-outs apply no matter which
+/// remote transport pushes to the shared repo / WebDAV endpoint.
 pub fn read_sync_prefs(db: &Db) -> AppResult<SyncPrefs> {
     // Absent or any value other than "0" → on. Only an explicit "0" disables.
     let flag = |key: &str| -> AppResult<bool> {

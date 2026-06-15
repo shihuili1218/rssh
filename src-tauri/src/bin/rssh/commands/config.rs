@@ -1,4 +1,4 @@
-//! `rssh config <export|import|set|push|pull|...>` —— config backup & remote sync.
+//! `rssh config <export|import|github|webdav>` —— config backup & remote sync.
 //!
 //! Both `import` and `pull` go through `merge_import` (additive upsert by
 //! identity, never destructive), sharing `rssh_lib::sync::config` with the GUI.
@@ -16,30 +16,42 @@ pub enum ConfigCmd {
     Export { file: String },
     /// Import from encrypted backup
     Import { file: String },
-    /// Set GitHub sync settings
+    /// GitHub remote sync
+    Github {
+        #[command(subcommand)]
+        action: RemoteSyncCmd,
+    },
+    /// WebDAV remote sync
+    Webdav {
+        #[command(subcommand)]
+        action: RemoteSyncCmd,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum RemoteSyncCmd {
+    /// Set remote sync settings
     Set,
-    /// Push config to GitHub
+    /// Push config to remote
     Push,
-    /// Pull config from GitHub
+    /// Pull config from remote
     Pull,
-    /// Set WebDAV sync settings
-    WebdavSet,
-    /// Push config to WebDAV
-    WebdavPush,
-    /// Pull config from WebDAV
-    WebdavPull,
 }
 
 pub fn cmd_config(conn: &CliCtx, action: ConfigCmd) -> AppResult<()> {
     match action {
         ConfigCmd::Export { file } => config_export(conn, &file),
         ConfigCmd::Import { file } => config_import(conn, &file),
-        ConfigCmd::Set => config_set(conn),
-        ConfigCmd::Push => config_push(conn),
-        ConfigCmd::Pull => config_pull(conn),
-        ConfigCmd::WebdavSet => config_webdav_set(conn),
-        ConfigCmd::WebdavPush => config_webdav_push(conn),
-        ConfigCmd::WebdavPull => config_webdav_pull(conn),
+        ConfigCmd::Github { action } => match action {
+            RemoteSyncCmd::Set => config_github_set(conn),
+            RemoteSyncCmd::Push => config_github_push(conn),
+            RemoteSyncCmd::Pull => config_github_pull(conn),
+        },
+        ConfigCmd::Webdav { action } => match action {
+            RemoteSyncCmd::Set => config_webdav_set(conn),
+            RemoteSyncCmd::Push => config_webdav_push(conn),
+            RemoteSyncCmd::Pull => config_webdav_pull(conn),
+        },
     }
 }
 
@@ -87,7 +99,22 @@ fn config_import(conn: &CliCtx, file: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn config_set(conn: &CliCtx) -> AppResult<()> {
+// ---------------------------------------------------------------------------
+// GitHub sync
+// ---------------------------------------------------------------------------
+
+fn read_github_settings(conn: &CliCtx) -> AppResult<(String, String, String)> {
+    let token = conn
+        .secret_store()
+        .get(&setting_key("github_token"))?
+        .unwrap_or_else(|| die("GitHub token not set. Run: rssh config github set"));
+    let repo = rssh_lib::db::settings::get(conn, "github_repo")?
+        .unwrap_or_else(|| die("GitHub repo not set"));
+    let branch = rssh_lib::db::settings::get(conn, "github_branch")?.unwrap_or("main".into());
+    Ok((token, repo, branch))
+}
+
+fn config_github_set(conn: &CliCtx) -> AppResult<()> {
     let cur_token = conn
         .secret_store()
         .get(&setting_key("github_token"))?
@@ -116,14 +143,8 @@ fn config_set(conn: &CliCtx) -> AppResult<()> {
     Ok(())
 }
 
-fn config_push(conn: &CliCtx) -> AppResult<()> {
-    let token = conn
-        .secret_store()
-        .get(&setting_key("github_token"))?
-        .unwrap_or_else(|| die("GitHub token not set. Run: rssh config set"));
-    let repo = rssh_lib::db::settings::get(conn, "github_repo")?
-        .unwrap_or_else(|| die("GitHub repo not set"));
-    let branch = rssh_lib::db::settings::get(conn, "github_branch")?.unwrap_or("main".into());
+fn config_github_push(conn: &CliCtx) -> AppResult<()> {
+    let (token, repo, branch) = read_github_settings(conn)?;
 
     // push 路径：跟 GUI push 用同一个 build_payload —— 尊重所有同步开关 + group 过滤
     // + save_to_remote scrub + AI-key 闸门。GUI 里关掉的类别，CLI 也不会漏到同一 repo。
@@ -152,14 +173,8 @@ fn config_push(conn: &CliCtx) -> AppResult<()> {
     Ok(())
 }
 
-fn config_pull(conn: &CliCtx) -> AppResult<()> {
-    let token = conn
-        .secret_store()
-        .get(&setting_key("github_token"))?
-        .unwrap_or_else(|| die("GitHub token not set. Run: rssh config set"));
-    let repo = rssh_lib::db::settings::get(conn, "github_repo")?
-        .unwrap_or_else(|| die("GitHub repo not set"));
-    let branch = rssh_lib::db::settings::get(conn, "github_branch")?.unwrap_or("main".into());
+fn config_github_pull(conn: &CliCtx) -> AppResult<()> {
+    let (token, repo, branch) = read_github_settings(conn)?;
 
     let sync = rssh_lib::sync::github::GitHubSync::from_settings(&token, &repo, &branch)?;
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -182,12 +197,12 @@ fn config_pull(conn: &CliCtx) -> AppResult<()> {
 
 fn read_webdav_settings(conn: &CliCtx) -> AppResult<(String, String, String)> {
     let url = rssh_lib::db::settings::get(conn, "webdav_url")?
-        .unwrap_or_else(|| die("WebDAV URL not set. Run: rssh config webdav-set"));
+        .unwrap_or_else(|| die("WebDAV URL not set. Run: rssh config webdav set"));
     let username = rssh_lib::db::settings::get(conn, "webdav_username")?.unwrap_or_default();
     let password = conn
         .secret_store()
         .get(&setting_key("webdav_password"))?
-        .unwrap_or_else(|| die("WebDAV password not set. Run: rssh config webdav-set"));
+        .unwrap_or_else(|| die("WebDAV password not set. Run: rssh config webdav set"));
     Ok((url, username, password))
 }
 
@@ -237,13 +252,6 @@ fn config_webdav_push(conn: &CliCtx) -> AppResult<()> {
         .unwrap_or_else(|e| die(format!("Serialization failed: {e}")));
 
     let pw = read_password("Encryption password: ");
-    let pw2 = read_password("Confirm password: ");
-    if pw != pw2 {
-        return Err(AppError::config(
-            "cli_password_mismatch",
-            serde_json::json!({}),
-        ));
-    }
     let encrypted = rssh_lib::crypto::encrypt(&json_data, &pw)?;
     json_data.clear();
 

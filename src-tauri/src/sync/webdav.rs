@@ -184,15 +184,19 @@ impl WebDavSync {
         ))
     }
 
-    /// 读取并截断错误响应体，防止恶意服务端返回超大 body 导致内存问题。
+    /// 用 `resp.chunk()` 逐块读取错误响应体，累计到 MAX_ERROR_BODY_LEN 即停止，
+    /// 避免一次性缓冲超大响应。
     async fn truncate_error_body(resp: reqwest::Response) -> String {
-        match resp.bytes().await {
-            Ok(bytes) => {
-                let len = bytes.len().min(MAX_ERROR_BODY_LEN);
-                String::from_utf8_lossy(&bytes[..len]).to_string()
+        let mut buf = Vec::with_capacity(MAX_ERROR_BODY_LEN);
+        while let Ok(Some(chunk)) = resp.chunk().await {
+            let remaining = MAX_ERROR_BODY_LEN.saturating_sub(buf.len());
+            if remaining == 0 {
+                break;
             }
-            Err(_) => String::new(),
+            let take = chunk.len().min(remaining);
+            buf.extend_from_slice(&chunk[..take]);
         }
+        String::from_utf8_lossy(&buf).to_string()
     }
 }
 

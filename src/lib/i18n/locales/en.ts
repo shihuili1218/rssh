@@ -691,6 +691,7 @@ const en = {
   "error.github_api_error": "GitHub API error: {msg}",
   "error.webdav_url_missing": "WebDAV URL not configured",
   "error.webdav_url_invalid": "Invalid WebDAV URL: {err}",
+  "error.webdav_url_format_invalid": "Invalid WebDAV URL format",
   "error.webdav_push_failed": "WebDAV push failed: {err}",
   "error.webdav_pull_failed": "WebDAV pull failed: {err}",
   "error.webdav_not_found": "No backup found on WebDAV server",

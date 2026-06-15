@@ -1,5 +1,5 @@
 <script lang="ts">
-    import {onMount} from "svelte";
+    import {onMount, onDestroy} from "svelte";
     import {invoke} from "@tauri-apps/api/core";
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import type { MessageKey } from "../i18n/locales/en";
@@ -13,7 +13,7 @@
     let githubMsg = $state("");
     let githubSaveMsg = $state("");
     let githubSaveIsError = $state(false);
-    let ghSaveTimer = $state<ReturnType<typeof setTimeout> | null>(null);
+    let ghSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
     /* ── WebDAV source state ─────────────────────────────────────────────── */
     let webdavEnabled = $state(false);
@@ -24,7 +24,7 @@
     let webdavMsg = $state("");
     let webdavSaveMsg = $state("");
     let webdavSaveIsError = $state(false);
-    let wdSaveTimer = $state<ReturnType<typeof setTimeout> | null>(null);
+    let wdSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
     /* ── Shared sync content toggles ──────────────────────────────────────── */
     const SYNC_ITEMS: { key: string; label: MessageKey }[] = [
@@ -89,11 +89,11 @@
                 await invoke("set_setting", { key: "sync_profile_group_ids", value: "" });
             }
         }
+    });
 
-        return () => {
-            if (ghSaveTimer) clearTimeout(ghSaveTimer);
-            if (wdSaveTimer) clearTimeout(wdSaveTimer);
-        };
+    onDestroy(() => {
+        if (ghSaveTimer) clearTimeout(ghSaveTimer);
+        if (wdSaveTimer) clearTimeout(wdSaveTimer);
     });
 
     function startGhSaveTimer() {
@@ -111,12 +111,15 @@
     }
 
     function validateWebdavUrl(url: string): MessageKey | null {
+        if (!url.trim()) {
+            return "error.webdav_url_missing";
+        }
         let u: URL;
         try { u = new URL(url); } catch {
-            return "error.webdav_url_invalid";
+            return "error.webdav_url_format_invalid";
         }
         if (u.protocol !== "http:" && u.protocol !== "https:") {
-            return "error.webdav_url_invalid";
+            return "error.webdav_url_format_invalid";
         }
         if (u.username || u.password) {
             return "error.webdav_url_userinfo_forbidden";
@@ -128,12 +131,17 @@
     }
 
     async function saveGithubSettings() {
-        await invoke("set_setting", { key: "github_token", value: githubToken });
-        await invoke("set_setting", { key: "github_repo", value: githubRepo });
-        await invoke("set_setting", { key: "github_branch", value: githubBranch });
-        await invoke("set_setting", { key: "sync_github_enabled", value: githubEnabled ? "1" : "0" });
-        githubSaveMsg = t("github.saved");
-        githubSaveIsError = false;
+        try {
+            await invoke("set_setting", { key: "github_token", value: githubToken });
+            await invoke("set_setting", { key: "github_repo", value: githubRepo });
+            await invoke("set_setting", { key: "github_branch", value: githubBranch });
+            await invoke("set_setting", { key: "sync_github_enabled", value: githubEnabled ? "1" : "0" });
+            githubSaveMsg = t("github.saved");
+            githubSaveIsError = false;
+        } catch (e: any) {
+            githubSaveMsg = errMsg(e);
+            githubSaveIsError = true;
+        }
         startGhSaveTimer();
     }
 
@@ -145,12 +153,17 @@
             startWdSaveTimer();
             return;
         }
-        await invoke("set_setting", { key: "webdav_url", value: webdavUrl });
-        await invoke("set_setting", { key: "webdav_username", value: webdavUsername });
-        await invoke("set_setting", { key: "webdav_password", value: webdavPassword });
-        await invoke("set_setting", { key: "sync_webdav_enabled", value: webdavEnabled ? "1" : "0" });
-        webdavSaveMsg = t("webdav.saved");
-        webdavSaveIsError = false;
+        try {
+            await invoke("set_setting", { key: "webdav_url", value: webdavUrl });
+            await invoke("set_setting", { key: "webdav_username", value: webdavUsername });
+            await invoke("set_setting", { key: "webdav_password", value: webdavPassword });
+            await invoke("set_setting", { key: "sync_webdav_enabled", value: webdavEnabled ? "1" : "0" });
+            webdavSaveMsg = t("webdav.saved");
+            webdavSaveIsError = false;
+        } catch (e: any) {
+            webdavSaveMsg = errMsg(e);
+            webdavSaveIsError = true;
+        }
         startWdSaveTimer();
     }
 
