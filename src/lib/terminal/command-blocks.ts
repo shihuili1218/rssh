@@ -74,6 +74,21 @@ export function createCommandBlockTracker(term: Terminal): CommandBlockTracker {
     emit();
   };
 
+  // Drop every block at once. Used on hard reset: the buffer is gone, so no
+  // block corresponds to anything anymore. Snapshot-then-clear mirrors dispose():
+  // start.dispose()'s onDispose does indexOf(blocks) — blocks is already empty,
+  // so it neither re-splices nor double-emits. One emit() at the end.
+  const resetAll = () => {
+    if (blocks.length === 0) return;
+    const snapshot = blocks.slice();
+    blocks.length = 0;
+    for (const b of snapshot) {
+      b.start.dispose();
+      b.end?.dispose();
+    }
+    emit();
+  };
+
   // Rule 1: Enter in normal buffer. Each `\r` = one new block (includes
   // multiline pastes — pasted lines each get their own block by design).
   disposables.push(
@@ -92,6 +107,19 @@ export function createCommandBlockTracker(term: Terminal): CommandBlockTracker {
   disposables.push(
     term.buffer.onBufferChange((buf) => {
       if (buf.type === "alternate") closeCurrent();
+    }),
+  );
+
+  // Rule 3: hard reset. RIS (ESC c — from `reset` / `tput reset`) wipes the
+  // buffer, but xterm does NOT dispose our markers (verified: marker.isDisposed
+  // stays false), so every block would ghost over the cleared screen — and its
+  // consumers (染色 / selection halo / fold) with it. Drop them all. Return false
+  // so xterm still performs the reset. Plain `clear` (ED3 + ED2) already disposes
+  // markers via the ED2 leg, so it needs no handler here.
+  disposables.push(
+    term.parser.registerEscHandler({ final: "c" }, () => {
+      resetAll();
+      return false;
     }),
   );
 

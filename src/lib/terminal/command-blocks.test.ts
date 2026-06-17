@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { Terminal } from "@xterm/xterm";
 import { createCommandBlockTracker } from "./command-blocks.ts";
 
 /* ─────────────────────────────────────────────────────────────
@@ -20,6 +21,9 @@ function fakeTerm() {
   // Set 而非 Array：disposer 能 O(1) 拆订阅，且能在测试里观察"还剩几个 listener"。
   const dataListeners = new Set<(s: string) => void>();
   const bufferChangeListeners = new Set<(b: { type: BufType }) => void>();
+  // ESC handlers keyed by final byte (RIS = 'c'). Stored so the test can both
+  // trigger them and assert they get unsubscribed on dispose() (leak probe).
+  const escHandlers = new Set<{ final: string; handler: () => boolean | void }>();
   let markerCounter = 0;
   const allMarkers: FakeMarker[] = [];
 
@@ -59,6 +63,13 @@ function fakeTerm() {
     registerMarker(_line: number): FakeMarker | undefined {
       return makeMarker();
     },
+    parser: {
+      registerEscHandler(id: { final: string }, handler: () => boolean | void) {
+        const entry = { final: id.final, handler };
+        escHandlers.add(entry);
+        return { dispose: () => escHandlers.delete(entry) };
+      },
+    },
   };
 
   return {
@@ -70,8 +81,13 @@ function fakeTerm() {
       bufferType = t;
       bufferChangeListeners.forEach((f) => f({ type: t }));
     },
+    /** Fire all ESC handlers registered for `final` (RIS = 'c'). */
+    triggerEsc(final: string) {
+      for (const e of escHandlers) if (e.final === final) e.handler();
+    },
     markers: allMarkers,
-    listenerCount: () => dataListeners.size + bufferChangeListeners.size,
+    listenerCount: () =>
+      dataListeners.size + bufferChangeListeners.size + escHandlers.size,
   };
 }
 
@@ -255,5 +271,73 @@ describe("createCommandBlockTracker — marker disposal", () => {
     f.setBuffer("normal");
     expect(t.blocks.length).toBe(0);
     expect(onChangeCalls).toBe(0);
+  });
+});
+
+describe("createCommandBlockTracker — hard reset (RIS)", () => {
+  it("RIS (ESC c) drops every block and fires onChange once", () => {
+    const f = fakeTerm();
+    const t = createCommandBlockTracker(f.term);
+    f.pushData("\r");
+    f.pushData("\r");
+    f.pushData("\r");
+    expect(t.blocks.length).toBe(3);
+    let changes = 0;
+    t.onChange(() => changes++);
+    f.triggerEsc("c");
+    expect(t.blocks.length).toBe(0);
+    expect(changes).toBe(1); // single emit, not one-per-block
+    t.dispose();
+  });
+
+  it("RIS on an empty tracker is a no-op (no spurious onChange)", () => {
+    const f = fakeTerm();
+    const t = createCommandBlockTracker(f.term);
+    let changes = 0;
+    t.onChange(() => changes++);
+    f.triggerEsc("c");
+    expect(changes).toBe(0);
+    t.dispose();
+  });
+
+  it("dispose() unsubscribes the RIS handler too", () => {
+    const f = fakeTerm();
+    const t = createCommandBlockTracker(f.term);
+    // listenerCount now folds in escHandlers — must drop to zero on dispose.
+    expect(f.listenerCount()).toBeGreaterThan(0);
+    t.dispose();
+    expect(f.listenerCount()).toBe(0);
+  });
+});
+
+// Real xterm guards the contract Rule 3 depends on: writing RIS (\x1bc) actually
+// invokes a {final:'c'} ESC handler (and that markers are NOT disposed, which is
+// WHY the tracker must drop blocks itself). Driving onData/blocks needs real user
+// input (no DOM here), so the end-to-end "blocks cleared" is covered by the
+// fakeTerm tests above (handler → resetAll); this proves the xterm half.
+describe("createCommandBlockTracker — hard reset (real xterm contract)", () => {
+  const writeP = (term: Terminal, d: string) =>
+    new Promise<void>((r) => term.write(d, () => r()));
+
+  it("RIS (\\x1bc) invokes a {final:'c'} ESC handler; markers survive it", async () => {
+    const term = new Terminal({ allowProposedApi: true, scrollback: 1000 });
+    let fired = 0;
+    const disp = term.parser.registerEscHandler({ final: "c" }, () => {
+      fired++;
+      return false; // observe-only — xterm still performs the reset
+    });
+    await writeP(term, "line1\r\nline2\r\n");
+    const marker = term.registerMarker(0);
+    const cursorYBefore = term.buffer.active.cursorY;
+    expect(cursorYBefore).toBeGreaterThan(0); // cursor moved down past the writes
+    await writeP(term, "\x1bc"); // RIS
+    expect(fired).toBe(1); // our handler ran
+    expect(marker?.isDisposed).toBe(false); // xterm did NOT clean up the marker
+    // returning false did NOT swallow the reset: RIS still ran fullReset(),
+    // homing the cursor. (If our handler returned true this would stay > 0 —
+    // i.e. we'd have broken `reset`.)
+    expect(term.buffer.active.cursorY).toBe(0);
+    disp.dispose();
+    term.dispose();
   });
 });

@@ -5,6 +5,7 @@
   import WelcomeScreen from "./lib/components/WelcomeScreen.svelte";
   import { loadProfiles, loadForwards } from "./lib/stores/app.svelte.ts";
   import * as updates from "./lib/stores/updates.svelte.ts";
+  import * as ai from "./lib/ai/store.svelte.ts";
 
   // First-launch auto-show: when there are no profiles and no forwards,
   // surface the cinematic welcome once. After the user dismisses it
@@ -17,6 +18,11 @@
   let showWelcome = $state(false);
 
   onMount(async () => {
+    // 预热 AI 设置：色条"发送到 AI"等入口靠 ai.settings()?.has_api_key 同步判断是否
+    // 可用，过去只有打开 AI 面板才加载它。在 app 启动时拉一次，保证任何菜单打开前
+    // _settings 已就位（fire-and-forget；失败不阻塞 UI，开面板时还会重试）。
+    if (!ai.settings()) void ai.loadSettings().catch(() => {});
+
     // Skip background update polling on clone / AI-handoff windows —
     // they're transient and the main window already owns the timer.
     if (!window.__rssh_clone && !window.__rssh_ai_handoff) {

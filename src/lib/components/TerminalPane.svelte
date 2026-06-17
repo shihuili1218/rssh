@@ -238,6 +238,12 @@
     // 必须用 SvelteSet：原生 Set 在 $state 里 add/delete 不会让消费者
     // ($derived、模板表达式) 重算 —— Svelte 5 不给原生 Set 自动加代理。
     const selectedBlockIds = new SvelteSet<number>();
+
+    // 染色：右键"染色"打开的块集合。会话级、非持久——块被 scrollback GC 掉，
+    // 染色跟着消失（块本身就是临时的，给它造持久层是解决不存在的问题）。
+    // 不变式：块 GC 时必须从这里剪枝，否则新块复用旧 id 会"鬼染色"。
+    // 剪枝逻辑挂在 blockTracker.onChange，跟 selectedBlockIds 同一处。
+    const coloredBlockIds = new SvelteSet<number>();
     let selectionAnchorId: number | null = null;
 
     function handleBlockClick(r: BlockRect, ev: MouseEvent) {
@@ -348,6 +354,17 @@
         }
     }
 
+    /** 把目标块的内容塞进 AI 输入框（不发送）。打开面板 + prefill，用户过目再发。
+     *  面板绑定 activeTabId，而右键的终端就是 activeTab，所以 tabId 必然对得上。 */
+    function sendBlocksToAi(blocks: CommandBlock[]) {
+        if (!terminal || blocks.length === 0) return;
+        const text = extractBlocksText(terminal, blocks, foldStore);
+        if (!text) return;
+        ai.openPanel();
+        ai.prefillInput(tabId, text);
+        clearBlockSelection();
+    }
+
     function openBlockMenu(r: BlockRect, e: MouseEvent) {
         e.preventDefault();
         e.stopPropagation();
@@ -368,6 +385,13 @@
         const imageLabel = n > 1
             ? t("terminal.block.menu.copy_image_n", { n })
             : t("terminal.block.menu.copy_image");
+        // 染色是 per-block 状态 toggle（像 fold），不走 Finder 多选——标签随右键块的染色态翻转。
+        const colored = coloredBlockIds.has(r.id);
+        // 发送到 AI 走 Finder 多选（像复制）。未配 API key → 置灰。
+        const aiConfigured = ai.settings()?.has_api_key === true;
+        const sendAiLabel = n > 1
+            ? t("terminal.block.menu.send_ai_n", { n })
+            : t("terminal.block.menu.send_ai");
         ctxMenu = {
             x: e.clientX,
             y: e.clientY,
@@ -381,6 +405,14 @@
                     },
                 },
                 {
+                    label: t(colored ? "terminal.block.menu.uncolor" : "terminal.block.menu.color"),
+                    action: () => {
+                        // SvelteSet 的 add/delete 会让模板里的 .has(r.id) 重算 → 染色层即时增删。
+                        if (coloredBlockIds.has(r.id)) coloredBlockIds.delete(r.id);
+                        else coloredBlockIds.add(r.id);
+                    },
+                },
+                {
                     label: textLabel,
                     disabled: n === 0,
                     action: () => copyBlocksAsText(targets),
@@ -389,6 +421,11 @@
                     label: imageLabel,
                     disabled: n === 0,
                     action: () => copyBlocksAsImage(targets),
+                },
+                {
+                    label: sendAiLabel,
+                    disabled: n === 0 || !aiConfigured,
+                    action: () => sendBlocksToAi(targets),
                 },
             ],
         };
@@ -1149,12 +1186,15 @@
         blockTracker = createCommandBlockTracker(terminal);
         blockTracker.onChange(() => {
             paintTick++;
-            // 剪枝：被 GC 的块从选中集合里清掉，anchor 失效也复位。
+            // 剪枝：被 GC 的块从所有引用它 id 的集合里清掉，anchor 失效也复位。
             if (!blockTracker) return;
-            if (selectedBlockIds.size === 0 && selectionAnchorId === null) return;
+            if (selectedBlockIds.size === 0 && coloredBlockIds.size === 0 && selectionAnchorId === null) return;
             const live = new Set(blockTracker.blocks.map(b => b.id));
             for (const id of selectedBlockIds) {
                 if (!live.has(id)) selectedBlockIds.delete(id);
+            }
+            for (const id of coloredBlockIds) {
+                if (!live.has(id)) coloredBlockIds.delete(id);
             }
             if (selectionAnchorId !== null && !live.has(selectionAnchorId)) {
                 selectionAnchorId = null;
@@ -1354,6 +1394,16 @@
     <div class="term-wrap" class:is-mobile={app.isMobile} class:no-block-bar={!app.commandBlockBar()}>
         <div class="xterm-host" bind:this={containerEl}></div>
         {#if app.commandBlockBar()}
+            <!-- 染色层：整行宽的半透明色块，用块自身的色条颜色。pointer-events:none
+                 让点击/选中穿透到 xterm 与 .block-hit。坐标同 fold-label：block-bar
+                 SVG 有 top:4px 偏移，这个 div 是 .term-wrap 子节点，要把那 4px 加回来。
+                 排在 SVG 之前 → 色条画在染色之上，主条保持清晰。 -->
+            {#each blockRects as r (r.id)}
+                {#if coloredBlockIds.has(r.id)}
+                    <div class="block-tint"
+                         style="top: calc({r.y}px + 4px); height: {r.h}px; background: {r.color};"></div>
+                {/if}
+            {/each}
             <svg class="block-bar" aria-hidden="true">
                 {#if isAltBuffer}
                     <rect x="5" y="0" width="3" height="100%" rx="1.5" style="fill: var(--text-dim)" opacity="0.5" />
@@ -1498,6 +1548,17 @@
     .block-halo {
         filter: blur(2px);
         pointer-events: none;
+    }
+
+    /* 染色层：整行宽的半透明色带。0.15 不透明度——文字依旧清晰可读，只是底色透出
+       块的色条颜色。pointer-events:none 让选中/点击全部穿透到下面的 xterm。 */
+    .block-tint {
+        position: absolute;
+        left: 0;
+        right: 0;
+        pointer-events: none;
+        opacity: 0.15;
+        border-radius: 2px;
     }
 
     .search-bar {

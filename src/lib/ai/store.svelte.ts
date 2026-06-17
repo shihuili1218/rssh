@@ -82,6 +82,19 @@ export function openPanel() { _open = true; }
 export function closePanel() { _open = false; }
 export function togglePanel() { _open = !_open; }
 
+// ─── Input prefill ────────────────────────────────────────────────
+// 把一段文本塞进某个 tab 的 ChatPanel 输入框（不发送）。色条"发送到 AI"用它：
+// 抽块文本 → openPanel → prefillInput，让用户过目/编辑后再发。
+// 每次都是新对象字面量，identity 必变——同一段文本塞两次也照样触发 ChatPanel 的 $effect。
+let _prefill = $state<{ tabId: string; text: string } | null>(null);
+export function prefillInput(tab_id: string, text: string) {
+  _prefill = { tabId: tab_id, text };
+}
+export function pendingPrefill() { return _prefill; }
+export function clearPrefill(tab_id: string) {
+  if (_prefill?.tabId === tab_id) _prefill = null;
+}
+
 // ─── Session ──────────────────────────────────────────────────────
 
 export function activeTabId() { return _activeTabId; }

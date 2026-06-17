@@ -48,6 +48,17 @@
         }
     });
 
+    // 色条"发送到 AI"塞进来的输入：消费一次就清掉，避免切 tab 回来又灌一遍。
+    // 无条件先把 $state 读进局部变量，确保依赖被跟踪（即便为 null）——否则首跑
+    // 为空时 Svelte 5 不会登记对 _prefill 的依赖，后续 prefill 永远触发不了。
+    $effect(() => {
+        const p = ai.pendingPrefill();
+        if (!p || p.tabId !== tabId) return;
+        inputText = p.text;
+        ai.clearPrefill(tabId);
+        inputEl?.focus();
+    });
+
     // 历史对话随当前 target 重新加载 —— AppShell 复用同一个 ChatPanel 实例，
     // 切 tab 只换 props 不重挂载，onMount 不会再跑，必须用 $effect 跟踪。
     // seq 守卫：快速连续切 tab 时丢弃迟到的旧响应，避免 A 的列表盖到 B 头上。
