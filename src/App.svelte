@@ -21,7 +21,11 @@
     // 预热 AI 设置：色条"发送到 AI"等入口靠 ai.settings()?.has_api_key 同步判断是否
     // 可用，过去只有打开 AI 面板才加载它。在 app 启动时拉一次，保证任何菜单打开前
     // _settings 已就位（fire-and-forget；失败不阻塞 UI，开面板时还会重试）。
-    if (!ai.settings()) void ai.loadSettings().catch(() => {});
+    // 非致命的尽力预热：失败也不弹 toast（用户还没碰 AI，开机弹窗是噪音），
+    // 但按"不静默吞异常"留一行带上下文的 warn——打开 AI 面板时还会重试加载。
+    if (!ai.settings()) {
+      void ai.loadSettings().catch((e) => console.warn("[ai] settings preheat failed:", e));
+    }
 
     // Skip background update polling on clone / AI-handoff windows —
     // they're transient and the main window already owns the timer.

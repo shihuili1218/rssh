@@ -10,6 +10,8 @@
  *   2. On switching to alternate buffer (vim/top/less/tmux) → close current,
  *      do nothing until we're back in normal and user presses Enter again.
  *   3. When a start marker is disposed (scrollback trimmed), drop the block.
+ *   4. On hard reset (RIS / ESC c), drop all blocks at once — xterm wipes the
+ *      buffer without disposing our markers, so we must clear them ourselves.
  *
  * This module owns no DOM. A renderer (e.g. the overlay bar) subscribes
  * via `onChange` and redraws.
@@ -76,7 +78,7 @@ export function createCommandBlockTracker(term: Terminal): CommandBlockTracker {
 
   // Drop every block at once. Used on hard reset: the buffer is gone, so no
   // block corresponds to anything anymore. Snapshot-then-clear mirrors dispose():
-  // start.dispose()'s onDispose does indexOf(blocks) — blocks is already empty,
+  // start.dispose()'s onDispose does blocks.indexOf(block) — blocks already empty,
   // so it neither re-splices nor double-emits. One emit() at the end.
   const resetAll = () => {
     if (blocks.length === 0) return;
@@ -110,7 +112,7 @@ export function createCommandBlockTracker(term: Terminal): CommandBlockTracker {
     }),
   );
 
-  // Rule 3: hard reset. RIS (ESC c — from `reset` / `tput reset`) wipes the
+  // Rule 4: hard reset. RIS (ESC c — from `reset` / `tput reset`) wipes the
   // buffer, but xterm does NOT dispose our markers (verified: marker.isDisposed
   // stays false), so every block would ghost over the cleared screen — and its
   // consumers (染色 / selection halo / fold) with it. Drop them all. Return false
