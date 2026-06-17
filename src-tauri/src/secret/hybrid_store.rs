@@ -118,6 +118,13 @@ impl SecretStore for HybridStore {
         self.db_store.delete(key)
     }
 
+    /// Presence check on the DB row only — deliberately skips master_key() +
+    /// decrypt. This is what keeps "is AI configured?" from loading the master
+    /// key (and popping a keychain prompt) at app start / menu open.
+    fn exists(&self, key: &str) -> AppResult<bool> {
+        Ok(self.db_store.get(key)?.is_some())
+    }
+
     fn backend_name(&self) -> &'static str {
         self.backend_label
     }
@@ -221,6 +228,19 @@ mod tests {
         // HybridStore.get 解 B 必须失败 — AAD 不一致 tag fail
         let err = hs.get("cred:B:secret").unwrap_err();
         assert_eq!(err.code(), "secret_decrypt_failed_or_wrong_key");
+    }
+
+    #[test]
+    fn exists_checks_presence_without_loading_master_key() {
+        // exists() must answer purely from the DB row — no master key, no decrypt
+        // (that's what avoids a keychain prompt for has_api_key). Seed a raw row
+        // directly so no set()/get() ever loads the master key.
+        let (hs, tmp) = make_hybrid();
+        hs.db_store.set("setting:ai_x_key", "enc:v1:whatever").unwrap();
+        assert!(hs.exists("setting:ai_x_key").unwrap());
+        assert!(!hs.exists("ghost").unwrap());
+        // master key was never needed → its backing file was never created
+        assert!(!tmp.path().join("mk").exists());
     }
 
     #[test]

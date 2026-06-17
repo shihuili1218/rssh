@@ -1039,12 +1039,11 @@ pub async fn ai_settings_get_impl(
     };
     let model = crate::db::settings::get(&state.db, &key_model(&provider))?.unwrap_or_default();
     let endpoint = crate::db::settings::get(&state.db, &key_endpoint(&provider))?;
-    // API key 仍走 keychain
-    let has_api_key = state
-        .secret_store
-        .get(&key_api_key(&provider))?
-        .filter(|s| !s.is_empty())
-        .is_some();
+    // 只查存在性，**不解密** —— 解密会加载 master key（=钥匙串授权弹窗），
+    // 仅仅为了渲染设置 / 给"发送到 AI"做置灰判断而弹钥匙串是不可接受的。
+    // 空 key 在 ai_settings_set 里走 delete（不存空串），所以"存在"==有真 key，
+    // 跟旧的 .filter(!empty).is_some() 语义一致。真正的解密留给发起 LLM 请求时。
+    let has_api_key = state.secret_store.exists(&key_api_key(&provider))?;
     let danger_mode = crate::db::settings::get(&state.db, &key_danger_mode())?
         .map(|v| v == "1")
         .unwrap_or(false);

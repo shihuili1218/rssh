@@ -21,8 +21,11 @@
     // 预热 AI 设置：色条"发送到 AI"等入口靠 ai.settings()?.has_api_key 同步判断是否
     // 可用，过去只有打开 AI 面板才加载它。在 app 启动时拉一次，保证任何菜单打开前
     // _settings 已就位（fire-and-forget；失败不阻塞 UI，开面板时还会重试）。
-    // 非致命的尽力预热：失败也不弹 toast（用户还没碰 AI，开机弹窗是噪音），
-    // 但按"不静默吞异常"留一行带上下文的 warn——打开 AI 面板时还会重试加载。
+    // 预热 AI 设置，让"发送到 AI"的置灰判断在任何菜单打开前就确定。
+    // 关键：ai_settings_get 只读 DB 偏好 + 查 key 是否存在（has_api_key 走
+    // secret_store.exists，不解密），**绝不加载 master key**，所以开机不会弹钥匙串
+    // ——钥匙串只在真正发起 LLM 请求（解密 key）时申请。失败不弹 toast（开机噪音），
+    // 但按"不静默吞异常"留一行 warn；开 AI 面板时还会重试。
     if (!ai.settings()) {
       void ai.loadSettings().catch((e) => console.warn("[ai] settings preheat failed:", e));
     }

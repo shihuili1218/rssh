@@ -72,6 +72,17 @@ pub trait SecretStore: Send + Sync {
     fn set(&self, key: &str, value: &str) -> AppResult<()>;
     fn delete(&self, key: &str) -> AppResult<()>;
     fn backend_name(&self) -> &'static str;
+
+    /// Does a secret exist for `key`, WITHOUT decrypting it?
+    ///
+    /// The point is to answer "is this configured?" (e.g. has_api_key) without
+    /// touching the master key / OS keychain — decrypting would pop a keychain
+    /// prompt just to render a settings gate. The default delegates to `get`
+    /// (correct but may decrypt); stores where decryption is expensive override
+    /// it with a presence-only check (see HybridStore).
+    fn exists(&self, key: &str) -> AppResult<bool> {
+        Ok(self.get(key)?.is_some())
+    }
 }
 
 /// 打开 SecretStore 系统 —— 返回组合对象：
