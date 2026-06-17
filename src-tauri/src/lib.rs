@@ -22,8 +22,43 @@ use tauri::Manager;
 
 use state::AppState;
 
+#[cfg(all(target_os = "linux", not(target_os = "android")))]
+fn apply_linux_wayland_compat() {
+    if std::env::var_os("RSSH_DISABLE_WAYLAND_COMPAT").is_some() {
+        return;
+    }
+
+    let wayland_session = std::env::var_os("WAYLAND_DISPLAY").is_some()
+        || std::env::var("XDG_SESSION_TYPE")
+            .map(|v| v.eq_ignore_ascii_case("wayland"))
+            .unwrap_or(false);
+
+    if !wayland_session {
+        return;
+    }
+
+    // Wayland 兼容：部分 NVIDIA / wlroots 环境下，WebKitGTK 的 DMABUF renderer
+    // 会在 Tauri 窗口创建前失败。Prefer reliable startup by default; users can
+    // still override this variable explicitly.
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
+    // GBM 后端兼容：全局导出的 GBM_BACKEND，尤其是 nvidia-drm，可能导致
+    // Hyprland 下 GTK / WebKitGTK 报 "Failed to create GBM buffer"。Keep an
+    // explicit opt-out for users whose stack needs this variable.
+    if std::env::var_os("RSSH_KEEP_GBM_BACKEND").is_none() {
+        std::env::remove_var("GBM_BACKEND");
+    }
+}
+
+#[cfg(any(not(target_os = "linux"), target_os = "android"))]
+fn apply_linux_wayland_compat() {}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    apply_linux_wayland_compat();
+
     // 默认 info；用 RUST_LOG=debug 等覆盖
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .try_init();
