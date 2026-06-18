@@ -808,8 +808,6 @@ const zh: Messages = {
   // 录制
   "recording.enable": "启用录制",
   "recording.enable_desc": "自动以 Asciinema v2（.cast）格式录制 SSH 会话。",
-  "recording.save_dir": "保存目录",
-  "recording.save_dir_hint": "留空则使用默认目录",
   "recording.list_title": "录像",
   "recording.playback": "回放",
   // 回放

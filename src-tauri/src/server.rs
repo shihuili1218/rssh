@@ -1088,8 +1088,9 @@ fn headless_host(
 }
 
 /// Compute the asciicast recording path for a new SSH session, mirroring the
-/// desktop `ssh_connect`: honors `recording_enabled` / `recording_dir` and
-/// stamps the file with profile name + timestamp. `None` when recording is off.
+/// desktop `ssh_connect`: honors `recording_enabled`, writes into the fixed
+/// recordings dir, and stamps the file with profile name + timestamp. `None`
+/// when recording is off.
 fn recording_path_for(
     state: &AppState,
     profile_name: &str,
@@ -1100,16 +1101,7 @@ fn recording_path_for(
     if !enabled {
         return Ok(None);
     }
-    let dir_str = crate::db::settings::get(&state.db, "recording_dir")?
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            dirs::document_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("rssh-recordings")
-                .to_string_lossy()
-                .into_owned()
-        });
-    let dir = std::path::PathBuf::from(&dir_str);
+    let dir = crate::commands::settings::recording_dir(state);
     std::fs::create_dir_all(&dir).ok();
     // Reduce the user-controlled profile name to a safe filename component:
     // neutralize separators and dots so it can't inject `..` or extra path

@@ -118,7 +118,7 @@ pub fn list_recordings(state: State<AppState>) -> AppResult<Vec<String>> {
 
 /// Transport-agnostic body shared by the Tauri command and the headless server.
 pub fn list_recordings_impl(state: &AppState) -> AppResult<Vec<String>> {
-    let dir = recording_dir(state)?;
+    let dir = recording_dir(state);
     if !dir.exists() {
         return Ok(vec![]);
     }
@@ -156,7 +156,7 @@ pub fn read_recording_impl(state: &AppState, name: String) -> AppResult<String> 
             serde_json::json!({ "name": name }),
         ));
     }
-    let path = recording_dir(state)?.join(&name);
+    let path = recording_dir(state).join(&name);
     std::fs::read_to_string(&path).map_err(|e| {
         AppError::other(
             "settings_read_failed",
@@ -165,17 +165,13 @@ pub fn read_recording_impl(state: &AppState, name: String) -> AppResult<String> 
     })
 }
 
-fn recording_dir(state: &AppState) -> AppResult<std::path::PathBuf> {
-    let dir_str = crate::db::settings::get(&state.db, "recording_dir")?
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            dirs::document_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("rssh-recordings")
-                .to_string_lossy()
-                .into_owned()
-        });
-    Ok(std::path::PathBuf::from(dir_str))
+/// Fixed recordings directory: `<data_dir>/recordings` (`~/.rssh/recordings` on
+/// desktop, the app data dir on Android). Not user-configurable — every write
+/// path (`ssh_connect`, headless `recording_path_for`) and read path
+/// (`list_recordings`, `read_recording`) resolves here, so they can never
+/// disagree on where a `.cast` file lives.
+pub fn recording_dir(state: &AppState) -> std::path::PathBuf {
+    state.data_dir.join("recordings")
 }
 
 #[cfg(test)]

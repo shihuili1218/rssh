@@ -805,8 +805,6 @@ const en = {
   // Recording
   "recording.enable": "ENABLE RECORDING",
   "recording.enable_desc": "Automatically record SSH sessions as Asciinema v2 (.cast) files.",
-  "recording.save_dir": "Save Directory",
-  "recording.save_dir_hint": "Leave empty to use the default directory",
   "recording.list_title": "Recordings",
   "recording.playback": "Playback",
   // Playback

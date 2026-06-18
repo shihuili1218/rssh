@@ -60,16 +60,7 @@ pub async fn ssh_connect(
         .map(|v| v == "true")
         .unwrap_or(false);
     let recording_path = if recording_enabled {
-        let dir_str = crate::db::settings::get(&state.db, "recording_dir")?
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| {
-                dirs::document_dir()
-                    .unwrap_or_else(|| std::path::PathBuf::from("."))
-                    .join("rssh-recordings")
-                    .to_string_lossy()
-                    .into_owned()
-            });
-        let dir = std::path::PathBuf::from(&dir_str);
+        let dir = crate::commands::settings::recording_dir(&state);
         std::fs::create_dir_all(&dir).ok();
         let name = format!(
             "{}_{}.cast",
