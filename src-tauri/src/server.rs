@@ -1087,34 +1087,6 @@ fn headless_host(
     }
 }
 
-/// Compute the asciicast recording path for a new SSH session, mirroring the
-/// desktop `ssh_connect`: honors `recording_enabled`, writes into the fixed
-/// recordings dir, and stamps the file with profile name + timestamp. `None`
-/// when recording is off.
-fn recording_path_for(
-    state: &AppState,
-    profile_name: &str,
-) -> AppResult<Option<std::path::PathBuf>> {
-    let enabled = crate::db::settings::get(&state.db, "recording_enabled")?
-        .map(|v| v == "true")
-        .unwrap_or(false);
-    if !enabled {
-        return Ok(None);
-    }
-    let dir = crate::commands::settings::recording_dir(state);
-    std::fs::create_dir_all(&dir).ok();
-    // Reduce the user-controlled profile name to a safe filename component:
-    // neutralize separators and dots so it can't inject `..` or extra path
-    // segments and escape the recordings dir.
-    let safe = profile_name.replace(['/', '\\', '.', ' '], "_");
-    let name = format!(
-        "{}_{}.cast",
-        safe,
-        chrono::Local::now().format("%Y%m%d_%H%M%S")
-    );
-    Ok(Some(dir.join(name)))
-}
-
 /// Server-side `ssh_connect` — a faithful copy of the Tauri command body, but
 /// the engine emits through a `Host::Headless` sink (ws push) and we skip the
 /// per-window session bookkeeping (there are no windows).
@@ -1165,7 +1137,8 @@ async fn ssh_connect(
     let effective_log_id = if verbose_log { log_session_id } else { None };
     let known_hosts_path = crate::ssh::known_hosts::path_for(&state.data_dir);
     let init_command = profile.init_command.clone();
-    let recording_path = recording_path_for(state, &profile.name).map_err(err_value)?;
+    let recording_path =
+        crate::commands::settings::recording_path_for(state, &profile.name).map_err(err_value)?;
     let emitter = headless_host(state, tx);
 
     let result = client::run_blocking_ssh(move || async move {

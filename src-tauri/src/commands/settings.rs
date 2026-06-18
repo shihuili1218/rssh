@@ -166,17 +166,67 @@ pub fn read_recording_impl(state: &AppState, name: String) -> AppResult<String> 
 }
 
 /// Fixed recordings directory: `<data_dir>/recordings` (`~/.rssh/recordings` on
-/// desktop, the app data dir on Android). Not user-configurable — every write
-/// path (`ssh_connect`, headless `recording_path_for`) and read path
-/// (`list_recordings`, `read_recording`) resolves here, so they can never
-/// disagree on where a `.cast` file lives.
+/// desktop, the app data dir on Android). Not user-configurable — writes go
+/// through `recording_path_for` and reads (`list_recordings`, `read_recording`)
+/// resolve here, so they can never disagree on where a `.cast` file lives.
 pub fn recording_dir(state: &AppState) -> std::path::PathBuf {
     state.data_dir.join("recordings")
 }
 
+/// Reduce a user-controlled profile name to a safe filename component:
+/// neutralize separators and dots so it can't inject `..` or extra path
+/// segments and escape the recordings dir. The write-side mirror of
+/// `is_safe_recording_name`.
+fn safe_recording_stem(profile_name: &str) -> String {
+    profile_name.replace(['/', '\\', '.', ' '], "_")
+}
+
+/// Best-effort: ensure the recordings dir exists and is owner-only on Unix.
+/// Recordings can hold sensitive terminal output; a 0755 dir (default umask
+/// 022) under a 0755 home would leave them readable by other local users. We
+/// reapply 0700 each call (matching `secure_key_tmpdir`) in case it was
+/// loosened. Errors are swallowed — recording is best-effort end to end
+/// (`Recorder::new(...).ok()`), so a dir hiccup must never abort a connection.
+fn ensure_recordings_dir(dir: &std::path::Path) {
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+}
+
+/// Compute the asciicast recording path for a new SSH session: honors
+/// `recording_enabled`, ensures the fixed recordings dir exists (owner-only on
+/// Unix), and stamps the file with a path-safe profile name + timestamp.
+/// `None` when recording is disabled. The single source of truth for where a
+/// new `.cast` is born — both desktop `ssh_connect` and the headless server
+/// route through here, so they can never build the path differently.
+pub fn recording_path_for(
+    state: &AppState,
+    profile_name: &str,
+) -> AppResult<Option<std::path::PathBuf>> {
+    let enabled = crate::db::settings::get(&state.db, "recording_enabled")?
+        .map(|v| v == "true")
+        .unwrap_or(false);
+    if !enabled {
+        return Ok(None);
+    }
+    let dir = recording_dir(state);
+    ensure_recordings_dir(&dir);
+    let name = format!(
+        "{}_{}.cast",
+        safe_recording_stem(profile_name),
+        chrono::Local::now().format("%Y%m%d_%H%M%S")
+    );
+    Ok(Some(dir.join(name)))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_safe_recording_name;
+    use super::{is_safe_recording_name, safe_recording_stem};
 
     #[test]
     fn accepts_bare_recording_filenames() {
@@ -200,6 +250,24 @@ mod tests {
             "/abs.cast",
         ] {
             assert!(!is_safe_recording_name(bad), "should reject {bad:?}");
+        }
+    }
+
+    #[test]
+    fn safe_recording_stem_stays_within_recordings_dir() {
+        // Whatever a malicious profile name throws at it, the sanitized stem
+        // must still pass the read-side guard — i.e. it never grows a path
+        // separator or `..` that would escape the recordings dir.
+        for evil in [
+            "../../etc/passwd",
+            "..",
+            "sub/dir",
+            "back\\slash",
+            "with space",
+            "normal-name",
+        ] {
+            let name = format!("{}.cast", safe_recording_stem(evil));
+            assert!(is_safe_recording_name(&name), "stem escaped for {evil:?}: {name:?}");
         }
     }
 }

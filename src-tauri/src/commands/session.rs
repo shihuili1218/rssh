@@ -56,21 +56,7 @@ pub async fn ssh_connect(
     let timeout_secs: u64 = crate::db::settings::get(&state.db, "connect_timeout")?
         .and_then(|v| v.parse().ok())
         .unwrap_or(crate::ssh::client::DEFAULT_CONNECT_TIMEOUT);
-    let recording_enabled = crate::db::settings::get(&state.db, "recording_enabled")?
-        .map(|v| v == "true")
-        .unwrap_or(false);
-    let recording_path = if recording_enabled {
-        let dir = crate::commands::settings::recording_dir(&state);
-        std::fs::create_dir_all(&dir).ok();
-        let name = format!(
-            "{}_{}.cast",
-            profile.name.replace(' ', "_"),
-            chrono::Local::now().format("%Y%m%d_%H%M%S")
-        );
-        Some(dir.join(name))
-    } else {
-        None
-    };
+    let recording_path = crate::commands::settings::recording_path_for(&state, &profile.name)?;
 
     // Only pass log_session_id if verbose logging is enabled
     let effective_log_id = if verbose_log { log_session_id } else { None };

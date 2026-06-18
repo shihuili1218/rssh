@@ -20,7 +20,18 @@ pub struct Recorder {
 
 impl Recorder {
     pub fn new(path: PathBuf, cols: u32, rows: u32) -> AppResult<Self> {
-        let file = File::create(&path)?;
+        // Recordings can contain sensitive terminal output. Create the file
+        // 0600 on Unix so it's owner-only from birth (no 0644→chmod TOCTOU),
+        // matching how `master.key` is written. The recordings dir is already
+        // 0700; this is defense in depth.
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let file = opts.open(&path)?;
         let mut writer = BufWriter::new(file);
 
         let header = CastHeader {
