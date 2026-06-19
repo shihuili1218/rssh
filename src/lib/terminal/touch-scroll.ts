@@ -33,7 +33,11 @@ export function accumulateScroll(
 }
 
 // Tunables (device-feel; adjust on real hardware). Velocity is px/ms.
-const TAKEOVER_PX = 8;    // travel past this before we claim the gesture as a scroll
+// Keep TAKEOVER_PX == the soft-keyboard handler's moveSlopPx (12, in TerminalPane)
+// AND match its boundary: we claim only when travel EXCEEDS it (the check below uses
+// `<=`), exactly when that handler flips to "moved" (hypot > slop). Otherwise a small
+// drag could scroll yet still pop the keyboard on release.
+const TAKEOVER_PX = 12;   // claim the gesture as a scroll once travel exceeds this
 const FLING_MIN_V = 0.12; // release faster than this (~120 px/s) starts a fling
 const STOP_V = 0.02;      // fling ends once it decays below this (~20 px/s)
 const FRICTION = 0.94;    // per-60fps-frame velocity decay (frame-rate normalized)
@@ -53,19 +57,25 @@ export function setupTouchScroll(host: HTMLElement, terminal: Terminal): () => v
   let startY = 0;
   let lastY = 0;
   let remainder = 0;   // sub-row px carried across moves AND into the fling
+  let rowH = 0;        // px, sampled once per gesture (see measureRowHeight)
   let active = false;  // gesture claimed as a scroll (finger down)
+  let ignore = false;  // gesture disqualified (multi-touch) until all fingers lift
   let velocity = 0;    // px/ms, recent-biased; sign = drag direction (dy)
   let lastMoveTime = 0;
   let inertiaRaf = 0;  // rAF handle, 0 = no fling running (invariant I1)
 
-  function rowHeightPx(): number {
+  // Row height is constant within a gesture (font can't change mid-drag), so sample
+  // it ONCE at takeover, not per frame: reading offsetHeight while xterm is repainting
+  // rows forces a synchronous layout reflow on every touchmove/fling frame (layout
+  // thrash). Cached in rowH.
+  function measureRowHeight(): number {
     const row = host.querySelector(".xterm-rows")?.firstElementChild as HTMLElement | null;
     return row?.offsetHeight ?? 0;
   }
 
   // Finger down (dy>0) = reveal earlier output = scroll up → negate.
   function scrollByPx(px: number) {
-    const r = accumulateScroll(remainder, px, rowHeightPx());
+    const r = accumulateScroll(remainder, px, rowH);
     remainder = r.remainder;
     if (r.lines !== 0) terminal.scrollLines(-r.lines);
   }
@@ -90,19 +100,30 @@ export function setupTouchScroll(host: HTMLElement, terminal: Terminal): () => v
     cancelInertia();          // a new touch grabs and stops the glide (I2)
     active = false;
     velocity = 0;
-    if (e.touches.length !== 1) return; // ignore multi-touch (pinch/zoom)
+    // Only a clean single-finger start tracks. A finger added mid-gesture (pinch)
+    // disqualifies the gesture until ALL fingers lift and a fresh single touch
+    // begins — never scroll from stale coordinates.
+    ignore = e.touches.length !== 1;
+    if (ignore) return;
     startY = lastY = e.touches[0].clientY;
+    lastMoveTime = performance.now();
     remainder = 0;
   }
 
   function onTouchMove(e: TouchEvent) {
-    if (e.touches.length !== 1) return;
+    if (ignore) return;
+    if (e.touches.length !== 1) {  // a second finger joined → abandon this scroll
+      ignore = true;
+      active = false;
+      velocity = 0;
+      return;
+    }
     const y = e.touches[0].clientY;
     if (!active) {
-      if (Math.abs(y - startY) < TAKEOVER_PX) return; // still ambiguous: tap/long-press/drag
-      active = true;
-      lastY = y;                       // start from takeover point so the threshold px don't jump
-      lastMoveTime = performance.now();
+      if (Math.abs(y - startY) <= TAKEOVER_PX) return; // dead zone: tap / long-press
+      active = true; // claim it; lastY & lastMoveTime stay at the touch start, so THIS
+                     // frame scrolls the full travel and times velocity honestly
+      rowH = measureRowHeight(); // sample once; reused for this drag + its fling
     }
     // Claimed: block native selection/scroll so it can't fight us.
     e.preventDefault();
@@ -115,9 +136,12 @@ export function setupTouchScroll(host: HTMLElement, terminal: Terminal): () => v
     scrollByPx(dy);
   }
 
-  function onTouchEnd() {
+  function onTouchEnd(e: TouchEvent) {
     if (!active) return;      // wasn't a scroll drag → nothing to fling
     active = false;
+    // Other fingers still down (e.g. a 2nd finger that landed off-host, so we never
+    // saw its touchstart) → not a clean single-finger release, don't fling.
+    if (e.touches.length > 0) return;
     // Paused before lifting, or barely moving → no fling (native behavior).
     if (performance.now() - lastMoveTime > PAUSE_MS) return;
     if (Math.abs(velocity) < FLING_MIN_V) return;

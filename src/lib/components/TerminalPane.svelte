@@ -1137,7 +1137,7 @@
             if (helper) {
                 mobileKeyboardCleanup = setupMobileSoftKeyboard(helper);
             }
-            // 与上面的 pointer 键盘机正交：靠"位移超阈值才接管"避开点按(弹键盘)和
+            // 与上面的 pointer 键盘状态机正交：靠"位移超阈值才接管"避开点按(弹键盘)和
             // 长按(选字)。代价：长按选中后再拖动会变成滚动而非扩展选区——移动端有
             // 块复制 / 发 AI 取文，这个取舍可接受。
             mobileTouchScrollCleanup = setupTouchScroll(containerEl, terminal);
