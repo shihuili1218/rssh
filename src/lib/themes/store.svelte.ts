@@ -147,7 +147,12 @@ export function currentTermTheme(): PaletteTerm {
   } else {
     term = ui.term;
   }
-  return _termBgFollowsTheme ? { ...term, background: ui.ui.bg } : term;
+  const t = _termBgFollowsTheme ? { ...term, background: ui.ui.bg } : term;
+  // We set overviewRuler.width on the terminals only to narrow the scrollbar;
+  // that also makes xterm paint a 1px overview-ruler border (defaults to the
+  // foreground colour → a white vertical line by the scrollbar). We don't use
+  // the ruler, so pin the border transparent.
+  return { ...t, overviewRulerBorder: "rgba(0,0,0,0)" };
 }
 
 export function termPaletteRef(): TermPaletteRef { return _termRef; }

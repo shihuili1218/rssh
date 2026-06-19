@@ -48,6 +48,10 @@ export interface PaletteUi {
 export interface PaletteTerm {
   background: string;
   foreground: string;
+  /** Colour of xterm's 1px overview-ruler border (the vertical line beside the
+   *  scrollbar). We enable the ruler only to size the scrollbar, so we pin this
+   *  transparent in currentTermTheme() — see store.svelte.ts. */
+  overviewRulerBorder?: string;
   cursor?: string;
   selectionBackground?: string;
   black?: string;
