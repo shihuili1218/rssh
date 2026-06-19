@@ -56,6 +56,7 @@ const zh: Messages = {
   "downloads.status.done": "完成",
   "downloads.status.failed": "失败",
   "downloads.status.cancelled": "已取消",
+  "home.new_profile": "+ 新建 SSH 连接",
   "tab.context.search": "搜索",
   "tab.context.snippets": "命令片段",
   "tab.context.sftp": "SFTP 文件浏览",

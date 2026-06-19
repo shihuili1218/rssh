@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { t } from "../i18n/index.svelte.ts";
   import * as app from "../stores/app.svelte.ts";
   import type { Profile, Credential, Forward, Group, SerialProfile } from "../stores/app.svelte.ts";
 
@@ -241,6 +242,9 @@
   <div class="home-header">
     <h1 class="logo">RSSH ㋡</h1>
     <input class="search-input" type="text" bind:value={query} placeholder="Search..." />
+    <button class="btn btn-accent btn-sm" onclick={() => app.navigate("profile-edit")}>
+      {t("home.new_profile")}
+    </button>
   </div>
 
   {#if groupedProfiles.length > 0}

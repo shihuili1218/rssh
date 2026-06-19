@@ -54,6 +54,7 @@ const en = {
   "downloads.status.done": "Done",
   "downloads.status.failed": "Failed",
   "downloads.status.cancelled": "Cancelled",
+  "home.new_profile": "+ New SSH Connection",
   "tab.context.search": "Search",
   "tab.context.snippets": "Snippets",
   "tab.context.sftp": "SFTP Browser",
