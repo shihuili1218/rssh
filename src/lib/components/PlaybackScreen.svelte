@@ -5,6 +5,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
   import * as theme from "../themes/store.svelte.ts";
+  import { setupTouchScroll } from "../terminal/touch-scroll.ts";
   import { t, errMsg } from "../i18n/index.svelte.ts";
 
   let containerEl: HTMLDivElement;
@@ -19,6 +20,7 @@
   let elapsed = $state(0);
   let timerId: ReturnType<typeof setTimeout> | null = null;
   let unsubscribeTheme: (() => void) | null = null;
+  let touchScrollCleanup: (() => void) | null = null;
 
   const fileName = $derived(app.editingId() ?? "");
   let progress = $derived(totalDuration > 0 ? (elapsed / totalDuration) * 100 : 0);
@@ -38,6 +40,10 @@
     terminal.open(containerEl);
     fitAddon.fit();
 
+    // Mobile: one-finger drag scrolls the playback scrollback (xterm wires no
+    // touch scroll itself). Desktop uses the wheel, so gate on isMobile.
+    if (app.isMobile) touchScrollCleanup = setupTouchScroll(containerEl, terminal);
+
     if (fileName) await loadCast(fileName);
     window.addEventListener("resize", handleResize);
   });
@@ -47,6 +53,7 @@
   onDestroy(() => {
     stop();
     unsubscribeTheme?.();
+    touchScrollCleanup?.();
     window.removeEventListener("resize", handleResize);
     terminal?.dispose();
   });
