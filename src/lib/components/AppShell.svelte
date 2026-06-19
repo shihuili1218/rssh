@@ -17,6 +17,7 @@
     import TabContextMenu, {type CtxMenuItem} from "./TabContextMenu.svelte";
     import MenuButton, {type NavItem, navItemKey} from "./MenuButton.svelte";
     import StripBar from "./StripBar.svelte";
+    import { rippleWidth } from "./sidebar-ripple.ts";
     import ChatPanel from "../ai/ChatPanel.svelte";
     import * as ai from "../ai/store.svelte.ts";
     import type { AiTargetKind } from "../ai/types.ts";
@@ -31,7 +32,6 @@
     let tabCycling = $state(false);
     let profiles = $state<Profile[]>([]);
     let groups = $state<Group[]>([]);
-    let sidebarTimer = 0;
     let menuCtx = $state<{ x: number; y: number; tab: Tab } | null>(null);
     let pinnedMenu = $state<{ x: number; y: number } | null>(null);
     let pinned = $state(false);
@@ -111,7 +111,6 @@
                     const dir = e.shiftKey ? -1 : 1;
                     if (!tabCycling) {
                         tabCycling = true;
-                        drawerOpen = true;
                         const idx = navItems.findIndex(item =>
                             item.kind === "tab" ? item.tab.id === app.activeTabId() && !app.settingsActive()
                             : item.kind === "settings" ? app.settingsActive()
@@ -239,10 +238,23 @@
     }
 
     $effect(() => {
-        if (drawerOpen) {
+        // Desktop no longer opens a drawer; refresh pinned profiles when the
+        // touch drawer opens OR when Ctrl+Tab cycling begins.
+        if (drawerOpen || tabCycling) {
             app.loadProfiles().then(p => profiles = p);
             app.loadGroups().then(g => groups = g);
         }
+    });
+
+    // Keep the focused row in view while cycling a long, scrollable tab list.
+    $effect(() => {
+        const i = focusIdx;        // track focusIdx
+        if (!tabCycling) return;   // track tabCycling
+        void i;
+        requestAnimationFrame(() => {
+            document.querySelector(".sidebar .sb-item.focused")
+                ?.scrollIntoView({ block: "nearest" });
+        });
     });
 
     $effect(() => {
@@ -437,6 +449,16 @@
     });
     let navItems = $derived<NavItem[]>([...navSections.header, ...navSections.middle, ...navSections.footer]);
 
+    // Ctrl+Tab ripple: a row's width falls off with its distance from the
+    // focused row. null when not cycling → MenuButton's CSS (:hover / .fill)
+    // governs the width instead. See sidebar-ripple.ts.
+    function rowWidth(item: NavItem): number | null {
+        if (!tabCycling) return null;
+        const key = navItemKey(item);
+        const idx = navItems.findIndex(n => navItemKey(n) === key);
+        return idx < 0 ? null : rippleWidth(Math.abs(idx - focusIdx));
+    }
+
     function isFocusedItem(item: NavItem): boolean {
         const f = navItems[focusIdx];
         if (!f || f.kind !== item.kind) return false;
@@ -508,16 +530,6 @@
         drawerOpen = false;
         focusIdx = -1;
         tabCycling = false;
-    }
-
-    function enterSidebar(e: MouseEvent) {
-        if (e.buttons) return;
-        clearTimeout(sidebarTimer);
-        if (!drawerOpen) openDrawer();
-    }
-
-    function leaveSidebar() {
-        sidebarTimer = window.setTimeout(closeDrawer, 200);
     }
 
     function selectTab(id: string) {
@@ -855,17 +867,19 @@
         <div class="backdrop" onclick={closeDrawer} role="presentation"></div>
     {/if}
 
-    <!-- Sidebar: 40px collapsed ↔ 260px expanded. Position = left | right. -->
+    <!-- Sidebar: 40px rail; each row expands on hover (cliff) or Ctrl+Tab
+         (ripple). Touch swipe opens the full drawer. Position = left | right. -->
     {#if sbPos === "left" || sbPos === "right"}
     <div class="sidebar-rail">
     <nav
         class="sidebar" class:open={drawerOpen} class:right={sbPos === "right"}
-        onmouseenter={enterSidebar} onmouseleave={leaveSidebar}
     >
         <div class="sidebar-inner">
             {#each navSections.header as item (navItemKey(item))}
                 <MenuButton
                     {item}
+                    width={rowWidth(item)}
+                    fill={drawerOpen}
                     active={isActiveItem(item)}
                     focused={isFocusedItem(item)}
                     pinnedState={pinned}
@@ -878,6 +892,8 @@
                     {@const tab = item.kind === "tab" ? item.tab : null}
                     <MenuButton
                         {item}
+                        width={rowWidth(item)}
+                        fill={drawerOpen}
                         active={isActiveItem(item)}
                         focused={isFocusedItem(item)}
                         dragOver={tab !== null && dropTabId === tab.id && dragTabId !== tab.id}
@@ -897,6 +913,8 @@
                 {#each navSections.footer as item (navItemKey(item))}
                     <MenuButton
                         {item}
+                        width={rowWidth(item)}
+                        fill={drawerOpen}
                         active={isActiveItem(item)}
                         focused={isFocusedItem(item)}
                         pinnedState={pinned}
@@ -1028,40 +1046,45 @@
     .shell.sb-top    { flex-direction: column;         --sb-top:    44px; }
     .shell.sb-bottom { flex-direction: column-reverse; --sb-bottom: 44px; }
 
-    /* ── Sidebar: rail (flow footprint) + overlay (hover-expanding panel) ── */
-    /* The rail is a 40px flex item that reserves the collapsed sidebar's space
-       in normal flow, so content sits beside it and can never overlap it. */
+    /* ── Sidebar: rail (40px flow footprint) + transparent overlay ── */
+    /* The rail is a 40px flex item that reserves the sidebar's space in normal
+       flow, so content sits beside it and can never overlap it. */
     .sidebar-rail {
         flex: 0 0 40px;
         position: relative;
         z-index: 200;
+        background: var(--bg);     /* the persistent 40px rail strip */
     }
 
-    /* The panel itself is absolute within the rail: 40px collapsed, 260px on
-       hover. Absolute so the expansion floats over content instead of pushing
-       it — preserving the original drawer feel without the viewport-fixed hack. */
+    /* Overlay spanning the full expanded width (260px), transparent and
+       click-through (pointer-events:none); only the rows opt back in, so the
+       gap beside a collapsed row passes clicks through to the content below.
+       The 40px rail look comes from .sidebar-rail's background + .content's
+       divider border. No whole-panel hover-expansion on desktop anymore —
+       each row expands on its own (MenuButton). */
     .sidebar {
         position: absolute;
         left: 0;
         top: 0;
-        width: 40px;
-        height: 100%;
-        background: var(--bg);
-        border-right: 1px solid var(--divider);
-        overflow: hidden;
-        transition: width 0.15s ease;
-    }
-
-    .sidebar.right {
-        left: auto;
-        right: 0;
-        border-right: none;
-        border-left: 1px solid var(--divider);
-    }
-
-    .sidebar.open {
         width: 260px;
+        height: 100%;
+        overflow: hidden;
+        pointer-events: none;
+    }
+
+    .sidebar.right { left: auto; right: 0; }
+
+    /* Right sidebar: rows hug the right edge and grow leftward. */
+    .sidebar.right .sidebar-inner,
+    .sidebar.right .sidebar-list,
+    .sidebar.right .sidebar-footer { align-items: flex-end; }
+
+    /* Touch drawer (mobile / touch swipe sets drawerOpen): the overlay turns
+       into a solid, interactive panel; rows fill it via MenuButton's .fill. */
+    .sidebar.open {
+        background: var(--bg);
         box-shadow: var(--raised);
+        pointer-events: auto;
     }
 
 
@@ -1072,28 +1095,38 @@
         height: 100%;
         display: flex;
         flex-direction: column;
-        padding: 6px;
+        padding: 6px 0;            /* no horizontal pad: rows sit flush to the rail */
         gap: 2px;
     }
 
+    /* Section separators: a 40px-wide line painted via background (not a
+       full-width border) so it stays inside the rail and never spills across
+       the content under the transparent 260px overlay. */
     .sidebar-list {
         padding-top: 2px;
-        border-top: 1px solid var(--divider);
         flex: 1;
         overflow-y: auto;
         display: flex;
         flex-direction: column;
         gap: 2px;
+        background: linear-gradient(var(--divider), var(--divider)) no-repeat top left / 40px 1px;
     }
 
     .sidebar-footer {
-        border-top: 1px solid var(--divider);
         padding-top: 6px;
         margin-top: 2px;
         display: flex;
         flex-direction: column;
         gap: 2px;
+        background: linear-gradient(var(--divider), var(--divider)) no-repeat top left / 40px 1px;
     }
+
+    .sidebar.right .sidebar-list,
+    .sidebar.right .sidebar-footer { background-position: top right; }
+
+    /* Touch drawer: rows fill the panel, so separators span it full-width too. */
+    .sidebar.open .sidebar-list,
+    .sidebar.open .sidebar-footer { background-size: 100% 1px; }
 
     /* ── Backdrop ── */
     .backdrop {
@@ -1112,6 +1145,10 @@
         min-width: 0;
         min-height: 0;
     }
+    /* Rail/content divider. Lives on .content (not the overlay) so a collapsed
+       row never paints over it; an expanded row floats above it, as intended. */
+    .shell.sb-left  .content { border-left: 1px solid var(--divider); }
+    .shell.sb-right .content { border-right: 1px solid var(--divider); }
     /* AI 在左：flex row 翻转，模板顺序不变，无须状态机 */
     .content.ai-left { flex-direction: row-reverse; }
 

@@ -30,6 +30,11 @@
         groupColor?: string | null;
         showClose?: boolean;
         horizontal?: boolean;
+        /** Vertical sidebar only: inline width override during Ctrl+Tab ripple
+         *  (null → CSS :hover / .fill governs). Ignored in horizontal mode. */
+        width?: number | null;
+        /** Vertical sidebar only: touch drawer open → row fills full width. */
+        fill?: boolean;
         badge?: string | null;
         redDot?: boolean;
         onActivate: (e?: MouseEvent) => void;
@@ -49,6 +54,8 @@
         groupColor = null,
         showClose = false,
         horizontal = false,
+        width = null,
+        fill = false,
         badge = null,
         redDot = false,
         onActivate,
@@ -97,6 +104,17 @@
     // In horizontal mode, static function entries show icon; content items
     // (tabs, pinned profiles) show the user-supplied label.
     let iconOnly = $derived(horizontal && item.kind !== "tab" && item.kind !== "pin");
+
+    // Merge the two inline-style overrides into one string: the vertical ripple
+    // width and the horizontal group-color accent never co-occur, but both ride
+    // the same `style` attribute.
+    let widthStyle = $derived(!horizontal && width != null ? `width: ${width}px;` : "");
+    let accentStyle = $derived(
+        horizontal && showActive && groupColor
+            ? `--accent: ${groupColor}; --accent-soft: color-mix(in srgb, ${groupColor} 15%, transparent);`
+            : ""
+    );
+    let styleAttr = $derived(`${widthStyle}${accentStyle}` || null);
 </script>
 
 <button
@@ -107,6 +125,7 @@
     class:pinned={tinted}
     class:horizontal
     class:icon-only={iconOnly}
+    class:fill
     draggable={draggable ? "true" : undefined}
     onclick={(e) => onActivate(e)}
     ondragstart={onDragStart}
@@ -115,7 +134,7 @@
     ondragend={onDragEnd}
     title={label}
     data-transfers-trigger={item.kind === "downloads" ? "true" : undefined}
-    style={horizontal && showActive && groupColor ? `--accent: ${groupColor}; --accent-soft: color-mix(in srgb, ${groupColor} 15%, transparent)` : null}
+    style={styleAttr}
 >
     <span class="sb-icon-wrap">
         <span class="sb-icon" style={groupColor ? `background: ${groupColor}; color: white` : ''}>{icon}</span>
@@ -155,6 +174,27 @@
         text-align: left;
         flex-shrink: 0;
     }
+
+    /* ── Vertical sidebar (AppShell): 40px rail ↔ per-row expansion ──
+       Each row owns its width. Hover = cliff (only this row grows). Ctrl+Tab
+       sets an inline width (ripple) that overrides these. Touch drawer adds
+       .fill. overflow:hidden clips the label + close button beyond the
+       collapsed 40px so they neither show nor catch clicks until the row
+       expands. Placed BEFORE the generic :hover/.active rules so those win the
+       equal-specificity background/color ties, while the width rules here keep
+       their :not edge. */
+    .sb-item:not(.horizontal) {
+        width: 40px;
+        padding: 0 9px;            /* centers the 22px icon in the 40px rail */
+        overflow: hidden;
+        pointer-events: auto;      /* opt back in; the overlay around us is none */
+        background: var(--bg);     /* solid so cycle rows read over the terminal */
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
+        transition: width 400ms cubic-bezier(0.34, 1.56, 0.64, 1),
+                    background 0.15s, color 0.15s;
+    }
+    .sb-item:not(.horizontal):hover { width: 240px; }   /* cliff: only the hovered row */
+    .sb-item:not(.horizontal).fill  { width: 100%; }     /* touch drawer: every row full */
 
     .sb-item:hover, .sb-item.focused {
         background: var(--surface);
