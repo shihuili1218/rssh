@@ -453,7 +453,10 @@
     // focused row. null when not cycling → MenuButton's CSS (:hover / .fill)
     // governs the width instead. See sidebar-ripple.ts.
     function rowWidth(item: NavItem): number | null {
-        if (!tabCycling) return null;
+        // Drawer wins over ripple: a touch device with a keyboard could have the
+        // swipe drawer open AND hit Ctrl+Tab. Returning null lets MenuButton's
+        // .fill keep rows full-width; the focus ring still tracks the cycle.
+        if (!tabCycling || drawerOpen) return null;
         const key = navItemKey(item);
         const idx = navItems.findIndex(n => navItemKey(n) === key);
         return idx < 0 ? null : rippleWidth(Math.abs(idx - focusIdx));
@@ -1106,11 +1109,17 @@
         padding-top: 2px;
         flex: 1;
         overflow-y: auto;
+        /* Scrolls via wheel/drag, but the bar is hidden — the overlay is 260px
+           wide and transparent, so a visible bar would float over the terminal.
+           Same treatment as StripBar's horizontal overflow. */
+        scrollbar-width: none;
+        -ms-overflow-style: none;
         display: flex;
         flex-direction: column;
         gap: 2px;
         background: linear-gradient(var(--divider), var(--divider)) no-repeat top left / 40px 1px;
     }
+    .sidebar-list::-webkit-scrollbar { display: none; }
 
     .sidebar-footer {
         padding-top: 6px;

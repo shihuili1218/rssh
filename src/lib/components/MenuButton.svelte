@@ -115,6 +115,11 @@
             : ""
     );
     let styleAttr = $derived(`${widthStyle}${accentStyle}` || null);
+
+    // During Ctrl+Tab cycling the row carries an inline ripple width. Use that
+    // same signal to lift the row off the terminal (distinct surface + shadow)
+    // so non-focused rows don't blend into the same-colored background.
+    let rippling = $derived(!horizontal && width != null);
 </script>
 
 <button
@@ -126,6 +131,7 @@
     class:horizontal
     class:icon-only={iconOnly}
     class:fill
+    class:rippling
     draggable={draggable ? "true" : undefined}
     onclick={(e) => onActivate(e)}
     ondragstart={onDragStart}
@@ -195,6 +201,14 @@
     }
     .sb-item:not(.horizontal):hover { width: 240px; }   /* cliff: only the hovered row */
     .sb-item:not(.horizontal).fill  { width: 100%; }     /* touch drawer: every row full */
+    /* Ctrl+Tab ripple: lift rows off the same-colored terminal so the full
+       expanded silhouette (including non-focused rows) is legible. */
+    .sb-item:not(.horizontal).rippling {
+        background: var(--surface);
+        /*box-shadow: var(--raised);*/
+    }
+    /* Keep the active tab's accent tint visible during the ripple. */
+    .sb-item:not(.horizontal).rippling.active { background: var(--accent-soft); }
 
     .sb-item:hover, .sb-item.focused {
         background: var(--surface);
