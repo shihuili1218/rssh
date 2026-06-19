@@ -17,6 +17,7 @@
     import {createCommandBlockTracker, type CommandBlock, type CommandBlockTracker} from "../terminal/command-blocks.ts";
     import {createFoldStore, type FoldStore} from "../terminal/folds.ts";
     import {extractBlocksText} from "../terminal/block-content.ts";
+    import {accumulateScroll} from "../terminal/touch-scroll.ts";
     import {renderBlocksToBlob} from "../terminal/block-to-image.ts";
     import {inputNewline, normalizeIncoming, bytesToHex, parseHexInput, parseLoginScript, remapEditingKeys, normalizeOutgoing, type LoginStep} from "../terminal/serial-transforms.ts";
     import {compileHighlightRules, type CompiledHighlightRule} from "../terminal/highlight.ts";
@@ -438,6 +439,7 @@
     let reconnectDisposable: IDisposable | undefined;
     let resizeObs: ResizeObserver;
     let mobileKeyboardCleanup: (() => void) | undefined;
+    let mobileTouchScrollCleanup: (() => void) | undefined;
 
     const isLocal = $derived(tabType === "local");
     const isSsh = $derived(tabType === "ssh");
@@ -1080,6 +1082,65 @@
         };
     }
 
+    /** 移动端：手指竖向拖动 → 滚动 scrollback。xterm 6.0.0 把 VSCode 手势服务
+     *  vendor 进来却从不 addTarget()，触摸滚动是死代码——桌面有滚轮，移动端原来
+     *  什么滚动路径都没有。这里补上。
+     *
+     *  与 setupMobileSoftKeyboard 的 pointer 键盘机正交：靠"位移超阈值才接管"避开
+     *  点按(弹键盘)和长按(选字)。静止长按不动它 → 原生选字照常；只新增"拖动→滚动"。
+     *  代价：长按选中后再拖动会变成滚动而非扩展选区——移动端有块复制/发 AI 取文，
+     *  这个取舍可接受。 */
+    function setupTouchScroll(host: HTMLElement): () => void {
+        const TAKEOVER_PX = 8;   // 竖向位移超过它才判定为拖动滚动，低于则放行给点按/长按
+        let startY = 0;
+        let lastY = 0;
+        let remainder = 0;       // 不足一行的像素余数，跨 move 累积 → 跟手不丢精度
+        let active = false;      // 已接管为滚动
+
+        function rowHeightPx(): number {
+            const row = host.querySelector(".xterm-rows")?.firstElementChild as HTMLElement | null;
+            return row?.offsetHeight ?? 0;
+        }
+
+        function onTouchStart(e: TouchEvent) {
+            active = false;
+            if (e.touches.length !== 1) return;   // 多指(缩放等)不接管
+            startY = lastY = e.touches[0].clientY;
+            remainder = 0;
+        }
+
+        function onTouchMove(e: TouchEvent) {
+            if (e.touches.length !== 1) return;
+            const y = e.touches[0].clientY;
+            if (!active) {
+                if (Math.abs(y - startY) < TAKEOVER_PX) return;   // 还分不清点按/长按/拖动
+                active = true;
+                lastY = y;   // 从接管点起算，别把阈值那几像素也算进滚动 → 无突跳
+            }
+            // 接管后阻止原生选字/惯性，免得和我们的滚动打架
+            e.preventDefault();
+            const r = accumulateScroll(remainder, y - lastY, rowHeightPx());
+            lastY = y;
+            remainder = r.remainder;
+            // 手指下移(dy>0)=想看更早的输出=向上滚 → scrollLines 取负
+            if (r.lines !== 0) terminal.scrollLines(-r.lines);
+        }
+
+        function onTouchEnd() { active = false; }
+
+        host.addEventListener("touchstart", onTouchStart, { passive: true });
+        host.addEventListener("touchmove", onTouchMove, { passive: false });
+        host.addEventListener("touchend", onTouchEnd, { passive: true });
+        host.addEventListener("touchcancel", onTouchEnd, { passive: true });
+
+        return () => {
+            host.removeEventListener("touchstart", onTouchStart);
+            host.removeEventListener("touchmove", onTouchMove);
+            host.removeEventListener("touchend", onTouchEnd);
+            host.removeEventListener("touchcancel", onTouchEnd);
+        };
+    }
+
     let unsubscribeTheme: (() => void) | null = null;
     let unsubscribeFont: (() => void) | null = null;
 
@@ -1135,6 +1196,7 @@
             if (helper) {
                 mobileKeyboardCleanup = setupMobileSoftKeyboard(helper);
             }
+            mobileTouchScrollCleanup = setupTouchScroll(containerEl);
         }
 
         app.registerTerminalControls(tabId, {
@@ -1328,6 +1390,7 @@
         hostKeyInputDisposable?.dispose();
         resizeObs?.disconnect();
         mobileKeyboardCleanup?.();
+        mobileTouchScrollCleanup?.();
         foldStore?.dispose();
         blockTracker?.dispose();
         app.unregisterTerminalWriter();
