@@ -521,6 +521,28 @@ export async function setRightClickAction(v: RightClickAction) {
   await invoke("set_setting", { key: "right_click_action", value: v });
 }
 
+/* ─── Confirm before closing a tab ─── */
+// Off by default so existing close behavior is unchanged; only an explicit
+// "true" turns the confirmation on. Same encoding as copyOnSelect.
+let _confirmCloseTab = $state(false);
+let _cctLoaded = false;
+export function confirmCloseTab() { return _confirmCloseTab; }
+export async function loadConfirmCloseTab(): Promise<boolean> {
+  if (!_cctLoaded) {
+    _cctLoaded = true;
+    try {
+      const v = await invoke<string | null>("get_setting", { key: "confirm_close_tab" });
+      _confirmCloseTab = v === "true";
+    } catch {}
+  }
+  return _confirmCloseTab;
+}
+export async function setConfirmCloseTab(v: boolean) {
+  _confirmCloseTab = v;
+  _cctLoaded = true;
+  await invoke("set_setting", { key: "confirm_close_tab", value: String(v) });
+}
+
 /* ─── Per-tab search pulse (context menu → TerminalPane.openSearch) ─── */
 let _searchRequest = $state<{ tabId: string; n: number } | null>(null);
 export function searchRequest() { return _searchRequest; }

@@ -48,6 +48,20 @@
     let dragTabId = $state<string | null>(null);
     let dropTabId = $state<string | null>(null);
 
+    /* 关闭 tab 的唯一入口：所有关闭路径（快捷键 / 右键菜单 / tab 上的 × 按钮）都走这里。
+       开了二次确认就先弹窗存住待关的 tab，否则直接关。home tab 不可关，跟 closeTab 一致。 */
+    let closingTab = $state<Tab | null>(null);
+    function requestCloseTab(id: string) {
+        const tab = app.tabs().find(t => t.id === id);
+        if (!tab || tab.type === "home") return;
+        if (app.confirmCloseTab()) { closingTab = tab; return; }
+        app.closeTab(id);
+    }
+    function confirmCloseTab() {
+        if (closingTab) app.closeTab(closingTab.id);
+        closingTab = null;
+    }
+
     /* ── 全局快捷键声明表 ── */
     function shortcutsTable(): Shortcut[] {
         return [
@@ -59,7 +73,7 @@
                 handler: () => {
                     const id = app.activeTabId();
                     if (id === "home") return false;
-                    app.closeTab(id);
+                    requestCloseTab(id);
                 },
             },
             {
@@ -719,7 +733,7 @@
                 disabled: tab.type === "home",
                 onClick: () => cloneTab(tab),
             },
-            {label: t("tab.context.close"), shortcut: keymap.format("tab.close"), onClick: () => app.closeTab(tab.id)},
+            {label: t("tab.context.close"), shortcut: keymap.format("tab.close"), onClick: () => requestCloseTab(tab.id)},
         ]);
 
         // AI 排障入口（ssh/local/serial tab 才有，且需要已经连上 = 有 sessionId）
@@ -903,7 +917,7 @@
                         groupColor={tab ? tabGroupColor(tab) : null}
                         showClose={tab !== null}
                         onActivate={(e) => activateNavItem(item, e)}
-                        onClose={tab ? () => app.closeTab(tab.id) : undefined}
+                        onClose={tab ? () => requestCloseTab(tab.id) : undefined}
                         onDragStart={tab ? (e) => handleDragStart(e, tab.id) : undefined}
                         onDragOver={tab ? (e) => handleDragOver(e, tab.id) : undefined}
                         onDrop={tab ? (e) => handleDrop(e, tab.id) : undefined}
@@ -943,7 +957,7 @@
             isFocusedItem={isFocusedItem}
             groupColorOf={tabGroupColor}
             onActivate={activateNavItem}
-            onClose={(id) => app.closeTab(id)}
+            onClose={(id) => requestCloseTab(id)}
             onDragStart={handleDragStart}
             onDragOver={handleDragOver}
             onDrop={handleDrop}
@@ -1024,6 +1038,23 @@
          because .shell does not create a fixed-positioning containing block. -->
     {#if app.downloadsActive()}
         <DownloadsScreen/>
+    {/if}
+
+    <!-- 关闭 tab 二次确认。Tauri webview 不支持原生 confirm()，沿用 ChatPanel/AiSettings
+         同款自定义 modal。只有开启「关闭标签页前确认」后 requestCloseTab 才会挂起 closingTab。 -->
+    {#if closingTab}
+        <div class="dialog-backdrop" onclick={() => (closingTab = null)} role="presentation">
+            <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()}
+                 role="dialog" aria-modal="true"
+                 aria-labelledby="close-tab-title" aria-describedby="close-tab-body">
+                <h3 id="close-tab-title" class="dialog-title">{t("tab.close_confirm_title")}</h3>
+                <div id="close-tab-body" class="dialog-body">{t("tab.close_confirm_body", { label: closingTab.label })}</div>
+                <div class="btn-row">
+                    <button class="btn btn-sm" onclick={() => (closingTab = null)}>{t("common.cancel")}</button>
+                    <button class="btn btn-sm btn-primary" onclick={confirmCloseTab}>{t("tab.context.close")}</button>
+                </div>
+            </div>
+        </div>
     {/if}
 </div>
 
@@ -1272,4 +1303,40 @@
         opacity: 0.45;
     }
 
+    /* 关闭 tab 二次确认弹窗 —— 跟 ChatPanel 的 clear-context dialog 同款。 */
+    .dialog-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 500;
+        background: var(--overlay-strong);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .dialog {
+        background: var(--bg);
+        box-shadow: var(--raised);
+        border-radius: var(--radius);
+        padding: calc(24px * var(--density));
+        max-width: 420px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+    .dialog-title {
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--text);
+    }
+    .dialog-body {
+        font-size: 13px;
+        color: var(--text);
+        line-height: 1.55;
+    }
+    .btn-row {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        margin-top: 4px;
+    }
 </style>

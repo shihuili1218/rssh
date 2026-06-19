@@ -17,6 +17,7 @@
   let connectTimeout = $state(10);
   let commandBlockBar = $state(true);
   let copyOnSelect = $state(false);
+  let confirmCloseTab = $state(false);
   let rightClickAction = $state<app.RightClickAction>("menu");
   let rightClickOptions = $derived([
     { value: "menu", label: t("settings.shell.right_click_menu") },
@@ -43,6 +44,7 @@
     if (ts) connectTimeout = parseInt(ts, 10) || 10;
     commandBlockBar = await app.loadCommandBlockBar();
     copyOnSelect = await app.loadCopyOnSelect();
+    confirmCloseTab = await app.loadConfirmCloseTab();
     rightClickAction = await app.loadRightClickAction();
     // SFTP 并发上限：main.ts 启动时已读过持久值进 store，但用户可能在打开 Settings 前
     // 还没 await 完。再读一次确保 input 显示真实当前值。
@@ -98,6 +100,10 @@
 
   async function saveCopyOnSelect() {
     await app.setCopyOnSelect(copyOnSelect);
+  }
+
+  async function saveConfirmCloseTab() {
+    await app.setConfirmCloseTab(confirmCloseTab);
   }
 
   function saveRightClickAction(v: app.RightClickAction) {
@@ -185,9 +191,9 @@
     </label>
   </div>
 
-  <div class="section-label">{t("settings.shell.mouse")}</div>
-  <!-- 鼠标交互：选中即复制（开关）+ 右键动作（下拉）合在一张卡片，
-       "主行 + 分隔线 + 次行"结构，跟命令块卡片同款，避免两个控件割裂。 -->
+  <div class="section-label">{t("settings.shell.interaction")}</div>
+  <!-- 终端交互：选中即复制（开关）+ 关闭标签页确认（开关）+ 右键动作（下拉）合在一张卡片，
+       "行 + 分隔线 + 行"结构，跟命令块卡片同款，避免控件割裂。 -->
   <div class="card surface-raised mouse-card">
     <div class="cmd-block-head">
       <div class="cmd-block-head-body">
@@ -196,6 +202,19 @@
       </div>
       <label class="switch">
         <input type="checkbox" bind:checked={copyOnSelect} onchange={saveCopyOnSelect} />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="card-divider"></div>
+
+    <div class="cmd-block-head">
+      <div class="cmd-block-head-body">
+        <div class="cmd-block-title" class:on={confirmCloseTab} class:off={!confirmCloseTab}>{t("settings.shell.confirm_close_tab")}</div>
+        <div class="cmd-block-desc">{t("settings.shell.confirm_close_tab_desc")}</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" bind:checked={confirmCloseTab} onchange={saveConfirmCloseTab} />
         <span class="slider"></span>
       </label>
     </div>
