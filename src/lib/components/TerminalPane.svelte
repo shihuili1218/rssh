@@ -17,6 +17,7 @@
     import {createCommandBlockTracker, type CommandBlock, type CommandBlockTracker} from "../terminal/command-blocks.ts";
     import {createFoldStore, type FoldStore} from "../terminal/folds.ts";
     import {extractBlocksText} from "../terminal/block-content.ts";
+    import {setupTouchScroll} from "../terminal/touch-scroll.ts";
     import {renderBlocksToBlob} from "../terminal/block-to-image.ts";
     import {inputNewline, normalizeIncoming, bytesToHex, parseHexInput, parseLoginScript, remapEditingKeys, normalizeOutgoing, type LoginStep} from "../terminal/serial-transforms.ts";
     import {compileHighlightRules, type CompiledHighlightRule} from "../terminal/highlight.ts";
@@ -438,6 +439,7 @@
     let reconnectDisposable: IDisposable | undefined;
     let resizeObs: ResizeObserver;
     let mobileKeyboardCleanup: (() => void) | undefined;
+    let mobileTouchScrollCleanup: (() => void) | undefined;
 
     const isLocal = $derived(tabType === "local");
     const isSsh = $derived(tabType === "ssh");
@@ -1135,6 +1137,10 @@
             if (helper) {
                 mobileKeyboardCleanup = setupMobileSoftKeyboard(helper);
             }
+            // 与上面的 pointer 键盘状态机正交：靠"位移超阈值才接管"避开点按(弹键盘)和
+            // 长按(选字)。代价：长按选中后再拖动会变成滚动而非扩展选区——移动端有
+            // 块复制 / 发 AI 取文，这个取舍可接受。
+            mobileTouchScrollCleanup = setupTouchScroll(containerEl, terminal);
         }
 
         app.registerTerminalControls(tabId, {
@@ -1328,6 +1334,7 @@
         hostKeyInputDisposable?.dispose();
         resizeObs?.disconnect();
         mobileKeyboardCleanup?.();
+        mobileTouchScrollCleanup?.();
         foldStore?.dispose();
         blockTracker?.dispose();
         app.unregisterTerminalWriter();
