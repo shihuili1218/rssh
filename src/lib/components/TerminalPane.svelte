@@ -1092,6 +1092,9 @@
             fontFamily: theme.currentTermFontStack(),
             allowProposedApi: true,
             theme: theme.currentTermTheme(),
+            // xterm 6 draws its own scrollbar at overviewRuler.width||14 (=14px),
+            // out of reach of the global ::-webkit-scrollbar; pin it to the app's 6px.
+            overviewRuler: { width: 6 },
         });
         // Listener fires immediately with current theme (already applied above)
         // and on every palette change. Keep the unsubscribe for onDestroy.
@@ -1514,6 +1517,14 @@
        layout box (real rect, input works) while hiding the paint. */
     .term-wrap.is-mobile :global(.composition-view) {
         visibility: hidden !important;
+    }
+
+    /* Mobile: xterm 6's scrollbar slider has its own pointer-drag, which raced our
+       touch-scroll handler (drag "sometimes" worked, sometimes not). Make it a pure
+       position indicator on mobile so touches fall through to the content drag/fling;
+       desktop keeps the draggable scrollbar. */
+    .term-wrap.is-mobile :global(.xterm-scrollable-element > .scrollbar) {
+        pointer-events: none;
     }
 
     /* Overlay painted inside the enlarged left padding. SVG itself ignores

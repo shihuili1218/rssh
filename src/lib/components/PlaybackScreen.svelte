@@ -31,6 +31,8 @@
       fontSize: 13,
       fontFamily: "Menlo, Monaco, 'Courier New', monospace",
       theme: theme.currentTermTheme(),
+      // Match the app's 6px scrollbars (xterm 6's own scrollbar defaults to 14px).
+      overviewRuler: { width: 6 },
     });
     unsubscribeTheme = theme.registerXtermThemeListener((t) => {
       if (terminal) terminal.options.theme = t;
@@ -157,7 +159,7 @@
     <div class="progress-fill" style="width: {progress}%;"></div>
   </div>
 
-  <div class="term-container" bind:this={containerEl}></div>
+  <div class="term-container" class:is-mobile={app.isMobile} bind:this={containerEl}></div>
 </div>
 
 <style>
@@ -196,5 +198,10 @@
      around the rendered rows when "terminal bg follows theme" is off. */
   .term-container :global(.xterm-viewport) {
     background-color: var(--term-bg) !important;
+  }
+  /* Mobile: make xterm's scrollbar a pure indicator so its slider drag doesn't
+     race the touch-scroll handler (same fix as TerminalPane). */
+  .term-container.is-mobile :global(.xterm-scrollable-element > .scrollbar) {
+    pointer-events: none;
   }
 </style>
