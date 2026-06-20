@@ -199,12 +199,12 @@
         <span class="tag" class:patch-tag={isPatch}>
             {isPatch ? t("ai.cmd.patch.tag") : t("ai.cmd.proposed.tag")}
         </span>
-        <code class="cmd">{cmd.cmd}</code>
+        <code class="cmd" title={cmd.cmd}>{cmd.cmd}</code>
     </div>
     <div class="meta">
-        <div><span class="label">{t("ai.cmd.label.explain")}</span><span>{cmd.explain}</span></div>
-        <div><span class="label">{t("ai.cmd.label.side_effect")}</span><span>{cmd.side_effect}</span></div>
-        <div><span class="label">{t("ai.cmd.label.timeout")}</span><span>{cmd.timeout_s}s</span></div>
+        <div><span class="label">{t("ai.cmd.label.explain")}</span><span class="val" title={cmd.explain}>{cmd.explain}</span></div>
+        <div><span class="label">{t("ai.cmd.label.side_effect")}</span><span class="val" title={cmd.side_effect}>{cmd.side_effect}</span></div>
+        <div><span class="label">{t("ai.cmd.label.timeout")}</span><span class="val">{cmd.timeout_s}s</span></div>
     </div>
 
     {#if isPatch && cmd.diff}
@@ -309,8 +309,9 @@
     .diff-line.file { color: var(--text-dim); }
     .diff-line.ctx { color: var(--text); }
 
-    .head { display: flex; gap: 8px; align-items: baseline; }
+    .head { display: flex; gap: 8px; align-items: center; }
     .tag {
+        flex: none;
         font-size: 11px;
         background: var(--warning);
         color: var(--black);
@@ -321,11 +322,22 @@
     .cmd {
         font-family: monospace;
         font-size: 13px;
-        word-break: break-all;
+        flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
     .meta { font-size: 12px; margin-top: 6px; color: var(--text-dim); }
     .meta > div { display: flex; gap: 8px; }
-    .label { min-width: 50px; color: var(--text-dim); }
+    .label { flex: none; min-width: 50px; color: var(--text-dim); }
+    .val {
+        flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
     .actions { margin-top: 8px; display: flex; gap: 8px; }
     .btn { padding: 4px 12px; border-radius: 4px; cursor: pointer; }
     .btn-approve { background: var(--success); color: var(--white); border: none; }

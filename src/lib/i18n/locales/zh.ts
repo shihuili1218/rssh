@@ -471,7 +471,7 @@ const zh: Messages = {
   "ai.cmd.alert.exec_failed": "执行失败: {error}",
   "ai.cmd.alert.submit_failed": "提交失败: {error}",
   "ai.cmd.patch.tag": "[AI 改文件]",
-  "ai.cmd.proposed.tag": "[AI 提议]",
+  "ai.cmd.proposed.tag": "[AI]",
 
   // ── AI 排障：AiSettings ──
   "ai.settings.warn.byok": "⚠️ BYOK：你的命令输出经本地脱敏后会发送到所选 LLM 提供方。提供方可能按其条款使用这些数据",
