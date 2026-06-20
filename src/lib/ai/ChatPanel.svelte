@@ -3,6 +3,7 @@
     import type { AiTargetKind, ChatItem, ConversationMeta } from "./types.ts";
     import CommandConfirmDialog from "./CommandConfirmDialog.svelte";
     import AuditPanel from "./AuditPanel.svelte";
+    import DangerModeToggle from "./DangerModeToggle.svelte";
     import { renderMarkdown } from "./markdown.ts";
     import { formatTokenCount } from "./tokens.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
@@ -34,6 +35,11 @@
     let dangerMode = $derived(ai.settings()?.danger_mode === true);
     // 本会话累计 token 用量（actor 生命周期，清上下文不归零——花掉的钱不会退）。
     let tokens = $derived(ai.tokenUsage(tabId));
+    // Currently running model: prefer the model the active session actually started
+    // with (authoritative — a later settings change doesn't affect a live session);
+    // fall back to the configured model (what will run) when there's no session yet.
+    // Empty string when neither is known — the .model span still works as the spring.
+    let currentModel = $derived(session?.model ?? ai.settings()?.model ?? "");
 
     // 该 profile 下持久化的历史对话 —— 仅会话未启动时展示（picker）。
     // null = 还没加载完，与空数组（确无历史）区分，避免列表闪现。
@@ -237,10 +243,10 @@
 
 <div class="ai-panel">
     <div class="toolbar">
-        {#if dangerMode}
-            <span class="title-danger" title={t("ai.title.danger_tip")}>{t("ai.title.danger_suffix")}</span>
-        {/if}
-        <span class="grow"></span>
+        <!-- Current model: left-aligned, single line, ellipsis on overflow (full
+             text on hover). Also the flex spring (flex:1) that pushes the controls
+             to the right — replaces the old empty .grow spacer. -->
+        <span class="model" title={currentModel}>{currentModel}</span>
         <span class="tokens" title={t("ai.toolbar.tokens_tip", { tin: tokens.tokens_in, tout: tokens.tokens_out })}>
             ↑{formatTokenCount(tokens.tokens_in)} ↓{formatTokenCount(tokens.tokens_out)}
         </span>
@@ -265,13 +271,32 @@
         <!-- 清理上下文：SVG 扫帚图标（22×22）跟"×"视觉重心对齐。 -->
         <button class="btn-icon" onclick={openClearDialog} disabled={!session} title={t("ai.toolbar.clear_context")} aria-label={t("ai.toolbar.clear_context")}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M19.36 2.72l1.42 1.42-5.72 5.71-1.42-1.42 5.72-5.71z"/>
-                <path d="M14.13 8.05l-6.36 6.36c-.78.78-2.05.78-2.83 0l-.71-.71c-.39-.39-.39-1.02 0-1.41l7.07-7.07c.39-.39 1.02-.39 1.41 0l.71.71c.78.78.78 2.04 0 2.82"/>
-                <path d="M12 14l-3 7"/>
-                <path d="M9 14l-1.5 7"/>
-                <path d="M6 14l0 7"/>
+                <path d="M20 4 L13 11"/>
+                <path d="M11 9 L15 13"/>
+                <path d="M11 9 L5 15"/>
+                <path d="M12.33 10.33 L7 17"/>
+                <path d="M13.67 11.67 L9 18.5"/>
+                <path d="M15 13 L11 19.5"/>
             </svg>
         </button>
+        <!-- Danger-mode toggle: always visible, selected (red) when ON. The toggle
+             logic + confirm modal live in DangerModeToggle (shared with AiSettings —
+             one safety contract); here we only render the icon. No disabled={!session}
+             — danger_mode is a global setting, settable before the session starts. -->
+        <DangerModeToggle onError={(m) => (banner = m)}>
+            {#snippet trigger(requestToggle, saving)}
+                <button class="btn-icon danger-toggle" class:on={dangerMode}
+                        onclick={requestToggle} disabled={saving}
+                        title={dangerMode ? t("ai.title.danger_tip") : t("ai.toolbar.danger_enable")}
+                        aria-label={t("ai.toolbar.danger_aria")} aria-pressed={dangerMode}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                        <line x1="12" y1="9" x2="12" y2="13"/>
+                        <line x1="12" y1="17" x2="12.01" y2="17"/>
+                    </svg>
+                </button>
+            {/snippet}
+        </DangerModeToggle>
         <button class="btn-icon" onclick={closePanel} title={t("ai.toolbar.close_panel")} aria-label={t("ai.toolbar.close_panel")}>×</button>
     </div>
 
@@ -406,16 +431,16 @@
         padding: 8px; border-bottom: 1px solid var(--divider);
         flex-shrink: 0;
     }
-    .title-danger {
+    .model {
+        flex: 1;
+        min-width: 0;
         font-size: 11px;
-        font-weight: 600;
-        color: var(--error);
-        padding: 1px 6px;
-        border: 1px solid var(--error);
-        border-radius: 3px;
-        background: color-mix(in srgb, var(--error) 8%, transparent);
+        font-family: monospace;
+        color: var(--text-dim);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
-    .grow { flex: 1; }
     .tokens {
         font-size: 10.5px;
         font-family: monospace;
@@ -450,6 +475,17 @@
         cursor: default;
     }
     .btn-icon:disabled:hover { background: transparent; }
+    /* Danger-mode toggle, selected state: red icon + red-tinted fill so it reads
+       as "on" among the otherwise-neutral toolbar icons. The :hover rule keeps it
+       red (overriding .btn-icon:hover's neutral color via higher specificity). */
+    .danger-toggle.on {
+        color: var(--error);
+        background: color-mix(in srgb, var(--error) 14%, transparent);
+    }
+    .danger-toggle.on:hover {
+        color: var(--error);
+        background: color-mix(in srgb, var(--error) 22%, transparent);
+    }
     .banner {
         display: flex; align-items: center; gap: 8px;
         padding: 8px 12px;

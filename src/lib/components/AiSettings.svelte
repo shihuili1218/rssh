@@ -6,6 +6,7 @@
     import type { CategoryGroup, LlmProvider, ModelInfo, RedactRuleRecord, SkillRecord } from "../ai/types.ts";
     import Select from "./Select.svelte";
     import SearchSelect from "./SearchSelect.svelte";
+    import DangerModeToggle from "../ai/DangerModeToggle.svelte";
 
     /** Provider 下拉选项 —— OpenAI 那项的翻译用 $derived 跟着 locale 自动重算。 */
     let providerOptions = $derived([
@@ -43,9 +44,9 @@
     let byokNote = $state<string | null>(null);
 
     // ─── Danger mode（全局，跟 provider 无关）────────────────────────
-    let dangerMode = $state(false);
-    let savingDanger = $state(false);
-    let showDangerDialog = $state(false);
+    // dangerMode 直接派生自 store —— DangerModeToggle 改动后这里自动同步，不再维护
+    // 本地镜像。saving 状态与确认模态都归 DangerModeToggle 管。
+    let dangerMode = $derived(ai.settings()?.danger_mode === true);
     let dangerNote = $state<string | null>(null);
 
     // per-tool 自动批准。每个 checkbox 各自一个 boolean state。8 个字段平铺；
@@ -80,32 +81,6 @@
             shellDetectNote = t("ai.settings.shell_detect.save_failed", { error: errMsg(err) });
         } finally {
             savingShellDetect = false;
-        }
-    }
-
-    /** onclick + preventDefault：Tauri webview 不支持原生 confirm()，且依赖 checkbox
-     *  默认 toggle 会导致 cancel 后 DOM 与 Svelte state 错位。这里手动接管：
-     *  开启时弹自定义模态等用户确认；关闭直接 save（关 = 回到安全默认，不拦）。 */
-    function handleDangerToggle(e: MouseEvent) {
-        e.preventDefault();
-        if (savingDanger) return;
-        if (!dangerMode) {
-            showDangerDialog = true;
-            return;
-        }
-        void applyDangerMode(false);
-    }
-    async function applyDangerMode(wantOn: boolean) {
-        savingDanger = true;
-        showDangerDialog = false;
-        dangerNote = null;
-        try {
-            await ai.saveSettings({ dangerMode: wantOn });
-            dangerMode = wantOn;
-        } catch (err) {
-            dangerNote = t("ai.settings.danger.save_failed", { error: errMsg(err) });
-        } finally {
-            savingDanger = false;
         }
     }
 
@@ -264,7 +239,6 @@
         model = s.model;
         endpoint = s.endpoint ?? "";
         hasKey = s.has_api_key;
-        dangerMode = s.danger_mode;
         autoRunCommand = s.auto_run_command;
         autoMatchFile = s.auto_match_file;
         autoDownloadFile = s.auto_download_file;
@@ -603,14 +577,18 @@
                     <div class="danger-err">{dangerNote}</div>
                 {/if}
             </div>
-            <label class="switch">
-                <input type="checkbox" checked={dangerMode}
-                       disabled={savingDanger}
-                       onclick={handleDangerToggle}
-                       aria-labelledby="danger-mode-title"
-                       aria-describedby="danger-mode-desc"/>
-                <span class="slider"></span>
-            </label>
+            <DangerModeToggle onError={(m) => (dangerNote = t("ai.settings.danger.save_failed", { error: m }))}>
+                {#snippet trigger(requestToggle, saving)}
+                    <label class="switch">
+                        <input type="checkbox" checked={dangerMode}
+                               disabled={saving}
+                               onclick={(e) => { e.preventDefault(); dangerNote = null; requestToggle(); }}
+                               aria-labelledby="danger-mode-title"
+                               aria-describedby="danger-mode-desc"/>
+                        <span class="slider"></span>
+                    </label>
+                {/snippet}
+            </DangerModeToggle>
         </div>
 
         <div class="card-divider"></div>
@@ -875,31 +853,6 @@
     {/if}
 </div>
 
-<!-- Danger mode confirmation dialog —— Tauri webview 不弹原生 confirm，
-     用自定义模态。ARIA 跟 AppearanceSettings 的 Custom theme dialog 一致：
-     backdrop=presentation（纯装饰可点关闭），内容=dialog+aria-modal=true。 -->
-{#if showDangerDialog}
-    <div class="dialog-backdrop" onclick={() => (showDangerDialog = false)} role="presentation">
-        <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()}
-             role="dialog" aria-modal="true"
-             aria-labelledby="danger-dialog-title"
-             aria-describedby="danger-dialog-body">
-            <h3 id="danger-dialog-title" class="danger-dialog-title">{t("ai.settings.danger.confirm_title")}</h3>
-            <div id="danger-dialog-body" class="danger-dialog-body">{t("ai.settings.danger.confirm_body")}</div>
-            <div class="btn-row">
-                <button class="btn btn-sm" onclick={() => (showDangerDialog = false)}>
-                    {t("common.cancel")}
-                </button>
-                <button class="btn btn-sm btn-danger-solid"
-                        onclick={() => applyDangerMode(true)}
-                        disabled={savingDanger}>
-                    {t("ai.settings.danger.confirm_enable")}
-                </button>
-            </div>
-        </div>
-    </div>
-{/if}
-
 <style>
     .page {
         padding: 24px;
@@ -1068,51 +1021,6 @@
     .auto-group.disabled .auto-row input[type="checkbox"] {
         cursor: not-allowed;
     }
-
-    /* Danger confirm dialog —— 仿 SyncScreen 的模态结构 */
-    .dialog-backdrop {
-        position: fixed;
-        inset: 0;
-        z-index: 500;
-        background: var(--overlay-strong);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-    .dialog {
-        background: var(--bg);
-        box-shadow: var(--raised);
-        border-radius: var(--radius);
-        padding: calc(24px * var(--density));
-        max-width: 460px;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-    }
-    .danger-dialog-title {
-        font-size: 16px;
-        color: var(--error);
-        font-weight: 700;
-    }
-    .danger-dialog-body {
-        font-size: 13px;
-        color: var(--text);
-        line-height: 1.55;
-        white-space: pre-line;
-    }
-    .btn-row {
-        display: flex;
-        gap: 8px;
-        justify-content: flex-end;
-        margin-top: 4px;
-    }
-    /* "确认启用"按钮 —— 用 error 配色，让用户知道点下去等于踩雷 */
-    .btn-danger-solid {
-        background: var(--error);
-        color: var(--white);
-        border-color: var(--error);
-    }
-    .btn-danger-solid:disabled { opacity: 0.5; cursor: not-allowed; }
 
     .banner {
         display: flex;
