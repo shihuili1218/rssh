@@ -207,8 +207,15 @@
         background: var(--surface);
         /*box-shadow: var(--raised);*/
     }
-    /* Keep the active tab's accent tint visible during the ripple. */
-    .sb-item:not(.horizontal).rippling.active { background: var(--accent-soft); }
+    /* Active row's accent tint, OPAQUE for the vertical sidebar. --accent-soft is
+       accent@15% over transparent: fine at rest over the solid --bg rail, but once
+       the row expands (hover / Ctrl+Tab ripple) and floats over the terminal, the
+       transparent tint lets content bleed through. Mix the accent into --bg so the
+       floating row is solid — visually identical at rest, opaque while floating. */
+    .sb-item:not(.horizontal).active,
+    .sb-item:not(.horizontal).rippling.active {
+        background: color-mix(in srgb, var(--accent) 15%, var(--bg));
+    }
 
     .sb-item:hover, .sb-item.focused {
         background: var(--surface);

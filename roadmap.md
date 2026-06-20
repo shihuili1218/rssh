@@ -8,6 +8,9 @@
 - 隐藏标题栏
 - 支持telnet ？
 - home搜索框，改成快速连接 ？
+- 导入阿里云、aws账号资源
 - 高亮全部用正则实现
-- 端口转发/串口支持分组，home也只按分组展示
-- home页面profile named单行
+- 端口转发/串口支持分组
+- Home页面，端口转发去掉“via xxxx”
+- Home页面，只按分组展示，去掉profile/forward/serial这些类型
+- Home页面，顶部的搜索过滤，也要支持端口转发和串口

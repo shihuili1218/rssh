@@ -379,7 +379,7 @@
   .card-icon.serial { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
 
   .card-body { flex: 1; min-width: 0; }
-  .card-name { font-weight: 600; font-size: 14px; color: var(--text); margin-bottom: 2px; }
+  .card-name { font-weight: 600; font-size: 14px; color: var(--text); margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .card-sub { font-size: 12px; color: var(--text-sub); font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .card-via { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
 
