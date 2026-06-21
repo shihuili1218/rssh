@@ -147,6 +147,19 @@ mod tests {
     }
 
     #[test]
+    fn update_changes_group_id() {
+        // Exercises the UPDATE path (distinct from INSERT's ON CONFLICT branch):
+        // serial's UPDATE has the most columns, so column/param drift is easiest
+        // here — this pins group_id=?17 / WHERE id=?18 alignment.
+        let db = Db::open_in_memory().unwrap();
+        insert(&db, &mk("s1", "router")).unwrap();
+        let mut s = mk("s1", "router");
+        s.group_id = Some("g9".into());
+        update(&db, &s).unwrap();
+        assert_eq!(get(&db, "s1").unwrap().group_id.as_deref(), Some("g9"));
+    }
+
+    #[test]
     fn insert_then_get_roundtrips_all_fields() {
         let db = Db::open_in_memory().unwrap();
         insert(&db, &mk("s1", "router-console")).unwrap();

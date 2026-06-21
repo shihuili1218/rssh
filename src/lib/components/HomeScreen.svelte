@@ -162,6 +162,14 @@
     if (app.activeTabId() === "home" && !app.settingsActive()) refresh();
   });
 
+  // Clear the selection whenever the filter changes — otherwise the highlight
+  // would point at whatever item now sits at the stale navIdx in the reordered
+  // (and possibly shorter) list. First arrow press re-enters at top-left.
+  $effect(() => {
+    void query;
+    navIdx = -1;
+  });
+
   async function refresh() {
     [profiles, credentials, forwards, groups, serialProfiles] = await Promise.all([
       app.loadProfiles(), app.loadCredentials(), app.loadForwards(), app.loadGroups(), app.loadSerialProfiles(),

@@ -129,6 +129,18 @@ mod tests {
     }
 
     #[test]
+    fn update_changes_group_id() {
+        // Exercises the UPDATE path (distinct from INSERT's ON CONFLICT branch):
+        // proves the group_id placeholder/column alignment in update() is right.
+        let db = Db::open_in_memory().unwrap();
+        insert(&db, &mk("f1", "alpha", ForwardType::Local)).unwrap();
+        let mut f = mk("f1", "alpha", ForwardType::Local);
+        f.group_id = Some("g9".into());
+        update(&db, &f).unwrap();
+        assert_eq!(get(&db, "f1").unwrap().group_id.as_deref(), Some("g9"));
+    }
+
+    #[test]
     fn insert_then_get_for_all_types() {
         let db = Db::open_in_memory().unwrap();
         for ft in [
