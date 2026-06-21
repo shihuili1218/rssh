@@ -90,7 +90,21 @@ pub async fn run() -> std::io::Result<()> {
     }
 
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, _) = match listener.accept().await {
+            Ok(pair) => pair,
+            Err(e) => {
+                // A transient accept error (ECONNABORTED: peer RST between SYN and
+                // accept; EMFILE/ENFILE: fd exhaustion) must NOT tear down the whole
+                // headless server. Propagating it `?`→`run()`→`process::exit(1)`
+                // would drop every live SSH session and freeze the IDEA tool window.
+                // Log and keep serving. The short backoff stops a hot spin under fd
+                // exhaustion (accept would otherwise fail-and-retry at 100% CPU
+                // until an fd frees up).
+                log::warn!("rssh-server: accept failed (continuing): {e}");
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            }
+        };
         let expected = token.clone();
         let state = state.clone();
         tokio::spawn(async move {

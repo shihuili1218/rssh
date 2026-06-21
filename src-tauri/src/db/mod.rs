@@ -31,7 +31,14 @@ impl Db {
         std::fs::create_dir_all(data_dir)?;
         let path = data_dir.join("rssh.db");
         let conn = Connection::open(path)?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+        // WAL: readers never block the writer. busy_timeout: three processes write
+        // this same ~/.rssh/rssh.db (GUI, headless server, `rssh` CLI). Without it,
+        // a write that meets a peer's lock fails *instantly* with SQLITE_BUSY
+        // instead of waiting — e.g. GUI autosaving AI history while the CLI runs
+        // `config pull`. 5s covers any real contention window.
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
+        )?;
         schema::migrate(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),

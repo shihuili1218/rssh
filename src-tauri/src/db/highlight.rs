@@ -47,6 +47,23 @@ pub fn list(db: &Db) -> AppResult<Vec<HighlightRule>> {
 pub fn insert(db: &Db, rule: &HighlightRule) -> AppResult<()> {
     validate_rule(rule)?;
     let conn = db.lock()?;
+    // keyword is the rule's identity: the sync key AND the UI list key (see the
+    // keyed `each` in HighlightManager). The schema has no UNIQUE constraint, so
+    // a second row with an existing keyword would slip in and crash the settings
+    // panel on its duplicate key. Reject it here, mirroring update()'s rename-
+    // collision guard. (ERROR/WARN/INFO/DEBUG/IPv4 are seeded, so "add ERROR" is
+    // the common trigger.)
+    let exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM highlights WHERE keyword = ?1",
+        params![rule.keyword],
+        |r| r.get(0),
+    )?;
+    if exists > 0 {
+        return Err(AppError::other(
+            "highlight_keyword_conflict",
+            serde_json::json!({ "keyword": rule.keyword }),
+        ));
+    }
     conn.execute(
         "INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
@@ -171,4 +188,52 @@ pub fn reset_defaults(db: &Db) -> AppResult<()> {
         )?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rule(keyword: &str) -> HighlightRule {
+        HighlightRule {
+            keyword: keyword.into(),
+            name: String::new(),
+            color: "#FF0000".into(),
+            enabled: true,
+            is_regex: false,
+            is_case_sensitive: false,
+        }
+    }
+
+    #[test]
+    fn insert_rejects_seeded_keyword() {
+        // C1 repro: a fresh DB seeds ERROR/WARN/INFO/DEBUG/IPv4. Adding "ERROR"
+        // via the New form used to INSERT a duplicate row; the keyword-keyed
+        // each-block in HighlightManager then threw on the duplicate key and the
+        // settings panel went blank on a routine action. insert now rejects it.
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(
+            insert(&db, &rule("ERROR")).unwrap_err().code(),
+            "highlight_keyword_conflict"
+        );
+    }
+
+    #[test]
+    fn insert_rejects_second_duplicate() {
+        let db = Db::open_in_memory().unwrap();
+        insert(&db, &rule("CUSTOM")).unwrap();
+        assert_eq!(
+            insert(&db, &rule("CUSTOM")).unwrap_err().code(),
+            "highlight_keyword_conflict"
+        );
+        // Exactly one row survives — no duplicate to crash the keyed each block.
+        assert_eq!(
+            list(&db)
+                .unwrap()
+                .iter()
+                .filter(|r| r.keyword == "CUSTOM")
+                .count(),
+            1
+        );
+    }
 }

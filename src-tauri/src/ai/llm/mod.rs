@@ -140,17 +140,29 @@ pub fn build_client(
 
 /// 增量 SSE 解析器：feed 接收任意 byte chunk，返回完整事件的 data 字符串列表。
 pub(crate) struct SseParser {
+    /// Decoded-but-not-yet-terminated event text (split on `\n\n`).
     buf: String,
+    /// Bytes of an incomplete trailing UTF-8 char from the previous chunk.
+    /// `reqwest` splits the stream at arbitrary byte boundaries, so a multibyte
+    /// char (CJK / emoji) can straddle two chunks; we hold the partial tail here
+    /// and prepend it to the next chunk instead of decoding each chunk alone
+    /// (which produced replacement chars on both sides — silent corruption that
+    /// still parsed as JSON and got persisted).
+    pending: Vec<u8>,
 }
 
 impl SseParser {
     pub fn new() -> Self {
-        Self { buf: String::new() }
+        Self {
+            buf: String::new(),
+            pending: Vec::new(),
+        }
     }
 
     /// 喂入新字节，返回若干完整事件的 data 行（多行 data: 已合并）。
-    pub fn feed(&mut self, chunk: &str) -> Vec<String> {
-        self.buf.push_str(chunk);
+    /// 接收原始字节并自己处理 UTF-8 边界 —— 调用方不再各自 from_utf8_lossy。
+    pub fn feed(&mut self, chunk: &[u8]) -> Vec<String> {
+        self.decode_into_buf(chunk);
         let mut events = Vec::new();
         loop {
             let sep_idx = self.buf.find("\n\n").or_else(|| self.buf.find("\r\n\r\n"));
@@ -175,5 +187,83 @@ impl SseParser {
             }
         }
         events
+    }
+
+    /// Append `chunk` to `buf`, decoding UTF-8 across chunk boundaries. The
+    /// maximal valid prefix is decoded; an incomplete trailing char is stashed
+    /// in `pending` for the next call; genuinely invalid bytes become U+FFFD
+    /// (the same lossy behavior as before, minus the splitting of real chars at
+    /// chunk seams).
+    fn decode_into_buf(&mut self, chunk: &[u8]) {
+        let mut bytes = std::mem::take(&mut self.pending);
+        bytes.extend_from_slice(chunk);
+
+        let mut rest: &[u8] = &bytes;
+        loop {
+            match std::str::from_utf8(rest) {
+                Ok(s) => {
+                    self.buf.push_str(s);
+                    break;
+                }
+                Err(e) => {
+                    let valid = e.valid_up_to();
+                    // `rest[..valid]` is valid UTF-8 by definition of valid_up_to.
+                    self.buf
+                        .push_str(std::str::from_utf8(&rest[..valid]).unwrap_or(""));
+                    match e.error_len() {
+                        // Unexpected end: a valid prefix of a multibyte char sits
+                        // at the tail. Hold it for the next chunk.
+                        None => {
+                            self.pending.extend_from_slice(&rest[valid..]);
+                            break;
+                        }
+                        // n genuinely invalid bytes: emit one replacement char,
+                        // skip past them, keep decoding the remainder.
+                        Some(n) => {
+                            self.buf.push('\u{FFFD}');
+                            rest = &rest[valid + n..];
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod sse_tests {
+    use super::SseParser;
+
+    #[test]
+    fn reassembles_multibyte_char_split_across_chunks() {
+        // "中" = E4 B8 AD. Cut right after E4 so each half is invalid UTF-8 on
+        // its own — the exact shape reqwest produces mid-stream. Per-chunk lossy
+        // decoding (the old bug) yielded U+FFFD on both sides; the parser must
+        // instead carry the partial char across feeds.
+        let mut p = SseParser::new();
+        let event = "data: hi 中\n\n".as_bytes();
+        let cut = event.iter().position(|&b| b == 0xE4).unwrap() + 1;
+        assert!(p.feed(&event[..cut]).is_empty());
+        assert_eq!(p.feed(&event[cut..]), vec!["hi 中".to_string()]);
+    }
+
+    #[test]
+    fn emits_replacement_for_genuinely_invalid_bytes() {
+        // A lone 0xFF is never valid and never a multibyte prefix: it must become
+        // U+FFFD (matching lossy) and not be hoarded as "pending" forever, which
+        // would stall the stream.
+        let mut p = SseParser::new();
+        let mut bytes = b"data: ".to_vec();
+        bytes.push(0xFF);
+        bytes.extend_from_slice(b"x\n\n");
+        assert_eq!(p.feed(&bytes), vec!["\u{FFFD}x".to_string()]);
+    }
+
+    #[test]
+    fn splits_multiple_events_in_one_chunk() {
+        // Sanity: event framing still works on the new byte path.
+        let mut p = SseParser::new();
+        let events = p.feed(b"data: a\n\ndata: b\n\n");
+        assert_eq!(events, vec!["a".to_string(), "b".to_string()]);
     }
 }

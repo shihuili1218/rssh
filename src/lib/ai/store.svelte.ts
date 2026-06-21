@@ -463,6 +463,15 @@ export async function executeCommand(
   target_kind: AiTargetKind,
   target_session_id: string,
 ): Promise<void> {
+  // Re-entrancy guard: a tool_call_id must never be pasted twice. A
+  // CommandConfirmDialog remount (AI panel close→reopen mid-run) loses its local
+  // `executing` flag and can fire approve() again; without this, the command
+  // (possibly rm/reboot) would be pasted a second time and the first exec's
+  // listener + timer would leak when `_runningExecutions.set` below overwrites
+  // the entry. The map is the single source of truth for "in flight" — honor it.
+  // The original exec keeps running and still funnels through finish().
+  if (_runningExecutions.has(proposed.tool_call_id)) return;
+
   // Transport per kind. Record<AiTargetKind, …> so adding a kind is a compile
   // error here until routed — no silent fall-through to the wrong write command.
   const TRANSPORT: Record<AiTargetKind, { write: string; data: string }> = {

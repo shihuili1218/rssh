@@ -85,9 +85,20 @@ pub fn update(db: &Db, p: &Profile) -> AppResult<()> {
 }
 
 pub fn delete(db: &Db, id: &str) -> AppResult<()> {
-    let conn = db.lock()?;
-    conn.execute("DELETE FROM profiles WHERE id = ?1", params![id])?;
-    Ok(())
+    // Deleting an SSH profile must also purge its AI conversations (keyed
+    // "ssh:<id>", holding UNREDACTED terminal output). Once the profile is gone
+    // the AI panel — which only opens per live target — can't reach them, so
+    // they'd linger in the DB forever with no way to clear them. Atomic so a
+    // crash can't leave the profile deleted but its transcripts behind.
+    let convo_key = crate::db::ai_conversation::ssh_target_key(id);
+    db.with_transaction(|tx| {
+        tx.execute("DELETE FROM profiles WHERE id = ?1", params![id])?;
+        tx.execute(
+            "DELETE FROM ai_conversations WHERE target_key = ?1",
+            params![convo_key],
+        )?;
+        Ok(())
+    })
 }
 
 pub fn clear_all_tx(conn: &rusqlite::Connection) -> AppResult<()> {
@@ -166,6 +177,27 @@ mod tests {
         insert(&db, &mk("p1", "alpha")).unwrap();
         delete(&db, "p1").unwrap();
         assert_eq!(get(&db, "p1").unwrap_err().code(), "profile_not_found");
+    }
+
+    /// #2: an SSH profile's AI conversations (target_key "ssh:<id>", holding
+    /// UNREDACTED terminal output) must die with the profile — otherwise they
+    /// linger unreachable in the DB, since the AI panel only opens per live
+    /// target. Scoped: other profiles' and non-ssh conversations stay untouched.
+    #[test]
+    fn delete_purges_profile_ai_conversations() {
+        use crate::db::ai_conversation;
+        let db = Db::open_in_memory().unwrap();
+        insert(&db, &mk("p1", "web")).unwrap();
+        insert(&db, &mk("p2", "db")).unwrap();
+        ai_conversation::create(&db, "c1", &ai_conversation::ssh_target_key("p1")).unwrap();
+        ai_conversation::create(&db, "c2", &ai_conversation::ssh_target_key("p2")).unwrap();
+        ai_conversation::create(&db, "c3", "local").unwrap();
+
+        delete(&db, "p1").unwrap();
+
+        assert!(ai_conversation::get(&db, "c1").unwrap().is_none());
+        assert!(ai_conversation::get(&db, "c2").unwrap().is_some());
+        assert!(ai_conversation::get(&db, "c3").unwrap().is_some());
     }
 
     #[test]

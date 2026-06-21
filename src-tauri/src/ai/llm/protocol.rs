@@ -221,8 +221,7 @@ pub async fn chat(
         let bytes = chunk.map_err(|e| {
             AppError::other("llm_stream_read_failed", json!({ "err": e.to_string() }))
         })?;
-        let s = String::from_utf8_lossy(&bytes).into_owned();
-        for ev_data in parser.feed(&s) {
+        for ev_data in parser.feed(&bytes) {
             if ev_data.trim() == "[DONE]" {
                 break 'stream;
             }

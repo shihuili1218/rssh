@@ -658,6 +658,14 @@ impl SftpHandle {
     }
 
     /// Stream-upload a local file to a remote path, emitting progress events.
+    ///
+    /// Atomicity: stream to `<remote_path>.part`, then rename to the final name
+    /// only on full success. Cancel / read-error / write-error leave only a
+    /// partial `.part` (cleaned up below) — never a truncated file at the real
+    /// path, and crucially never a *destroyed* pre-existing remote file we ended
+    /// up not replacing (raw `create(remote_path)` truncates the target the
+    /// instant it opens, so a mid-transfer failure on an overwrite lost the
+    /// original irrecoverably). Mirrors the download path's `.part` + rename.
     pub async fn upload_streaming(
         &self,
         local_path: &Path,
@@ -680,7 +688,47 @@ impl SftpHandle {
             }
         }
 
-        let mut remote_file = self.sftp.create(remote_path).await.map_err(|e| {
+        let tmp_path = format!("{remote_path}.part");
+        let result = self
+            .stream_upload_to_part(&mut local_file, &tmp_path, total, host, transfer_id, cancel)
+            .await;
+
+        match result {
+            Ok(transferred) => {
+                // SFTP rename fails on many servers if the destination exists, so
+                // remove the old file first (best-effort — an absent target, the
+                // common create-new case, is fine to ignore).
+                let _ = self.sftp.remove_file(remote_path).await;
+                self.sftp.rename(&tmp_path, remote_path).await.map_err(|e| {
+                    AppError::sftp(
+                        "sftp_io_failed",
+                        json!({ "op": "rename", "err": e.to_string() }),
+                    )
+                })?;
+                Ok(transferred)
+            }
+            Err(e) => {
+                // Best-effort cleanup; even if unlink fails we just leak `.part`.
+                let _ = self.sftp.remove_file(&tmp_path).await;
+                Err(e)
+            }
+        }
+    }
+
+    /// Inner streaming loop for `upload_streaming`: copy the local file to the
+    /// supplied remote temp path, emitting progress. The caller promotes `.part`
+    /// to the final name on success or removes it on failure. Symmetric with
+    /// `stream_to_part` on the download side.
+    async fn stream_upload_to_part(
+        &self,
+        local_file: &mut tokio::fs::File,
+        tmp_path: &str,
+        total: u64,
+        host: &crate::emitter::Host,
+        transfer_id: &str,
+        cancel: Arc<AtomicBool>,
+    ) -> AppResult<u64> {
+        let mut remote_file = self.sftp.create(tmp_path).await.map_err(|e| {
             AppError::sftp(
                 "sftp_io_failed",
                 json!({ "op": "create", "err": e.to_string() }),
@@ -689,7 +737,7 @@ impl SftpHandle {
 
         let mut transferred: u64 = 0;
         let mut buf = vec![0u8; 32768];
-        // 事件名每个 chunk emit 一次；预算一次避免循环里反复 String 分配。
+        // Build the event name once; emitted on every chunk, avoid re-allocating.
         let event = format!("sftp:progress:{transfer_id}");
 
         loop {

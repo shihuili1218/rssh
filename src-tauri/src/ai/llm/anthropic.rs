@@ -252,8 +252,7 @@ impl LlmClient for AnthropicClient {
                     serde_json::json!({ "err": e.to_string() }),
                 )
             })?;
-            let s = String::from_utf8_lossy(&bytes).into_owned();
-            for ev_data in parser.feed(&s) {
+            for ev_data in parser.feed(&bytes) {
                 let v: serde_json::Value = match serde_json::from_str(&ev_data) {
                     Ok(v) => v,
                     Err(_) => continue,

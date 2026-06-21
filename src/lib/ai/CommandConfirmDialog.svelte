@@ -78,6 +78,19 @@
     //
     // 历史卡片没有 kind 字段 → autoApproveAllowed 返回 false → 走人审，符合 fail-safe。
     onMount(() => {
+        // Command already in flight when this dialog (re)mounts — e.g. the AI
+        // panel was closed and reopened mid-execution. Reflect the running state
+        // so the card shows Terminate/Submit instead of a stale Approve button
+        // (clicking which would be a no-op now that executeCommand guards on the
+        // running map, but a dead button is confusing). The original execution
+        // still owns the listener/timer and delivers the result.
+        const inFlight = isAckOnly
+            ? _ackedToolCalls.has(cmd.tool_call_id)
+            : ai.isCommandRunning(cmd.tool_call_id);
+        if (isPending && inFlight) {
+            executing = true;
+            return;
+        }
         if (
             isPending
             && !executing

@@ -1186,10 +1186,16 @@
             return true;
         });
 
-        // OSC 7337: rssh CLI → app integration（处理逻辑见 lib/osc/handler.ts）
-        registerRsshOscHandlers(terminal.parser, {
-            error: (msg) => terminal?.write(`\r\n\x1b[31m${msg}\x1b[0m\r\n`),
-        });
+        // OSC 7337: rssh CLI → app integration（处理逻辑见 lib/osc/handler.ts）。
+        // 仅本地 PTY 注册：open:/fwd: 引用的是本地保存的 profile，远程 SSH/serial
+        // 主机发这个序列在语义上只可能是攻击 —— 让客户端无确认地连到任意已保存
+        // profile 或开端口转发。xterm 解析器分不清本地字节与经数据流到达的远程
+        // 字节，所以唯一干净的防线是根本不在远程终端上挂这个 handler。
+        if (isLocal) {
+            registerRsshOscHandlers(terminal.parser, {
+                error: (msg) => terminal?.write(`\r\n\x1b[31m${msg}\x1b[0m\r\n`),
+            });
+        }
 
         // Command block tracker — marks Enter keypresses in normal buffer.
         blockTracker = createCommandBlockTracker(terminal);

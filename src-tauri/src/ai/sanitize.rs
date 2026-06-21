@@ -908,52 +908,72 @@ fn check_per_command_rules(head: &str, args: &[String]) -> Result<(), ShapeError
     Ok(())
 }
 
-/// redirected_statement 上检查每个 file_redirect：destination 必须是 fd 数字 (fd dup)
-/// 或字面 `/dev/null`。其余一律拒（含 heredoc / herestring 已经不是 file_redirect 节点）。
+/// Validate every `file_redirect` in a `redirected_statement`'s subtree: an
+/// output redirect's destination must be an fd number (fd dup) or the literal
+/// `/dev/null`; anything else is a file write that must go through patch_file.
 ///
-/// **输入重定向 (`cmd < file`)** 是 file_redirect 节点但 operator 是 `<`，读文件不写。
-/// 通过扫节点 text 里第一个 `<`/`>` 区分 —— `<` 在前是输入，放行写检查；但仍要
-/// 递归 destination 找 command_substitution（`cat < $(rm -rf /)` 否则绕过）。
+/// We RECURSE the whole subtree, not just the statement's direct `redirect`
+/// field children, because tree-sitter-bash nests the file_redirect of
+/// `cmd <<EOF > /path` INSIDE the `heredoc_redirect` node — a direct-children
+/// scan skipped that write entirely (the heredoc bypass: `echo x <<EOF > /etc/...`
+/// reached the filesystem without a patch_file). Recursing can't over-reach: a
+/// heredoc/herestring body is a raw text node, never a parsed file_redirect, so
+/// no legitimate stdin payload is mis-flagged.
 fn check_redirects(stmt: &tree_sitter::Node, src: &[u8], bl: &Blacklist) -> Result<(), ShapeError> {
     let mut cur = stmt.walk();
-    for r in stmt.children_by_field_name("redirect", &mut cur) {
-        if r.kind() != "file_redirect" {
-            continue;
+    for child in stmt.children(&mut cur) {
+        if child.kind() == "file_redirect" {
+            check_one_file_redirect(&child, src, bl)?;
+        } else {
+            check_redirects(&child, src, bl)?;
         }
-        let dest_opt = r.child_by_field_name("destination");
-        // 不管输入 / 输出 / fd-dup：destination 可能含 `$(...)`，里面的命令必审查。
-        if let Some(dest) = dest_opt {
-            recurse_substitutions(&dest, src, bl)?;
-        }
-        // 区分输入 vs 输出：file_redirect 节点 text 形如 "> /tmp/x" / "<file" / "2>&1" /
-        // "&> out" / "1< file" / "<> rw"。
-        // **不含 `>`** → 纯输入 (`<`, `0<`, `N<`)，放行；
-        // **含 `>`** → 输出 / 读写 (`>`, `>>`, `&>`, `<>`, `N>`)，必须 fd-dup 或 /dev/null。
-        let r_text = node_text(&r, src);
-        if !r_text.contains('>') {
-            continue;
-        }
-        let dest = match dest_opt {
-            Some(d) => d,
-            None => continue,
-        };
-        // destination kind == number → fd duplicate (2>&1 / 1>&2)，不写文件
-        if dest.kind() == "number" {
-            continue;
-        }
-        // destination 可能被引号包围（`>"/dev/null"` / `>'/dev/null'`）—— tree-sitter 把
-        // string / raw_string 节点的 text 保留引号字符，直接相等比较会误拒。
-        // 归一化（剥外层引号 + 反斜杠 escape）后再对比，和命令头 / arg 检查保持一致。
-        let dest_raw = node_text(&dest, src);
-        let dest_norm = normalize_head(dest_raw);
-        if dest_norm == "/dev/null" {
-            continue;
-        }
-        return Err(ShapeError::Write(format!(
-            "redirect to '{dest_raw}' (file modification must go through patch_file; '/dev/null' is the only allowed target)"
-        )));
     }
     Ok(())
+}
+
+/// Apply the write rule to a single `file_redirect` node.
+///
+/// **Input redirects (`cmd < file`)** are file_redirect nodes too, but read
+/// rather than write — told apart by the absence of `>` in the node text. Their
+/// destination is still recursed for command_substitution (`cat < $(rm -rf /)`
+/// would otherwise slip by).
+fn check_one_file_redirect(
+    r: &tree_sitter::Node,
+    src: &[u8],
+    bl: &Blacklist,
+) -> Result<(), ShapeError> {
+    let dest_opt = r.child_by_field_name("destination");
+    // Whichever direction, destination may hold `$(...)` whose command must be audited.
+    if let Some(dest) = dest_opt {
+        recurse_substitutions(&dest, src, bl)?;
+    }
+    // file_redirect text looks like "> /tmp/x" / "<file" / "2>&1" / "&> out" /
+    // "1< file" / "<> rw". No `>` → pure input (`<`, `0<`, `N<`), allowed.
+    // Contains `>` → output / read-write (`>`, `>>`, `&>`, `<>`, `N>`), must be
+    // fd-dup or /dev/null.
+    let r_text = node_text(r, src);
+    if !r_text.contains('>') {
+        return Ok(());
+    }
+    let dest = match dest_opt {
+        Some(d) => d,
+        None => return Ok(()),
+    };
+    // destination kind == number → fd duplicate (2>&1 / 1>&2), not a file write.
+    if dest.kind() == "number" {
+        return Ok(());
+    }
+    // destination may be quoted (`>"/dev/null"` / `>'/dev/null'`) — tree-sitter
+    // keeps the quote chars in the node text, so normalize (strip outer quotes +
+    // backslash escapes) before comparing, consistent with the head / arg checks.
+    let dest_raw = node_text(&dest, src);
+    let dest_norm = normalize_head(dest_raw);
+    if dest_norm == "/dev/null" {
+        return Ok(());
+    }
+    Err(ShapeError::Write(format!(
+        "redirect to '{dest_raw}' (file modification must go through patch_file; '/dev/null' is the only allowed target)"
+    )))
 }
 
 #[cfg(test)]
@@ -1565,6 +1585,28 @@ mod tests {
             validate("cmd &> out.log"),
             Err(ShapeError::Write(_))
         ));
+    }
+
+    #[test]
+    fn shape_heredoc_with_trailing_redirect_blocked() {
+        // H1: `<<EOF > /path` — tree-sitter-bash nests the file_redirect (`> /path`)
+        // inside the heredoc_redirect node, so check_redirects (which only looked
+        // at the statement's direct "redirect" field children) skipped the real
+        // write and the file modification slipped past the "must go through
+        // patch_file" guard. Every output redirect to a real path must be rejected
+        // even when a heredoc precedes it.
+        assert!(matches!(
+            validate("cat <<EOF > /tmp/pwn\nhi\nEOF"),
+            Err(ShapeError::Write(_))
+        ));
+        assert!(matches!(
+            validate("cat <<EOF >> /etc/cron.d/job\nhi\nEOF"),
+            Err(ShapeError::Write(_))
+        ));
+        // A heredoc with no file redirect is fine — the body is just stdin data.
+        assert!(validate("cat <<EOF\nhi\nEOF").is_ok());
+        // /dev/null target stays allowed even with a heredoc.
+        assert!(validate("cat <<EOF > /dev/null\nhi\nEOF").is_ok());
     }
 
     #[test]

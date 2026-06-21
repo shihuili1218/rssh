@@ -120,6 +120,14 @@ pub fn set_timeline(db: &Db, id: &str, timeline_json: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// The conversation `target_key` for an SSH profile — single source of truth for
+/// the "ssh:<profile_id>" convention, shared by ai::commands (storing a
+/// conversation) and profile::delete (purging one). Keeping the format in one
+/// place means the purge can't silently desync from the store.
+pub fn ssh_target_key(profile_id: &str) -> String {
+    format!("ssh:{profile_id}")
+}
+
 pub fn delete(db: &Db, id: &str) -> AppResult<()> {
     let conn = db.lock()?;
     conn.execute("DELETE FROM ai_conversations WHERE id = ?1", [id])?;

@@ -886,7 +886,7 @@ pub(crate) fn conversation_target_key(state: &AppState, target: &AiTarget) -> Ap
             let h = g
                 .get(id)
                 .ok_or_else(|| AppError::not_found("ssh_session_not_found", json!({})))?;
-            format!("ssh:{}", h.profile_id())
+            crate::db::ai_conversation::ssh_target_key(h.profile_id())
         }
         AiTarget::Local(_) => "local".to_string(),
         #[cfg(not(target_os = "android"))]
