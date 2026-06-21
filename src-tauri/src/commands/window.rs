@@ -114,8 +114,16 @@ fn place(win: &tauri::WebviewWindow, r: Rect, deco: (u32, u32)) -> AppResult<()>
 /// `split` is `None` for a plain new window (OS-positioned, 1200×800 — the
 /// original behavior). "left"/"right"/"up"/"down" tiles the CALLER window into
 /// one half and opens the new window in the other half of the same screen.
+///
+/// MUST stay `async`: on Windows, `WebviewWindowBuilder::build()` deadlocks when
+/// called from a synchronous command — WebView2 needs the main thread's message
+/// loop to create the webview controller, but a sync command is itself running
+/// on that thread and blocks it, so the new window opens but never renders
+/// (blank, no UI). async commands run off the main event-loop thread, so the
+/// build completes. macOS/Linux don't have this reentrancy, so it only bites on
+/// Windows. See tauri `WebviewWindowBuilder` docs / wry#583.
 #[tauri::command]
-pub fn open_tab_in_new_window(
+pub async fn open_tab_in_new_window(
     app: AppHandle,
     window: tauri::WebviewWindow,
     clone: String,
