@@ -523,6 +523,14 @@ export async function executeCommand(
     },
   };
 
+  // Reserve the in-flight slot synchronously, BEFORE any await. The guard at the
+  // top of this function only holds if check-and-reserve is atomic. This set used
+  // to live after `await listen()` below, leaving a window where a second call
+  // (dialog remount re-firing approve, a double-click) passed the guard before
+  // this ran and pasted the command — possibly rm/reboot — twice. There is no
+  // await between the guard and here, so the reservation closes that window.
+  _runningExecutions.set(exec.toolCallId, exec);
+
   const finish = async (output: string, exit_code: number, timed_out: boolean) => {
     if (exec.resolved) return;
     exec.resolved = true;
@@ -544,18 +552,23 @@ export async function executeCommand(
     resolveDone();
   };
 
-  exec.unlisten = await listen<number[]>(dataEvent, (e) => {
-    if (exec.resolved) return;
-    const chunk = new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(e.payload));
-    exec.buffer.append(chunk);
-    // Serial has no sentinel — just accumulate. Completion comes from the user
-    // (submit, wired to the terminate button) or the safety timeout below.
-    if (target_kind === "serial") return;
-    const hit = findSentinel(exec.buffer.view(), proposed.sentinel);
-    if (hit) void finish(hit.output, hit.exitCode, false);
-  });
-
-  _runningExecutions.set(exec.toolCallId, exec);
+  try {
+    exec.unlisten = await listen<number[]>(dataEvent, (e) => {
+      if (exec.resolved) return;
+      const chunk = new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(e.payload));
+      exec.buffer.append(chunk);
+      // Serial has no sentinel — just accumulate. Completion comes from the user
+      // (submit, wired to the terminate button) or the safety timeout below.
+      if (target_kind === "serial") return;
+      const hit = findSentinel(exec.buffer.view(), proposed.sentinel);
+      if (hit) void finish(hit.output, hit.exitCode, false);
+    });
+  } catch (e) {
+    // listen() failed to register: release the slot reserved above so this
+    // tool_call_id isn't wedged "in flight" forever.
+    _runningExecutions.delete(exec.toolCallId);
+    throw e;
+  }
 
   // \r (not \n) is the cross-platform Enter byte: ConPTY/PowerShell only
   // accepts \r; Unix cooked PTY translates \r → \n via ICRNL. Matches the
