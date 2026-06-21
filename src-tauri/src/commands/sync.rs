@@ -421,6 +421,42 @@ mod tests {
     }
 
     #[test]
+    fn push_always_includes_credentials_and_groups_secret_still_gated() {
+        use crate::db::credential;
+        use crate::models::{Credential, CredentialType};
+        use crate::secret::cred_secret_key;
+        let (db, ss, dir) = fixture();
+        // credentials + groups are referential deps of the always-exported
+        // profiles/forwards/serial; their category toggles were removed, so a
+        // stale "0" must NOT drop them. Secret upload stays gated per-credential
+        // by save_to_remote — independent of (and unaffected by) that removal.
+        crate::db::settings::set(&db, "sync_include_credentials", "0").unwrap();
+        crate::db::settings::set(&db, "sync_include_groups", "0").unwrap();
+        let meta = |id: &str, remote: bool| Credential {
+            id: id.into(),
+            name: id.into(),
+            username: "u".into(),
+            credential_type: CredentialType::Password,
+            secret: None,
+            save_to_remote: remote,
+        };
+        credential::insert(&db, &meta("r", true)).unwrap();
+        credential::insert(&db, &meta("l", false)).unwrap();
+        ss.set(&cred_secret_key("r"), "s-r").unwrap();
+        ss.set(&cred_secret_key("l"), "s-l").unwrap();
+
+        let prefs = read_sync_prefs(&db).unwrap();
+        let v = build_payload(&db, &ss, dir.path(), &ExportMode::RemotePush(prefs)).unwrap();
+        let obj = v.as_object().unwrap();
+        assert!(obj.contains_key("groups"), "groups always pushed");
+        let creds = obj["credentials"].as_array().unwrap();
+        assert_eq!(creds.len(), 2, "all credential metadata always pushed");
+        let secret = |id: &str| creds.iter().find(|c| c["id"] == id).unwrap()["secret"].clone();
+        assert_eq!(secret("r"), json!("s-r"), "save_to_remote=true keeps secret");
+        assert_eq!(secret("l"), json!(null), "save_to_remote=false scrubs secret");
+    }
+
+    #[test]
     fn push_filters_profiles_by_group() {
         let (db, ss, dir) = fixture();
         profile::insert(&db, &prof("p1", Some("g1"))).unwrap();

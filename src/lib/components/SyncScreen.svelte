@@ -28,8 +28,6 @@
 
     /* ── Shared sync content toggles ──────────────────────────────────────── */
     const SYNC_ITEMS: { key: string; label: MessageKey }[] = [
-        { key: "sync_include_credentials", label: "sync.categories.credentials" },
-        { key: "sync_include_groups", label: "sync.categories.groups" },
         { key: "sync_include_highlights", label: "sync.categories.highlights" },
         { key: "sync_include_snippets", label: "sync.categories.snippets" },
         { key: "sync_include_skills", label: "sync.categories.skills" },

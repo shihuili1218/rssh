@@ -361,8 +361,6 @@ fn parse_skill(item: &Value) -> AppResult<Option<crate::db::ai_skill::UserSkill>
 /// "sync everything" behavior; the user opts OUT per category.
 #[derive(Debug)]
 pub struct SyncPrefs {
-    credentials: bool,
-    groups: bool,
     skills: bool,
     highlights: bool,
     snippets: bool,
@@ -405,8 +403,6 @@ pub fn read_sync_prefs(db: &Db) -> AppResult<SyncPrefs> {
         _ => None,
     };
     Ok(SyncPrefs {
-        credentials: flag("sync_include_credentials")?,
-        groups: flag("sync_include_groups")?,
         skills: flag("sync_include_skills")?,
         highlights: flag("sync_include_highlights")?,
         ai_redact: flag("sync_include_ai_redact")?,
@@ -479,23 +475,24 @@ pub fn build_payload(
     retain_by_groups(&mut profiles, prefs, |p| p.group_id.as_deref());
     out.insert("profiles".into(), to_val(profiles)?);
 
-    if on(|p| p.credentials) {
-        let mut credentials = collect_credentials_with_secrets(db, ss)?;
-        if prefs.is_some() {
-            for c in credentials.iter_mut() {
-                if !c.save_to_remote {
-                    c.secret = None;
-                }
+    // credentials + groups are the referential closure of the always-exported
+    // profiles/forwards/serial (profile→credential_id, *→group_id). Gating them
+    // behind their own toggle would leave dangling refs on the other device, so
+    // both always ride along. Secret upload stays gated per-credential by
+    // save_to_remote — orthogonal to (and unaffected by) the removed toggle.
+    let mut credentials = collect_credentials_with_secrets(db, ss)?;
+    if prefs.is_some() {
+        for c in credentials.iter_mut() {
+            if !c.save_to_remote {
+                c.secret = None;
             }
         }
-        out.insert("credentials".into(), to_val(credentials)?);
     }
+    out.insert("credentials".into(), to_val(credentials)?);
     let mut forwards = forward::list(db)?;
     retain_by_groups(&mut forwards, prefs, |f| f.group_id.as_deref());
     out.insert("forwards".into(), to_val(forwards)?);
-    if on(|p| p.groups) {
-        out.insert("groups".into(), to_val(group::list(db)?)?);
-    }
+    out.insert("groups".into(), to_val(group::list(db)?)?);
     let mut serials = serial_profile::list(db)?;
     retain_by_groups(&mut serials, prefs, |s| s.group_id.as_deref());
     out.insert("serial_profiles".into(), to_val(serials)?);
