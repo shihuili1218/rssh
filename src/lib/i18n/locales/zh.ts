@@ -870,8 +870,8 @@ const zh: Messages = {
   "sync.categories.ai_blacklist": "AI 命令黑名单",
   "sync.categories.ai": "AI 配置",
   "sync.categories.ai_key": "AI API 密钥",
-  "sync.categories.profiles": "同步范围（按分组）",
-  "sync.categories.profiles_hint": "勾选的分组（含「未分组」）内的主机、端口转发、串口预设都会同步；全部勾选 = 全部同步，全部不勾 = 都不同步。",
+  "sync.categories.profiles": "Profile/端口转发/串口（按分组）",
+  "sync.categories.profiles_hint": "勾选的分组内的主机、端口转发、串口预设都会同步；全部勾选 = 全部同步，全部不勾 = 都不同步。",
   // GitHub 同步
   "github.pat_hint1": "在 github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens 创建一个 PAT。",
   "github.pat_hint2": "仓库访问：选择 “Only select repositories”（而非 “All repositories”）",
