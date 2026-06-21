@@ -563,12 +563,16 @@ mod tests {
     }
 
     #[test]
-    fn push_omits_ai_key_when_disabled() {
+    fn push_ai_toggle_gates_whole_block_including_key() {
+        // "AI 配置" is one switch (merged from the old sync_include_ai +
+        // sync_include_ai_key pair): on → provider config AND key are exported;
+        // off → the whole "ai" section is omitted.
         let (db, ss, dir) = fixture();
         crate::db::settings::set(&db, "ai_anthropic_model", "claude-x").unwrap();
         ss.set(&setting_key("ai_anthropic_key"), "sk-secret")
             .unwrap();
-        crate::db::settings::set(&db, "sync_include_ai_key", "0").unwrap();
+
+        // On (default): the key rides alongside model/endpoint.
         let prefs = read_sync_prefs(&db).unwrap();
         let v = build_payload(&db, &ss, dir.path(), &ExportMode::RemotePush(prefs)).unwrap();
         let anth = v["ai"]["providers"]
@@ -577,8 +581,14 @@ mod tests {
             .iter()
             .find(|p| p["provider"] == "anthropic")
             .expect("anthropic present (model configured)");
-        assert!(anth.get("api_key").is_none(), "api_key gated off");
-        assert_eq!(anth["model"], "claude-x", "non-secret fields still synced");
+        assert_eq!(anth["api_key"], "sk-secret", "key rides with the AI block");
+        assert_eq!(anth["model"], "claude-x");
+
+        // Off: the entire ai section is gone.
+        crate::db::settings::set(&db, "sync_include_ai", "0").unwrap();
+        let prefs = read_sync_prefs(&db).unwrap();
+        let v = build_payload(&db, &ss, dir.path(), &ExportMode::RemotePush(prefs)).unwrap();
+        assert!(v.get("ai").is_none(), "ai section omitted when toggle off");
     }
 
     #[test]

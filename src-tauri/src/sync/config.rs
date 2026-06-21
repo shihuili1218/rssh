@@ -369,7 +369,6 @@ pub struct SyncPrefs {
     ai_redact: bool,
     ai_blacklist: bool,
     ai: bool,
-    ai_key: bool,
     /// Group filter shared by profiles / forwards / serial_profiles.
     /// `None` = everything (the "all groups" sentinel). `Some(ids)` = only rows
     /// whose group is in the set; the "" id matches ungrouped rows.
@@ -414,7 +413,6 @@ pub fn read_sync_prefs(db: &Db) -> AppResult<SyncPrefs> {
         ai_blacklist: flag("sync_include_ai_blacklist")?,
         snippets: flag("sync_include_snippets")?,
         ai: flag("sync_include_ai")?,
-        ai_key: flag("sync_include_ai_key")?,
         profile_group_ids,
     })
 }
@@ -519,11 +517,14 @@ pub fn build_payload(
             to_val(ai_command_blacklist::list(db)?)?,
         );
     }
+    // "AI 配置" — one toggle for the whole AI section: active provider + each
+    // provider's model/endpoint AND api_key, all-or-nothing. The key rides in the
+    // payload as plaintext, then the whole payload is encrypted with the sync
+    // password before upload, so the remote never sees it in clear.
     if on(|p| p.ai) {
-        let include_keys = on(|p| p.ai_key);
         out.insert(
             "ai".into(),
-            crate::ai::commands::export_ai_settings(db, ss, include_keys)?,
+            crate::ai::commands::export_ai_settings(db, ss, true)?,
         );
     }
 

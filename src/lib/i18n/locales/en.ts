@@ -865,7 +865,7 @@ const en = {
   "sync.categories.snippets": "Command snippets",
   "sync.categories.ai_redact": "AI redaction rules",
   "sync.categories.ai_blacklist": "AI command blacklist",
-  "sync.categories.ai": "AI providers (model / endpoint)",
+  "sync.categories.ai": "AI config",
   "sync.categories.ai_key": "AI API keys",
   "sync.categories.profiles": "Sync scope (by group)",
   "sync.categories.profiles_hint": "Profiles, port forwards and serial profiles in the checked groups (including \"Ungrouped\") are synced. All checked = sync everything; none checked = sync nothing.",

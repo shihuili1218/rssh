@@ -868,7 +868,7 @@ const zh: Messages = {
   "sync.categories.snippets": "命令片段",
   "sync.categories.ai_redact": "AI 脱敏规则",
   "sync.categories.ai_blacklist": "AI 命令黑名单",
-  "sync.categories.ai": "AI 平台（模型 / 端点）",
+  "sync.categories.ai": "AI 配置",
   "sync.categories.ai_key": "AI API 密钥",
   "sync.categories.profiles": "同步范围（按分组）",
   "sync.categories.profiles_hint": "勾选的分组（含「未分组」）内的主机、端口转发、串口预设都会同步；全部勾选 = 全部同步，全部不勾 = 都不同步。",

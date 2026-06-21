@@ -36,7 +36,6 @@
         { key: "sync_include_ai_redact", label: "sync.categories.ai_redact" },
         { key: "sync_include_ai_blacklist", label: "sync.categories.ai_blacklist" },
         { key: "sync_include_ai", label: "sync.categories.ai" },
-        { key: "sync_include_ai_key", label: "sync.categories.ai_key" },
     ];
     let flags = $state<Record<string, boolean>>({});
     let groups = $state<{ id: string; name: string; color: string }[]>([]);
