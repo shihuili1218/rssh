@@ -23,6 +23,7 @@
   import ShortcutsScreen from "./ShortcutsScreen.svelte";
   import AboutScreen from "./AboutScreen.svelte";
   import ShellSettings from "./ShellSettings.svelte";
+  import CommandBlockSettings from "./CommandBlockSettings.svelte";
   import CliSettings from "./CliSettings.svelte";
   import AppearanceSettings from "./AppearanceSettings.svelte";
   import AiSettings from "./AiSettings.svelte";
@@ -50,6 +51,7 @@
     "import-export":      { component: ImportExportScreen },
     "import-ssh-config":  { component: SshConfigImportScreen },
     "shell-settings":     { component: ShellSettings },
+    "command-blocks":     { component: CommandBlockSettings },
     "recording-settings": { component: RecordingSettings },
     "playback":           { component: PlaybackScreen },
     "cli":                { component: CliSettings },
@@ -83,6 +85,7 @@
     { id: "highlights", label: t("settings.section.highlights"), section: "settings.group.appearance" },
     { id: "snippets", label: t("settings.section.snippets"), section: "settings.group.appearance" },
     // Advanced: power features beyond a plain terminal (sync, AI, CLI).
+    { id: "command-blocks", label: t("settings.section.command_block"), section: "settings.group.advanced" },
     { id: "sync", label: t("settings.section.sync"), section: "settings.group.advanced" },
     { id: "ai", label: t("settings.section.ai"), section: "settings.group.advanced" },
     { id: "cli", label: t("settings.section.cli"), section: "settings.group.advanced" },

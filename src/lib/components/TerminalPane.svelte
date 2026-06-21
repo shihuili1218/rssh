@@ -247,6 +247,22 @@
     const coloredBlockIds = new SvelteSet<number>();
     let selectionAnchorId: number | null = null;
 
+    // 自动染色：开关开着时，每个新块一出现就自动染（等价于自动右键"染色"）。
+    // 块 id 单调递增、永不复用，用一个水位线整数记"已自动处理到哪"，保证每块只自动
+    // 染一次——右键"取消染色"删掉的块 id 在水位线之下，不会被下一帧重新染回来。
+    // 中途打开开关时，存量块（id > 水位线）也会被一并染上。
+    let autoColoredHwm = 0;
+    $effect(() => {
+        paintTick; // 块增删 → 重算
+        if (!app.autoColorBlocks() || !blockTracker) return;
+        let maxId = autoColoredHwm;
+        for (const b of blockTracker.blocks) {
+            if (b.id > autoColoredHwm) coloredBlockIds.add(b.id);
+            if (b.id > maxId) maxId = b.id;
+        }
+        autoColoredHwm = maxId;
+    });
+
     function handleBlockClick(r: BlockRect, ev: MouseEvent) {
         if (ev.shiftKey) rangeSelectTo(r);
         else if (ev.metaKey || ev.ctrlKey) toggleSelect(r);
@@ -1233,6 +1249,7 @@
         try { hlRules = await app.loadHighlights(); buildCompiledRules(hlRules); } catch {}
         hlEverLoaded = true;
         await app.loadCommandBlockBar();
+        await app.loadAutoColorBlocks();
 
         // Connect
         await connectAndWire();

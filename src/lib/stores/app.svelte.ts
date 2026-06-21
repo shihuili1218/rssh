@@ -36,6 +36,7 @@ export type SettingsPage =
   | "recording-settings"
   | "playback"
   | "shell-settings"
+  | "command-blocks"
   | "groups"
   | "group-edit"
   | "cli"
@@ -476,6 +477,29 @@ export async function setCommandBlockBar(v: boolean) {
   _commandBlockBar = v;
   _cbbLoaded = true;
   await invoke("set_setting", { key: "command_block_bar", value: String(v) });
+}
+
+/* ─── Auto-color every command block ─── */
+// When on, each new block is colored automatically (same effect as right-click
+// "color"); right-click can still uncolor an individual block. Default false:
+// only an explicit "true" enables, same encoding as copyOnSelect.
+let _autoColorBlocks = $state(false);
+let _acbLoaded = false;
+export function autoColorBlocks() { return _autoColorBlocks; }
+export async function loadAutoColorBlocks(): Promise<boolean> {
+  if (!_acbLoaded) {
+    _acbLoaded = true;
+    try {
+      const v = await invoke<string | null>("get_setting", { key: "command_block_auto_color" });
+      _autoColorBlocks = v === "true";
+    } catch {}
+  }
+  return _autoColorBlocks;
+}
+export async function setAutoColorBlocks(v: boolean) {
+  _autoColorBlocks = v;
+  _acbLoaded = true;
+  await invoke("set_setting", { key: "command_block_auto_color", value: String(v) });
 }
 
 /* ─── Copy selected terminal text on selection ─── */

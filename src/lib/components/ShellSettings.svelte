@@ -15,7 +15,6 @@
   let pendingCustom = $state(false);
   let verboseLog = $state(true);
   let connectTimeout = $state(10);
-  let commandBlockBar = $state(true);
   let copyOnSelect = $state(false);
   let confirmCloseTab = $state(false);
   let rightClickAction = $state<app.RightClickAction>("menu");
@@ -42,7 +41,6 @@
     verboseLog = (await invoke<string | null>("get_setting", { key: "verbose_log" })) !== "false";
     const ts = await invoke<string | null>("get_setting", { key: "connect_timeout" });
     if (ts) connectTimeout = parseInt(ts, 10) || 10;
-    commandBlockBar = await app.loadCommandBlockBar();
     copyOnSelect = await app.loadCopyOnSelect();
     confirmCloseTab = await app.loadConfirmCloseTab();
     rightClickAction = await app.loadRightClickAction();
@@ -92,10 +90,6 @@
     const val = Math.max(1, Math.min(300, connectTimeout));
     connectTimeout = val;
     await invoke("set_setting", { key: "connect_timeout", value: String(val) });
-  }
-
-  async function saveCommandBlockBar() {
-    await app.setCommandBlockBar(commandBlockBar);
   }
 
   async function saveCopyOnSelect() {
@@ -234,39 +228,6 @@
     </div>
   </div>
 
-  <div class="section-label">{t("settings.shell.command_block")}</div>
-  <!-- 命令块侧栏开关 + 启用后的快捷键提示合在一个 .card.surface-raised。
-       关时只有开关行；开时分隔线下展开 tips，跟 .danger-card 同款"主开关 + 分隔 + 子内容"结构。 -->
-  <div class="card surface-raised cmd-block-card">
-    <div class="cmd-block-head">
-      <div class="cmd-block-head-body">
-        <div class="cmd-block-title"
-             class:on={commandBlockBar} class:off={!commandBlockBar}>
-          {t("settings.shell.command_block_bar")}
-        </div>
-        <div class="cmd-block-desc">{t("settings.shell.command_block_bar_desc")}</div>
-      </div>
-      <label class="switch">
-        <input type="checkbox" bind:checked={commandBlockBar} onchange={saveCommandBlockBar} />
-        <span class="slider"></span>
-      </label>
-    </div>
-
-    {#if commandBlockBar}
-      <div class="card-divider"></div>
-      <div class="tips-group">
-        <div class="tips-title">{t("settings.shell.command_block_tips_title")}</div>
-        <ul class="tips-list">
-          <li>{t("settings.shell.command_block_tip_click")}</li>
-          <li>{t("settings.shell.command_block_tip_shift_click")}</li>
-          <li>{t("settings.shell.command_block_tip_cmd_click")}</li>
-          <li>{t("settings.shell.command_block_tip_right_click")}</li>
-          <li>{t("settings.shell.command_block_tip_clear")}</li>
-        </ul>
-      </div>
-    {/if}
-  </div>
-
 </div>
 
 <style>
@@ -275,7 +236,6 @@
   /* 卡片：复用全局 .card.surface-raised，本地只加 padding + 内布局，
      跟 SyncScreen / AiSettings 同款。 */
   .shell-card,
-  .cmd-block-card,
   .mouse-card {
     padding: 18px;
     display: flex;
@@ -433,8 +393,8 @@
     font-size: 11px; color: var(--text-dim);
   }
 
-  /* 命令块卡片：主开关行（title/desc + switch）→ 分隔线 → tips 列表，
-     跟 .danger-card 同样的"主开关 + 子内容"结构。 */
+  /* 交互卡片的行布局（title/desc + 控件），分隔线分隔多行。
+     类名沿用 .cmd-block-* —— 命令块卡片已迁到 CommandBlockSettings，这里复用同款行结构。 */
   .cmd-block-head {
     display: flex;
     align-items: center;
@@ -465,29 +425,5 @@
     height: 1px;
     background: var(--divider);
     margin: 2px -18px;
-  }
-
-  /* Tips 列表 —— 嵌在 .cmd-block-card 内，不再有自己的 bg/border。 */
-  .tips-group {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .tips-title {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-sub);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-  .tips-list {
-    margin: 0;
-    padding-left: 18px;
-    font-size: 12px;
-    color: var(--text);
-    line-height: 1.6;
-  }
-  .tips-list li {
-    margin: 2px 0;
   }
 </style>
