@@ -60,6 +60,7 @@ export interface Credential {
 export interface Forward {
   id: string; name: string; type: string;
   local_port: number; remote_host: string; remote_port: number; profile_id: string;
+  group_id: string | null;
 }
 export interface SerialProfile {
   id: string; name: string; port: string;
@@ -70,6 +71,7 @@ export interface SerialProfile {
   input_newline: string; output_newline: string;
   local_echo: boolean; backspace: string; slow_send: boolean;
   input_mode: string; output_mode: string; login_script: string;
+  group_id: string | null;
 }
 export interface Snippet { name: string; command: string; }
 export interface HighlightRule { keyword: string; name: string; color: string; enabled: boolean; is_regex: boolean; is_case_sensitive: boolean; }

@@ -22,13 +22,14 @@ fn type_str(ft: ForwardType) -> &'static str {
 pub fn get(db: &Db, id: &str) -> AppResult<Forward> {
     let conn = db.lock()?;
     conn.query_row(
-        "SELECT id, name, profile_id, type, local_port, remote_host, remote_port FROM forwards WHERE id = ?1",
+        "SELECT id, name, profile_id, type, local_port, remote_host, remote_port, group_id FROM forwards WHERE id = ?1",
         params![id],
         |row| Ok(Forward {
             id: row.get(0)?, name: row.get(1)?, profile_id: row.get(2)?,
             forward_type: parse_type(&row.get::<_, String>(3)?),
             local_port: row.get::<_, u32>(4)? as u16,
             remote_host: row.get(5)?, remote_port: row.get::<_, u32>(6)? as u16,
+            group_id: row.get(7)?,
         }),
     ).map_err(|e| match e {
         rusqlite::Error::QueryReturnedNoRows => crate::error::AppError::not_found("fwd_rule_not_found", serde_json::json!({})),
@@ -39,7 +40,7 @@ pub fn get(db: &Db, id: &str) -> AppResult<Forward> {
 pub fn list(db: &Db) -> AppResult<Vec<Forward>> {
     let conn = db.lock()?;
     let mut stmt = conn.prepare(
-        "SELECT id, name, profile_id, type, local_port, remote_host, remote_port FROM forwards ORDER BY name ASC",
+        "SELECT id, name, profile_id, type, local_port, remote_host, remote_port, group_id FROM forwards ORDER BY name ASC",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(Forward {
@@ -50,6 +51,7 @@ pub fn list(db: &Db) -> AppResult<Vec<Forward>> {
             local_port: row.get::<_, u32>(4)? as u16,
             remote_host: row.get(5)?,
             remote_port: row.get::<_, u32>(6)? as u16,
+            group_id: row.get(7)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -58,9 +60,9 @@ pub fn list(db: &Db) -> AppResult<Vec<Forward>> {
 pub fn insert_tx(conn: &rusqlite::Connection, f: &Forward) -> AppResult<()> {
     validate_name(&f.name)?;
     conn.execute(
-        "INSERT INTO forwards (id, name, profile_id, type, local_port, remote_host, remote_port) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
-         ON CONFLICT(id) DO UPDATE SET name=excluded.name, profile_id=excluded.profile_id, type=excluded.type, local_port=excluded.local_port, remote_host=excluded.remote_host, remote_port=excluded.remote_port",
-        params![f.id, f.name, f.profile_id, type_str(f.forward_type), f.local_port as u32, f.remote_host, f.remote_port as u32],
+        "INSERT INTO forwards (id, name, profile_id, type, local_port, remote_host, remote_port, group_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+         ON CONFLICT(id) DO UPDATE SET name=excluded.name, profile_id=excluded.profile_id, type=excluded.type, local_port=excluded.local_port, remote_host=excluded.remote_host, remote_port=excluded.remote_port, group_id=excluded.group_id",
+        params![f.id, f.name, f.profile_id, type_str(f.forward_type), f.local_port as u32, f.remote_host, f.remote_port as u32, f.group_id],
     )?;
     Ok(())
 }
@@ -74,8 +76,8 @@ pub fn update(db: &Db, f: &Forward) -> AppResult<()> {
     validate_name(&f.name)?;
     let conn = db.lock()?;
     conn.execute(
-        "UPDATE forwards SET name=?1, profile_id=?2, type=?3, local_port=?4, remote_host=?5, remote_port=?6 WHERE id=?7",
-        params![f.name, f.profile_id, type_str(f.forward_type), f.local_port as u32, f.remote_host, f.remote_port as u32, f.id],
+        "UPDATE forwards SET name=?1, profile_id=?2, type=?3, local_port=?4, remote_host=?5, remote_port=?6, group_id=?7 WHERE id=?8",
+        params![f.name, f.profile_id, type_str(f.forward_type), f.local_port as u32, f.remote_host, f.remote_port as u32, f.group_id, f.id],
     )?;
     Ok(())
 }
@@ -110,7 +112,20 @@ mod tests {
             remote_host: "127.0.0.1".into(),
             remote_port: 80,
             profile_id: "p1".into(),
+            group_id: None,
         }
+    }
+
+    #[test]
+    fn group_id_roundtrips() {
+        let db = Db::open_in_memory().unwrap();
+        let mut f = mk("f1", "alpha", ForwardType::Local);
+        f.group_id = Some("g_prod".into());
+        insert(&db, &f).unwrap();
+        assert_eq!(get(&db, "f1").unwrap().group_id.as_deref(), Some("g_prod"));
+        // A row inserted without a group stays ungrouped (NULL → None).
+        insert(&db, &mk("f2", "beta", ForwardType::Local)).unwrap();
+        assert_eq!(get(&db, "f2").unwrap().group_id, None);
     }
 
     #[test]

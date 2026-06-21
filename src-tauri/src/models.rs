@@ -105,6 +105,10 @@ pub struct Forward {
     pub remote_host: String,
     pub remote_port: u16,
     pub profile_id: String,
+    /// Optional group membership — shares the same `groups` table as profiles.
+    /// `#[serde(default)]` keeps older exported payloads (no group_id) importable.
+    #[serde(default)]
+    pub group_id: Option<String>,
 }
 
 /// Saved serial console — a peer of `Profile`/`Forward`. No secret, no FK: just
@@ -141,6 +145,9 @@ pub struct SerialProfile {
     pub output_mode: String, // text | hex
     #[serde(default)]
     pub login_script: String, // expect/send lines, run on connect
+    /// Optional group membership — same `groups` table as profiles/forwards.
+    #[serde(default)]
+    pub group_id: Option<String>,
 }
 
 fn default_input_newline() -> String {

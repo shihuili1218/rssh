@@ -298,7 +298,7 @@ pub async fn webdav_pull_impl(state: &AppState, password: String) -> AppResult<(
 mod tests {
     use super::*;
     use crate::db::profile;
-    use crate::models::Profile;
+    use crate::models::{Forward, ForwardType, Profile, SerialProfile};
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -344,6 +344,42 @@ mod tests {
             credential_id: "c".into(),
             bastion_profile_id: None,
             init_command: None,
+            group_id: group.map(String::from),
+        }
+    }
+
+    fn fwd(id: &str, group: Option<&str>) -> Forward {
+        Forward {
+            id: id.into(),
+            name: format!("fwd-{id}"),
+            forward_type: ForwardType::Local,
+            local_port: 8080,
+            remote_host: "127.0.0.1".into(),
+            remote_port: 80,
+            profile_id: "p".into(),
+            group_id: group.map(String::from),
+        }
+    }
+
+    fn ser(id: &str, group: Option<&str>) -> SerialProfile {
+        SerialProfile {
+            id: id.into(),
+            name: format!("ser-{id}"),
+            port: "/dev/ttyUSB0".into(),
+            baud_rate: 115200,
+            data_bits: 8,
+            parity: "none".into(),
+            stop_bits: 1,
+            flow_control: "none".into(),
+            xany: false,
+            input_newline: "cr".into(),
+            output_newline: "raw".into(),
+            local_echo: false,
+            backspace: "del".into(),
+            slow_send: false,
+            input_mode: "normal".into(),
+            output_mode: "text".into(),
+            login_script: String::new(),
             group_id: group.map(String::from),
         }
     }
@@ -400,6 +436,93 @@ mod tests {
             .map(|p| p["id"].as_str().unwrap())
             .collect();
         assert_eq!(ids, vec!["p1"], "only the selected group is exported");
+    }
+
+    #[test]
+    fn push_filters_forwards_and_serial_by_group() {
+        // Forwards and serial profiles now share the profile group filter: pick a
+        // group, only that group's rows of every kind go out. Ungrouped drop out.
+        let (db, ss, dir) = fixture();
+        crate::db::forward::insert(&db, &fwd("f1", Some("g1"))).unwrap();
+        crate::db::forward::insert(&db, &fwd("f2", Some("g2"))).unwrap();
+        crate::db::forward::insert(&db, &fwd("f3", None)).unwrap();
+        crate::db::serial_profile::insert(&db, &ser("s1", Some("g1"))).unwrap();
+        crate::db::serial_profile::insert(&db, &ser("s2", Some("g2"))).unwrap();
+        crate::db::settings::set(&db, "sync_profile_group_ids", "[\"g1\"]").unwrap();
+        let prefs = read_sync_prefs(&db).unwrap();
+        let v = build_payload(&db, &ss, dir.path(), &ExportMode::RemotePush(prefs)).unwrap();
+
+        let fids: Vec<&str> = v["forwards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(fids, vec!["f1"], "only g1 forwards exported");
+        let sids: Vec<&str> = v["serial_profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(sids, vec!["s1"], "only g1 serial profiles exported");
+    }
+
+    #[test]
+    fn push_all_groups_includes_ungrouped_forwards_serial() {
+        // Empty-string sentinel = all groups = everything, including ungrouped
+        // forwards/serial (the "select all groups to sync everything" contract).
+        let (db, ss, dir) = fixture();
+        crate::db::forward::insert(&db, &fwd("f1", Some("g1"))).unwrap();
+        crate::db::forward::insert(&db, &fwd("f2", None)).unwrap();
+        crate::db::serial_profile::insert(&db, &ser("s1", None)).unwrap();
+        crate::db::settings::set(&db, "sync_profile_group_ids", "").unwrap();
+        let prefs = read_sync_prefs(&db).unwrap();
+        let v = build_payload(&db, &ss, dir.path(), &ExportMode::RemotePush(prefs)).unwrap();
+        assert_eq!(
+            v["forwards"].as_array().unwrap().len(),
+            2,
+            "all forwards incl ungrouped"
+        );
+        assert_eq!(
+            v["serial_profiles"].as_array().unwrap().len(),
+            1,
+            "ungrouped serial included"
+        );
+    }
+
+    #[test]
+    fn push_ungrouped_sentinel_selects_ungrouped_rows() {
+        // "" = the "Ungrouped" chip: selecting only it syncs only the rows that
+        // have no group, across all three kinds.
+        let (db, ss, dir) = fixture();
+        profile::insert(&db, &prof("p1", Some("g1"))).unwrap();
+        profile::insert(&db, &prof("p2", None)).unwrap();
+        crate::db::forward::insert(&db, &fwd("f1", None)).unwrap();
+        crate::db::forward::insert(&db, &fwd("f2", Some("g1"))).unwrap();
+        crate::db::serial_profile::insert(&db, &ser("s1", None)).unwrap();
+        crate::db::settings::set(&db, "sync_profile_group_ids", "[\"\"]").unwrap();
+        let prefs = read_sync_prefs(&db).unwrap();
+        let v = build_payload(&db, &ss, dir.path(), &ExportMode::RemotePush(prefs)).unwrap();
+        let pid: Vec<&str> = v["profiles"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap()).collect();
+        assert_eq!(pid, vec!["p2"], "only ungrouped profile");
+        let fid: Vec<&str> = v["forwards"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
+        assert_eq!(fid, vec!["f1"], "only ungrouped forward");
+        assert_eq!(v["serial_profiles"].as_array().unwrap().len(), 1, "ungrouped serial");
+    }
+
+    #[test]
+    fn push_group_plus_ungrouped_sentinel() {
+        // A real group id + "" syncs that group AND the ungrouped rows.
+        let (db, ss, dir) = fixture();
+        profile::insert(&db, &prof("p1", Some("g1"))).unwrap();
+        profile::insert(&db, &prof("p2", Some("g2"))).unwrap();
+        profile::insert(&db, &prof("p3", None)).unwrap();
+        crate::db::settings::set(&db, "sync_profile_group_ids", "[\"g1\",\"\"]").unwrap();
+        let prefs = read_sync_prefs(&db).unwrap();
+        let v = build_payload(&db, &ss, dir.path(), &ExportMode::RemotePush(prefs)).unwrap();
+        let pid: Vec<&str> = v["profiles"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap()).collect();
+        assert_eq!(pid, vec!["p1", "p3"], "g1 + ungrouped");
     }
 
     #[test]
@@ -461,7 +584,7 @@ mod tests {
     #[test]
     fn payload_never_contains_sync_toggles() {
         let (db, ss, dir) = fixture();
-        crate::db::settings::set(&db, "sync_include_forwards", "0").unwrap();
+        crate::db::settings::set(&db, "sync_include_highlights", "0").unwrap();
         let prefs = read_sync_prefs(&db).unwrap();
         let v = build_payload(&db, &ss, dir.path(), &ExportMode::RemotePush(prefs)).unwrap();
         let s = serde_json::to_string(&v).unwrap();

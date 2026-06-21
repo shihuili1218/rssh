@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
+  import type { Group } from "../stores/app.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
   import { t, errMsg } from "../i18n/index.svelte.ts";
   import Select from "./Select.svelte";
@@ -31,6 +32,12 @@
   let saving = $state(false);
   // Detected ports populate a <datalist> for the free-form port input.
   let ports = $state<string[]>([]);
+  let groups = $state<Group[]>([]);
+  let groupId = $state<string | null>(null);
+  let groupOptions = $derived([
+    { value: null, label: t("profile.none") },
+    ...groups.map((g) => ({ value: g.id, label: g.name })),
+  ]);
 
   const dataBitsOptions = [
     { value: 8, label: "8" }, { value: 7, label: "7" },
@@ -75,6 +82,7 @@
 
   onMount(async () => {
     invoke<string[]>("serial_list_ports").then((p) => (ports = p)).catch(() => {});
+    app.loadGroups().then((g) => (groups = g)).catch(() => {});
     if (id) {
       const s = await invoke<any>("get_serial_profile", { id }).catch(() => null);
       if (s) {
@@ -83,6 +91,7 @@
         xany = s.xany; inputNewline = s.input_newline; outputNewline = s.output_newline;
         localEcho = s.local_echo; backspace = s.backspace; slowSend = s.slow_send;
         inputMode = s.input_mode; outputMode = s.output_mode; loginScript = s.login_script;
+        groupId = s.group_id ?? null;
       }
     }
   });
@@ -98,6 +107,7 @@
         input_newline: inputNewline, output_newline: outputNewline,
         local_echo: localEcho, backspace, slow_send: slowSend,
         input_mode: inputMode, output_mode: outputMode, login_script: loginScript,
+        group_id: groupId || null,
       };
       if (id) await invoke("update_serial_profile", { profile });
       else await invoke("create_serial_profile", { profile });
@@ -111,6 +121,8 @@
   <div class="form">
     <label>{t("common.name")}</label>
     <input type="text" bind:value={name} placeholder={t("serial.name_placeholder")} />
+    <label>{t("profile.group")} {t("common.optional")}</label>
+    <Select bind:value={groupId} options={groupOptions} />
 
     <div class="section-label">{t("serial.sec.line")}</div>
     <label>{t("serial.port")}</label>

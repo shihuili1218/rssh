@@ -867,8 +867,8 @@ const en = {
   "sync.categories.ai_blacklist": "AI command blacklist",
   "sync.categories.ai": "AI providers (model / endpoint)",
   "sync.categories.ai_key": "AI API keys",
-  "sync.categories.profiles": "Profiles (by group)",
-  "sync.categories.profiles_hint": "Only profiles in checked groups are synced. Check all groups to sync every profile; leave all unchecked to sync none.",
+  "sync.categories.profiles": "Sync scope (by group)",
+  "sync.categories.profiles_hint": "Profiles, port forwards and serial profiles in the checked groups (including \"Ungrouped\") are synced. All checked = sync everything; none checked = sync nothing.",
   // GitHub sync
   "github.pat_hint1": "Create a PAT at github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens.",
   "github.pat_hint2": "Repository access: Select \"Only select repositories\" (instead of \"All repositories\")",

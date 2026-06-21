@@ -29,9 +29,7 @@
     /* ── Shared sync content toggles ──────────────────────────────────────── */
     const SYNC_ITEMS: { key: string; label: MessageKey }[] = [
         { key: "sync_include_credentials", label: "sync.categories.credentials" },
-        { key: "sync_include_forwards", label: "sync.categories.forwards" },
         { key: "sync_include_groups", label: "sync.categories.groups" },
-        { key: "sync_include_serial", label: "sync.categories.serial" },
         { key: "sync_include_highlights", label: "sync.categories.highlights" },
         { key: "sync_include_snippets", label: "sync.categories.snippets" },
         { key: "sync_include_skills", label: "sync.categories.skills" },
@@ -43,6 +41,12 @@
     let flags = $state<Record<string, boolean>>({});
     let groups = $state<{ id: string; name: string; color: string }[]>([]);
     let selectedGroups = $state<string[]>([]);
+    // Chips = real groups + a synthetic "Ungrouped" (id ""). Selecting it syncs
+    // rows with no group; the backend treats "" as the ungrouped key.
+    let chipGroups = $derived([
+        ...groups,
+        { id: "", name: t("profile.ungrouped"), color: "" },
+    ]);
 
     /* ── Password dialog state ───────────────────────────────────────────── */
     let showPwDialog = $state(false);
@@ -77,15 +81,15 @@
         groups = await invoke<{ id: string; name: string; color: string }[]>("list_groups").catch(() => []);
         const gjson = await invoke<string | null>("get_setting", { key: "sync_profile_group_ids" });
         if (gjson === null || gjson === "") {
-            selectedGroups = groups.map((g) => g.id);
+            selectedGroups = chipGroups.map((g) => g.id);
         } else {
-            const valid = new Set(groups.map((g) => g.id));
+            const valid = new Set(chipGroups.map((g) => g.id));
             let parsed: unknown;
             try { parsed = JSON.parse(gjson); } catch { parsed = undefined; }
             if (Array.isArray(parsed) && parsed.every((v) => typeof v === "string")) {
                 selectedGroups = [...new Set((parsed as string[]).filter((v) => valid.has(v)))];
             } else {
-                selectedGroups = groups.map((g) => g.id);
+                selectedGroups = chipGroups.map((g) => g.id);
                 await invoke("set_setting", { key: "sync_profile_group_ids", value: "" });
             }
         }
@@ -176,7 +180,7 @@
         selectedGroups = checked
             ? [...selectedGroups, id]
             : selectedGroups.filter((g) => g !== id);
-        const allSelected = groups.length > 0 && selectedGroups.length === groups.length;
+        const allSelected = selectedGroups.length === chipGroups.length;
         await invoke("set_setting", {
             key: "sync_profile_group_ids",
             value: allSelected ? "" : JSON.stringify(selectedGroups),
@@ -350,9 +354,9 @@
                 <div class="sync-row-desc">{t("sync.categories.profiles_hint")}</div>
             </div>
         </div>
-        {#if groups.length}
+        {#if chipGroups.length}
             <div class="chips">
-                {#each groups as g (g.id)}
+                {#each chipGroups as g (g.id)}
                     {@const sel = selectedGroups.includes(g.id)}
                     <button type="button" class="chip" class:selected={sel}
                             style={g.color ? `--chip: ${g.color}` : ""}

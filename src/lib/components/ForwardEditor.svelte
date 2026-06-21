@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
-  import type { Profile } from "../stores/app.svelte.ts";
+  import type { Profile, Group } from "../stores/app.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
   import { t, errMsg } from "../i18n/index.svelte.ts";
   import Select from "./Select.svelte";
@@ -13,6 +13,8 @@
   let localPort = $state(8080); let remoteHost = $state("127.0.0.1");
   let remotePort = $state(80); let profileId = $state("");
   let profiles = $state<Profile[]>([]);
+  let groups = $state<Group[]>([]);
+  let groupId = $state<string | null>(null);
   let saving = $state(false);
 
   let profileOptions = $derived(profiles.map((p) => ({ value: p.id, label: p.name })));
@@ -21,15 +23,20 @@
     { value: "remote",  label: t("forward.type.remote") },
     { value: "dynamic", label: t("forward.type.dynamic") },
   ]);
+  let groupOptions = $derived([
+    { value: null, label: t("profile.none") },
+    ...groups.map((g) => ({ value: g.id, label: g.name })),
+  ]);
 
   onMount(async () => {
-    profiles = await app.loadProfiles();
+    [profiles, groups] = await Promise.all([app.loadProfiles(), app.loadGroups()]);
     if (id) {
       const f = await invoke<any>("get_forward", { id }).catch(() => null);
       if (f) {
         name = f.name; forwardType = f.type;
         localPort = f.local_port; remoteHost = f.remote_host;
         remotePort = f.remote_port; profileId = f.profile_id;
+        groupId = f.group_id ?? null;
       }
     }
   });
@@ -45,6 +52,7 @@
         remote_host: remoteHost,
         remote_port: remotePort,
         profile_id: profileId,
+        group_id: groupId || null,
       };
       if (id) await invoke("update_forward", { forward });
       else await invoke("create_forward", { forward });
@@ -71,6 +79,8 @@
         <div class="field"><label>{t("forward.remote_port")}</label><input type="number" bind:value={remotePort} /></div>
       </div>
     {/if}
+    <label>{t("profile.group")} {t("common.optional")}</label>
+    <Select bind:value={groupId} options={groupOptions} />
     <button class="btn btn-accent" onclick={save} disabled={saving || !name || !profileId}>
       {saving ? t("common.saving") : t("common.save")}
     </button>

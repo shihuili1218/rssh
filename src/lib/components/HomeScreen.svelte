@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
   import type { Profile, Credential, Forward, Group, SerialProfile } from "../stores/app.svelte.ts";
 
@@ -11,175 +10,149 @@
   let serialProfiles = $state<SerialProfile[]>([]);
   let query = $state("");
 
-  // Grid nav: "profile" / "forward" / "serial" section + index within that section
-  let navSection = $state<"profile" | "forward" | "serial">("profile");
+  // One global nav index into the flat (display-order) item list.
   let navIdx = $state(-1);
-  let profileGridEl: HTMLDivElement;
-  let forwardGridEl: HTMLDivElement;
-  let serialGridEl: HTMLDivElement;
+  // One grid element per section; all share the same CSS so any one gives the
+  // column count. Plain array (not $state): only read inside the key handler.
+  let gridEls: HTMLDivElement[] = [];
 
+  // ── Normalize the three config kinds into one shape ──────────────────────
+  // SSH profiles, port forwards and serial profiles all become a HomeItem, so a
+  // single grouping / filtering / keyboard-nav path covers them — no per-kind
+  // sections, no special cases. `kind` + the icon are all that set them apart.
+  interface HomeItem {
+    kind: "ssh" | "forward" | "serial";
+    id: string; // `${kind}:${rawId}` — globally unique for keyed #each + nav
+    rawId: string;
+    name: string;
+    sub: string;
+    icon: string;
+    iconClass: string; // "" | "fwd" | "serial"
+    group_id: string | null;
+    data: Profile | Forward | SerialProfile;
+  }
+
+  let allItems = $derived<HomeItem[]>([
+    ...profiles.map((p): HomeItem => {
+      const cred = credentials.find((c) => c.id === p.credential_id);
+      return {
+        kind: "ssh", id: `ssh:${p.id}`, rawId: p.id, name: p.name,
+        sub: `${cred?.username ?? "?"}@${p.host}:${p.port}`,
+        icon: "S", iconClass: "", group_id: p.group_id ?? null, data: p,
+      };
+    }),
+    ...forwards.map((f): HomeItem => ({
+      kind: "forward", id: `forward:${f.id}`, rawId: f.id, name: f.name,
+      sub: `:${f.local_port} → ${f.remote_host}:${f.remote_port}`,
+      icon: f.type === "dynamic" ? "D" : f.type === "local" ? "L" : "R",
+      iconClass: "fwd", group_id: f.group_id ?? null, data: f,
+    })),
+    ...serialProfiles.map((s): HomeItem => ({
+      kind: "serial", id: `serial:${s.id}`, rawId: s.id, name: s.name,
+      sub: `${s.port} · ${s.baud_rate}`,
+      icon: "⎓", iconClass: "serial", group_id: s.group_id ?? null, data: s,
+    })),
+  ]);
+
+  // Search filters all three kinds at once (#4): match the name or the sub-line
+  // (which carries host / ports / baud), case-insensitive.
   let filtered = $derived(
     query
-      ? profiles.filter(p => p.name.toLowerCase().includes(query.toLowerCase()) || p.host.toLowerCase().includes(query.toLowerCase()))
-      : profiles
+      ? allItems.filter((it) => {
+          const q = query.toLowerCase();
+          return it.name.toLowerCase().includes(q) || it.sub.toLowerCase().includes(q);
+        })
+      : allItems
   );
 
-  let groupedProfiles = $derived((() => {
-    const groupMap = new Map<string | null, Profile[]>();
-    for (const p of filtered) {
-      const gid = p.group_id ?? null;
-      if (!groupMap.has(gid)) groupMap.set(gid, []);
-      groupMap.get(gid)!.push(p);
+  // Group into sections by group_id; groups sorted by sort_order, ungrouped
+  // last. Empty groups never appear. `offset` makes an item's global nav index
+  // `offset + i`, keeping the flat list and the rendered sections aligned.
+  let groupedItems = $derived((() => {
+    const map = new Map<string | null, HomeItem[]>();
+    for (const it of filtered) {
+      const gid = it.group_id ?? null;
+      if (!map.has(gid)) map.set(gid, []);
+      map.get(gid)!.push(it);
     }
-    const sections: { group: Group | null; profiles: Profile[]; offset: number }[] = [];
-    // Groups sorted by sort_order
-    const sorted = [...groups].sort((a, b) => a.sort_order - b.sort_order);
-    for (const g of sorted) {
-      const ps = groupMap.get(g.id);
-      if (ps && ps.length > 0) {
-        sections.push({ group: g, profiles: ps, offset: 0 });
-        groupMap.delete(g.id);
-      }
+    const sections: { group: Group | null; items: HomeItem[]; offset: number }[] = [];
+    for (const g of [...groups].sort((a, b) => a.sort_order - b.sort_order)) {
+      const items = map.get(g.id);
+      if (items && items.length > 0) { sections.push({ group: g, items, offset: 0 }); map.delete(g.id); }
     }
-    // Ungrouped profiles (null group_id or unknown group_id)
-    const ungrouped: Profile[] = [];
-    for (const [, ps] of groupMap) ungrouped.push(...ps);
-    if (ungrouped.length > 0) sections.push({ group: null, profiles: ungrouped, offset: 0 });
-    // Attach running offset so any profile's global nav index is `offset + i`.
+    // Ungrouped (null group_id or unknown group_id) → one trailing section.
+    const ungrouped: HomeItem[] = [];
+    for (const [, items] of map) ungrouped.push(...items);
+    if (ungrouped.length > 0) sections.push({ group: null, items: ungrouped, offset: 0 });
     let off = 0;
-    for (const s of sections) { s.offset = off; off += s.profiles.length; }
+    for (const s of sections) { s.offset = off; off += s.items.length; }
     return sections;
   })());
 
-  // Flat list in *display order* — this is what arrow-key navigation walks,
-  // not the original `filtered` order (groups reshuffle things).
-  let navProfiles = $derived(groupedProfiles.flatMap(s => s.profiles));
+  // Flat list in display order — what arrow-key nav walks.
+  let navItems = $derived(groupedItems.flatMap((s) => s.items));
 
-  function getCols(gridEl: HTMLDivElement | undefined): number {
-    if (!gridEl) return 3;
-    const style = getComputedStyle(gridEl);
-    return style.gridTemplateColumns.split(" ").length;
+  function getCols(): number {
+    const el = gridEls.find(Boolean);
+    if (!el) return 3;
+    return getComputedStyle(el).gridTemplateColumns.split(" ").length;
   }
 
-  // Locate which section a global profile navIdx falls into.
+  // Locate which section a global navIdx falls into.
   function findSection(idx: number) {
-    for (let sIdx = 0; sIdx < groupedProfiles.length; sIdx++) {
-      const s = groupedProfiles[sIdx];
-      if (idx < s.offset + s.profiles.length) return { s, sIdx, i: idx - s.offset };
+    for (let sIdx = 0; sIdx < groupedItems.length; sIdx++) {
+      const s = groupedItems[sIdx];
+      if (idx < s.offset + s.items.length) return { s, sIdx, i: idx - s.offset };
     }
     return null;
-  }
-
-  // Enter the (grouped) profile pane from below — land on the last group's last
-  // row at the given column. Shared by forward→profile and serial→profile.
-  function enterProfileFromBelow(col: number) {
-    if (navProfiles.length === 0) return;
-    const last = groupedProfiles[groupedProfiles.length - 1];
-    const pCols = getCols(profileGridEl);
-    const lastRowStart = Math.floor((last.profiles.length - 1) / pCols) * pCols;
-    navSection = "profile";
-    navIdx = last.offset + Math.min(lastRowStart + col, last.profiles.length - 1);
   }
 
   function handleHomeKey(e: KeyboardEvent) {
     if (app.activeTabId() !== "home" || app.settingsActive()) return;
     if (document.activeElement?.tagName === "INPUT") return;
+    const total = navItems.length;
+    if (!total) return;
 
-    // Vertical pane order on Home: profile (grouped) → forward → serial.
-    const pLen = navProfiles.length;
-    const fLen = forwards.length;
-    const sLen = serialProfiles.length;
-    if (!pLen && !fLen && !sLen) return;
-
-    // Initialize nav if not started — first non-empty pane, top-left.
+    // Initialize nav on first arrow / Enter — top-left.
     if (navIdx < 0 && (e.key.startsWith("Arrow") || e.key === "Enter")) {
-      navSection = pLen > 0 ? "profile" : fLen > 0 ? "forward" : "serial";
       navIdx = 0;
       e.preventDefault();
       return;
     }
-
-    const curLen = navSection === "profile" ? pLen : navSection === "forward" ? fLen : sLen;
-    const gridEl = navSection === "profile" ? profileGridEl : navSection === "forward" ? forwardGridEl : serialGridEl;
-    const cols = getCols(gridEl);
+    const cols = getCols();
 
     if (e.key === "ArrowRight") {
       e.preventDefault();
-      navIdx = Math.min(navIdx + 1, curLen - 1);
+      navIdx = Math.min(navIdx + 1, total - 1);
     } else if (e.key === "ArrowLeft") {
       e.preventDefault();
       navIdx = Math.max(navIdx - 1, 0);
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
-      if (navSection === "profile") {
-        const cur = findSection(navIdx);
-        if (!cur) return;
-        const col = cur.i % cols;
-        if (cur.i + cols < cur.s.profiles.length) {
-          // Next row within current group
-          navIdx = cur.s.offset + cur.i + cols;
-        } else if (cur.sIdx + 1 < groupedProfiles.length) {
-          // Jump to next group's first row, same column
-          const next = groupedProfiles[cur.sIdx + 1];
-          navIdx = next.offset + Math.min(col, next.profiles.length - 1);
-        } else if (fLen > 0) {
-          navSection = "forward";
-          navIdx = Math.min(col, fLen - 1);
-        } else if (sLen > 0) {
-          navSection = "serial";
-          navIdx = Math.min(col, sLen - 1);
-        }
-      } else if (navSection === "forward") {
-        if (navIdx + cols < fLen) {
-          navIdx += cols;
-        } else if (sLen > 0) {
-          // forward bottom → serial, same column
-          navSection = "serial";
-          navIdx = Math.min(navIdx % cols, sLen - 1);
-        }
-      } else if (navIdx + cols < sLen) {
-        navIdx += cols;
+      const cur = findSection(navIdx);
+      if (!cur) return;
+      const col = cur.i % cols;
+      if (cur.i + cols < cur.s.items.length) {
+        navIdx = cur.s.offset + cur.i + cols; // next row within this section
+      } else if (cur.sIdx + 1 < groupedItems.length) {
+        const next = groupedItems[cur.sIdx + 1]; // next section, same column
+        navIdx = next.offset + Math.min(col, next.items.length - 1);
       }
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      if (navSection === "profile") {
-        const cur = findSection(navIdx);
-        if (!cur) return;
-        const col = cur.i % cols;
-        if (cur.i - cols >= 0) {
-          navIdx = cur.s.offset + cur.i - cols;
-        } else if (cur.sIdx - 1 >= 0) {
-          // Jump to prev group's last row, same column
-          const prev = groupedProfiles[cur.sIdx - 1];
-          const lastRowStart = Math.floor((prev.profiles.length - 1) / cols) * cols;
-          navIdx = prev.offset + Math.min(lastRowStart + col, prev.profiles.length - 1);
-        }
-      } else if (navSection === "forward") {
-        const col = navIdx % cols;
-        if (navIdx - cols >= 0) {
-          navIdx -= cols;
-        } else {
-          enterProfileFromBelow(col); // forward top → profile (no-op if no profiles)
-        }
-      } else {
-        // serial top → forward last row, else profile, same column
-        const col = navIdx % cols;
-        if (navIdx - cols >= 0) {
-          navIdx -= cols;
-        } else if (fLen > 0) {
-          const fCols = getCols(forwardGridEl);
-          const lastRowStart = Math.floor((fLen - 1) / fCols) * fCols;
-          navSection = "forward";
-          navIdx = Math.min(lastRowStart + col, fLen - 1);
-        } else {
-          enterProfileFromBelow(col);
-        }
+      const cur = findSection(navIdx);
+      if (!cur) return;
+      const col = cur.i % cols;
+      if (cur.i - cols >= 0) {
+        navIdx = cur.s.offset + cur.i - cols; // prev row within this section
+      } else if (cur.sIdx - 1 >= 0) {
+        const prev = groupedItems[cur.sIdx - 1]; // prev section, last row, same column
+        const lastRowStart = Math.floor((prev.items.length - 1) / cols) * cols;
+        navIdx = prev.offset + Math.min(lastRowStart + col, prev.items.length - 1);
       }
-    } else if (e.key === "Enter" && navIdx >= 0) {
+    } else if (e.key === "Enter" && navIdx >= 0 && navIdx < total) {
       e.preventDefault();
-      if (navSection === "profile" && navIdx < pLen) connectProfile(navProfiles[navIdx]);
-      else if (navSection === "forward" && navIdx < fLen) openForward(forwards[navIdx]);
-      else if (navSection === "serial" && navIdx < sLen) app.connectSerialProfile(serialProfiles[navIdx]);
+      activate(navItems[navIdx]);
     }
   }
 
@@ -195,17 +168,15 @@
     ]);
   }
 
-  function credentialFor(p: Profile): Credential | undefined {
-    return credentials.find(c => c.id === p.credential_id);
-  }
-
-  function profileFor(f: Forward): Profile | undefined {
-    return profiles.find(p => p.id === f.profile_id);
+  function activate(it: HomeItem) {
+    if (it.kind === "ssh") connectProfile(it.data as Profile);
+    else if (it.kind === "forward") openForward(it.data as Forward);
+    else app.connectSerialProfile(it.data as SerialProfile);
   }
 
   function connectProfile(p: Profile) {
     const tabId = `ssh:${crypto.randomUUID()}`;
-    const cred = credentialFor(p);
+    const cred = credentials.find((c) => c.id === p.credential_id);
     app.addTab({
       id: tabId, type: "ssh", label: p.name,
       meta: {
@@ -219,7 +190,7 @@
   }
 
   function openForward(f: Forward) {
-    const fp = profileFor(f);
+    const fp = profiles.find((p) => p.id === f.profile_id);
     const id = `fwd:${f.id}:${Date.now()}`;
     app.addTab({
       id, type: "forward", label: f.name,
@@ -243,79 +214,38 @@
     <input class="search-input" type="text" bind:value={query} placeholder="Search..." />
   </div>
 
-  {#if groupedProfiles.length > 0}
-    <div class="grid" bind:this={profileGridEl}>
-      {#each groupedProfiles as section}
-        <div class="section-label row-span" style={section.group ? `border-left: 3px solid ${section.group.color}; padding-left: 8px` : ''}>
-          {section.group?.name ?? 'PROFILES'}
-        </div>
-        {#each section.profiles as p, i (p.id)}
-          {@const cred = credentialFor(p)}
+  {#if groupedItems.length > 0}
+    {#each groupedItems as section, sIdx (section.group?.id ?? "__ungrouped__")}
+      <div class="section-label" style={section.group ? `border-left: 3px solid ${section.group.color}; padding-left: 8px` : ""}>
+        {section.group?.name ?? "UNGROUPED"}
+      </div>
+      <div class="grid" bind:this={gridEls[sIdx]}>
+        {#each section.items as it, i (it.id)}
           <div class="card-wrap">
             <button
               class="card-btn surface-raised"
-              class:selected={navSection === "profile" && navIdx === section.offset + i}
-              onclick={() => connectProfile(p)}
+              class:selected={navIdx === section.offset + i}
+              onclick={() => activate(it)}
             >
-              <div class="card-icon">S</div>
+              <div class="card-icon {it.iconClass}">{it.icon}</div>
               <div class="card-body">
-                <div class="card-name">{p.name}</div>
-                <div class="card-sub">{cred?.username ?? "?"}@{p.host}:{p.port}</div>
+                <div class="card-name">{it.name}</div>
+                <div class="card-sub">{it.sub}</div>
               </div>
             </button>
-            <button
-              class="pin-btn"
-              class:pinned={app.isProfilePinned(p.id)}
-              title={app.isProfilePinned(p.id) ? "Unpin" : "Pin to sidebar"}
-              onclick={(e) => { e.stopPropagation(); app.isProfilePinned(p.id) ? app.unpinProfile(p.id) : app.pinProfile(p.id); }}
-            >{app.isProfilePinned(p.id) ? "\u2605" : "\u2606"}</button>
+            {#if it.kind === "ssh"}
+              <button
+                class="pin-btn"
+                class:pinned={app.isProfilePinned(it.rawId)}
+                title={app.isProfilePinned(it.rawId) ? "Unpin" : "Pin to sidebar"}
+                onclick={(e) => { e.stopPropagation(); app.isProfilePinned(it.rawId) ? app.unpinProfile(it.rawId) : app.pinProfile(it.rawId); }}
+              >{app.isProfilePinned(it.rawId) ? "★" : "☆"}</button>
+            {/if}
           </div>
         {/each}
-      {/each}
-    </div>
-  {/if}
-
-  {#if forwards.length > 0}
-    <div class="section-label">PORT FORWARDS</div>
-    <div class="grid" bind:this={forwardGridEl}>
-      {#each forwards as f, i (f.id)}
-        {@const fp = profileFor(f)}
-        <button
-          class="card-btn surface-raised"
-          class:selected={navSection === "forward" && navIdx === i}
-          onclick={() => openForward(f)}
-        >
-          <div class="card-icon fwd">{f.type === "dynamic" ? "D" : f.type === "local" ? "L" : "R"}</div>
-          <div class="card-body">
-            <div class="card-name">{f.name}</div>
-            <div class="card-sub">:{f.local_port} → {f.remote_host}:{f.remote_port}</div>
-            <div class="card-via">via {fp?.name ?? "?"}</div>
-          </div>
-        </button>
-      {/each}
-    </div>
-  {/if}
-
-  {#if serialProfiles.length > 0}
-    <div class="section-label">SERIAL</div>
-    <div class="grid" bind:this={serialGridEl}>
-      {#each serialProfiles as s, i (s.id)}
-        <button
-          class="card-btn surface-raised"
-          class:selected={navSection === "serial" && navIdx === i}
-          onclick={() => app.connectSerialProfile(s)}
-        >
-          <div class="card-icon serial">⎓</div>
-          <div class="card-body">
-            <div class="card-name">{s.name}</div>
-            <div class="card-sub">{s.port} · {s.baud_rate}</div>
-          </div>
-        </button>
-      {/each}
-    </div>
-  {/if}
-
-  {#if profiles.length === 0 && forwards.length === 0 && serialProfiles.length === 0}
+      </div>
+    {/each}
+  {:else if allItems.length === 0}
     <div class="empty-state">
       <p>No Profiles or Port Forwards yet</p>
       <button class="btn btn-accent" onclick={() => app.navigate("settings")}>Go to Settings</button>
@@ -343,9 +273,6 @@
     gap: 14px;
     margin-bottom: 8px;
   }
-  /* Section label sits inside the grid so profile indices stay contiguous —
-     one grid, one cols, arrow keys map to physical layout without drift. */
-  .row-span { grid-column: 1 / -1; }
 
   .card-wrap { position: relative; }
   .pin-btn {
@@ -381,7 +308,6 @@
   .card-body { flex: 1; min-width: 0; }
   .card-name { font-weight: 600; font-size: 14px; color: var(--text); margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .card-sub { font-size: 12px; color: var(--text-sub); font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .card-via { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
 
   .empty-state { text-align: center; padding: 60px 24px; color: var(--text-dim); }
   .empty-state p { margin-bottom: 12px; }

@@ -167,6 +167,7 @@ fn add_forward(conn: &CliCtx) -> AppResult<()> {
         remote_host,
         remote_port,
         profile_id,
+        group_id: None,
     };
     rssh_lib::db::forward::insert(conn, &f)?;
     println!("Forward '{}' created.", f.name);

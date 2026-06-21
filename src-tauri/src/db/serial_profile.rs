@@ -5,7 +5,7 @@ use crate::error::AppResult;
 use crate::models::{validate_name, SerialProfile};
 
 const COLS: &str = "id, name, port, baud_rate, data_bits, parity, stop_bits, flow_control, \
-     xany, input_newline, output_newline, local_echo, backspace, slow_send, input_mode, output_mode, login_script";
+     xany, input_newline, output_newline, local_echo, backspace, slow_send, input_mode, output_mode, login_script, group_id";
 
 fn from_row(row: &rusqlite::Row) -> rusqlite::Result<SerialProfile> {
     Ok(SerialProfile {
@@ -27,6 +27,7 @@ fn from_row(row: &rusqlite::Row) -> rusqlite::Result<SerialProfile> {
         input_mode: row.get(14)?,
         output_mode: row.get(15)?,
         login_script: row.get(16)?,
+        group_id: row.get(17)?,
     })
 }
 
@@ -59,16 +60,16 @@ pub fn insert_tx(conn: &rusqlite::Connection, s: &SerialProfile) -> AppResult<()
     conn.execute(
         "INSERT INTO serial_profiles \
          (id, name, port, baud_rate, data_bits, parity, stop_bits, flow_control, \
-          xany, input_newline, output_newline, local_echo, backspace, slow_send, input_mode, output_mode, login_script) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17) \
+          xany, input_newline, output_newline, local_echo, backspace, slow_send, input_mode, output_mode, login_script, group_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18) \
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, port=excluded.port, baud_rate=excluded.baud_rate, \
           data_bits=excluded.data_bits, parity=excluded.parity, stop_bits=excluded.stop_bits, flow_control=excluded.flow_control, \
           xany=excluded.xany, input_newline=excluded.input_newline, output_newline=excluded.output_newline, \
           local_echo=excluded.local_echo, backspace=excluded.backspace, slow_send=excluded.slow_send, \
-          input_mode=excluded.input_mode, output_mode=excluded.output_mode, login_script=excluded.login_script",
+          input_mode=excluded.input_mode, output_mode=excluded.output_mode, login_script=excluded.login_script, group_id=excluded.group_id",
         params![
             s.id, s.name, s.port, s.baud_rate, s.data_bits as u32, s.parity, s.stop_bits as u32, s.flow_control,
-            s.xany, s.input_newline, s.output_newline, s.local_echo, s.backspace, s.slow_send, s.input_mode, s.output_mode, s.login_script,
+            s.xany, s.input_newline, s.output_newline, s.local_echo, s.backspace, s.slow_send, s.input_mode, s.output_mode, s.login_script, s.group_id,
         ],
     )?;
     Ok(())
@@ -84,11 +85,11 @@ pub fn update(db: &Db, s: &SerialProfile) -> AppResult<()> {
     let conn = db.lock()?;
     conn.execute(
         "UPDATE serial_profiles SET name=?1, port=?2, baud_rate=?3, data_bits=?4, parity=?5, stop_bits=?6, flow_control=?7, \
-         xany=?8, input_newline=?9, output_newline=?10, local_echo=?11, backspace=?12, slow_send=?13, input_mode=?14, output_mode=?15, login_script=?16 \
-         WHERE id=?17",
+         xany=?8, input_newline=?9, output_newline=?10, local_echo=?11, backspace=?12, slow_send=?13, input_mode=?14, output_mode=?15, login_script=?16, group_id=?17 \
+         WHERE id=?18",
         params![
             s.name, s.port, s.baud_rate, s.data_bits as u32, s.parity, s.stop_bits as u32, s.flow_control,
-            s.xany, s.input_newline, s.output_newline, s.local_echo, s.backspace, s.slow_send, s.input_mode, s.output_mode, s.login_script,
+            s.xany, s.input_newline, s.output_newline, s.local_echo, s.backspace, s.slow_send, s.input_mode, s.output_mode, s.login_script, s.group_id,
             s.id,
         ],
     )?;
@@ -129,7 +130,20 @@ mod tests {
             input_mode: "normal".into(),
             output_mode: "text".into(),
             login_script: String::new(),
+            group_id: None,
         }
+    }
+
+    #[test]
+    fn group_id_roundtrips() {
+        let db = Db::open_in_memory().unwrap();
+        let mut s = mk("s1", "router");
+        s.group_id = Some("g_lab".into());
+        insert(&db, &s).unwrap();
+        assert_eq!(get(&db, "s1").unwrap().group_id.as_deref(), Some("g_lab"));
+        // A row inserted without a group stays ungrouped (NULL → None).
+        insert(&db, &mk("s2", "switch")).unwrap();
+        assert_eq!(get(&db, "s2").unwrap().group_id, None);
     }
 
     #[test]
