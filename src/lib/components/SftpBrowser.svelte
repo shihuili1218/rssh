@@ -1,10 +1,12 @@
 <script lang="ts">
     import {onDestroy, onMount, tick} from "svelte";
     import {invoke} from "@tauri-apps/api/core";
+    import {getCurrentWebview} from "@tauri-apps/api/webview";
     import * as app from "../stores/app.svelte.ts";
     import * as transfers from "../stores/transfers.svelte.ts";
     import type {RemoteEntry} from "../stores/app.svelte.ts";
     import { errMsg, t } from "../i18n/index.svelte.ts";
+    import {isLocalFileDrag, localPathsFromDrop} from "../local-drop.ts";
 
     /** Mirrors the backend WalkEntry; rel_path is always '/'-separated. */
     interface WalkEntry { rel_path: string; size: number; }
@@ -22,6 +24,13 @@
         permissions?: number;
     }
 
+    type LocalPathKind = "file" | "dir" | "other";
+    type NativeDragDropPayload =
+        | { type: "enter"; paths: string[]; position: unknown }
+        | { type: "over"; position: unknown }
+        | { type: "drop"; paths: string[]; position: unknown }
+        | { type: "leave" };
+
     let {meta}: { meta: Record<string, string> } = $props();
 
     let sftpId = $state<string | null>(null);
@@ -32,6 +41,7 @@
     let loading = $state(true);
     let error = $state("");
     let notice = $state("");
+    let draggingLocalFiles = $state(false);
 
     /** Names of selected entries in the current directory. Cleared on
      *  directory change — selections do not persist across directories. */
@@ -63,6 +73,9 @@
 
     /** Renames the input after mount so it can receive focus. */
     let renameInputEl: HTMLInputElement | undefined;
+    let nativeDropUnlisten: (() => void) | null = null;
+    let lastDropKey = "";
+    let lastDropAt = 0;
 
     const selectedCount = $derived(selected.size);
     const allSelected = $derived(entries.length > 0 && selected.size === entries.length);
@@ -94,6 +107,53 @@
 
     onDestroy(() => {
         if (sftpId) invoke("sftp_close", {sftpId});
+    });
+
+    onMount(() => {
+        let disposed = false;
+        getCurrentWebview().onDragDropEvent((event) => {
+            const payload = event.payload as NativeDragDropPayload;
+            if (payload.type === "enter" || payload.type === "over") {
+                draggingLocalFiles = true;
+            } else if (payload.type === "leave") {
+                draggingLocalFiles = false;
+            } else if (payload.type === "drop") {
+                draggingLocalFiles = false;
+                void queueDroppedLocalPaths(payload.paths);
+            }
+        }).then((unlisten) => {
+            if (disposed) unlisten();
+            else nativeDropUnlisten = unlisten;
+        }).catch(() => {
+            // Browser/headless mode has no native webview file-drop source.
+        });
+
+        const onDragOver = (event: DragEvent) => {
+            if (!isLocalFileDrag(event.dataTransfer)) return;
+            draggingLocalFiles = true;
+        };
+        const onDrop = (event: DragEvent) => {
+            const paths = localPathsFromDrop(event.dataTransfer);
+            if (!isLocalFileDrag(event.dataTransfer) && paths.length === 0) return;
+            draggingLocalFiles = false;
+            if (paths.length > 0) void queueDroppedLocalPaths(paths);
+        };
+        const onDragLeave = (event: DragEvent) => {
+            if (event.relatedTarget !== null) return;
+            draggingLocalFiles = false;
+        };
+        window.addEventListener("dragover", onDragOver, { capture: true });
+        window.addEventListener("drop", onDrop, { capture: true });
+        window.addEventListener("dragleave", onDragLeave, { capture: true });
+
+        return () => {
+            disposed = true;
+            nativeDropUnlisten?.();
+            nativeDropUnlisten = null;
+            window.removeEventListener("dragover", onDragOver, { capture: true });
+            window.removeEventListener("drop", onDrop, { capture: true });
+            window.removeEventListener("dragleave", onDragLeave, { capture: true });
+        };
     });
 
     async function listDir(path: string) {
@@ -497,9 +557,60 @@
         }
     }
 
+    function duplicateDrop(paths: string[]): boolean {
+        const key = paths.join("\0");
+        const now = Date.now();
+        if (key === lastDropKey && now - lastDropAt < 1000) return true;
+        lastDropKey = key;
+        lastDropAt = now;
+        return false;
+    }
+
+    async function queueDroppedLocalPaths(paths: string[]) {
+        const uniquePaths = [...new Set(paths)].filter(Boolean);
+        if (uniquePaths.length === 0 || duplicateDrop(uniquePaths)) return;
+        error = "";
+        notice = "";
+        closeUploadMenu();
+        if (!meta.sessionId) { error = "Missing SSH session"; return; }
+
+        let queued = 0;
+        const walkErrors: string[] = [];
+        for (const p of uniquePaths) {
+            const name = basename(p);
+            try {
+                const kind = await invoke<LocalPathKind>("local_path_kind", { localPath: p });
+                if (kind === "file") {
+                    await transfers.startUpload({
+                        sessionId: meta.sessionId,
+                        localPath: p,
+                        remotePath: joinRemote(cwd, name),
+                    });
+                    queued++;
+                } else if (kind === "dir") {
+                    const walked = await invoke<WalkEntry[]>("walk_local_dir", { localRoot: p });
+                    for (const w of walked) {
+                        await transfers.startUpload({
+                            sessionId: meta.sessionId,
+                            localPath: joinLocal(p, w.rel_path),
+                            remotePath: joinRemote(cwd, name, w.rel_path),
+                        });
+                        queued++;
+                    }
+                }
+            } catch (err) {
+                walkErrors.push(`${name}: ${errMsg(err)}`);
+            }
+        }
+
+        if (walkErrors.length > 0) error = `${t("sftp.walk_failed")}\n${walkErrors.join("\n")}`;
+        if (queued > 0) notice = t("sftp.queued_n", { n: queued });
+        else if (walkErrors.length === 0) notice = t("sftp.folder_empty");
+    }
+
 </script>
 
-<div class="sftp">
+<div class="sftp" class:dragging-local-files={draggingLocalFiles}>
     <div class="toolbar">
         <span class="title">SFTP</span>
         <span class="grow"></span>
@@ -542,6 +653,9 @@
     {/if}
     {#if notice}
         <div class="notice-banner">{notice}</div>
+    {/if}
+    {#if draggingLocalFiles}
+        <div class="drop-hint">{t("sftp.upload")}</div>
     {/if}
 
     {#if loading}
@@ -683,6 +797,7 @@
 
 <style>
     .sftp {
+        position: relative;
         display: flex;
         flex-direction: column;
         height: 100%;
@@ -810,6 +925,21 @@
         border-radius: var(--radius-sm);
         margin-bottom: 8px;
         font-size: 12px;
+    }
+
+    .drop-hint {
+        position: absolute;
+        inset: 50px 14px 14px;
+        z-index: 20;
+        display: grid;
+        place-items: center;
+        border: 2px dashed var(--accent);
+        border-radius: var(--radius-md);
+        background: color-mix(in srgb, var(--surface) 84%, transparent);
+        color: var(--text);
+        font-size: 14px;
+        font-weight: 600;
+        pointer-events: none;
     }
 
     .loading {

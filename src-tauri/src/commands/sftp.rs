@@ -195,6 +195,18 @@ pub async fn walk_local_dir(local_root: String) -> AppResult<Vec<WalkEntry>> {
     Ok(result)
 }
 
+#[tauri::command]
+pub async fn local_path_kind(local_path: String) -> AppResult<String> {
+    let meta = tokio::fs::metadata(local_path).await?;
+    if meta.is_file() {
+        Ok("file".to_string())
+    } else if meta.is_dir() {
+        Ok("dir".to_string())
+    } else {
+        Ok("other".to_string())
+    }
+}
+
 /// Convert the portion of `full` relative to `root` into a '/'-separated string.
 /// On Windows std::path::Component uses '\'; we normalise here and the frontend
 /// converts back to the platform separator when joining.

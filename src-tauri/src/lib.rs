@@ -226,6 +226,7 @@ pub fn run() {
             commands::sftp::sftp_list,
             commands::sftp::sftp_walk_remote_dir,
             commands::sftp::walk_local_dir,
+            commands::sftp::local_path_kind,
             commands::sftp::sftp_download,
             commands::sftp::sftp_upload,
             commands::sftp::sftp_mkdir,

@@ -6,6 +6,9 @@ import { mount } from "svelte";
 import * as theme from "./lib/themes/store.svelte.ts";
 import * as transfers from "./lib/stores/transfers.svelte.ts";
 import * as app from "./lib/stores/app.svelte.ts";
+import { installLocalFileDropNavigationGuard } from "./lib/local-drop.ts"; /*防止WebView直接打开文件卡死*/
+
+installLocalFileDropNavigationGuard();
 
 // Apply persisted theme before mount so first paint reflects the user's choice.
 // We don't await — startup paint blocks on the persisted lookup otherwise. The

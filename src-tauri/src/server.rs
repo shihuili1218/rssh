@@ -737,6 +737,9 @@ async fn dispatch_async(
         "walk_local_dir" => {
             ok(crate::commands::sftp::walk_local_dir(arg::<String>(&args, "localRoot")?).await)
         }
+        "local_path_kind" => {
+            ok(crate::commands::sftp::local_path_kind(arg::<String>(&args, "localPath")?).await)
+        }
         "sftp_download" => {
             let h = sftp_handle(state, &arg::<String>(&args, "sftpId")?)?;
             ok(h.download(&arg::<String>(&args, "path")?).await)
