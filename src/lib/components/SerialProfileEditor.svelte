@@ -82,7 +82,7 @@
 
   onMount(async () => {
     invoke<string[]>("serial_list_ports").then((p) => (ports = p)).catch(() => {});
-    app.loadGroups().then((g) => (groups = g)).catch(() => {});
+    groups = await app.loadGroups();
     if (id) {
       const s = await invoke<any>("get_serial_profile", { id }).catch(() => null);
       if (s) {

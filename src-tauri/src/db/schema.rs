@@ -328,9 +328,12 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
         // group_id on forwards / serial_profiles. They become peers of profiles
         // (v10) under the shared `groups` table. ADD COLUMN DEFAULT NULL → every
         // existing row is "ungrouped"; zero breakage. Mirrors v10's profiles add.
-        let _ = conn.execute_batch("ALTER TABLE forwards ADD COLUMN group_id TEXT DEFAULT NULL;");
-        let _ =
-            conn.execute_batch("ALTER TABLE serial_profiles ADD COLUMN group_id TEXT DEFAULT NULL;");
+        if !column_exists(conn, "forwards", "group_id")? {
+            conn.execute_batch("ALTER TABLE forwards ADD COLUMN group_id TEXT DEFAULT NULL;")?;
+        }
+        if !column_exists(conn, "serial_profiles", "group_id")? {
+            conn.execute_batch("ALTER TABLE serial_profiles ADD COLUMN group_id TEXT DEFAULT NULL;")?;
+        }
     }
 
     if version < SCHEMA_VERSION {
