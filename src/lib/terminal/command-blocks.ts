@@ -47,11 +47,21 @@ export function createCommandBlockTracker(term: Terminal): CommandBlockTracker {
 
   const closeCurrent = () => {
     const cur = blocks[blocks.length - 1];
-    if (cur && cur.end === null) {
-      // Mark one line above the new prompt. registerMarker(-1) = previous line.
-      // If that fails (cursor at top), fall back to current line.
-      cur.end = term.registerMarker(-1) ?? term.registerMarker(0);
+    if (!cur || cur.end !== null) return;
+    // Rule 2 close-on-switch: the active buffer is ALREADY the alternate one
+    // here, so registerMarker would land on it and be disposed when the alt
+    // buffer is torn down on exit — leaving the block end-less, so consumers
+    // (染色 / bar / fold) grow it to the cursor forever and stacked tints turn
+    // grey. The command that launched the alt program (less/vim/top) has no
+    // normal-buffer output past its prompt line, so end it at its own start
+    // marker, which stays valid across the alt round-trip.
+    if (term.buffer.active.type === "alternate") {
+      cur.end = cur.start;
+      return;
     }
+    // Normal buffer: mark one line above the new prompt. registerMarker(-1) =
+    // previous line. If that fails (cursor at top), fall back to current line.
+    cur.end = term.registerMarker(-1) ?? term.registerMarker(0);
   };
 
   const openNew = () => {

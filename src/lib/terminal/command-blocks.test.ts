@@ -12,6 +12,9 @@ type BufType = "normal" | "alternate";
 interface FakeMarker {
   id: number;
   disposed: boolean;
+  readonly isDisposed: boolean;
+  /** Which buffer this marker was registered on — alt markers die on alt exit. */
+  createdOn: BufType;
   onDispose(fn: () => void): { dispose: () => void };
   dispose(): void;
 }
@@ -32,6 +35,8 @@ function fakeTerm() {
     const m: FakeMarker = {
       id: ++markerCounter,
       disposed: false,
+      createdOn: bufferType,
+      get isDisposed() { return this.disposed; },
       onDispose(fn) {
         onDisposeFns.push(fn);
         return { dispose: () => {} };
@@ -78,7 +83,16 @@ function fakeTerm() {
       dataListeners.forEach((f) => f(s));
     },
     setBuffer(t: BufType) {
+      const leavingAlt = bufferType === "alternate" && t === "normal";
       bufferType = t;
+      // Real xterm tears down the alternate buffer on exit, disposing any
+      // marker registered while it was active (see the real-xterm contract
+      // test below). Model that so the tracker is exercised against reality.
+      if (leavingAlt) {
+        for (const m of allMarkers) {
+          if (m.createdOn === "alternate" && !m.disposed) m.dispose();
+        }
+      }
       bufferChangeListeners.forEach((f) => f({ type: t }));
     },
     /** Fire all ESC handlers registered for `final` (RIS = 'c'). */
@@ -181,6 +195,37 @@ describe("createCommandBlockTracker — buffer switch closes current", () => {
     f.setBuffer("normal");
     expect(t.blocks.length).toBe(1);
     expect(t.blocks[0].end).not.toBeNull();
+    t.dispose();
+  });
+
+  // 回归：less/vim/top 进出后，块的 end marker 必须仍然有效。
+  // 之前 closeCurrent 在 alt 缓冲区里 registerMarker，退出 alt 时该 marker 被
+  // 销毁 → 块变"未结束"，blockRects 把它一路画到光标，多次进出叠加成灰。
+  it("survives an alt-buffer round-trip with a still-valid end marker", () => {
+    const f = fakeTerm();
+    const t = createCommandBlockTracker(f.term);
+    f.pushData("\r"); // 启动 less 的命令块
+    f.setBuffer("alternate"); // less 接管 → Rule 2 关闭该块
+    f.setBuffer("normal"); // 退出 less → alt 缓冲区被拆除
+    const b = t.blocks[0];
+    expect(b.end).not.toBeNull();
+    expect(b.end!.isDisposed).toBe(false); // 修复前：end 在 alt 上被销毁 → true
+    t.dispose();
+  });
+
+  it("repeated alt-buffer sessions each keep a valid end marker", () => {
+    const f = fakeTerm();
+    const t = createCommandBlockTracker(f.term);
+    for (let i = 0; i < 3; i++) {
+      f.pushData("\r");
+      f.setBuffer("alternate");
+      f.setBuffer("normal");
+    }
+    // 每个块都应正常收尾，没有"未结束"的块拖到光标造成叠加。
+    for (const b of t.blocks) {
+      expect(b.end).not.toBeNull();
+      expect(b.end!.isDisposed).toBe(false);
+    }
     t.dispose();
   });
 });
@@ -338,6 +383,28 @@ describe("createCommandBlockTracker — hard reset (real xterm contract)", () =>
     // i.e. we'd have broken `reset`.)
     expect(term.buffer.active.cursorY).toBe(0);
     disp.dispose();
+    term.dispose();
+  });
+
+  // Proves the assumption behind closeCurrent's alt-buffer branch (and the
+  // fakeTerm model above): a marker registered while the ALTERNATE buffer is
+  // active is disposed when that buffer is torn down on exit — so end markers
+  // must NOT be registered there.
+  it("a marker registered on the alternate buffer is disposed on return to normal", async () => {
+    const term = new Terminal({ allowProposedApi: true, scrollback: 1000 });
+    await writeP(term, "line1\r\nline2\r\nline3\r\n");
+    const normalMarker = term.registerMarker(0);
+    expect(term.buffer.active.type).toBe("normal");
+
+    await writeP(term, "\x1b[?1049h"); // enter alt buffer (less/vim/top)
+    expect(term.buffer.active.type).toBe("alternate");
+    const altMarker = term.registerMarker(0);
+
+    await writeP(term, "\x1b[?1049l"); // leave alt buffer
+    expect(term.buffer.active.type).toBe("normal");
+
+    expect(normalMarker?.isDisposed).toBe(false); // normal-buffer marker survives
+    expect(altMarker?.isDisposed).toBe(true); // alt-buffer marker is gone
     term.dispose();
   });
 });
