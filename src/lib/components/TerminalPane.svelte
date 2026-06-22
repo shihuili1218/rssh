@@ -252,8 +252,11 @@
     // 染一次——右键"取消染色"删掉的块 id 在水位线之下，不会被下一帧重新染回来。
     // 中途打开开关时，存量块（id > 水位线）也会被一并染上。
     let autoColoredHwm = 0;
+    // blockListRevision 只在块集合真正增删时自增（见 blockTracker.onChange），不像
+    // paintTick 每次滚动/渲染都跳 —— 否则开着自动染色时每帧都要空扫一遍所有块。
+    let blockListRevision = $state(0);
     $effect(() => {
-        paintTick; // 块增删 → 重算
+        blockListRevision; // 仅块集合变化时重算
         if (!app.autoColorBlocks() || !blockTracker) return;
         let maxId = autoColoredHwm;
         for (const b of blockTracker.blocks) {
@@ -1217,6 +1220,7 @@
         blockTracker = createCommandBlockTracker(terminal);
         blockTracker.onChange(() => {
             paintTick++;
+            blockListRevision++;
             // 剪枝：被 GC 的块从所有引用它 id 的集合里清掉，anchor 失效也复位。
             if (!blockTracker) return;
             if (selectedBlockIds.size === 0 && coloredBlockIds.size === 0 && selectionAnchorId === null) return;
