@@ -41,6 +41,10 @@ pub struct AppState {
     pub passphrase_cache: Mutex<HashMap<String, zeroize::Zeroizing<String>>>,
     /// window_label → session IDs owned by that window (for per-window cleanup)
     pub window_sessions: Mutex<HashMap<String, HashSet<String>>>,
+    /// Windows bound to move together by directional "open in new window":
+    /// dragging one drags the rest. Desktop-only (mobile is single-window).
+    #[cfg(desktop)]
+    pub window_groups: Mutex<crate::commands::window::WindowGroups>,
     /// AI 排障会话表（ai_session_id → DiagnoseSession）
     pub ai_sessions: Mutex<HashMap<String, DiagnoseSession>>,
     /// 远端 shell 探测结果缓存：profile_id → ShellKind。

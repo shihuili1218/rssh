@@ -66,11 +66,43 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .on_window_event(|window, event| {
-            if matches!(event, tauri::WindowEvent::Destroyed) {
-                let state = window.state::<AppState>();
-                let label = window.label();
-                // Close only sessions belonging to this window.
-                commands::lifecycle::close_window_sessions(&state, label);
+            match event {
+                tauri::WindowEvent::Destroyed => {
+                    let state = window.state::<AppState>();
+                    // Close only sessions belonging to this window.
+                    commands::lifecycle::close_window_sessions(&state, window.label());
+                    // Drop it from any move-together group (survivors stay bound).
+                    #[cfg(desktop)]
+                    state
+                        .window_groups
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(window.label());
+                }
+                // Live window binding: mirror this window's drag onto its group
+                // siblings. Binding SUSPENDS at the OS boundary — a window
+                // animating into fullscreen (its own Space on macOS) or
+                // minimizing fires a Moved we must not propagate.
+                #[cfg(desktop)]
+                tauri::WindowEvent::Moved(pos) => {
+                    if window.is_fullscreen().unwrap_or(false)
+                        || window.is_minimized().unwrap_or(false)
+                    {
+                        return;
+                    }
+                    let moves = window
+                        .state::<AppState>()
+                        .window_groups
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .moved(window.label(), (pos.x, pos.y));
+                    for (label, (x, y)) in moves {
+                        if let Some(w) = window.get_webview_window(&label) {
+                            let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+                        }
+                    }
+                }
+                _ => {}
             }
         })
         .setup(|app| {
@@ -117,6 +149,8 @@ pub fn run() {
                 host_key_waiters: Mutex::new(HashMap::new()),
                 passphrase_cache: Mutex::new(HashMap::new()),
                 window_sessions: Mutex::new(HashMap::new()),
+                #[cfg(desktop)]
+                window_groups: Mutex::new(commands::window::WindowGroups::default()),
                 ai_sessions: Mutex::new(HashMap::new()),
                 ai_remote_shell_cache: Mutex::new(HashMap::new()),
                 data_dir,

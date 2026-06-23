@@ -104,6 +104,107 @@ fn place(win: &tauri::WebviewWindow, r: Rect, deco: (u32, u32)) -> AppResult<()>
     Ok(())
 }
 
+/// The set of windows that move as one. "Move-together" is an equivalence
+/// relation (reflexive, symmetric, transitive), so it's modeled as disjoint
+/// GROUPS, not directed pairs — that erases the "who's the leader",
+/// "leader window closed", and "A-B meets B-C" special cases.
+///
+/// `last` holds each window's last known OUTER position (physical px). The move
+/// handler mirrors a window's drag delta onto its siblings; before moving a
+/// sibling it pre-writes the sibling's new `last`, so the programmatic move's
+/// echoed `Moved` event computes a zero delta and dies — no re-entrancy lock.
+#[cfg(desktop)]
+#[derive(Default)]
+pub struct WindowGroups {
+    of: std::collections::HashMap<String, u64>,
+    members: std::collections::HashMap<u64, std::collections::HashSet<String>>,
+    last: std::collections::HashMap<String, (i32, i32)>,
+    next_id: u64,
+}
+
+#[cfg(desktop)]
+impl WindowGroups {
+    /// Bind `newcomer` into `opener`'s group (creating one if `opener` is free),
+    /// seeding both last-known positions. `newcomer` is always a fresh window.
+    pub fn bind(
+        &mut self,
+        opener: &str,
+        newcomer: &str,
+        opener_pos: (i32, i32),
+        newcomer_pos: (i32, i32),
+    ) {
+        let id = match self.of.get(opener) {
+            Some(&id) => id,
+            None => {
+                let id = self.next_id;
+                self.next_id += 1;
+                self.members.entry(id).or_default().insert(opener.to_string());
+                self.of.insert(opener.to_string(), id);
+                id
+            }
+        };
+        self.members.entry(id).or_default().insert(newcomer.to_string());
+        self.of.insert(newcomer.to_string(), id);
+        self.last.insert(opener.to_string(), opener_pos);
+        self.last.insert(newcomer.to_string(), newcomer_pos);
+    }
+
+    /// Record that `label` moved to `new` and return the siblings that must
+    /// follow, each with its new outer position. Empty if `label` is unbound or
+    /// the move is a zero-delta echo of our own `set_position`.
+    pub fn moved(&mut self, label: &str, new: (i32, i32)) -> Vec<(String, (i32, i32))> {
+        let Some(&id) = self.of.get(label) else {
+            return vec![];
+        };
+        let old = self.last.get(label).copied().unwrap_or(new);
+        let delta = (new.0 - old.0, new.1 - old.1);
+        self.last.insert(label.to_string(), new);
+        if delta == (0, 0) {
+            return vec![];
+        }
+        // Sorted for deterministic output (HashSet iteration order is not).
+        let mut sibs: Vec<String> = self.members[&id]
+            .iter()
+            .filter(|l| l.as_str() != label)
+            .cloned()
+            .collect();
+        sibs.sort();
+        let mut out = Vec::with_capacity(sibs.len());
+        for s in sibs {
+            let lp = self.last.get(&s).copied().unwrap_or((0, 0));
+            let target = (lp.0 + delta.0, lp.1 + delta.1);
+            self.last.insert(s.clone(), target); // pre-write so the echo is a no-op
+            out.push((s, target));
+        }
+        out
+    }
+
+    /// Drop `label` (its window closed or was explicitly unbound). When a group
+    /// falls to a single member it dissolves — one window can't be "bound".
+    pub fn remove(&mut self, label: &str) {
+        let Some(id) = self.of.remove(label) else {
+            return;
+        };
+        self.last.remove(label);
+        let dissolve = {
+            let set = self
+                .members
+                .get_mut(&id)
+                .expect("group exists for a mapped label");
+            set.remove(label);
+            set.len() <= 1
+        };
+        if dissolve {
+            if let Some(set) = self.members.remove(&id) {
+                for m in set {
+                    self.of.remove(&m);
+                    self.last.remove(&m);
+                }
+            }
+        }
+    }
+}
+
 /// Open a new in-process Tauri window with a clone payload.
 /// The new window boots the same frontend; `AppShell` reads
 /// `window.__rssh_clone` on mount and auto-creates the cloned tab.
@@ -168,6 +269,16 @@ pub async fn open_tab_in_new_window(
             // perfect placement is the bonus. So we always show() regardless.
             place(&new_win, opened, deco).ok();
             place(&window, stays, deco).ok();
+            // Bind the two windows so dragging one drags the other (live),
+            // seeding last-known positions from where we just placed them.
+            {
+                use tauri::Manager as _;
+                app.state::<crate::state::AppState>()
+                    .window_groups
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .bind(window.label(), &label, (stays.x, stays.y), (opened.x, opened.y));
+            }
             new_win.show().map_err(|e| {
                 AppError::other(
                     "window_open_failed",
@@ -236,6 +347,64 @@ mod tests {
     #[test]
     fn unknown_direction_is_none() {
         assert!(split_rect(rect(), "sideways").is_none());
+    }
+
+    // ---- WindowGroups: live position binding ----
+
+    #[test]
+    fn move_mirrors_delta_to_sibling() {
+        let mut g = WindowGroups::default();
+        g.bind("A", "B", (100, 200), (700, 200));
+        // Drag A by (+10, +5); B must shift by the SAME delta to keep formation.
+        assert_eq!(g.moved("A", (110, 205)), vec![("B".to_string(), (710, 205))]);
+    }
+
+    #[test]
+    fn echo_move_is_noop() {
+        let mut g = WindowGroups::default();
+        g.bind("A", "B", (100, 200), (700, 200));
+        g.moved("A", (110, 205)); // B is now recorded at (710, 205)
+        // The programmatic set_position echoes Moved(B, 710,205): zero delta → no-op.
+        // This is what kills the feedback loop without any lock.
+        assert!(g.moved("B", (710, 205)).is_empty());
+    }
+
+    #[test]
+    fn move_unbound_window_is_noop() {
+        let mut g = WindowGroups::default();
+        assert!(g.moved("ghost", (10, 10)).is_empty());
+    }
+
+    #[test]
+    fn three_windows_move_together() {
+        let mut g = WindowGroups::default();
+        g.bind("A", "B", (0, 0), (600, 0));
+        g.bind("B", "C", (600, 0), (1200, 0)); // C joins A/B's group via B
+        let mut moves = g.moved("A", (5, 0));
+        moves.sort();
+        assert_eq!(
+            moves,
+            vec![("B".to_string(), (605, 0)), ("C".to_string(), (1205, 0))]
+        );
+    }
+
+    #[test]
+    fn closing_one_dissolves_a_pair() {
+        let mut g = WindowGroups::default();
+        g.bind("A", "B", (0, 0), (600, 0));
+        g.remove("B"); // B's window closed
+        // A is now a free window again: moving it touches nothing.
+        assert!(g.moved("A", (50, 0)).is_empty());
+    }
+
+    #[test]
+    fn closing_one_of_three_keeps_the_rest_bound() {
+        let mut g = WindowGroups::default();
+        g.bind("A", "B", (0, 0), (600, 0));
+        g.bind("B", "C", (600, 0), (1200, 0));
+        g.remove("B"); // close the middle window
+        // A and C remain one group (a group is a set, not a chain — no split).
+        assert_eq!(g.moved("A", (5, 0)), vec![("C".to_string(), (1205, 0))]);
     }
 }
 
