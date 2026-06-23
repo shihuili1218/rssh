@@ -18,12 +18,14 @@ theme.init();
 // 不影响功能。
 void transfers.loadMaxConcurrent();
 
-// Terminal interaction prefs (copy-on-select + right-click action). Global,
-// loaded once at startup so the first terminal honors persisted values without
-// waiting for the Settings screen. fire-and-forget like loadMaxConcurrent.
+// Terminal interaction prefs (copy-on-select, right-click action, tab MRU).
+// Global, loaded once at startup so the first terminal / tab switch honors
+// persisted values without waiting for the Settings screen. fire-and-forget
+// like loadMaxConcurrent.
 void app.loadCopyOnSelect();
 void app.loadRightClickAction();
 void app.loadConfirmCloseTab();
+void app.loadTabMru();
 
 const instance = mount(App, { target: document.getElementById("app")! });
 

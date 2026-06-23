@@ -925,6 +925,8 @@ const zh: Messages = {
   "settings.shell.interaction": "终端交互",
   "settings.shell.confirm_close_tab": "关闭标签页前确认",
   "settings.shell.confirm_close_tab_desc": "关闭标签页时弹出二次确认，避免误关丢失会话。",
+  "settings.shell.tab_mru": "聚焦的标签页置前",
+  "settings.shell.tab_mru_desc": "聚焦某个标签页时把它移到标签栏最前（最近使用顺序）。关闭则保持打开时的顺序。",
   "settings.shell.copy_on_select": "选中即复制",
   "settings.shell.copy_on_select_desc": "选中文本时自动复制到剪贴板。",
   "settings.shell.right_click": "右键动作",

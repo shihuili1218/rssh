@@ -922,6 +922,8 @@ const en = {
   "settings.shell.interaction": "Terminal interaction",
   "settings.shell.confirm_close_tab": "Confirm before closing tab",
   "settings.shell.confirm_close_tab_desc": "Show a confirmation dialog when closing a tab, to avoid losing a session by accident.",
+  "settings.shell.tab_mru": "Move focused tab to front",
+  "settings.shell.tab_mru_desc": "Focusing a tab moves it to the front of the tab bar (most-recently-used order). Off keeps tabs in the order they were opened.",
   "settings.shell.copy_on_select": "Copy on select",
   "settings.shell.copy_on_select_desc": "Automatically copy selected text to the clipboard.",
   "settings.shell.right_click": "Right-click action",

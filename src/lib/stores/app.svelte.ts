@@ -174,12 +174,21 @@ export function terminalTitle(tabId: string) { return _terminalTitles[tabId]; }
 export function setActiveTab(id: string) {
   _activeTabId = id;
   _settingsActive = false;
+  // MRU (when enabled): bring the just-focused session tab to the front of the
+  // session region (index 1, right after the fixed home tab). Reuses the
+  // drag-reorder primitive. home (index 0) and an already-front tab (index 1)
+  // are no-ops; _tabMru off leaves the order untouched.
+  const idx = _tabs.findIndex((t) => t.id === id);
+  if (_tabMru && idx > 1) moveTab(idx, 1);
   // SFTP per-tab：切 tab 不动其他 tab 的 SFTP 状态（mirror AI panel 的"跨导航持久"模型）
   // Transfers popover state persists across tab switches; closed only by user.
 }
 
 export function addTab(tab: Tab) {
-  _tabs.push(tab);
+  // MRU on: new tab is the most-recently-focused → front of the session region
+  // (index 1, right after the fixed home tab), no "freshly created but not at
+  // front" special case. MRU off: append at the end (pre-MRU behavior).
+  _tabs.splice(_tabMru ? 1 : _tabs.length, 0, tab);
   _activeTabId = tab.id;
   _settingsActive = false;
 }
@@ -567,6 +576,30 @@ export async function setConfirmCloseTab(v: boolean) {
   _confirmCloseTab = v;
   _cctLoaded = true;
   await invoke("set_setting", { key: "confirm_close_tab", value: String(v) });
+}
+
+/* ─── MRU tab reorder ─── */
+// On by default: focusing a session tab moves it to the front of the strip
+// (see setActiveTab / addTab). Off restores plain insertion order — the exact
+// pre-MRU behavior. Default-true encoding: only an explicit "false" disables
+// (mirrors verbose_log, inverted vs copyOnSelect).
+let _tabMru = $state(true);
+let _tabMruLoaded = false;
+export function tabMru() { return _tabMru; }
+export async function loadTabMru(): Promise<boolean> {
+  if (!_tabMruLoaded) {
+    _tabMruLoaded = true;
+    try {
+      const v = await invoke<string | null>("get_setting", { key: "tab_mru_reorder" });
+      _tabMru = v !== "false";
+    } catch {}
+  }
+  return _tabMru;
+}
+export async function setTabMru(v: boolean) {
+  _tabMru = v;
+  _tabMruLoaded = true;
+  await invoke("set_setting", { key: "tab_mru_reorder", value: String(v) });
 }
 
 /* ─── Per-tab search pulse (context menu → TerminalPane.openSearch) ─── */

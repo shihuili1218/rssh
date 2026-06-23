@@ -17,6 +17,7 @@
   let connectTimeout = $state(10);
   let copyOnSelect = $state(false);
   let confirmCloseTab = $state(false);
+  let tabMru = $state(true);
   let rightClickAction = $state<app.RightClickAction>("menu");
   let rightClickOptions = $derived([
     { value: "menu", label: t("settings.shell.right_click_menu") },
@@ -43,6 +44,7 @@
     if (ts) connectTimeout = parseInt(ts, 10) || 10;
     copyOnSelect = await app.loadCopyOnSelect();
     confirmCloseTab = await app.loadConfirmCloseTab();
+    tabMru = await app.loadTabMru();
     rightClickAction = await app.loadRightClickAction();
     // SFTP 并发上限：main.ts 启动时已读过持久值进 store，但用户可能在打开 Settings 前
     // 还没 await 完。再读一次确保 input 显示真实当前值。
@@ -98,6 +100,10 @@
 
   async function saveConfirmCloseTab() {
     await app.setConfirmCloseTab(confirmCloseTab);
+  }
+
+  async function saveTabMru() {
+    await app.setTabMru(tabMru);
   }
 
   function saveRightClickAction(v: app.RightClickAction) {
@@ -209,6 +215,19 @@
       </div>
       <label class="switch">
         <input type="checkbox" bind:checked={confirmCloseTab} onchange={saveConfirmCloseTab} />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="card-divider"></div>
+
+    <div class="cmd-block-head">
+      <div class="cmd-block-head-body">
+        <div class="cmd-block-title" class:on={tabMru} class:off={!tabMru}>{t("settings.shell.tab_mru")}</div>
+        <div class="cmd-block-desc">{t("settings.shell.tab_mru_desc")}</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" bind:checked={tabMru} onchange={saveTabMru} />
         <span class="slider"></span>
       </label>
     </div>
