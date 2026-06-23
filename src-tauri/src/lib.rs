@@ -95,7 +95,7 @@ pub fn run() {
                         .window_groups
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
-                        .moved(window.label(), (pos.x, pos.y));
+                        .moved(window.label(), (pos.x, pos.y), std::time::Instant::now());
                     for (label, (x, y)) in moves {
                         if let Some(w) = window.get_webview_window(&label) {
                             let _ = w.set_position(tauri::PhysicalPosition::new(x, y));

@@ -109,29 +109,46 @@ fn place(win: &tauri::WebviewWindow, r: Rect, deco: (u32, u32)) -> AppResult<()>
 /// GROUPS, not directed pairs — that erases the "who's the leader",
 /// "leader window closed", and "A-B meets B-C" special cases.
 ///
-/// `last` holds each window's last known OUTER position (physical px). The move
-/// handler mirrors a window's drag delta onto its siblings; before moving a
-/// sibling it pre-writes the sibling's new `last`, so the programmatic move's
-/// echoed `Moved` event computes a zero delta and dies — no re-entrancy lock.
+/// `last` holds each window's last known OUTER position (physical px); a drag
+/// delta is mirrored onto the dragged window's siblings.
+///
+/// `quiet_until` is the anti-feedback mechanism. A user drag and the OS moving a
+/// window for us (placement, our own follow, an edge clamp, a `set_size` origin
+/// shift) are indistinguishable except by origin — so after we move a window
+/// programmatically we mark it "settling" for `SETTLE` and ignore its `Moved`
+/// events until then, *however far the OS adjusted the landing*. A plain
+/// zero-delta check is not enough: macOS does not place windows pixel-exact, so
+/// a clamped follow reports a non-zero delta and ping-pongs across the group.
 #[cfg(desktop)]
 #[derive(Default)]
 pub struct WindowGroups {
     of: std::collections::HashMap<String, u64>,
     members: std::collections::HashMap<u64, std::collections::HashSet<String>>,
     last: std::collections::HashMap<String, (i32, i32)>,
+    quiet_until: std::collections::HashMap<String, std::time::Instant>,
     next_id: u64,
 }
+
+/// How long a window ignores its own `Moved` events after we move it. Long
+/// enough to swallow the burst one placement emits (set_position, set_size
+/// origin shift, show — a few frames), short enough that grabbing the partner
+/// window right after still feels instant.
+#[cfg(desktop)]
+const SETTLE: std::time::Duration = std::time::Duration::from_millis(250);
 
 #[cfg(desktop)]
 impl WindowGroups {
     /// Bind `newcomer` into `opener`'s group (creating one if `opener` is free),
     /// seeding both last-known positions. `newcomer` is always a fresh window.
+    /// Both windows settle from `now`: the placement that just tiled them emits
+    /// programmatic `Moved`s that must not be mistaken for drags.
     pub fn bind(
         &mut self,
         opener: &str,
         newcomer: &str,
         opener_pos: (i32, i32),
         newcomer_pos: (i32, i32),
+        now: std::time::Instant,
     ) {
         let id = match self.of.get(opener) {
             Some(&id) => id,
@@ -147,18 +164,30 @@ impl WindowGroups {
         self.of.insert(newcomer.to_string(), id);
         self.last.insert(opener.to_string(), opener_pos);
         self.last.insert(newcomer.to_string(), newcomer_pos);
+        self.quiet_until.insert(opener.to_string(), now + SETTLE);
+        self.quiet_until.insert(newcomer.to_string(), now + SETTLE);
     }
 
-    /// Record that `label` moved to `new` and return the siblings that must
-    /// follow, each with its new outer position. Empty if `label` is unbound or
-    /// the move is a zero-delta echo of our own `set_position`.
-    pub fn moved(&mut self, label: &str, new: (i32, i32)) -> Vec<(String, (i32, i32))> {
+    /// Record that `label` moved to `new` at `now` and return the siblings that
+    /// must follow, each with its new outer position. Empty if `label` is
+    /// unbound, still settling from a programmatic move, or hasn't moved.
+    pub fn moved(
+        &mut self,
+        label: &str,
+        new: (i32, i32),
+        now: std::time::Instant,
+    ) -> Vec<(String, (i32, i32))> {
         let Some(&id) = self.of.get(label) else {
             return vec![];
         };
         let old = self.last.get(label).copied().unwrap_or(new);
-        let delta = (new.0 - old.0, new.1 - old.1);
         self.last.insert(label.to_string(), new);
+        // Absorb the window's own programmatic moves (placement, the follow we
+        // commanded, an OS clamp) — whatever the landing — until they settle.
+        if self.quiet_until.get(label).is_some_and(|&t| now < t) {
+            return vec![];
+        }
+        let delta = (new.0 - old.0, new.1 - old.1);
         if delta == (0, 0) {
             return vec![];
         }
@@ -173,7 +202,10 @@ impl WindowGroups {
         for s in sibs {
             let lp = self.last.get(&s).copied().unwrap_or((0, 0));
             let target = (lp.0 + delta.0, lp.1 + delta.1);
-            self.last.insert(s.clone(), target); // pre-write so the echo is a no-op
+            self.last.insert(s.clone(), target);
+            // The follow we're about to command is ours: let it settle so its
+            // (possibly OS-clamped) `Moved` isn't mirrored back here.
+            self.quiet_until.insert(s.clone(), now + SETTLE);
             out.push((s, target));
         }
         out
@@ -186,6 +218,7 @@ impl WindowGroups {
             return;
         };
         self.last.remove(label);
+        self.quiet_until.remove(label);
         let dissolve = {
             let set = self
                 .members
@@ -199,6 +232,7 @@ impl WindowGroups {
                 for m in set {
                     self.of.remove(&m);
                     self.last.remove(&m);
+                    self.quiet_until.remove(&m);
                 }
             }
         }
@@ -277,7 +311,13 @@ pub async fn open_tab_in_new_window(
                     .window_groups
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .bind(window.label(), &label, (stays.x, stays.y), (opened.x, opened.y));
+                    .bind(
+                        window.label(),
+                        &label,
+                        (stays.x, stays.y),
+                        (opened.x, opened.y),
+                        std::time::Instant::now(),
+                    );
             }
             new_win.show().map_err(|e| {
                 AppError::other(
@@ -301,6 +341,7 @@ pub async fn open_tab_in_new_window(
 #[cfg(all(test, desktop))]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     // Odd width/height on purpose: proves the halves still tile with no gap.
     fn rect() -> Rect {
@@ -351,36 +392,48 @@ mod tests {
 
     // ---- WindowGroups: live position binding ----
 
-    #[test]
-    fn move_mirrors_delta_to_sibling() {
-        let mut g = WindowGroups::default();
-        g.bind("A", "B", (100, 200), (700, 200));
-        // Drag A by (+10, +5); B must shift by the SAME delta to keep formation.
-        assert_eq!(g.moved("A", (110, 205)), vec![("B".to_string(), (710, 205))]);
+    // A timestamp safely past a window's settle period (formation / follow) —
+    // i.e. a genuine user drag, not placement noise.
+    fn after_settle(base: Instant) -> Instant {
+        base + SETTLE + Duration::from_millis(1)
     }
 
     #[test]
-    fn echo_move_is_noop() {
+    fn move_mirrors_delta_to_sibling() {
+        let t0 = Instant::now();
         let mut g = WindowGroups::default();
-        g.bind("A", "B", (100, 200), (700, 200));
-        g.moved("A", (110, 205)); // B is now recorded at (710, 205)
-        // The programmatic set_position echoes Moved(B, 710,205): zero delta → no-op.
-        // This is what kills the feedback loop without any lock.
-        assert!(g.moved("B", (710, 205)).is_empty());
+        g.bind("A", "B", (100, 200), (700, 200), t0);
+        // A genuine drag of A (past formation settle) shifts B by the same delta.
+        assert_eq!(
+            g.moved("A", (110, 205), after_settle(t0)),
+            vec![("B".to_string(), (710, 205))]
+        );
+    }
+
+    #[test]
+    fn zero_delta_move_is_noop() {
+        let t0 = Instant::now();
+        let mut g = WindowGroups::default();
+        g.bind("A", "B", (100, 200), (700, 200), t0);
+        let t1 = after_settle(t0);
+        g.moved("A", (110, 205), t1); // B → (710, 205)
+        // A re-reports the SAME position past every settle window: zero delta, no-op.
+        assert!(g.moved("A", (110, 205), after_settle(t1)).is_empty());
     }
 
     #[test]
     fn move_unbound_window_is_noop() {
         let mut g = WindowGroups::default();
-        assert!(g.moved("ghost", (10, 10)).is_empty());
+        assert!(g.moved("ghost", (10, 10), Instant::now()).is_empty());
     }
 
     #[test]
     fn three_windows_move_together() {
+        let t0 = Instant::now();
         let mut g = WindowGroups::default();
-        g.bind("A", "B", (0, 0), (600, 0));
-        g.bind("B", "C", (600, 0), (1200, 0)); // C joins A/B's group via B
-        let mut moves = g.moved("A", (5, 0));
+        g.bind("A", "B", (0, 0), (600, 0), t0);
+        g.bind("B", "C", (600, 0), (1200, 0), t0); // C joins A/B's group via B
+        let mut moves = g.moved("A", (5, 0), after_settle(t0));
         moves.sort();
         assert_eq!(
             moves,
@@ -389,22 +442,66 @@ mod tests {
     }
 
     #[test]
-    fn closing_one_dissolves_a_pair() {
+    fn either_window_drives_after_settle() {
+        let t0 = Instant::now();
         let mut g = WindowGroups::default();
-        g.bind("A", "B", (0, 0), (600, 0));
+        g.bind("A", "B", (0, 0), (600, 0), t0);
+        // Dragging B (not A) past the settle window moves A — binding is symmetric.
+        assert_eq!(
+            g.moved("B", (650, 0), after_settle(t0)),
+            vec![("A".to_string(), (50, 0))]
+        );
+    }
+
+    #[test]
+    fn formation_moves_do_not_propagate() {
+        let t0 = Instant::now();
+        let mut g = WindowGroups::default();
+        g.bind("A", "B", (0, 0), (600, 0), t0);
+        // place()/set_size()/show() fire programmatic Moveds right after bind, at
+        // OS-adjusted positions (≠ what we seeded). Within the settle window they
+        // must be absorbed, or the two windows ping-pong at open (the flicker).
+        assert!(g.moved("A", (3, 0), t0 + Duration::from_millis(10)).is_empty());
+        assert!(g.moved("B", (605, 0), t0 + Duration::from_millis(20)).is_empty());
+    }
+
+    #[test]
+    fn os_adjusted_landing_is_absorbed_not_propagated() {
+        let t0 = Instant::now();
+        let mut g = WindowGroups::default();
+        g.bind("A", "B", (0, 0), (600, 0), t0);
+        let drag = after_settle(t0);
+        // A drags; B is commanded to (610, 0) and starts settling.
+        assert_eq!(g.moved("A", (10, 0), drag), vec![("B".to_string(), (610, 0))]);
+        // The OS clamps B's landing to (615, 0) — its own programmatic move, not a
+        // user drag. It MUST be absorbed, not mirrored back onto A (the feedback
+        // loop behind the open-time flicker).
+        let echo = g.moved("B", (615, 0), drag + Duration::from_millis(5));
+        assert!(echo.is_empty(), "OS-adjusted landing leaked back to A: {:?}", echo);
+    }
+
+    #[test]
+    fn closing_one_dissolves_a_pair() {
+        let t0 = Instant::now();
+        let mut g = WindowGroups::default();
+        g.bind("A", "B", (0, 0), (600, 0), t0);
         g.remove("B"); // B's window closed
-        // A is now a free window again: moving it touches nothing.
-        assert!(g.moved("A", (50, 0)).is_empty());
+        // A is a free window again: moving it touches nothing.
+        assert!(g.moved("A", (50, 0), after_settle(t0)).is_empty());
     }
 
     #[test]
     fn closing_one_of_three_keeps_the_rest_bound() {
+        let t0 = Instant::now();
         let mut g = WindowGroups::default();
-        g.bind("A", "B", (0, 0), (600, 0));
-        g.bind("B", "C", (600, 0), (1200, 0));
+        g.bind("A", "B", (0, 0), (600, 0), t0);
+        g.bind("B", "C", (600, 0), (1200, 0), t0);
         g.remove("B"); // close the middle window
         // A and C remain one group (a group is a set, not a chain — no split).
-        assert_eq!(g.moved("A", (5, 0)), vec![("C".to_string(), (1205, 0))]);
+        assert_eq!(
+            g.moved("A", (5, 0), after_settle(t0)),
+            vec![("C".to_string(), (1205, 0))]
+        );
     }
 }
 
