@@ -29,6 +29,7 @@ void app.loadCopyOnSelect();
 void app.loadRightClickAction();
 void app.loadConfirmCloseTab();
 void app.loadTabMru();
+void app.loadCtrlRightClickMenu();
 
 const instance = mount(App, { target: document.getElementById("app")! });
 

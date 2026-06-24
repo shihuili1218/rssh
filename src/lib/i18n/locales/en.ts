@@ -1055,6 +1055,8 @@ const en = {
   "settings.shell.right_click_confirm_body": "Right-clicking the terminal will “{action}” directly and the system menu will no longer open. That menu is the entry point for many features — make sure you know their shortcuts.",
   "settings.shell.right_click_confirm_hint": "You can switch back to the system menu here anytime; shortcuts can be customized on the Shortcuts page.",
   "settings.shell.right_click_confirm_ok": "Change it",
+  "settings.shell.ctrl_right_click_menu": "{mod}+Right-click opens menu",
+  "settings.shell.ctrl_right_click_menu_desc": "When right-click is set to \u201cPaste\u201d or \u201cCopy if selected, otherwise paste\u201d, hold {mod} and right-click to open the system menu.",
   // CLI settings
   "settings.cli.installed": "Installed",
   "settings.cli.installed_to": "Installed to {path}",

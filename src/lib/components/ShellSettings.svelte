@@ -3,7 +3,9 @@
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
   import * as transfers from "../stores/transfers.svelte.ts";
-  import { t } from "../i18n/index.svelte.ts";
+  import { isMac } from "../stores/keymap.svelte.ts";
+  import { t, errMsg } from "../i18n/index.svelte.ts";
+  import { toast } from "../stores/toast.svelte.ts";
   import Select from "./Select.svelte";
   import Modal from "./Modal.svelte";
 
@@ -21,6 +23,9 @@
   let copyOnSelect = $state(false);
   let confirmCloseTab = $state(false);
   let rightClickAction = $state<app.RightClickAction>("menu");
+  let ctrlRightClickMenu = $state(false);
+  /** Modifier key label for the ctrl+right-click hint — Cmd on macOS, Ctrl elsewhere. */
+  const modKey = isMac ? "Cmd" : "Ctrl";
   let rightClickOptions = $derived([
     { value: "menu", label: t("settings.shell.right_click_menu") },
     { value: "paste", label: t("settings.shell.right_click_paste") },
@@ -48,6 +53,7 @@
     copyOnSelect = await app.loadCopyOnSelect();
     confirmCloseTab = await app.loadConfirmCloseTab();
     rightClickAction = await app.loadRightClickAction();
+    ctrlRightClickMenu = await app.loadCtrlRightClickMenu();
     // SFTP 并发上限：main.ts 启动时已读过持久值进 store，但用户可能在打开 Settings 前
     // 还没 await 完。再读一次确保 input 显示真实当前值。
     await transfers.loadMaxConcurrent();
@@ -130,6 +136,14 @@
   function cancelRightClick() {
     rightClickAction = app.rightClickAction();
     pendingRightClick = null;
+  }
+
+  async function saveCtrlRightClickMenu() {
+    try {
+      await app.setCtrlRightClickMenu(ctrlRightClickMenu);
+    } catch (e: any) {
+      toast.error(`${t("toast.error.save")}: ${errMsg(e)}`);
+    }
   }
 
   async function saveSftpMaxConcurrent() {
@@ -265,6 +279,23 @@
                 onchange={(v) => saveRightClickAction(v as app.RightClickAction)} />
       </div>
     </div>
+
+    {#if rightClickAction === "paste" || rightClickAction === "copyPaste"}
+      <div class="card-divider"></div>
+      <div class="cmd-block-head">
+        <div class="cmd-block-head-body">
+          <div class="cmd-block-title"
+               class:on={ctrlRightClickMenu} class:off={!ctrlRightClickMenu}>
+            {t("settings.shell.ctrl_right_click_menu", { mod: modKey })}
+          </div>
+          <div class="cmd-block-desc">{t("settings.shell.ctrl_right_click_menu_desc", { mod: modKey })}</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" bind:checked={ctrlRightClickMenu} onchange={saveCtrlRightClickMenu} />
+          <span class="slider"></span>
+        </label>
+      </div>
+    {/if}
   </div>
 
   <!-- Leaving "menu" hides the system right-click menu (entry point for many

@@ -871,6 +871,30 @@ export async function setTabMru(v: boolean) {
   await invoke("set_setting", { key: "tab_mru_reorder", value: String(v) });
 }
 
+/* ─── Ctrl/Cmd+right-click opens the native system menu ─── */
+// When right-click is set to paste/copyPaste, holding Ctrl (Cmd on macOS)
+// while right-clicking falls back to the native context menu. Default off:
+// paste/copyPaste modes already suppress the menu by design, and this is an
+// opt-in escape hatch for users who occasionally need the system menu.
+let _ctrlRightClickMenu = $state(false);
+let _crcmLoaded = false;
+export function ctrlRightClickMenu() { return _ctrlRightClickMenu; }
+export async function loadCtrlRightClickMenu(): Promise<boolean> {
+  if (!_crcmLoaded) {
+    _crcmLoaded = true;
+    try {
+      const v = await invoke<string | null>("get_setting", { key: "ctrl_right_click_menu" });
+      _ctrlRightClickMenu = v === "true";
+    } catch {}
+  }
+  return _ctrlRightClickMenu;
+}
+export async function setCtrlRightClickMenu(v: boolean) {
+  _ctrlRightClickMenu = v;
+  _crcmLoaded = true;
+  await invoke("set_setting", { key: "ctrl_right_click_menu", value: String(v) });
+}
+
 /* ─── Per-tab search pulse (context menu → TerminalPane.openSearch) ─── */
 let _searchRequest = $state<{ tabId: string; n: number } | null>(null);
 export function searchRequest() { return _searchRequest; }
