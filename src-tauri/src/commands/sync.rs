@@ -452,8 +452,16 @@ mod tests {
         let creds = obj["credentials"].as_array().unwrap();
         assert_eq!(creds.len(), 2, "all credential metadata always pushed");
         let secret = |id: &str| creds.iter().find(|c| c["id"] == id).unwrap()["secret"].clone();
-        assert_eq!(secret("r"), json!("s-r"), "save_to_remote=true keeps secret");
-        assert_eq!(secret("l"), json!(null), "save_to_remote=false scrubs secret");
+        assert_eq!(
+            secret("r"),
+            json!("s-r"),
+            "save_to_remote=true keeps secret"
+        );
+        assert_eq!(
+            secret("l"),
+            json!(null),
+            "save_to_remote=false scrubs secret"
+        );
     }
 
     #[test]
@@ -540,11 +548,25 @@ mod tests {
         crate::db::settings::set(&db, "sync_profile_group_ids", "[\"\"]").unwrap();
         let prefs = read_sync_prefs(&db).unwrap();
         let v = build_payload(&db, &ss, dir.path(), &ExportMode::RemotePush(prefs)).unwrap();
-        let pid: Vec<&str> = v["profiles"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap()).collect();
+        let pid: Vec<&str> = v["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["id"].as_str().unwrap())
+            .collect();
         assert_eq!(pid, vec!["p2"], "only ungrouped profile");
-        let fid: Vec<&str> = v["forwards"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
+        let fid: Vec<&str> = v["forwards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["id"].as_str().unwrap())
+            .collect();
         assert_eq!(fid, vec!["f1"], "only ungrouped forward");
-        assert_eq!(v["serial_profiles"].as_array().unwrap().len(), 1, "ungrouped serial");
+        assert_eq!(
+            v["serial_profiles"].as_array().unwrap().len(),
+            1,
+            "ungrouped serial"
+        );
     }
 
     #[test]
@@ -557,7 +579,12 @@ mod tests {
         crate::db::settings::set(&db, "sync_profile_group_ids", "[\"g1\",\"\"]").unwrap();
         let prefs = read_sync_prefs(&db).unwrap();
         let v = build_payload(&db, &ss, dir.path(), &ExportMode::RemotePush(prefs)).unwrap();
-        let pid: Vec<&str> = v["profiles"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap()).collect();
+        let pid: Vec<&str> = v["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["id"].as_str().unwrap())
+            .collect();
         assert_eq!(pid, vec!["p1", "p3"], "g1 + ungrouped");
     }
 

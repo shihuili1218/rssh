@@ -267,7 +267,10 @@ mod tests {
             "normal-name",
         ] {
             let name = format!("{}.cast", safe_recording_stem(evil));
-            assert!(is_safe_recording_name(&name), "stem escaped for {evil:?}: {name:?}");
+            assert!(
+                is_safe_recording_name(&name),
+                "stem escaped for {evil:?}: {name:?}"
+            );
         }
     }
 }

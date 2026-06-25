@@ -288,17 +288,21 @@ impl SftpHandle {
     }
 
     pub async fn remove_file(&self, path: &str) -> AppResult<()> {
-        self.sftp
-            .remove_file(path)
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "remove_file", "err": e.to_string() })))
+        self.sftp.remove_file(path).await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "remove_file", "err": e.to_string() }),
+            )
+        })
     }
 
     pub async fn remove_dir(&self, path: &str) -> AppResult<()> {
-        self.sftp
-            .remove_dir(path)
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "remove_dir", "err": e.to_string() })))
+        self.sftp.remove_dir(path).await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "remove_dir", "err": e.to_string() }),
+            )
+        })
     }
 
     /// Delete a file or a directory tree. LSTAT decides which — the frontend's
@@ -308,7 +312,10 @@ impl SftpHandle {
     /// symlink, special — is removed by name.
     pub async fn remove(&self, path: &str) -> AppResult<()> {
         let meta = self.sftp.symlink_metadata(path).await.map_err(|e| {
-            AppError::sftp("sftp_io_failed", json!({ "op": "lstat", "err": e.to_string() }))
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "lstat", "err": e.to_string() }),
+            )
         })?;
         if meta.file_type().is_dir() {
             self.remove_dir_all(path).await
@@ -337,7 +344,10 @@ impl SftpHandle {
                 ));
             }
             let entries = self.sftp.read_dir(&dir).await.map_err(|e| {
-                AppError::sftp("sftp_io_failed", json!({ "op": "read_dir", "path": dir, "err": e.to_string() }))
+                AppError::sftp(
+                    "sftp_io_failed",
+                    json!({ "op": "read_dir", "path": dir, "err": e.to_string() }),
+                )
             })?;
             for e in entries {
                 let full = join_remote(&dir, &e.file_name());
@@ -357,18 +367,21 @@ impl SftpHandle {
     }
 
     pub async fn rename(&self, old: &str, new: &str) -> AppResult<()> {
-        self.sftp
-            .rename(old, new)
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "rename", "err": e.to_string() })))
+        self.sftp.rename(old, new).await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "rename", "err": e.to_string() }),
+            )
+        })
     }
 
     pub async fn stat(&self, path: &str) -> AppResult<FileStat> {
-        let meta = self
-            .sftp
-            .metadata(path)
-            .await
-            .map_err(|e| AppError::sftp("sftp_io_failed", json!({ "op": "metadata", "err": e.to_string() })))?;
+        let meta = self.sftp.metadata(path).await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "metadata", "err": e.to_string() }),
+            )
+        })?;
         let name = path.rsplit('/').next().unwrap_or(path).to_string();
         Ok(FileStat {
             name,
@@ -699,12 +712,15 @@ impl SftpHandle {
                 // remove the old file first (best-effort — an absent target, the
                 // common create-new case, is fine to ignore).
                 let _ = self.sftp.remove_file(remote_path).await;
-                self.sftp.rename(&tmp_path, remote_path).await.map_err(|e| {
-                    AppError::sftp(
-                        "sftp_io_failed",
-                        json!({ "op": "rename", "err": e.to_string() }),
-                    )
-                })?;
+                self.sftp
+                    .rename(&tmp_path, remote_path)
+                    .await
+                    .map_err(|e| {
+                        AppError::sftp(
+                            "sftp_io_failed",
+                            json!({ "op": "rename", "err": e.to_string() }),
+                        )
+                    })?;
                 Ok(transferred)
             }
             Err(e) => {

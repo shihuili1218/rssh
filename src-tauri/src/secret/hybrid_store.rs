@@ -236,7 +236,9 @@ mod tests {
         // (that's what avoids a keychain prompt for has_api_key). Seed a raw row
         // directly so no set()/get() ever loads the master key.
         let (hs, tmp) = make_hybrid();
-        hs.db_store.set("setting:ai_x_key", "enc:v1:whatever").unwrap();
+        hs.db_store
+            .set("setting:ai_x_key", "enc:v1:whatever")
+            .unwrap();
         assert!(hs.exists("setting:ai_x_key").unwrap());
         assert!(!hs.exists("ghost").unwrap());
         // master key was never needed → its backing file was never created

@@ -104,7 +104,10 @@ pub async fn pick_private_key_file() -> AppResult<Option<String>> {
         // file must not be stuffed into the keychain.
         let size = std::fs::metadata(path)?.len();
         if size > 1024 * 1024 {
-            return Err(AppError::other("key_file_too_large", json!({ "size": size })));
+            return Err(AppError::other(
+                "key_file_too_large",
+                json!({ "size": size }),
+            ));
         }
         Ok(Some(std::fs::read_to_string(path)?))
     }

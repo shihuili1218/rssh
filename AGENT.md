@@ -229,7 +229,8 @@ rg 'invoke\("' src/lib
 
 ### Pr3. CSS
 
-用 `src/styles/global.css` 的变量与现有 `.neu-*` / `.btn*` 类。**不要**自己挑十六进制色——主题切换会破。
+- 用 `src/styles/global.css` 的变量与现有 `.neu-*` / `.btn*` 类。**不要**自己挑十六进制色——主题切换会破
+- 图标自己画，别用emoji
 
 ### Pr4. 改动节奏
 

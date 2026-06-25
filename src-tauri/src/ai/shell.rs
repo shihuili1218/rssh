@@ -429,6 +429,9 @@ mod tests {
         // Serial joins the wire vocabulary as "serial".
         let se: ShellKind = serde_json::from_str("\"serial\"").unwrap();
         assert_eq!(se, ShellKind::Serial);
-        assert_eq!(serde_json::to_string(&ShellKind::Serial).unwrap(), "\"serial\"");
+        assert_eq!(
+            serde_json::to_string(&ShellKind::Serial).unwrap(),
+            "\"serial\""
+        );
     }
 }

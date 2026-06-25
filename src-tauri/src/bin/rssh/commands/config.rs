@@ -225,7 +225,8 @@ fn config_webdav_set(conn: &CliCtx) -> AppResult<()> {
     rssh_lib::db::settings::set(conn, "webdav_url", &url)?;
     rssh_lib::db::settings::set(conn, "webdav_username", &username)?;
     if password.is_empty() {
-        conn.secret_store().delete(&setting_key("webdav_password"))?;
+        conn.secret_store()
+            .delete(&setting_key("webdav_password"))?;
     } else {
         conn.secret_store()
             .set(&setting_key("webdav_password"), &password)?;

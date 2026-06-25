@@ -155,12 +155,18 @@ impl WindowGroups {
             None => {
                 let id = self.next_id;
                 self.next_id += 1;
-                self.members.entry(id).or_default().insert(opener.to_string());
+                self.members
+                    .entry(id)
+                    .or_default()
+                    .insert(opener.to_string());
                 self.of.insert(opener.to_string(), id);
                 id
             }
         };
-        self.members.entry(id).or_default().insert(newcomer.to_string());
+        self.members
+            .entry(id)
+            .or_default()
+            .insert(newcomer.to_string());
         self.of.insert(newcomer.to_string(), id);
         self.last.insert(opener.to_string(), opener_pos);
         self.last.insert(newcomer.to_string(), newcomer_pos);
@@ -417,7 +423,7 @@ mod tests {
         g.bind("A", "B", (100, 200), (700, 200), t0);
         let t1 = after_settle(t0);
         g.moved("A", (110, 205), t1); // B → (710, 205)
-        // A re-reports the SAME position past every settle window: zero delta, no-op.
+                                      // A re-reports the SAME position past every settle window: zero delta, no-op.
         assert!(g.moved("A", (110, 205), after_settle(t1)).is_empty());
     }
 
@@ -461,8 +467,12 @@ mod tests {
         // place()/set_size()/show() fire programmatic Moveds right after bind, at
         // OS-adjusted positions (≠ what we seeded). Within the settle window they
         // must be absorbed, or the two windows ping-pong at open (the flicker).
-        assert!(g.moved("A", (3, 0), t0 + Duration::from_millis(10)).is_empty());
-        assert!(g.moved("B", (605, 0), t0 + Duration::from_millis(20)).is_empty());
+        assert!(g
+            .moved("A", (3, 0), t0 + Duration::from_millis(10))
+            .is_empty());
+        assert!(g
+            .moved("B", (605, 0), t0 + Duration::from_millis(20))
+            .is_empty());
     }
 
     #[test]
@@ -472,12 +482,19 @@ mod tests {
         g.bind("A", "B", (0, 0), (600, 0), t0);
         let drag = after_settle(t0);
         // A drags; B is commanded to (610, 0) and starts settling.
-        assert_eq!(g.moved("A", (10, 0), drag), vec![("B".to_string(), (610, 0))]);
+        assert_eq!(
+            g.moved("A", (10, 0), drag),
+            vec![("B".to_string(), (610, 0))]
+        );
         // The OS clamps B's landing to (615, 0) — its own programmatic move, not a
         // user drag. It MUST be absorbed, not mirrored back onto A (the feedback
         // loop behind the open-time flicker).
         let echo = g.moved("B", (615, 0), drag + Duration::from_millis(5));
-        assert!(echo.is_empty(), "OS-adjusted landing leaked back to A: {:?}", echo);
+        assert!(
+            echo.is_empty(),
+            "OS-adjusted landing leaked back to A: {:?}",
+            echo
+        );
     }
 
     #[test]
@@ -486,7 +503,7 @@ mod tests {
         let mut g = WindowGroups::default();
         g.bind("A", "B", (0, 0), (600, 0), t0);
         g.remove("B"); // B's window closed
-        // A is a free window again: moving it touches nothing.
+                       // A is a free window again: moving it touches nothing.
         assert!(g.moved("A", (50, 0), after_settle(t0)).is_empty());
     }
 
@@ -497,7 +514,7 @@ mod tests {
         g.bind("A", "B", (0, 0), (600, 0), t0);
         g.bind("B", "C", (600, 0), (1200, 0), t0);
         g.remove("B"); // close the middle window
-        // A and C remain one group (a group is a set, not a chain — no split).
+                       // A and C remain one group (a group is a set, not a chain — no split).
         assert_eq!(
             g.moved("A", (5, 0), after_settle(t0)),
             vec![("C".to_string(), (1205, 0))]

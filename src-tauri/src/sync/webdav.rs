@@ -67,10 +67,7 @@ impl WebDavSync {
             ));
         }
         if !parsed.username().is_empty() || parsed.password().is_some() {
-            return Err(AppError::config(
-                "webdav_url_userinfo_forbidden",
-                json!({}),
-            ));
+            return Err(AppError::config("webdav_url_userinfo_forbidden", json!({})));
         }
         if parsed.query().is_some() || parsed.fragment().is_some() {
             return Err(AppError::config(
@@ -94,13 +91,9 @@ impl WebDavSync {
 
     fn build_file_url(&self) -> AppResult<Url> {
         Url::parse(&self.url)
-            .map_err(|e| {
-                AppError::other("webdav_url_invalid", json!({ "err": e.to_string() }))
-            })?
+            .map_err(|e| AppError::other("webdav_url_invalid", json!({ "err": e.to_string() })))?
             .join(BACKUP_FILE)
-            .map_err(|e| {
-                AppError::other("webdav_url_invalid", json!({ "err": e.to_string() }))
-            })
+            .map_err(|e| AppError::other("webdav_url_invalid", json!({ "err": e.to_string() })))
     }
 
     /// 推送加密配置到 WebDAV。
@@ -260,8 +253,7 @@ mod tests {
         let err = WebDavSync::from_settings("https://dav.example.com/?x=1", "u", "p").unwrap_err();
         assert_eq!(err.code(), "webdav_url_query_fragment_forbidden");
 
-        let err =
-            WebDavSync::from_settings("https://dav.example.com/#frag", "u", "p").unwrap_err();
+        let err = WebDavSync::from_settings("https://dav.example.com/#frag", "u", "p").unwrap_err();
         assert_eq!(err.code(), "webdav_url_query_fragment_forbidden");
     }
 

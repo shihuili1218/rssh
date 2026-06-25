@@ -98,7 +98,10 @@ const MAX_INCLUDE_DEPTH: usize = 16;
 /// Missing or unreadable included files are skipped, like a glob with no
 /// matches. A file already on the active include chain is skipped too, so
 /// cycles don't duplicate content. IO errors on the root file propagate.
-pub fn load_with_includes(path: &std::path::Path, base: &std::path::Path) -> std::io::Result<String> {
+pub fn load_with_includes(
+    path: &std::path::Path,
+    base: &std::path::Path,
+) -> std::io::Result<String> {
     let content = std::fs::read_to_string(path)?;
     let mut out = String::new();
     let mut chain = vec![canonical(path)];
@@ -177,7 +180,9 @@ fn splice_pattern(
         if chain.contains(&cpath) {
             continue; // cycle — this file is an ancestor of itself
         }
-        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
         chain.push(cpath);
         splice_includes(&content, base, chain, out);
         chain.pop();
@@ -352,8 +357,16 @@ Host two
     #[test]
     fn include_splices_glob_matches() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "config.d/alpha", "Host alpha\n    HostName 10.0.0.1\n");
-        write(dir.path(), "config.d/beta", "Host beta\n    HostName 10.0.0.2\n");
+        write(
+            dir.path(),
+            "config.d/alpha",
+            "Host alpha\n    HostName 10.0.0.1\n",
+        );
+        write(
+            dir.path(),
+            "config.d/beta",
+            "Host beta\n    HostName 10.0.0.2\n",
+        );
         let root = write(
             dir.path(),
             "config",
@@ -367,8 +380,16 @@ Host two
     #[test]
     fn include_nested_two_levels() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "level2", "Host deep\n    HostName deep.example\n");
-        write(dir.path(), "level1", "Include level2\nHost mid\n    HostName mid.example\n");
+        write(
+            dir.path(),
+            "level2",
+            "Host deep\n    HostName deep.example\n",
+        );
+        write(
+            dir.path(),
+            "level1",
+            "Include level2\nHost mid\n    HostName mid.example\n",
+        );
         let root = write(dir.path(), "config", "Include level1\n");
         let content = load_with_includes(&root, dir.path()).unwrap();
         assert_eq!(aliases(&parse(&content)), ["deep", "mid"]);
@@ -390,8 +411,16 @@ Host two
     fn include_absolute_path() {
         let dir = tempfile::tempdir().unwrap();
         let other = tempfile::tempdir().unwrap();
-        let abs = write(other.path(), "extra", "Host abs\n    HostName abs.example\n");
-        let root = write(dir.path(), "config", &format!("Include {}\n", abs.display()));
+        let abs = write(
+            other.path(),
+            "extra",
+            "Host abs\n    HostName abs.example\n",
+        );
+        let root = write(
+            dir.path(),
+            "config",
+            &format!("Include {}\n", abs.display()),
+        );
         let content = load_with_includes(&root, dir.path()).unwrap();
         assert_eq!(aliases(&parse(&content)), ["abs"]);
     }
@@ -399,7 +428,11 @@ Host two
     #[test]
     fn include_self_reference_is_skipped() {
         let dir = tempfile::tempdir().unwrap();
-        let root = write(dir.path(), "config", "Include config\nHost x\n    HostName x.example\n");
+        let root = write(
+            dir.path(),
+            "config",
+            "Include config\nHost x\n    HostName x.example\n",
+        );
         // A file already on the active include chain is not expanded again.
         let content = load_with_includes(&root, dir.path()).unwrap();
         assert_eq!(aliases(&parse(&content)), ["x"]);
@@ -408,8 +441,16 @@ Host two
     #[test]
     fn include_mutual_cycle_expands_each_file_once() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "a", "Include b\nHost a\n    HostName a.example\n");
-        write(dir.path(), "b", "Include a\nHost b\n    HostName b.example\n");
+        write(
+            dir.path(),
+            "a",
+            "Include b\nHost a\n    HostName a.example\n",
+        );
+        write(
+            dir.path(),
+            "b",
+            "Include a\nHost b\n    HostName b.example\n",
+        );
         let root = write(dir.path(), "config", "Include a\n");
         let content = load_with_includes(&root, dir.path()).unwrap();
         assert_eq!(aliases(&parse(&content)), ["b", "a"]);
@@ -418,7 +459,11 @@ Host two
     #[test]
     fn include_quoted_pattern_with_spaces() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "my keys/host.conf", "Host quoted\n    HostName q.example\n");
+        write(
+            dir.path(),
+            "my keys/host.conf",
+            "Host quoted\n    HostName q.example\n",
+        );
         write(dir.path(), "plain", "Host plain\n    HostName p.example\n");
         let root = write(dir.path(), "config", "Include \"my keys/*.conf\" plain\n");
         let content = load_with_includes(&root, dir.path()).unwrap();
