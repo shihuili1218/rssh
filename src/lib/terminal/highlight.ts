@@ -13,6 +13,7 @@ export interface CompiledHighlightRule {
 export type HighlightValidationError =
     | { kind: "invalid"; message: string }
     | { kind: "zero_width" }
+    | { kind: "name_required" }
     | { kind: "name_too_long" };
 
 const MAX_HIGHLIGHT_NAME = 100;
@@ -69,10 +70,13 @@ function isPureZeroWidth(pattern: string): boolean {
  * Returns null when valid; otherwise returns an error kind for the UI to map to i18n.
  */
 export function validateHighlightRule(rule: HighlightRule): HighlightValidationError | null {
+    if (!rule.name.trim()) {
+        return { kind: "name_required" };
+    }
     if (rule.name.length > MAX_HIGHLIGHT_NAME) {
         return { kind: "name_too_long" };
     }
-    if (!rule.is_regex || !rule.keyword) return null;
+    if (!rule.keyword) return null;
     const flags = rule.is_case_sensitive ? "g" : "gi";
     if (isPureZeroWidth(rule.keyword)) {
         return { kind: "zero_width" };
@@ -94,9 +98,9 @@ export function compileHighlightRules(rules: HighlightRule[]): CompiledHighlight
         if (!rule.enabled || !rule.keyword) {
             return { ...rule, source: "", regex: null };
         }
-        const source = rule.is_regex
-            ? rule.keyword
-            : rule.keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        // Every rule is a regex now (the text/regex split is gone, enforced by
+        // the backend migration + normalize). keyword IS the regex source.
+        const source = rule.keyword;
         const flags = rule.is_case_sensitive ? "g" : "gi";
         try {
             const regex = new RegExp(source, flags);

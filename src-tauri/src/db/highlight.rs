@@ -4,6 +4,51 @@ use super::Db;
 use crate::error::{AppError, AppResult};
 use crate::models::HighlightRule;
 
+/// Escape regex metacharacters so a plain-text keyword matches literally once it
+/// goes through the regex engine. Mirrors the frontend escape in `highlight.ts`
+/// (compileHighlightRules) so a migrated rule and a UI-entered rule behave
+/// identically. The char set MUST stay in sync with that regex:
+/// `. * + ? ^ $ { } ( ) | [ ] \`.
+pub fn regex_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(
+            c,
+            '.' | '*' | '+' | '?' | '^' | '$' | '{' | '}' | '(' | ')' | '|' | '[' | ']' | '\\'
+        ) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Coerce a rule into the table invariant: is_regex=true, keyword a valid regex
+/// source, name non-empty. Legacy plain text has its keyword escaped into an
+/// equivalent regex (matching unchanged); an empty name is seeded from the
+/// ORIGINAL keyword so the rule keeps a human-readable label. Runs ONLY at the
+/// two boundaries that still receive legacy data — the v21 migration and sync
+/// import from an older device — NOT on the UI's insert/update, which already
+/// send a regex with a required name.
+fn normalize_to_regex(rule: &HighlightRule) -> HighlightRule {
+    let keyword = if rule.is_regex {
+        rule.keyword.clone()
+    } else {
+        regex_escape(&rule.keyword)
+    };
+    let name = if rule.name.trim().is_empty() {
+        rule.keyword.clone()
+    } else {
+        rule.name.clone()
+    };
+    HighlightRule {
+        keyword,
+        name,
+        is_regex: true,
+        ..rule.clone()
+    }
+}
+
 fn validate_rule(rule: &HighlightRule) -> AppResult<()> {
     if rule.keyword.trim().is_empty() {
         return Err(AppError::config(
@@ -11,9 +56,9 @@ fn validate_rule(rule: &HighlightRule) -> AppResult<()> {
             serde_json::json!({}),
         ));
     }
-    if !rule.is_regex && !rule.name.trim().is_empty() {
+    if rule.name.trim().is_empty() {
         return Err(AppError::config(
-            "highlight_name_for_regex_only",
+            "highlight_name_required",
             serde_json::json!({}),
         ));
     }
@@ -135,7 +180,10 @@ pub fn update(db: &Db, old_keyword: &str, rule: &HighlightRule) -> AppResult<()>
 /// columns when the keyword exists, inserts otherwise. Used by merge_import;
 /// additive, never deletes.
 pub fn upsert_by_keyword(db: &Db, rule: &HighlightRule) -> AppResult<()> {
-    validate_rule(rule)?;
+    // normalize first so a legacy (is_regex=0, empty-name) payload from an older
+    // device gets its name seeded BEFORE the now-required-name check runs.
+    let rule = normalize_to_regex(rule);
+    validate_rule(&rule)?;
     let conn = db.lock()?;
     let affected = conn.execute(
         "UPDATE highlights SET name = ?2, color = ?3, enabled = ?4, is_regex = ?5, is_case_sensitive = ?6 WHERE keyword = ?1",
@@ -167,11 +215,13 @@ pub fn upsert_by_keyword(db: &Db, rule: &HighlightRule) -> AppResult<()> {
 pub fn reset_defaults(db: &Db) -> AppResult<()> {
     let conn = db.lock()?;
     conn.execute("DELETE FROM highlights", [])?;
+    // All defaults are regex now (the text/regex split is gone). ERROR/WARN/INFO/
+    // DEBUG carry no metacharacters, so as regexes they match exactly as before.
     const DEFAULTS: [(&str, &str, &str, bool, bool, bool); 5] = [
-        ("ERROR", "", "#FF6B6B", true, false, false),
-        ("WARN", "", "#FFD060", true, false, false),
-        ("INFO", "", "#6EDAA0", true, false, false),
-        ("DEBUG", "", "#40C8E0", true, false, false),
+        ("ERROR", "ERROR", "#FF6B6B", true, true, false),
+        ("WARN", "WARN", "#FFD060", true, true, false),
+        ("INFO", "INFO", "#6EDAA0", true, true, false),
+        ("DEBUG", "DEBUG", "#40C8E0", true, true, false),
         (
             r"\b(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b",
             "IPv4",
@@ -197,10 +247,11 @@ mod tests {
     fn rule(keyword: &str) -> HighlightRule {
         HighlightRule {
             keyword: keyword.into(),
-            name: String::new(),
+            // Name is required now; tests reuse the keyword as the display name.
+            name: keyword.into(),
             color: "#FF0000".into(),
             enabled: true,
-            is_regex: false,
+            is_regex: true,
             is_case_sensitive: false,
         }
     }
@@ -234,6 +285,55 @@ mod tests {
                 .filter(|r| r.keyword == "CUSTOM")
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn regex_escape_neutralizes_metacharacters() {
+        assert_eq!(regex_escape("C++"), r"C\+\+");
+        assert_eq!(regex_escape("a.txt"), r"a\.txt");
+        assert_eq!(regex_escape("$HOME"), r"\$HOME");
+        assert_eq!(regex_escape("[ERROR]"), r"\[ERROR\]");
+        // Pure letters carry no metacharacters → unchanged. This is why the
+        // seeded ERROR/WARN/INFO/DEBUG migrate to regex with zero behavior change.
+        assert_eq!(regex_escape("ERROR"), "ERROR");
+    }
+
+    #[test]
+    fn normalize_escapes_text_and_seeds_name_from_keyword() {
+        // Only sync/migration produce a legacy plain-text rule now, never the UI.
+        let legacy = HighlightRule {
+            keyword: "a.b".into(),
+            name: String::new(),
+            color: "#FF0000".into(),
+            enabled: true,
+            is_regex: false,
+            is_case_sensitive: false,
+        };
+        let n = normalize_to_regex(&legacy);
+        assert_eq!(n.keyword, r"a\.b", "text escaped to an equivalent regex");
+        assert_eq!(n.name, "a.b", "empty name seeded from the original keyword");
+        assert!(n.is_regex);
+    }
+
+    #[test]
+    fn normalize_leaves_regex_rule_untouched() {
+        let n = normalize_to_regex(&rule(r"\d+"));
+        assert_eq!(n.keyword, r"\d+");
+        assert_eq!(n.name, r"\d+");
+        assert!(n.is_regex);
+    }
+
+    #[test]
+    fn insert_rejects_empty_name() {
+        // Names are required now: the UI enforces it, the backend guarantees it.
+        // insert no longer normalizes — it trusts the UI to send a regex + name.
+        let db = Db::open_in_memory().unwrap();
+        let mut r = rule("UNIQUE_KW");
+        r.name = String::new();
+        assert_eq!(
+            insert(&db, &r).unwrap_err().code(),
+            "highlight_name_required"
         );
     }
 }

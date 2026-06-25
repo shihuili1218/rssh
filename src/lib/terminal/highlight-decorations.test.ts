@@ -191,7 +191,7 @@ function fakeTerm() {
 }
 
 function rule(keyword: string): HighlightRule {
-    return { keyword, name: "", color: "#FF6B6B", enabled: true, is_regex: false, is_case_sensitive: false };
+    return { keyword, name: "", color: "#FF6B6B", enabled: true, is_regex: true, is_case_sensitive: false };
 }
 
 describe("HighlightDecorator lifecycle", () => {

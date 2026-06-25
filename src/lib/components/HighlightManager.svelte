@@ -12,7 +12,7 @@
     name: "",
     color: "#FF6B6B",
     enabled: true,
-    is_regex: false,
+    is_regex: true,
     is_case_sensitive: false,
   };
 
@@ -99,7 +99,7 @@
   }
 
   function displayTitle(h: HighlightRule): string {
-    return h.is_regex && h.name ? h.name : h.keyword;
+    return h.name || h.keyword;
   }
 </script>
 
@@ -126,10 +126,9 @@
             <div class="item-name" title={h.keyword}>{displayTitle(h)}</div>
             <div class="item-meta">
               <div class="item-sub">{h.color}</div>
-              {#if h.is_regex || h.is_case_sensitive}
+              {#if h.is_case_sensitive}
                 <div class="item-tags">
-                  {#if h.is_regex}<span class="tag">{t("highlight.tag_regex")}</span>{/if}
-                  {#if h.is_case_sensitive}<span class="tag">{t("highlight.tag_case_sensitive")}</span>{/if}
+                  <span class="tag">{t("highlight.tag_case_sensitive")}</span>
                 </div>
               {/if}
             </div>

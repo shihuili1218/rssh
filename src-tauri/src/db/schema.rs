@@ -2,7 +2,7 @@ use rusqlite::{params, Connection};
 
 use crate::error::AppResult;
 
-const SCHEMA_VERSION: u32 = 20;
+const SCHEMA_VERSION: u32 = 21;
 
 fn column_exists(conn: &Connection, table: &str, col: &str) -> AppResult<bool> {
     let mut stmt = conn.prepare("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2")?;
@@ -306,11 +306,10 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
     if version < 19 {
         // Regex highlight rules support a human-readable name for easier list management.
         if !column_exists(conn, "highlights", "name")? {
-            conn.execute_batch(
-                "ALTER TABLE highlights ADD COLUMN name TEXT NOT NULL DEFAULT '';",
-            )?;
+            conn.execute_batch("ALTER TABLE highlights ADD COLUMN name TEXT NOT NULL DEFAULT '';")?;
         }
-        let ipv4_pattern = r"\b(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b";
+        let ipv4_pattern =
+            r"\b(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b";
         let exists: i64 = conn.query_row(
             "SELECT COUNT(*) FROM highlights WHERE keyword = ?1",
             params![ipv4_pattern],
@@ -332,7 +331,41 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
             conn.execute_batch("ALTER TABLE forwards ADD COLUMN group_id TEXT DEFAULT NULL;")?;
         }
         if !column_exists(conn, "serial_profiles", "group_id")? {
-            conn.execute_batch("ALTER TABLE serial_profiles ADD COLUMN group_id TEXT DEFAULT NULL;")?;
+            conn.execute_batch(
+                "ALTER TABLE serial_profiles ADD COLUMN group_id TEXT DEFAULT NULL;",
+            )?;
+        }
+    }
+
+    if version < 21 {
+        // Highlight rules unify on regex: the text/regex split is gone and names
+        // are required. Convert every legacy plain-text rule (is_regex=0) into the
+        // equivalent regex by escaping its keyword (matching stays byte-for-byte
+        // unchanged: C++ -> C\+\+, $HOME -> \$HOME), and seed an empty name from
+        // the ORIGINAL keyword so the rule keeps a readable label. Idempotent:
+        // afterwards no is_regex=0 row remains.
+        let stale: Vec<(i64, String, String)> = {
+            let mut stmt =
+                conn.prepare("SELECT id, keyword, name FROM highlights WHERE is_regex = 0")?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        for (id, keyword, name) in stale {
+            let new_name = if name.trim().is_empty() {
+                keyword.clone()
+            } else {
+                name
+            };
+            conn.execute(
+                "UPDATE highlights SET keyword = ?1, name = ?2, is_regex = 1 WHERE id = ?3",
+                params![crate::db::highlight::regex_escape(&keyword), new_name, id],
+            )?;
         }
     }
 
@@ -341,4 +374,65 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migration_21_escapes_plain_text_highlights() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Simulate a pre-v21 DB: highlights as of v19 holding one plain-text rule
+        // and one regex rule. Stamp user_version at 20 so migrate() runs only the
+        // v21 step (every earlier gate is skipped, so other tables aren't needed).
+        conn.execute_batch(
+            "CREATE TABLE highlights (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                keyword TEXT NOT NULL,
+                name TEXT NOT NULL DEFAULT '',
+                color TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                is_regex INTEGER NOT NULL DEFAULT 0,
+                is_case_sensitive INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO highlights (keyword, color, enabled, is_regex) VALUES ('C++', '#fff', 1, 0);
+            INSERT INTO highlights (keyword, name, color, enabled, is_regex) VALUES ('\\d+', 'nums', '#000', 1, 1);",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 20u32).unwrap();
+
+        migrate(&conn).unwrap();
+
+        // Plain-text C++ became an escaped regex; the existing regex is untouched.
+        let (kw, name, isr): (String, String, bool) = conn
+            .query_row(
+                "SELECT keyword, name, is_regex FROM highlights WHERE color = '#fff'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(kw, r"C\+\+");
+        assert_eq!(name, "C++", "empty name seeded from the original keyword");
+        assert!(isr);
+
+        let kw2: String = conn
+            .query_row(
+                "SELECT keyword FROM highlights WHERE name = 'nums'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kw2, r"\d+");
+
+        // Idempotent: no is_regex=0 row remains after the migration.
+        let zeros: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM highlights WHERE is_regex = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(zeros, 0);
+    }
 }

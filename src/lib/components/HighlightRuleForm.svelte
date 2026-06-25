@@ -17,15 +17,13 @@
   let formName = $state("");
   let formColor = $state("#FF6B6B");
   let formEnabled = $state(true);
-  let formIsRegex = $state(false);
   let formIsCaseSensitive = $state(false);
 
   function loadFromRule(r: HighlightRule) {
     formKw = r.keyword ?? "";
-    formName = r.is_regex ? (r.name ?? "") : "";
+    formName = r.name ?? "";
     formColor = r.color || "#FF6B6B";
     formEnabled = r.enabled ?? true;
-    formIsRegex = r.is_regex ?? false;
     formIsCaseSensitive = r.is_case_sensitive ?? false;
   }
 
@@ -38,25 +36,19 @@
     name: formName.trim(),
     color: formColor,
     enabled: formEnabled,
-    is_regex: formIsRegex,
+    // Every rule is a regex now; the field is kept for storage/sync compatibility.
+    is_regex: true,
     is_case_sensitive: formIsCaseSensitive,
   });
 
   const formError = $derived(validateHighlightRule(finalRule));
-
-  function toggleRegex() {
-    formIsRegex = !formIsRegex;
-    if (!formIsRegex) {
-      formName = "";
-    }
-  }
 
   function toggleCaseSensitive() {
     formIsCaseSensitive = !formIsCaseSensitive;
   }
 
   function handleSave() {
-    if (!finalRule.keyword || formError) return;
+    if (!finalRule.keyword || !finalRule.name || formError) return;
     onSave(finalRule);
   }
 
@@ -66,16 +58,17 @@
 </script>
 
 <div class="card inline-form">
+  <label class="field">
+    <span class="label-text">{t("highlight.name")}</span>
+    <input type="text" bind:value={formName} placeholder={t("highlight.name_placeholder")}
+      onkeydown={handleKeydown} />
+  </label>
+
   <div class="field">
     <span class="label-text">{t("highlight.keyword")}</span>
     <div class="keyword-row">
       <input type="text" bind:value={formKw} placeholder={t("highlight.keyword_placeholder")}
         onkeydown={handleKeydown} />
-      <button type="button" class="btn btn-sm" class:btn-accent={formIsRegex}
-        aria-pressed={formIsRegex}
-        onclick={toggleRegex}>
-        {t("highlight.regex")}
-      </button>
       <button type="button" class="btn btn-sm" class:btn-accent={formIsCaseSensitive}
         aria-pressed={formIsCaseSensitive}
         onclick={toggleCaseSensitive}>
@@ -83,15 +76,7 @@
       </button>
     </div>
   </div>
-
-  {#if formIsRegex}
-    <label class="field">
-      <span class="label-text">{t("highlight.name")}</span>
-      <input type="text" bind:value={formName} placeholder={t("highlight.name_placeholder")}
-        onkeydown={handleKeydown} />
-    </label>
-    <p class="hint">{t("highlight.regex_hint")}</p>
-  {/if}
+  <p class="hint">{t("highlight.regex_hint")}</p>
 
   <div class="color-actions-row">
     <label class="color-picker">
@@ -103,7 +88,7 @@
     </label>
 
     <div class="form-actions">
-      <button class="btn btn-accent btn-sm" onclick={handleSave} disabled={!formKw.trim() || !!formError}>
+      <button class="btn btn-accent btn-sm" onclick={handleSave} disabled={!formKw.trim() || !formName.trim() || !!formError}>
         {t("common.save")}
       </button>
       <button class="btn btn-sm" onclick={onCancel}>{t("common.cancel")}</button>
@@ -114,6 +99,8 @@
     <div class="form-error">
       {#if formError.kind === "zero_width"}
         {t("error.highlight_regex_zero_width")}
+      {:else if formError.kind === "name_required"}
+        {t("error.highlight_name_required")}
       {:else if formError.kind === "name_too_long"}
         {t("error.highlight_name_too_long", { max: 100 })}
       {:else}

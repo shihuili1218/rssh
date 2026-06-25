@@ -13,10 +13,14 @@ function rule(
 ): HighlightRule {
     return {
         keyword,
-        name: "",
+        // Name is required now; default it to the keyword so tests that don't
+        // care about the name still pass validation.
+        name: keyword,
         color: "#FF6B6B",
         enabled: true,
-        is_regex: false,
+        // Unified on regex: a bare keyword is a regex whose metacharacters happen
+        // to be absent, so it still matches literally.
+        is_regex: true,
         is_case_sensitive: false,
         ...opts,
     };
@@ -28,31 +32,35 @@ function matches(text: string, rules: HighlightRule[]) {
 
 describe("validateHighlightRule", () => {
     it("accepts valid regex", () => {
-        expect(validateHighlightRule(rule("\\d+", { is_regex: true }))).toBeNull();
+        expect(validateHighlightRule(rule("\\d+"))).toBeNull();
     });
 
     it("rejects invalid regex", () => {
-        const err = validateHighlightRule(rule("(\\d+", { is_regex: true }));
+        const err = validateHighlightRule(rule("(\\d+"));
         expect(err?.kind).toBe("invalid");
     });
 
     it("rejects zero-width regex", () => {
-        const err = validateHighlightRule(rule("^$", { is_regex: true }));
+        const err = validateHighlightRule(rule("^$"));
         expect(err?.kind).toBe("zero_width");
     });
 
     it("rejects pure lookaround as zero-width", () => {
-        const err = validateHighlightRule(rule("(?=ERROR)", { is_regex: true }));
+        const err = validateHighlightRule(rule("(?=ERROR)"));
         expect(err?.kind).toBe("zero_width");
     });
 
     it("rejects name longer than 100 chars", () => {
-        const err = validateHighlightRule(rule("\\d+", { is_regex: true, name: "a".repeat(101) }));
+        const err = validateHighlightRule(rule("\\d+", {name: "a".repeat(101) }));
         expect(err?.kind).toBe("name_too_long");
     });
 
-    it("ignores non-regex rules", () => {
+    it("accepts a plain word (regex with no metacharacters)", () => {
         expect(validateHighlightRule(rule("ERROR"))).toBeNull();
+    });
+
+    it("rejects an empty name", () => {
+        expect(validateHighlightRule(rule("ERROR", { name: "" }))?.kind).toBe("name_required");
     });
 });
 
@@ -61,41 +69,41 @@ describe("findMatches", () => {
         const input = "log: 2026-06-09 09:05:02 done";
         const r = rule(
             "\\d{4}[-/]\\d{2}[-/]\\d{2}\\s\\d{2}:\\d{2}:\\d{2}",
-            { is_regex: true, color: "#6EDAA0" }
+            {color: "#6EDAA0" }
         );
         expect(matches(input, [r])).toEqual([
             { start: 5, end: 24, color: "#6EDAA0" },
         ]);
     });
 
-    it("matches literal keyword case-insensitively by default", () => {
+    it("matches a keyword case-insensitively by default", () => {
         expect(matches("error ERROR", [rule("ERROR")])).toEqual([
             { start: 0, end: 5, color: "#FF6B6B" },
             { start: 6, end: 11, color: "#FF6B6B" },
         ]);
     });
 
-    it("respects literal case sensitivity when enabled", () => {
+    it("respects case sensitivity when enabled", () => {
         expect(matches("error ERROR", [rule("ERROR", { is_case_sensitive: true })])).toEqual([
             { start: 6, end: 11, color: "#FF6B6B" },
         ]);
     });
 
     it("matches regex case-insensitively by default", () => {
-        expect(matches("ABC abc", [rule("[a-z]+", { is_regex: true })])).toEqual([
+        expect(matches("ABC abc", [rule("[a-z]+")])).toEqual([
             { start: 0, end: 3, color: "#FF6B6B" },
             { start: 4, end: 7, color: "#FF6B6B" },
         ]);
     });
 
     it("respects regex case sensitivity when enabled", () => {
-        expect(matches("ABC abc", [rule("[a-z]+", { is_regex: true, is_case_sensitive: true })])).toEqual([
+        expect(matches("ABC abc", [rule("[a-z]+", {is_case_sensitive: true })])).toEqual([
             { start: 4, end: 7, color: "#FF6B6B" },
         ]);
     });
 
     it("treats regex alternation as a single rule", () => {
-        expect(matches("foo bar", [rule("foo|bar", { is_regex: true })])).toEqual([
+        expect(matches("foo bar", [rule("foo|bar")])).toEqual([
             { start: 0, end: 3, color: "#FF6B6B" },
             { start: 4, end: 7, color: "#FF6B6B" },
         ]);
@@ -103,7 +111,7 @@ describe("findMatches", () => {
 
     it("skips disabled and invalid rules without throwing", () => {
         expect(matches("hello", [
-            rule("(\\d+", { is_regex: true }),
+            rule("(\\d+"),
             rule("hello"),
         ])).toEqual([{ start: 0, end: 5, color: "#FF6B6B" }]);
     });
@@ -111,7 +119,7 @@ describe("findMatches", () => {
     it("keeps the first rule when multiple rules overlap at same position", () => {
         expect(matches("ERRORs", [
             rule("ERROR", { color: "#FF0000" }),
-            rule("[A-Z]+", { is_regex: true, color: "#00FF00" }),
+            rule("[A-Z]+", {color: "#00FF00" }),
         ])).toEqual([{ start: 0, end: 5, color: "#FF0000" }]);
     });
 
@@ -148,7 +156,7 @@ describe("planLine", () => {
     it("resolves overlaps by rule priority like findMatches", () => {
         const plan = planLine(ascii("ERRORs"), compileHighlightRules([
             rule("ERROR", { color: "#FF0000" }),
-            rule("[A-Z]+", { is_regex: true, color: "#00FF00" }),
+            rule("[A-Z]+", {color: "#00FF00" }),
         ]));
         expect(plan).toEqual([{ x: 0, width: 5, color: "#FF0000" }]);
     });

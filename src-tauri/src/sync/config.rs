@@ -67,12 +67,7 @@ fn aggregate_failure(errs: Vec<ImportError>) -> AppError {
 /// Upsert every entity by identity. Does not clear local data; a single item's
 /// failure does not abort the others. `data_dir` is the app data directory,
 /// used by file-backed categories (snippets) that live outside the DB.
-pub fn merge_import(
-    db: &Db,
-    ss: &dyn SecretStore,
-    data_dir: &Path,
-    data: &Value,
-) -> AppResult<()> {
+pub fn merge_import(db: &Db, ss: &dyn SecretStore, data_dir: &Path, data: &Value) -> AppResult<()> {
     let mut errors: Vec<ImportError> = Vec::new();
 
     if let Some(arr) = data["credentials"].as_array() {
@@ -397,9 +392,14 @@ pub fn read_sync_prefs(db: &Db) -> AppResult<SyncPrefs> {
     // silently falling back to None would widen a deliberately-narrowed export
     // back to every profile (a privacy leak), which is fail-OPEN, not safe.
     let profile_group_ids = match crate::db::settings::get(db, "sync_profile_group_ids")? {
-        Some(s) if !s.trim().is_empty() => Some(serde_json::from_str::<Vec<String>>(&s).map_err(
-            |e| AppError::config("sync_profile_group_ids_invalid", json!({ "err": e.to_string() })),
-        )?),
+        Some(s) if !s.trim().is_empty() => {
+            Some(serde_json::from_str::<Vec<String>>(&s).map_err(|e| {
+                AppError::config(
+                    "sync_profile_group_ids_invalid",
+                    json!({ "err": e.to_string() }),
+                )
+            })?)
+        }
         _ => None,
     };
     Ok(SyncPrefs {
@@ -414,7 +414,8 @@ pub fn read_sync_prefs(db: &Db) -> AppResult<SyncPrefs> {
 }
 
 fn to_val<T: serde::Serialize>(v: T) -> AppResult<Value> {
-    serde_json::to_value(v).map_err(|e| AppError::other("serde_failed", json!({ "err": e.to_string() })))
+    serde_json::to_value(v)
+        .map_err(|e| AppError::other("serde_failed", json!({ "err": e.to_string() })))
 }
 
 /// Apply the push-time group filter to any grouped category. `None` prefs (local
@@ -757,20 +758,26 @@ mod tests {
     #[test]
     fn merge_highlights_old_3_field_payload() {
         let (db, ss, dir) = fixture();
-        // Pre-sync clients only send keyword/color/enabled. New fields must
-        // default safely thanks to #[serde(default)] on HighlightRule.
+        // Pre-sync clients only send keyword/color/enabled (no is_regex/name/
+        // is_case_sensitive). Missing fields default via #[serde(default)]; then
+        // upsert normalizes the legacy plain-text rule to its escaped-regex form,
+        // so the "every rule is a regex" invariant holds even across versions.
+        // "a.b" proves the escape ran: the dot is neutralized to a literal.
         let data = json!({
             "version": 1,
             "highlights": [
-                {"keyword": "OLD", "color": "#00f", "enabled": true},
+                {"keyword": "a.b", "color": "#00f", "enabled": true},
             ],
         });
         merge_import(&db, &ss, dir.path(), &data).unwrap();
         let hs = highlight::list(&db).unwrap();
-        let h = hs.iter().find(|h| h.keyword == "OLD").unwrap();
-        assert_eq!(h.color, "#00f");
-        assert_eq!(h.name, "");
-        assert!(!h.is_regex, "missing is_regex defaults to false");
+        let h = hs.iter().find(|h| h.color == "#00f").unwrap();
+        assert_eq!(
+            h.keyword, r"a\.b",
+            "legacy plain text escaped to an equivalent regex"
+        );
+        assert_eq!(h.name, "a.b", "empty name seeded from the original keyword");
+        assert!(h.is_regex, "legacy text rule normalized to regex on import");
         assert!(
             !h.is_case_sensitive,
             "missing is_case_sensitive defaults to false"
@@ -787,9 +794,7 @@ mod tests {
         });
         merge_import(&db, &ss, dir.path(), &data).unwrap();
         let rules = crate::db::ai_redact_rule::list(&db).unwrap();
-        assert!(rules
-            .iter()
-            .any(|r| r.id == "u1" && r.replacement == "<X>"));
+        assert!(rules.iter().any(|r| r.id == "u1" && r.replacement == "<X>"));
     }
 
     #[test]
@@ -805,7 +810,10 @@ mod tests {
         merge_import(&db, &ss, dir.path(), &data).unwrap_err();
         // …and the bad rule never reached the DB.
         let rules = crate::db::ai_redact_rule::list(&db).unwrap();
-        assert!(!rules.iter().any(|r| r.id == "bad"), "invalid regex not persisted");
+        assert!(
+            !rules.iter().any(|r| r.id == "bad"),
+            "invalid regex not persisted"
+        );
     }
 
     #[test]
@@ -930,12 +938,16 @@ mod tests {
         });
         merge_import(&db, &ss, dir.path(), &data).unwrap();
         assert_eq!(
-            crate::db::settings::get(&db, "ai_anthropic_model").unwrap().as_deref(),
+            crate::db::settings::get(&db, "ai_anthropic_model")
+                .unwrap()
+                .as_deref(),
             Some("claude-x"),
             "empty model did not overwrite local"
         );
         assert_eq!(
-            crate::db::settings::get(&db, "ai_anthropic_endpoint").unwrap().as_deref(),
+            crate::db::settings::get(&db, "ai_anthropic_endpoint")
+                .unwrap()
+                .as_deref(),
             Some("https://local"),
             "empty endpoint did not overwrite local"
         );
@@ -981,8 +993,11 @@ mod tests {
         // merge). A real key is trimmed before export.
         crate::db::settings::set(&db, "ai_anthropic_model", "   ").unwrap();
         crate::db::settings::set(&db, "ai_anthropic_endpoint", "\t").unwrap();
-        ss.set(&crate::secret::setting_key("ai_anthropic_key"), "  sk-zzz  ")
-            .unwrap();
+        ss.set(
+            &crate::secret::setting_key("ai_anthropic_key"),
+            "  sk-zzz  ",
+        )
+        .unwrap();
         let ai = crate::ai::commands::export_ai_settings(&db, &ss, true).unwrap();
         let prov = ai["providers"]
             .as_array()
@@ -991,7 +1006,10 @@ mod tests {
             .find(|p| p["provider"] == "anthropic")
             .expect("provider present via key");
         assert!(prov.get("model").is_none(), "whitespace model not emitted");
-        assert!(prov.get("endpoint").is_none(), "whitespace endpoint not emitted");
+        assert!(
+            prov.get("endpoint").is_none(),
+            "whitespace endpoint not emitted"
+        );
         assert_eq!(prov["api_key"], "sk-zzz", "key trimmed on export");
     }
 
@@ -1002,10 +1020,10 @@ mod tests {
             &db,
             &HighlightRule {
                 keyword: "KEEP".into(),
-                name: "".into(),
+                name: "KEEP".into(),
                 color: "#1".into(),
                 enabled: true,
-                is_regex: false,
+                is_regex: true,
                 is_case_sensitive: false,
             },
         )
