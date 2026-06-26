@@ -2,20 +2,43 @@
 
 [English](README.md) | [中文](README_zh.md)
 
-SSH connection manager with a desktop GUI and built-in CLI.
+**The SSH client built to be an AI ops copilot.**
 
-macOS / Windows / Linux / Android.
+> Connect to a host and just ask "why is the disk full?" — the AI proposes commands, flags their side effects, and runs them in your terminal only after you approve. Sensitive data is redacted locally before anything leaves your machine.
+> Desktop · Mobile · JetBrains · CLI — one shared data store.
 
-> Read the story: [Why RSSH? — An SSH Client Born to be an AI Ops Assistant](docs/article_en.md) ([中文](docs/article_zh.md))
-
+[![Release](https://img.shields.io/github/v/release/shihuili1218/rssh)](../../releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/shihuili1218/rssh/total)](../../releases)
+![Platforms](https://img.shields.io/badge/macOS%20·%20Windows%20·%20Linux%20·%20Android-555)
+[![License](https://img.shields.io/github/license/shihuili1218/rssh)](LICENSE)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/shihuili1218/rssh)
 
-## Boom!
+<p align="center">
+  <img src="docs/welcome-ai.gif" alt="RSSH — ask a question, the AI proposes commands, you approve before they run" width="820">
+</p>
 
-- **AI Diagnostics** -- LLM-driven general ops triage on the connected host; every tool call gated by shape validator, your approval, and local redaction before the payload leaves your machine
-- **Command Block Colors** -- zero remote dependency, color-coded command blocks in terminal
-- **CLI-First** -- CLI and GUI share one database, `rssh open prod` from any terminal
-- **Security & Sync** -- secrets in platform keychain, per-credential sync filter, encrypted backup to your own GitHub repo
+<p align="center"><b><a href="../../releases/latest">⬇️ Download latest</a></b> &nbsp;·&nbsp; <a href="docs/article_en.md">Why RSSH?</a></p>
+
+---
+
+## Why RSSH
+
+### 🤖 AI triage, with you always in the loop
+Not another chat box. It reads what is **actually happening** in your terminal, proposes **read-first** commands, each annotated with its side effects and gated behind an explicit "Run" click. Before any payload leaves your machine it passes a shape validator and local redaction — your keys and internal addresses never go out verbatim.
+
+![AI triage panel: the AI proposes commands and waits for your approval](docs/img_ai_panel.png)
+
+### 🎨 Color-coded command blocks
+Every command and its output become a block with a color-coded left edge. In a thousand-line scrollback you spot the previous command's output at a glance. Rendered **fully locally** — zero remote dependency, no agent installed on the server.
+
+![Color-coded command blocks: locate output at a glance](docs/img.png)
+
+### ⌨️ Configure once, use everywhere
+`rssh open prod` launches a session from any terminal — the CLI and GUI share one SQLite store. The same hosts and keys also run on **mobile** and inside a **JetBrains** tool window.
+
+![CLI: rssh open prod](docs/welcome-cli.gif)
+
+---
 
 ## Features
 
@@ -26,7 +49,7 @@ macOS / Windows / Linux / Android.
 - **Local Terminal** -- auto-detect zsh/bash/PowerShell
 - **Session Recording** -- asciicast v2 format, variable-speed playback
 - **Profiles & Credentials** -- SQLite storage, import from `~/.ssh/config`
-- **Sync** -- encrypted export/import, GitHub backup
+- **Security & Sync** -- secrets in platform keychain, per-credential sync filter, encrypted backup to your own GitHub repo
 - **Snippets** -- reusable command shortcuts (Cmd+E)
 - **Mobile** -- virtual keybar (Ctrl/Alt/arrows/Tab/Esc), safe area, stack navigation
 - **IDE Plugin** -- run RSSH inside JetBrains IDEs in a tool window (shared data dir)
@@ -71,4 +94,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## License
 
 MIT
-

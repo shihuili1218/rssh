@@ -2,20 +2,43 @@
 
 [English](README.md) | [中文](README_zh.md)
 
-带桌面 GUI 和内置 CLI 的 SSH 连接管理器。
+**为 AI 运维而生的 SSH 客户端。**
 
-macOS / Windows / Linux / Android。
+> 连上服务器，直接问"磁盘怎么满了"——AI 提议命令、标注副作用，你点同意它才在终端里执行；敏感信息离机前本地脱敏。
+> 桌面 · 手机 · JetBrains · 命令行，一套数据通用。
 
-> 设计理念：[为什么是 RSSH？—— 天生的 AI 运维助手](docs/article_zh.md) ([English](docs/article_en.md))
-
+[![Release](https://img.shields.io/github/v/release/shihuili1218/rssh)](../../releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/shihuili1218/rssh/total)](../../releases)
+![Platforms](https://img.shields.io/badge/macOS%20·%20Windows%20·%20Linux%20·%20Android-555)
+[![License](https://img.shields.io/github/license/shihuili1218/rssh)](LICENSE)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/shihuili1218/rssh)
 
-## 亮点
+<p align="center">
+  <img src="docs/welcome-ai.gif" alt="RSSH —— 问一句，AI 提议命令，你点同意才执行" width="820">
+</p>
 
-- **AI 排查** —— LLM 驱动的通用运维问题定位；每次工具调用都过 shape validator、你的授权、本地脱敏三道关卡，payload 离机前已清洗
-- **命令块色条** —— 零远端依赖，终端命令块自动按颜色分组
-- **CLI 优先** —— CLI 与 GUI 共享同一个数据库，任意终端 `rssh open prod`
-- **安全与同步** —— 密钥进系统钥匙串，按凭据控制同步范围，加密备份到你自己的 GitHub 仓库
+<p align="center"><b><a href="../../releases/latest">⬇️ 下载最新版</a></b> &nbsp;·&nbsp; <a href="docs/article_zh.md">为什么是 RSSH？</a></p>
+
+---
+
+## 为什么选 RSSH
+
+### 🤖 AI 排障，你始终在回路里
+不是又一个聊天框。它读终端里**真实发生**的事，提议**只读优先**的命令，每条都标注副作用、要你点「执行」才会跑。payload 离机前过 shape 校验 + 本地脱敏——你的密钥、内网地址不会原样发出去。
+
+![AI 排障面板：AI 提议命令，等你批准](docs/img_ai_panel.png)
+
+### 🎨 彩色命令块
+每条命令和它的输出自动成块、左侧按色分隔。上千行滚屏里，一眼找到上一条命令的输出在哪儿。**纯本地渲染**，零远端依赖、不在服务器上装任何 agent。
+
+![彩色命令块：左侧分色定位](docs/img.png)
+
+### ⌨️ 一处配置，处处可用
+`rssh open prod` 从任意终端直接拉起会话——CLI 与 GUI 共用同一个 SQLite 库。同一套主机和密钥，还能跑在**手机**和 **JetBrains** 工具窗口里。
+
+![CLI 直连：rssh open prod](docs/welcome-cli.gif)
+
+---
 
 ## 功能
 
@@ -26,7 +49,7 @@ macOS / Windows / Linux / Android。
 - **本地终端** —— 自动识别 zsh/bash/PowerShell
 - **会话录制** —— asciicast v2 格式，变速回放
 - **Profile 与凭据** —— SQLite 存储，可从 `~/.ssh/config` 导入
-- **同步** —— 加密导出/导入，GitHub 备份
+- **安全与同步** —— 密钥进系统钥匙串，按凭据控制同步范围，加密备份到你自己的 GitHub 仓库
 - **片段** —— 可复用命令快捷键（Cmd+E）
 - **移动端** —— 虚拟键盘栏（Ctrl/Alt/方向键/Tab/Esc）、安全区、栈式导航
 - **IDE 插件** —— 在 JetBrains IDE 的工具窗口里运行 RSSH（共享数据目录）
