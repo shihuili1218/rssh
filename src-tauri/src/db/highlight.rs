@@ -5,10 +5,16 @@ use crate::error::{AppError, AppResult};
 use crate::models::HighlightRule;
 
 /// Escape regex metacharacters so a plain-text keyword matches literally once it
-/// goes through the regex engine. Mirrors the frontend escape in `highlight.ts`
-/// (compileHighlightRules) so a migrated rule and a UI-entered rule behave
-/// identically. The char set MUST stay in sync with that regex:
-/// `. * + ? ^ $ { } ( ) | [ ] \`.
+/// goes through the regex engine. This is the ONLY escape point in the system:
+/// the frontend runtime feeds `keyword` straight to `new RegExp` (highlight.ts
+/// compileHighlightRules) and never escapes, so there is no second copy to keep
+/// in sync.
+///
+/// Used only to migrate legacy plain-text rules into equivalent regexes (the v21
+/// migration and sync import from an older device). Matching stays byte-for-byte
+/// unchanged because the old text mode already escaped-then-matched. The char set
+/// must neutralize every JS `RegExp` metacharacter — those migrated patterns run
+/// through the frontend's JS regex engine: `. * + ? ^ $ { } ( ) | [ ] \`.
 pub fn regex_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
