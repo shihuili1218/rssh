@@ -14,7 +14,7 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/shihuili1218/rssh)
 
 <p align="center">
-  <img src="docs/welcome-ai.gif" alt="RSSH —— 问一句，AI 提议命令，你点同意才执行" width="820">
+  <img src="docs/img_local.png" alt="RSSH —— 问一句，AI 提议命令，你点同意才执行" width="820">
 </p>
 
 <p align="center"><b><a href="../../releases/latest">⬇️ 下载最新版</a></b> &nbsp;·&nbsp; <a href="docs/article_zh.md">为什么是 RSSH？</a></p>
@@ -26,12 +26,12 @@
 ### 🤖 AI 排障，你始终在回路里
 不是又一个聊天框。它读终端里**真实发生**的事，提议**只读优先**的命令，每条都标注副作用、要你点「执行」才会跑。payload 离机前过 shape 校验 + 本地脱敏——你的密钥、内网地址不会原样发出去。
 
-![AI 排障面板：AI 提议命令，等你批准](docs/img_ai_panel.png)
+![AI 排障面板：AI 提议命令，等你批准](docs/welcome-ai.gif)
 
 ### 🎨 彩色命令块
 每条命令和它的输出自动成块、左侧按色分隔。上千行滚屏里，一眼找到上一条命令的输出在哪儿。**纯本地渲染**，零远端依赖、不在服务器上装任何 agent。
 
-![彩色命令块：左侧分色定位](docs/img.png)
+![彩色命令块：左侧分色定位](docs/welcome-blocks.gif)
 
 ### ⌨️ 一处配置，处处可用
 `rssh open prod` 从任意终端直接拉起会话——CLI 与 GUI 共用同一个 SQLite 库。同一套主机和密钥，还能跑在**手机**和 **JetBrains** 工具窗口里。

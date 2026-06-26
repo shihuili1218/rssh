@@ -14,7 +14,7 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/shihuili1218/rssh)
 
 <p align="center">
-  <img src="docs/welcome-ai.gif" alt="RSSH — ask a question, the AI proposes commands, you approve before they run" width="820">
+  <img src="docs/img_local.png" alt="RSSH — ask a question, the AI proposes commands, you approve before they run" width="820">
 </p>
 
 <p align="center"><b><a href="../../releases/latest">⬇️ Download latest</a></b> &nbsp;·&nbsp; <a href="docs/article_en.md">Why RSSH?</a></p>
@@ -26,12 +26,12 @@
 ### 🤖 AI triage, with you always in the loop
 Not another chat box. It reads what is **actually happening** in your terminal, proposes **read-first** commands, each annotated with its side effects and gated behind an explicit "Run" click. Before any payload leaves your machine it passes a shape validator and local redaction — your keys and internal addresses never go out verbatim.
 
-![AI triage panel: the AI proposes commands and waits for your approval](docs/img_ai_panel.png)
+![AI triage panel: the AI proposes commands and waits for your approval](docs/welcome-ai.gif)
 
 ### 🎨 Color-coded command blocks
 Every command and its output become a block with a color-coded left edge. In a thousand-line scrollback you spot the previous command's output at a glance. Rendered **fully locally** — zero remote dependency, no agent installed on the server.
 
-![Color-coded command blocks: locate output at a glance](docs/img.png)
+![Color-coded command blocks: locate output at a glance](docs/welcome-blocks.gif)
 
 ### ⌨️ Configure once, use everywhere
 `rssh open prod` launches a session from any terminal — the CLI and GUI share one SQLite store. The same hosts and keys also run on **mobile** and inside a **JetBrains** tool window.
