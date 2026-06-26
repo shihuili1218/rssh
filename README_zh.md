@@ -7,8 +7,8 @@
 > 连上服务器，直接问"磁盘怎么满了"——AI 提议命令、标注副作用，你点同意它才在终端里执行；敏感信息离机前本地脱敏。
 > 桌面 · 手机 · JetBrains · 命令行，一套数据通用。
 
-[![Release](https://img.shields.io/github/v/release/shihuili1218/rssh)](../../releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/shihuili1218/rssh/total)](../../releases)
+[![Release](https://img.shields.io/github/v/release/shihuili1218/rssh)](https://github.com/shihuili1218/rssh/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/shihuili1218/rssh/total)](https://github.com/shihuili1218/rssh/releases)
 ![Platforms](https://img.shields.io/badge/macOS%20·%20Windows%20·%20Linux%20·%20Android-555)
 [![License](https://img.shields.io/github/license/shihuili1218/rssh)](LICENSE)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/shihuili1218/rssh)
@@ -17,7 +17,7 @@
   <img src="docs/img_local.png" alt="RSSH —— 问一句，AI 提议命令，你点同意才执行" width="820">
 </p>
 
-<p align="center"><b><a href="../../releases/latest">⬇️ 下载最新版</a></b> &nbsp;·&nbsp; <a href="docs/article_zh.md">为什么是 RSSH？</a></p>
+<p align="center"><b><a href=".https://github.com/shihuili1218/rssh/releases">⬇️ 下载最新版</a></b> &nbsp;·&nbsp; <a href="docs/article_zh.md">为什么是 RSSH？</a></p>
 
 ---
 
@@ -56,7 +56,7 @@
 
 ## 安装
 
-从 [Releases](../../releases) 下载：
+从 [Releases](https://github.com/shihuili1218/rssh/releases) 下载：
 
 | 平台                  | 文件                                   | 备注              |
 |---------------------|--------------------------------------|-----------------|

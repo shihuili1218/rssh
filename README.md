@@ -7,8 +7,8 @@
 > Connect to a host and just ask "why is the disk full?" — the AI proposes commands, flags their side effects, and runs them in your terminal only after you approve. Sensitive data is redacted locally before anything leaves your machine.
 > Desktop · Mobile · JetBrains · CLI — one shared data store.
 
-[![Release](https://img.shields.io/github/v/release/shihuili1218/rssh)](../../releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/shihuili1218/rssh/total)](../../releases)
+[![Release](https://img.shields.io/github/v/release/shihuili1218/rssh)](https://github.com/shihuili1218/rssh/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/shihuili1218/rssh/total)](https://github.com/shihuili1218/rssh/releases)
 ![Platforms](https://img.shields.io/badge/macOS%20·%20Windows%20·%20Linux%20·%20Android-555)
 [![License](https://img.shields.io/github/license/shihuili1218/rssh)](LICENSE)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/shihuili1218/rssh)
@@ -17,7 +17,7 @@
   <img src="docs/img_local.png" alt="RSSH — ask a question, the AI proposes commands, you approve before they run" width="820">
 </p>
 
-<p align="center"><b><a href="../../releases/latest">⬇️ Download latest</a></b> &nbsp;·&nbsp; <a href="docs/article_en.md">Why RSSH?</a></p>
+<p align="center"><b><a href="https://github.com/shihuili1218/rssh/releases/latest">⬇️ Download latest</a></b> &nbsp;·&nbsp; <a href="docs/article_en.md">Why RSSH?</a></p>
 
 ---
 
@@ -56,7 +56,7 @@ Every command and its output become a block with a color-coded left edge. In a t
 
 ## Install
 
-Download from [Releases](../../releases):
+Download from [Releases](https://github.com/shihuili1218/rssh/releases):
 
 | Platform            | File                                  | Notes                        |
 |---------------------|---------------------------------------|------------------------------|
