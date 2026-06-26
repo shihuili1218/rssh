@@ -17,7 +17,7 @@
   <img src="docs/img_local.png" alt="RSSH —— 问一句，AI 提议命令，你点同意才执行" width="820">
 </p>
 
-<p align="center"><b><a href=".https://github.com/shihuili1218/rssh/releases">⬇️ 下载最新版</a></b> &nbsp;·&nbsp; <a href="docs/article_zh.md">为什么是 RSSH？</a></p>
+<p align="center"><b><a href="https://github.com/shihuili1218/rssh/releases">⬇️ 下载最新版</a></b> &nbsp;·&nbsp; <a href="docs/article_zh.md">为什么是 RSSH？</a></p>
 
 ---
 
