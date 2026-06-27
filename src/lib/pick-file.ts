@@ -35,9 +35,21 @@ export function pickTextFile(
     input.style.display = "none";
 
     let settled = false;
+
+    // Cancellation fires no reliable event. Treat "app back in the foreground
+    // without a `change`" as cancel: desktop refocuses the window; Android
+    // backgrounds the webview for the SAF picker activity — there `focus` is
+    // unreliable, but visibilitychange→visible fires on return. The 500ms delay
+    // lets a real `change` win the race when a file was actually picked.
+    const cancelSoon = () => setTimeout(() => finish(() => resolve(null)), 500);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") cancelSoon();
+    };
     const finish = (run: () => void) => {
       if (settled) return;
       settled = true;
+      window.removeEventListener("focus", cancelSoon);
+      document.removeEventListener("visibilitychange", onVisible);
       input.remove();
       run();
     };
@@ -55,11 +67,8 @@ export function pickTextFile(
       finish(() => resolve({ name: file.name, text }));
     });
 
-    // Cancellation fires no reliable cross-browser event; treat "window
-    // refocused without a change" as cancel — same heuristic the old shim used.
-    window.addEventListener("focus", () => setTimeout(() => finish(() => resolve(null)), 500), {
-      once: true,
-    });
+    window.addEventListener("focus", cancelSoon, { once: true });
+    document.addEventListener("visibilitychange", onVisible);
 
     document.body.appendChild(input);
     input.click();
