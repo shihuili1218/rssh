@@ -191,6 +191,12 @@ jobs:
       - name: Setup Android SDK & NDK
         uses: android-actions/setup-android@v3
 
+      # setup-android doesn't export an NDK path, and `${{ env.* }}` can't see the
+      # runner image's default ANDROID_NDK_* vars — so point NDK_HOME at the
+      # runner's pre-installed NDK explicitly (this is what `tauri android` reads).
+      - name: Point NDK_HOME at the runner NDK
+        run: echo "NDK_HOME=${ANDROID_NDK_LATEST_HOME:?NDK not found on runner}" >> "$GITHUB_ENV"
+
       - name: Install Android targets
         run: rustup target add aarch64-linux-android armv7-linux-androideabi
 
@@ -231,8 +237,6 @@ jobs:
 
       - name: Build Android APK
         run: npx tauri android build --apk
-        env:
-          NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
