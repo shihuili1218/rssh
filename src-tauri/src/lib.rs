@@ -172,7 +172,6 @@ pub fn run() {
             commands::profile::import_ssh_config,
             commands::profile::read_ssh_config_default,
             commands::profile::import_ssh_entries,
-            commands::profile::pick_private_key_file,
             // groups
             commands::group::list_groups,
             commands::group::create_group,
@@ -304,8 +303,6 @@ pub fn run() {
             commands::sync::import_config,
             #[cfg(not(target_os = "android"))]
             commands::sync::export_config_to_file,
-            #[cfg(not(target_os = "android"))]
-            commands::sync::import_config_from_file,
             commands::sync::github_push,
             commands::sync::github_pull,
             commands::sync::webdav_push,

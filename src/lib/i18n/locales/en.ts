@@ -599,6 +599,7 @@ const en = {
   "error.conversation_corrupt": "Conversation archive is corrupt and cannot be restored",
   "error.ai_session_stopped": "AI session has stopped",
   "error.android_no_dialog": "Android does not support native file dialogs",
+  "error.file_pick_unsupported_in_plugin": "Choosing files isn't supported in the IDE plugin — paste the content, or use the RSSH desktop app.",
   "error.skill_builtin_readonly": "Skill id '{id}' is built-in; cannot modify",
   "error.skill_builtin_undeletable": "Skill id '{id}' is built-in; cannot delete",
   "error.cmd_rejected_shape": "rssh refused command: {reason}. Try a compliant rewrite.",

@@ -50,34 +50,6 @@ function downloadBlob(blob: Blob, filename: string): void {
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-/**
- * Open a hidden `<input type=file>` and resolve with the chosen File(s), or
- * `null` if the user cancelled. Cancellation has no reliable cross-browser
- * event, so we treat "window refocused without a change event" as cancel.
- */
-function pickLocalFiles(accept: string, multiple: boolean): Promise<File[] | null> {
-    return new Promise((resolve) => {
-        const input = document.createElement("input");
-        input.type = "file";
-        input.accept = accept;
-        input.multiple = multiple;
-        input.style.display = "none";
-        let settled = false;
-        const done = (v: File[] | null) => {
-            if (settled) return;
-            settled = true;
-            input.remove();
-            resolve(v);
-        };
-        input.addEventListener("change", () =>
-            done(input.files && input.files.length ? Array.from(input.files) : null),
-        );
-        window.addEventListener("focus", () => setTimeout(() => done(null), 500), { once: true });
-        document.body.appendChild(input);
-        input.click();
-    });
-}
-
 /** `YYYYMMDD-HHMMSS` stamp for default download filenames. */
 function fileStamp(): string {
     const d = new Date();
@@ -244,22 +216,6 @@ export function installTauriShim(): void {
             downloadBlob(new Blob([jsonStr], { type: "application/json" }), name);
             return name;
         },
-        import_config_from_file: async () => {
-            const files = await pickLocalFiles(".json,application/json", false);
-            if (!files || !files[0]) return null;
-            await wsInvoke("import_config", { json: await files[0].text() });
-            return files[0].name;
-        },
-        // Private keys carry no reliable extension (id_rsa, *.pem, *.key…) —
-        // no accept filter. Content is read client-side; never hits the wire.
-        pick_private_key_file: async () => {
-            const files = await pickLocalFiles("", false);
-            if (!files || !files[0]) return null;
-            // Same 1 MiB cap (and wire shape → same i18n) as the desktop command.
-            if (files[0].size > 1024 * 1024)
-                throw `__rssh_err__|${JSON.stringify({ code: "key_file_too_large", params: { size: files[0].size } })}`;
-            return files[0].text();
-        },
         ai_audit_save_pick: async (a) => {
             const audit = await wsInvoke("ai_audit_get", { tabId: a.tabId });
             const name = `rssh-audit-${fileStamp()}.json`;
@@ -291,9 +247,7 @@ export function installTauriShim(): void {
     // is false there, so these fall through to the LOCAL browser handlers).
     const PLUGIN_UNSUPPORTED: Record<string, string> = {
         export_config_to_file: "IDE 插件中暂不支持导出配置到文件，请在 RSSH 桌面版中操作。",
-        import_config_from_file: "IDE 插件中暂不支持从文件导入配置，请在 RSSH 桌面版中操作。",
         ai_audit_save_pick: "IDE 插件中暂不支持保存审计记录到文件，请在 RSSH 桌面版中操作。",
-        pick_private_key_file: "IDE 插件中暂不支持选择私钥文件，请粘贴私钥内容，或在 RSSH 桌面版中操作。",
     };
 
     function invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {

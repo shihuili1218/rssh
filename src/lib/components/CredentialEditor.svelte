@@ -5,6 +5,7 @@
   import { t, errMsg } from "../i18n/index.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
   import Select from "./Select.svelte";
+  import { pickTextFile } from "../pick-file.ts";
 
   let { id = null }: { id: string | null } = $props();
 
@@ -32,13 +33,13 @@
     }
   });
 
-  /** Desktop: native dialog at ~/.ssh; browser: <input type=file> via the
-   *  ipc-shim. null = user cancelled — leave the textarea alone. */
+  /** Read the key file in the webview — one path for desktop, mobile and
+   *  browser. null = user cancelled, so leave the textarea alone. */
   async function pickKeyFile() {
     picking = true;
     try {
-      const content = await invoke<string | null>("pick_private_key_file");
-      if (content != null) secret = content;
+      const f = await pickTextFile({ maxBytes: 1024 * 1024 });
+      if (f) secret = f.text;
     } catch (e: any) { toast.error(errMsg(e)); }
     finally { picking = false; }
   }
@@ -78,11 +79,9 @@
     {:else if credentialType === "key"}
       <label>{t("credential.private_key")}</label>
       <textarea bind:value={secret} rows="6" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
-      {#if !app.isMobile}
-        <button class="btn btn-sm pick-key" onclick={pickKeyFile} disabled={picking}>
-          {t("credential.pick_key_file")}
-        </button>
-      {/if}
+      <button class="btn btn-sm pick-key" onclick={pickKeyFile} disabled={picking}>
+        {t("credential.pick_key_file")}
+      </button>
       <p class="hint">{t("credential.encrypted_key_hint")}</p>
     {:else if credentialType === "agent"}
       <p class="hint agent-hint">{t("credential.agent_hint")}</p>

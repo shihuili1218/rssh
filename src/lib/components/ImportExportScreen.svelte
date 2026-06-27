@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
   import { t, errMsg } from "../i18n/index.svelte.ts";
+  import { pickTextFile } from "../pick-file.ts";
 
   let importing = $state(false);
   let msg = $state("");
@@ -23,8 +24,13 @@
   async function doImport() {
     importing = true;
     try {
-      const path = await invoke<string | null>("import_config_from_file");
-      msg = path ? t("import_export.imported_from", { path }) : "";
+      const f = await pickTextFile({ accept: ".json,application/json" });
+      if (f) {
+        await invoke("import_config", { json: f.text });
+        msg = t("import_export.imported_from", { path: f.name });
+      } else {
+        msg = "";
+      }
     } catch (e: any) { msg = `${t("toast.error.import")}: ${errMsg(e)}`; }
     finally { importing = false; }
     clearMsgLater();

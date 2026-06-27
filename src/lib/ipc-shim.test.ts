@@ -248,9 +248,7 @@ describe("plugin host: unsupported features surface a clear message", () => {
         ws.open();
         fakeWindow.__RSSH_PICK__ = vi.fn(); // marks the IDEA-plugin JCEF host
         await expect(internals.invoke("export_config_to_file")).rejects.toMatch(/IDE 插件中暂不支持/);
-        await expect(internals.invoke("import_config_from_file")).rejects.toMatch(/IDE 插件中暂不支持/);
         await expect(internals.invoke("ai_audit_save_pick", { tabId: "t1" })).rejects.toMatch(/IDE 插件中暂不支持/);
-        await expect(internals.invoke("pick_private_key_file")).rejects.toMatch(/IDE 插件中暂不支持/);
         // Rejected up front — never reaches the engine.
         expect(ws.sent).toHaveLength(0);
     });
