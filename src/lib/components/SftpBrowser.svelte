@@ -905,8 +905,9 @@
         margin: 0;
     }
 
+    /* No explicit grid-column: auto-placement keeps name/size in DOM order so
+       mobile (checkbox column hidden) lands name in col 1, not the size slot. */
     .file-name {
-        grid-column: 2;
         border: none;
         background: none;
         text-align: left;
