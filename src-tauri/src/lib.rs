@@ -65,6 +65,8 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .on_window_event(|window, event| {
             match event {
                 tauri::WindowEvent::Destroyed => {
@@ -301,8 +303,6 @@ pub fn run() {
             // sync
             commands::sync::export_config,
             commands::sync::import_config,
-            #[cfg(not(target_os = "android"))]
-            commands::sync::export_config_to_file,
             commands::sync::github_push,
             commands::sync::github_pull,
             commands::sync::webdav_push,
@@ -328,7 +328,7 @@ pub fn run() {
             ai::commands::ai_command_result,
             ai::commands::ai_command_reject,
             ai::commands::ai_audit_save,
-            ai::commands::ai_audit_save_pick,
+            ai::commands::ai_audit_log_text,
             ai::commands::ai_audit_get,
             ai::commands::ai_list_sessions,
             ai::commands::ai_conversations_list,

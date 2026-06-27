@@ -109,7 +109,7 @@ pub fn delete_user(db: &Db, id: &str) -> AppResult<()> {
 /// 由 commands 层根据前端 UI locale 解析后传入。
 ///
 /// `is_mobile` = true 时追加一段移动端能力声明：`analyze_locally` 与 `download_file`
-/// 在该端硬阻碍（Tauri 2 mobile 不能 spawn 窗口、Android 无 rfd 文件对话框），
+/// 在该端硬阻碍（Tauri 2 mobile 不能 spawn 窗口分析），
 /// 让 LLM 直接告诉用户改用桌面端，而不是徒劳调用工具撞 NotImplemented。
 pub fn build_catalog_prompt(
     db: &Db,

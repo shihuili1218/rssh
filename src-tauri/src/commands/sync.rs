@@ -81,40 +81,6 @@ pub fn import_config_impl(state: &AppState, json: String) -> AppResult<()> {
     )
 }
 
-/// 弹原生 Save 对话框选路径，把当前完整配置写入该文件。
-/// 用户取消返回 None；写盘成功返回路径字符串。
-/// Android 无 rfd 依赖，硬阻碍。
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn export_config_to_file(state: State<'_, AppState>) -> AppResult<Option<String>> {
-    // Build payload on the blocking pool — same rationale as the GitHub
-    // commands. After this point everything is either user-driven IO
-    // (the native file dialog) or a single file write.
-    let data_dir = state.data_dir.clone();
-    let payload = run_db_blocking(&state, move |db, ss| {
-        build_export_json_blocking(&db, ss.as_ref(), &data_dir)
-    })
-    .await?;
-
-    let default_dir = dirs::document_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    let default_name = format!(
-        "rssh-config-{}.json",
-        chrono::Local::now().format("%Y%m%d-%H%M%S")
-    );
-
-    let pick = rfd::AsyncFileDialog::new()
-        .set_directory(default_dir)
-        .set_file_name(default_name)
-        .add_filter("JSON", &["json"])
-        .save_file()
-        .await;
-
-    let Some(handle) = pick else { return Ok(None) };
-    let path = handle.path().to_path_buf();
-    std::fs::write(&path, payload.as_bytes())?;
-    Ok(Some(path.to_string_lossy().into_owned()))
-}
-
 // ---------------------------------------------------------------------------
 // GitHub sync
 // ---------------------------------------------------------------------------

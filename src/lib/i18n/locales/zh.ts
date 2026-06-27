@@ -601,7 +601,7 @@ const zh: Messages = {
   "error.conversation_target_mismatch": "该对话属于其他连接，无法在此恢复",
   "error.conversation_corrupt": "对话存档损坏，无法恢复",
   "error.ai_session_stopped": "AI session 已停止",
-  "error.android_no_dialog": "Android 不支持原生文件对话框",
+  "error.file_save_unsupported_in_plugin": "IDE 插件中暂不支持保存文件，请在 RSSH 桌面版中操作。",
   "error.file_pick_unsupported_in_plugin": "IDE 插件中暂不支持选择文件，请直接粘贴内容，或在 RSSH 桌面版中操作。",
   "error.skill_builtin_readonly": "skill id '{id}' 是内置，不能修改",
   "error.skill_builtin_undeletable": "skill id '{id}' 是内置，不能删除",

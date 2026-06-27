@@ -609,7 +609,7 @@ export function requestSearch(tabId: string) {
   _searchRequest = { tabId, n: (_searchRequest?.n ?? 0) + 1 };
 }
 
-/* ─── SFTP overlay (desktop only — rfd has no Android native dialog) ─── */
+/* ─── SFTP overlay (desktop only — folder pick + streaming transfer are desktop-scoped) ─── */
 /** 给当前活跃 tab 开 SFTP；mobile 屏蔽。仅 ssh tab 有意义（共用其 SSH channel；
  *  local PTY 没有远端文件系统）。UI 入口已 gate `!isSsh`，这里再 gate 防止
  *  键盘 navigate("sftp") 等路径绕过 UI，把 home/local/edit tab 错误标为 open。 */

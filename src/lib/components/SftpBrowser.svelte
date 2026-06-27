@@ -509,8 +509,8 @@
         <button class="btn btn-sm" onclick={goUp}>{t("sftp.up")}</button>
         <button class="btn btn-sm" onclick={() => listDir(cwd)}>{t("sftp.refresh")}</button>
         <div class="upload-wrap" bind:this={uploadWrapEl}>
-            <!-- The dialog commands `sftp_pick_*` are not registered on Android
-                 (rfd has no folder/multi-file picker there); gate the entry. -->
+            <!-- The dialog commands `sftp_pick_*` are desktop-only (the dialog
+                 plugin has no folder picker on mobile); gate the entry. -->
             <button class="btn btn-sm" disabled={!sftpId || app.isMobile} onclick={toggleUploadMenu} aria-haspopup="menu" aria-expanded={uploadMenuOpen}>
                 {t("sftp.upload")} <span class="caret">▾</span>
             </button>

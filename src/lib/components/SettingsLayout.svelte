@@ -93,9 +93,7 @@
     { id: "about", label: t("settings.section.about"), section: "settings.group.help" },
   ]);
 
-  // import-export 走 rfd 原生文件对话框，rfd 没 Android backend，
-  // 后端命令在 mobile 上根本没注册（见 src-tauri/Cargo.toml + sync.rs）。
-  const hiddenOnCompact = new Set<string>(["cli", "shortcuts", "import-export"]);
+  const hiddenOnCompact = new Set<string>(["cli", "shortcuts"]);
   // Serial is desktop-only; hide its settings entry on mobile (the runtime
   // commands aren't registered there). hiddenOnCompact still applies on narrow widths.
   let menu = $derived(

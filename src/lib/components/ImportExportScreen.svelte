@@ -3,6 +3,7 @@
   import * as app from "../stores/app.svelte.ts";
   import { t, errMsg } from "../i18n/index.svelte.ts";
   import { pickTextFile } from "../pick-file.ts";
+  import { saveTextFile, fileStamp } from "../save-file.ts";
 
   let importing = $state(false);
   let msg = $state("");
@@ -15,7 +16,11 @@
 
   async function doExport() {
     try {
-      const path = await invoke<string | null>("export_config_to_file");
+      const json = await invoke<string>("export_config");
+      const path = await saveTextFile(json, {
+        defaultName: `rssh-config-${fileStamp()}.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
       msg = path ? t("import_export.exported_to", { path }) : "";
     } catch (e: any) { msg = `${t("toast.error.export")}: ${errMsg(e)}`; }
     clearMsgLater();

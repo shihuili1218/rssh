@@ -241,24 +241,3 @@ describe("browser-environment commands (served locally, never over ws)", () => {
         expect(fakeWindow.__RSSH_PICK__).toHaveBeenCalledWith("files");
     });
 });
-
-describe("plugin host: unsupported features surface a clear message", () => {
-    it("rejects config file ops with a clear message inside the JCEF plugin (bridge present)", async () => {
-        const { internals, ws } = installWithServer();
-        ws.open();
-        fakeWindow.__RSSH_PICK__ = vi.fn(); // marks the IDEA-plugin JCEF host
-        await expect(internals.invoke("export_config_to_file")).rejects.toMatch(/IDE 插件中暂不支持/);
-        await expect(internals.invoke("ai_audit_save_pick", { tabId: "t1" })).rejects.toMatch(/IDE 插件中暂不支持/);
-        // Rejected up front — never reaches the engine.
-        expect(ws.sent).toHaveLength(0);
-    });
-
-    it("does NOT block those ops in a plain browser (no host bridge)", () => {
-        const { internals, ws } = installWithServer();
-        ws.open();
-        // No __RSSH_PICK__ → not the plugin → falls through to the LOCAL handler,
-        // which fetches the data over the ws (proving the guard is env-gated).
-        internals.invoke("export_config_to_file");
-        expect(ws.sentFrames().some((f) => f.cmd === "export_config")).toBe(true);
-    });
-});

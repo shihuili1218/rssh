@@ -8,6 +8,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { saveTextFile, fileStamp } from "../save-file.ts";
 import { t, locale as currentLocale } from "../i18n/index.svelte.ts";
 import { extractOutput, findSentinel } from "./pty-output.ts";
 import { PROBE_COMMAND, classifyProbeBuffer } from "./shell-probe.ts";
@@ -620,9 +621,13 @@ export async function saveAudit(tab_id: string, file_path: string) {
   return invoke("ai_audit_save", { tabId: tab_id, filePath: file_path });
 }
 
-/** Desktop-only：弹原生 Save 对话框选路径并保存。返回路径或 null（用户取消）。 */
+/** 拿审计 .log 文本，用统一的 saveTextFile 存盘（桌面 / 移动 / 浏览器一套）。 */
 export async function saveAuditWithDialog(tab_id: string): Promise<string | null> {
-  return invoke<string | null>("ai_audit_save_pick", { tabId: tab_id });
+  const text = await invoke<string>("ai_audit_log_text", { tabId: tab_id });
+  return saveTextFile(text, {
+    defaultName: `rssh-diagnose-${tab_id.slice(0, 8)}-${fileStamp()}.log`,
+    filters: [{ name: "Log", extensions: ["log", "txt"] }],
+  });
 }
 
 // ─── Settings ─────────────────────────────────────────────────────

@@ -37,26 +37,6 @@ function serverUrl(): string | null {
     return `ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`;
 }
 
-/** Trigger a browser download of `blob` saved as `filename`. */
-function downloadBlob(blob: Blob, filename: string): void {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
-}
-
-/** `YYYYMMDD-HHMMSS` stamp for default download filenames. */
-function fileStamp(): string {
-    const d = new Date();
-    const p = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-}
-
 /**
  * When this window was opened by `open_tab_in_new_window`'s browser fallback,
  * the opener stashed the clone payload in localStorage under a nonce carried in
@@ -207,21 +187,6 @@ export function installTauriShim(): void {
                 throw "popup_blocked";
             }
         },
-        // Config export/import + audit save: no real local path needed — download a
-        // Blob / read an <input type=file>. Works in a browser, and in JCEF once
-        // the plugin registers download/dialog handlers.
-        export_config_to_file: async () => {
-            const jsonStr = (await wsInvoke("export_config", {})) as string;
-            const name = `rssh-config-${fileStamp()}.json`;
-            downloadBlob(new Blob([jsonStr], { type: "application/json" }), name);
-            return name;
-        },
-        ai_audit_save_pick: async (a) => {
-            const audit = await wsInvoke("ai_audit_get", { tabId: a.tabId });
-            const name = `rssh-audit-${fileStamp()}.json`;
-            downloadBlob(new Blob([JSON.stringify(audit, null, 2)], { type: "application/json" }), name);
-            return name;
-        },
         sftp_pick_folder: () => hostPick("folder"),
         sftp_pick_open_files: () => hostPick("files"),
         // Window-plugin commands: off-Tauri the app lives in an IDE tool window
@@ -233,21 +198,6 @@ export function installTauriShim(): void {
         "plugin:window|set_always_on_top": async () => {},
         "plugin:window|set_decorations": async () => {},
         "plugin:window|is_decorated": async () => true,
-    };
-
-    // Running inside the IDEA plugin's JCEF host? The bridge injects __RSSH_PICK__;
-    // a plain browser has no equivalent.
-    const inPlugin = () => typeof (window as any).__RSSH_PICK__ === "function";
-
-    // Features with no working path inside JCEF: config export/import + audit save
-    // ride a browser Blob download / <input type=file>, which JCEF silently drops
-    // without download/dialog handlers — and those can't be bound across the
-    // plugin's IDE range (the CEF Java signatures differ 242↔261). Rather than do
-    // nothing, tell the user. Plain-browser deployments are unaffected (inPlugin()
-    // is false there, so these fall through to the LOCAL browser handlers).
-    const PLUGIN_UNSUPPORTED: Record<string, string> = {
-        export_config_to_file: "IDE 插件中暂不支持导出配置到文件，请在 RSSH 桌面版中操作。",
-        ai_audit_save_pick: "IDE 插件中暂不支持保存审计记录到文件，请在 RSSH 桌面版中操作。",
     };
 
     function invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
@@ -272,9 +222,6 @@ export function installTauriShim(): void {
             // Frontend→backend emit: not needed by the tracer; no-op.
             return Promise.resolve();
         }
-        // In the IDEA plugin, surface a clear "unsupported here" message for
-        // features that have no JCEF path, instead of failing silently.
-        if (inPlugin() && PLUGIN_UNSUPPORTED[cmd]) return Promise.reject(PLUGIN_UNSUPPORTED[cmd]);
         // Browser-environment commands (clipboard / open / file dialogs).
         const local = LOCAL[cmd];
         if (local) return local(args ?? {});
