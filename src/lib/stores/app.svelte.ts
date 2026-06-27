@@ -4,7 +4,10 @@ import * as ai from "../ai/store.svelte.ts";
 /* ═══════════════════════════════════════════════════════
    Platform
    ═══════════════════════════════════════════════════════ */
-export const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+// `navigator` is absent in the node test env; guard so importing this module
+// from a unit test doesn't throw. Browsers always have it → behavior unchanged.
+export const isMobile =
+  typeof navigator !== "undefined" && /Android|iPhone|iPad/i.test(navigator.userAgent);
 
 /* ═══════════════════════════════════════════════════════
    Types
@@ -609,12 +612,13 @@ export function requestSearch(tabId: string) {
   _searchRequest = { tabId, n: (_searchRequest?.n ?? 0) + 1 };
 }
 
-/* ─── SFTP overlay (desktop only — folder pick + streaming transfer are desktop-scoped) ─── */
-/** 给当前活跃 tab 开 SFTP；mobile 屏蔽。仅 ssh tab 有意义（共用其 SSH channel；
- *  local PTY 没有远端文件系统）。UI 入口已 gate `!isSsh`，这里再 gate 防止
- *  键盘 navigate("sftp") 等路径绕过 UI，把 home/local/edit tab 错误标为 open。 */
+/* ─── SFTP overlay (folder pick + multi-select are desktop-only; single-file
+   transfer also works on mobile via plugin-fs + content:// URIs) ─── */
+/** 给当前活跃 tab 开 SFTP。仅 ssh tab 有意义（共用其 SSH channel；local PTY
+ *  没有远端文件系统）。这里 gate tab.type，防止键盘 navigate("sftp") 等路径
+ *  绕过 UI，把 home/local/edit tab 错误标为 open。 */
 export function openSftp() {
-  if (isMobile || !_activeTabId) return;
+  if (!_activeTabId) return;
   const tab = _tabs.find(t => t.id === _activeTabId);
   if (!tab || tab.type !== "ssh") return;
   _sftpOpenByTab = { ..._sftpOpenByTab, [_activeTabId]: true };

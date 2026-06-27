@@ -53,6 +53,9 @@
     <button class="key" onpointerdown={prevent} onclick={() => arrow('D')}>←</button>
     <button class="key" onpointerdown={prevent} onclick={() => arrow('C')}>→</button>
     <button class="key" title="Snippets" onpointerdown={prevent} onclick={() => app.openSnippetPicker()}>⚡</button>
+    {#if app.activeTab()?.type === "ssh"}
+        <button class="key" title="SFTP" onpointerdown={prevent} onclick={() => app.openSftp()}>📁</button>
+    {/if}
     <button class="key" class:active={ai.isOpen()} class:dim={!ai.isOpen() && !canOpenAi} title="AI Chat" onpointerdown={prevent} onclick={toggleAi}>AI</button>
 </div>
 

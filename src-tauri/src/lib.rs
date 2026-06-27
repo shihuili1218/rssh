@@ -265,6 +265,9 @@ pub fn run() {
             commands::sftp::sftp_upload,
             commands::sftp::sftp_mkdir,
             commands::sftp::sftp_close,
+            // Stream transfer to/from a path (desktop) or content:// URI (mobile).
+            commands::sftp::sftp_download_to,
+            commands::sftp::sftp_upload_from,
             // SFTP native file transfer (desktop only)
             #[cfg(not(target_os = "android"))]
             commands::sftp::sftp_save_file,
@@ -278,10 +281,6 @@ pub fn run() {
             commands::sftp::sftp_pick_folder,
             #[cfg(not(target_os = "android"))]
             commands::sftp::sftp_pick_open_files,
-            #[cfg(not(target_os = "android"))]
-            commands::sftp::sftp_download_to,
-            #[cfg(not(target_os = "android"))]
-            commands::sftp::sftp_upload_from,
             commands::sftp::sftp_cancel_transfer,
             commands::sftp::sftp_remove,
             commands::sftp::sftp_rename,

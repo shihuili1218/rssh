@@ -325,8 +325,17 @@ pub async fn sftp_pick_and_upload(
     let transfer_id = uuid::Uuid::new_v4().to_string();
     let (_guard, cancel) = CancelGuard::register(&state, transfer_id.clone())?;
     let host = crate::emitter::Host::Tauri(app);
-    sftp.upload_streaming(&local, &remote_path, &host, &transfer_id, cancel)
-        .await?;
+    let mut reader = tokio::fs::File::open(&local).await?;
+    let total = reader.metadata().await?.len();
+    sftp.upload_streaming(
+        &mut reader,
+        total,
+        &remote_path,
+        &host,
+        &transfer_id,
+        cancel,
+    )
+    .await?;
     Ok(Some(name))
 }
 
@@ -395,10 +404,39 @@ pub async fn sftp_pick_open_files(app: tauri::AppHandle) -> AppResult<Option<Vec
     Ok(Some(paths))
 }
 
-/// Stream-download to a caller-supplied local path. transfer_id is used as the
+/// `sftp_io_failed` for a local open failure — same code/i18n as other SFTP IO.
+fn open_err(e: std::io::Error) -> AppError {
+    AppError::sftp(
+        "sftp_io_failed",
+        json!({ "op": "open", "err": e.to_string() }),
+    )
+}
+
+/// Resolve a `FilePath` (a desktop path or a mobile SAF `content://` URI) to a
+/// real `std::fs::File` for reading, via plugin-fs. Desktop paths open directly;
+/// Android URIs resolve to an fd through the ContentResolver bridge.
+fn fs_open_read(app: &tauri::AppHandle, fp: tauri_plugin_fs::FilePath) -> AppResult<std::fs::File> {
+    use tauri_plugin_fs::{FsExt, OpenOptions};
+    let mut opts = OpenOptions::new();
+    opts.read(true);
+    app.fs().open(fp, opts).map_err(open_err)
+}
+
+/// Same as [`fs_open_read`] but opens (create + truncate) for writing — the
+/// mobile download target.
+fn fs_open_write(
+    app: &tauri::AppHandle,
+    fp: tauri_plugin_fs::FilePath,
+) -> AppResult<std::fs::File> {
+    use tauri_plugin_fs::{FsExt, OpenOptions};
+    let mut opts = OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    app.fs().open(fp, opts).map_err(open_err)
+}
+
+/// Stream-download to a caller-supplied local target. transfer_id is used as the
 /// `sftp:progress:{transfer_id}` event suffix (R1) so the frontend listens
 /// per-transfer instead of multiplexing one global stream.
-#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn sftp_download_to(
     app: tauri::AppHandle,
@@ -409,16 +447,30 @@ pub async fn sftp_download_to(
     transfer_id: String,
 ) -> AppResult<()> {
     let sftp = get_sftp(&state, &sftp_id)?;
-    let local = std::path::PathBuf::from(&local_path);
     let (_guard, cancel) = CancelGuard::register(&state, transfer_id.clone())?;
-    let host = crate::emitter::Host::Tauri(app);
-    sftp.download_streaming(&remote_path, &local, &host, &transfer_id, cancel)
-        .await
-        .map(|_| ())
+    let host = crate::emitter::Host::Tauri(app.clone());
+    // Desktop sends a filesystem path → keep the atomic `.part` + rename.
+    // Mobile sends a SAF `content://` URI → open it through plugin-fs (which
+    // resolves the URI to a real fd) and stream straight in. There's no path to
+    // rename through on mobile, so that download has no local atomicity (agreed).
+    match local_path
+        .parse::<tauri_plugin_fs::FilePath>()
+        .expect("FilePath::from_str is infallible")
+    {
+        tauri_plugin_fs::FilePath::Path(p) => sftp
+            .download_streaming(&remote_path, &p, &host, &transfer_id, cancel)
+            .await
+            .map(|_| ()),
+        fp @ tauri_plugin_fs::FilePath::Url(_) => {
+            let mut dst = tokio::fs::File::from_std(fs_open_write(&app, fp)?);
+            sftp.download_streaming_to_writer(&remote_path, &mut dst, &host, &transfer_id, cancel)
+                .await
+                .map(|_| ())
+        }
+    }
 }
 
-/// Stream-upload from a caller-supplied local path. transfer_id mirrors above.
-#[cfg(not(target_os = "android"))]
+/// Stream-upload from a caller-supplied local source. transfer_id mirrors above.
 #[tauri::command]
 pub async fn sftp_upload_from(
     app: tauri::AppHandle,
@@ -429,12 +481,26 @@ pub async fn sftp_upload_from(
     transfer_id: String,
 ) -> AppResult<()> {
     let sftp = get_sftp(&state, &sftp_id)?;
-    let local = std::path::PathBuf::from(&local_path);
     let (_guard, cancel) = CancelGuard::register(&state, transfer_id.clone())?;
-    let host = crate::emitter::Host::Tauri(app);
-    sftp.upload_streaming(&local, &remote_path, &host, &transfer_id, cancel)
-        .await
-        .map(|_| ())
+    let host = crate::emitter::Host::Tauri(app.clone());
+    // Local end is just a reader, so desktop (path) and mobile (content:// URI)
+    // share one path — plugin-fs resolves either to a real fd.
+    let fp = local_path
+        .parse::<tauri_plugin_fs::FilePath>()
+        .expect("FilePath::from_str is infallible");
+    let mut reader = tokio::fs::File::from_std(fs_open_read(&app, fp)?);
+    // content:// fds may not support fstat; fall back to 0 (indeterminate bar).
+    let total = reader.metadata().await.map(|m| m.len()).unwrap_or(0);
+    sftp.upload_streaming(
+        &mut reader,
+        total,
+        &remote_path,
+        &host,
+        &transfer_id,
+        cancel,
+    )
+    .await
+    .map(|_| ())
 }
 
 #[tauri::command]

@@ -5,6 +5,8 @@
     import * as transfers from "../stores/transfers.svelte.ts";
     import type {RemoteEntry} from "../stores/app.svelte.ts";
     import { errMsg, t } from "../i18n/index.svelte.ts";
+    import { fileStamp } from "../save-file.ts";
+    import { remoteUploadName } from "../sftp-name.ts";
 
     /** Mirrors the backend WalkEntry; rel_path is always '/'-separated. */
     interface WalkEntry { rel_path: string; size: number; }
@@ -360,12 +362,15 @@
                 if (walkErrors.length > 0) error = `${t("sftp.walk_failed")}\n${walkErrors.join("\n")}`;
                 if (queued > 0) notice = t("sftp.queued_n", { n: queued });
             } else if (app.isMobile) {
-                const dir = await invoke<string | null>("sftp_pick_folder");
-                if (!dir) return;
+                // Mobile: pick a SAF save target via the dialog plugin and stream
+                // to its content:// URI through the shared transfer queue.
+                const { save } = await import("@tauri-apps/plugin-dialog");
+                const target = await save({ defaultPath: entry.name });
+                if (!target) return;
                 await transfers.startDownload({
                     sessionId: meta.sessionId,
                     remotePath: entryPath(entry),
-                    localPath:  joinLocal(dir, entry.name),
+                    localPath:  target,
                     sizeHint:   entry.size,
                 });
                 notice = t("sftp.queued_n", { n: 1 });
@@ -497,6 +502,30 @@
         }
     }
 
+    /** Mobile single-file upload: pick a source via the dialog plugin and stream
+     *  its content:// URI through the shared queue. The remote filename is
+     *  recovered from the URI (SAF encodes the display name for user-visible
+     *  providers); opaque providers fall back to a timestamped name. */
+    async function uploadFile() {
+        error = "";
+        notice = "";
+        if (!meta.sessionId) { error = "Missing SSH session"; return; }
+        try {
+            const { open } = await import("@tauri-apps/plugin-dialog");
+            const src = await open({ multiple: false, directory: false });
+            if (!src || Array.isArray(src)) return;
+            const name = remoteUploadName(src) || `upload-${fileStamp()}`;
+            await transfers.startUpload({
+                sessionId: meta.sessionId,
+                localPath:  src,
+                remotePath: joinRemote(cwd, name),
+            });
+            notice = t("sftp.queued_n", { n: 1 });
+        } catch (err: any) {
+            error = errMsg(err);
+        }
+    }
+
 </script>
 
 <div class="sftp">
@@ -508,10 +537,15 @@
     <div class="header">
         <button class="btn btn-sm" onclick={goUp}>{t("sftp.up")}</button>
         <button class="btn btn-sm" onclick={() => listDir(cwd)}>{t("sftp.refresh")}</button>
+        {#if app.isMobile}
+            <!-- Mobile: single-file upload only — folder / multi-select upload
+                 need the desktop-only folder picker. -->
+            <button class="btn btn-sm" disabled={!sftpId} onclick={uploadFile}>
+                {t("sftp.upload")}
+            </button>
+        {:else}
         <div class="upload-wrap" bind:this={uploadWrapEl}>
-            <!-- The dialog commands `sftp_pick_*` are desktop-only (the dialog
-                 plugin has no folder picker on mobile); gate the entry. -->
-            <button class="btn btn-sm" disabled={!sftpId || app.isMobile} onclick={toggleUploadMenu} aria-haspopup="menu" aria-expanded={uploadMenuOpen}>
+            <button class="btn btn-sm" disabled={!sftpId} onclick={toggleUploadMenu} aria-haspopup="menu" aria-expanded={uploadMenuOpen}>
                 {t("sftp.upload")} <span class="caret">▾</span>
             </button>
             {#if uploadMenuOpen}
@@ -521,9 +555,12 @@
                 </div>
             {/if}
         </div>
-        <button class="btn btn-sm" disabled={selectedCount === 0 || !sftpId || app.isMobile} onclick={downloadSelected}>
+        {/if}
+        {#if !app.isMobile}
+        <button class="btn btn-sm" disabled={selectedCount === 0 || !sftpId} onclick={downloadSelected}>
             {selectedCount > 0 ? t("sftp.download_n", { n: selectedCount }) : t("sftp.download")}
         </button>
+        {/if}
     </div>
     <input
         type="text"
@@ -547,7 +584,7 @@
     {#if loading}
         <p class="loading">{t("sftp.loading")}</p>
     {:else}
-        <div class="file-list" oncontextmenu={onSftpContextMenu}>
+        <div class="file-list" class:mobile={app.isMobile} oncontextmenu={onSftpContextMenu}>
             <div class="file-row file-header">
                 <span class="cell-check">
                     <input
@@ -601,7 +638,9 @@
          class:ready={ctxReady}
          bind:this={ctxMenuEl}
          style="left: {ctxMenu.x + ctxDx}px; top: {ctxMenu.y + ctxDy}px;">
-        <button class="ctx-item" onclick={() => downloadEntry(ctxMenu!.entry)}>{t("sftp.ctx.download")}</button>
+        {#if !(app.isMobile && ctxMenu.entry.is_dir)}
+            <button class="ctx-item" onclick={() => downloadEntry(ctxMenu!.entry)}>{t("sftp.ctx.download")}</button>
+        {/if}
         <button class="ctx-item" onclick={() => confirmDelete(ctxMenu!.entry)}>{t("sftp.ctx.delete")}</button>
         <button class="ctx-item" onclick={() => startRename(ctxMenu!.entry)}>{t("sftp.ctx.rename")}</button>
         <div class="ctx-sep"></div>
@@ -916,6 +955,17 @@
             grid-template-columns: 24px 1fr 60px;
         }
         .cell-mtime { display: none; }
+    }
+
+    /* Mobile: drop the checkbox column (multi-select download targets a local
+       folder, which is desktop-only) and mtime — keep the row to name + size.
+       `display:none` removes the cells from grid placement, so 2 columns suffice. */
+    .file-list.mobile .file-row {
+        grid-template-columns: 1fr 60px;
+    }
+    .file-list.mobile .cell-check,
+    .file-list.mobile .cell-mtime {
+        display: none;
     }
 
     .empty {
