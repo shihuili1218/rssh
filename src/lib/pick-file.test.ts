@@ -82,6 +82,16 @@ describe("pickTextFile", () => {
         await expect(p).rejects.toMatch(/key_file_too_large/);
     });
 
+    // A file can vanish or turn unreadable between pick and read; surface that
+    // instead of hanging (or silently resolving null via the cancel fallback).
+    it("rejects when reading the chosen file fails", async () => {
+        const p = pickTextFile();
+        const boom = new Error("unreadable");
+        input.files = [{ name: "id_rsa", size: 4, text: async () => { throw boom; } }];
+        input.fire("change");
+        await expect(p).rejects.toBe(boom);
+    });
+
     it("rejects with a localizable error inside the JCEF plugin host", async () => {
         win.__RSSH_PICK__ = vi.fn(); // marks the IDEA-plugin JCEF host
         await expect(pickTextFile()).rejects.toMatch(/file_pick_unsupported_in_plugin/);

@@ -63,8 +63,14 @@ export function pickTextFile(
             `__rssh_err__|${JSON.stringify({ code: "key_file_too_large", params: { size: file.size } })}`,
           ),
         );
-      const text = await file.text();
-      finish(() => resolve({ name: file.name, text }));
+      try {
+        const text = await file.text();
+        finish(() => resolve({ name: file.name, text }));
+      } catch (e) {
+        // A picked file can still fail to read (deleted, permissions, I/O).
+        // Surface it; don't let the cancel fallback swallow it as a null.
+        finish(() => reject(e));
+      }
     });
 
     window.addEventListener("focus", cancelSoon, { once: true });
