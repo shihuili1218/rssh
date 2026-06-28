@@ -582,11 +582,12 @@ export async function setConfirmCloseTab(v: boolean) {
 }
 
 /* ─── MRU tab reorder ─── */
-// On by default: focusing a session tab moves it to the front of the strip
-// (see setActiveTab / addTab). Off restores plain insertion order — the exact
-// pre-MRU behavior. Default-true encoding: only an explicit "false" disables
-// (mirrors verbose_log, inverted vs copyOnSelect).
-let _tabMru = $state(true);
+// Off by default: tabs keep their insertion order (see setActiveTab / addTab).
+// On makes focusing a session tab move it to the front of the strip. Default-
+// false encoding: only an explicit "true" enables — so a user who previously
+// chose either way (stored "true"/"false") keeps that choice; only the never-
+// touched default flips to off.
+let _tabMru = $state(false);
 let _tabMruLoaded = false;
 export function tabMru() { return _tabMru; }
 export async function loadTabMru(): Promise<boolean> {
@@ -594,7 +595,7 @@ export async function loadTabMru(): Promise<boolean> {
     _tabMruLoaded = true;
     try {
       const v = await invoke<string | null>("get_setting", { key: "tab_mru_reorder" });
-      _tabMru = v !== "false";
+      _tabMru = v === "true";
     } catch {}
   }
   return _tabMru;

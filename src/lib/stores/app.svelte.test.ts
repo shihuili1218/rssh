@@ -39,6 +39,7 @@ describe("tab MRU ordering", () => {
 
   it("inserts each new tab at the front of the session region (after home)", async () => {
     const app = await loadAppModule();
+    await app.setTabMru(true);
     app.addTab(local("a"));
     app.addTab(local("b"));
     app.addTab(local("c"));
@@ -49,6 +50,7 @@ describe("tab MRU ordering", () => {
 
   it("brings the focused session tab to the front on activation", async () => {
     const app = await loadAppModule();
+    await app.setTabMru(true);
     app.addTab(local("a"));
     app.addTab(local("b"));
     app.addTab(local("c")); // [home, c, b, a]
@@ -63,6 +65,7 @@ describe("tab MRU ordering", () => {
 
   it("activating the already-front tab is a no-op", async () => {
     const app = await loadAppModule();
+    await app.setTabMru(true);
     app.addTab(local("a"));
     app.addTab(local("b")); // [home, b, a]
     app.setActiveTab("b");
@@ -71,6 +74,7 @@ describe("tab MRU ordering", () => {
 
   it("never reorders the fixed home tab", async () => {
     const app = await loadAppModule();
+    await app.setTabMru(true);
     app.addTab(local("a"));
     app.addTab(local("b")); // [home, b, a]
     app.setActiveTab("home");
@@ -82,6 +86,7 @@ describe("tab MRU ordering", () => {
 describe("tab drag reorder stays independent of MRU", () => {
   it("moveTab reorders without refocusing the dragged tab", async () => {
     const app = await loadAppModule();
+    await app.setTabMru(true);
     app.addTab(local("a"));
     app.addTab(local("b"));
     app.addTab(local("c")); // [home, c, b, a], active c
@@ -97,6 +102,7 @@ describe("tab drag reorder stays independent of MRU", () => {
 describe("closeTab keeps the most-recent tab active", () => {
   it("activates the next session tab after closing the active one", async () => {
     const app = await loadAppModule();
+    await app.setTabMru(true);
     app.addTab(local("a"));
     app.addTab(local("b"));
     app.addTab(local("c")); // [home, c, b, a], active c at front
@@ -135,10 +141,10 @@ describe("MRU toggle disables reordering", () => {
     expect(app.tabs().map((t) => t.id)).toEqual(["home", "b", "a"]);
   });
 
-  it("defaults to enabled (move-to-front) with no setting loaded", async () => {
+  it("defaults to disabled (insertion order) with no setting loaded", async () => {
     const app = await loadAppModule();
     app.addTab(local("a"));
     app.addTab(local("b"));
-    expect(app.tabs().map((t) => t.id)).toEqual(["home", "b", "a"]);
+    expect(app.tabs().map((t) => t.id)).toEqual(["home", "a", "b"]);
   });
 });

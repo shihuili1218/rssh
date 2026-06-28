@@ -44,6 +44,13 @@
         ai.setPosition(p);
     }
 
+    // ─── Tab MRU reorder — lives next to menu position (the tab bar is
+    //     part of the menu). Off by default. ─────────────────────────────
+    let tabMru = $state(false);
+    async function saveTabMru() {
+        await app.setTabMru(tabMru);
+    }
+
     // ─── Theme: palette ──────────────────────────────────────────────
     const palettes = theme.listPalettes();
     let paletteId = $state<PaletteId>(theme.paletteId());
@@ -141,6 +148,7 @@
         fontSize = theme.termFontSize();
     }
     onMount(async () => {
+        tabMru = await app.loadTabMru();
         try {
             fonts = await invoke<FontInfo[]>("list_fonts");
         } catch (e) {
@@ -374,6 +382,21 @@
                 <div class="layout-label">{t(p.labelKey)}</div>
             </button>
         {/each}
+    </div>
+
+    <div class="card surface-raised toggle-card">
+        <div class="toggle-row">
+            <div class="switch-card-body">
+                <div class="switch-card-title" class:on={tabMru} class:off={!tabMru}>
+                    {t("settings.appearance.tab_mru")}
+                </div>
+                <div class="switch-card-desc">{t("settings.appearance.tab_mru_desc")}</div>
+            </div>
+            <label class="switch">
+                <input type="checkbox" bind:checked={tabMru} onchange={saveTabMru} />
+                <span class="slider"></span>
+            </label>
+        </div>
     </div>
 
     <div class="section-label">{t("settings.appearance.ai_panel_position")}</div>
@@ -877,5 +900,18 @@
         width: 72px;
         flex-shrink: 0;
         text-align: center;
+    }
+
+    /* ── Standalone toggle card (tab MRU) — switch styling is global
+       (.switch / .slider / .switch-card-*); we only supply the card +
+       row container. ── */
+    .toggle-card {
+        padding: 18px;
+    }
+    .toggle-row {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
     }
 </style>
