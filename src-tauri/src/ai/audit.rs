@@ -80,8 +80,8 @@ impl AuditLog {
         });
     }
 
-    /// 保存为人类可读文本（grep / less 友好）。
-    pub fn save_to_file(&self, path: &Path) -> std::io::Result<()> {
+    /// 格式化为人类可读文本（grep / less 友好）。
+    pub fn to_log_string(&self) -> String {
         let mut s = String::new();
         s.push_str(&format!(
             "# rssh AI 排障审计\n# 共 {} 条记录\n# 生成时间: {}\n\n",
@@ -174,7 +174,12 @@ impl AuditLog {
             }
             s.push('\n');
         }
-        std::fs::write(path, s)
+        s
+    }
+
+    /// 写入文件（headless server / 给定路径保存用）。
+    pub fn save_to_file(&self, path: &Path) -> std::io::Result<()> {
+        std::fs::write(path, self.to_log_string())
     }
 }
 

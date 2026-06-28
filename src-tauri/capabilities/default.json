@@ -6,6 +6,9 @@
     "core:default",
     "core:window:allow-set-title",
     "core:window:allow-set-always-on-top",
-    "opener:default"
+    "opener:default",
+    "dialog:default",
+    "fs:default",
+    "fs:allow-write-text-file"
   ]
 }

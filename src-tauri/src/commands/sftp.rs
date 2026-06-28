@@ -11,6 +11,9 @@ use crate::models::{Credential, CredentialType};
 use crate::ssh::sftp::{FileStat, RemoteEntry, SftpHandle, WalkEntry};
 use crate::state::AppState;
 
+#[cfg(not(target_os = "android"))]
+use tauri_plugin_dialog::{DialogExt, FilePath};
+
 /// Maximum recursion depth for the local walker. Mirrors the remote-side cap.
 const LOCAL_WALK_DEPTH_CAP: u32 = 32;
 
@@ -244,6 +247,20 @@ pub async fn sftp_close(state: State<'_, AppState>, sftp_id: String) -> AppResul
     Ok(())
 }
 
+/// dialog plugin 的 FilePath → 本地 PathBuf。SFTP 命令全是 `cfg(not(android))`，
+/// dialog 在桌面总返回真实路径，移动端的 content URI 不会出现在这里。
+#[cfg(not(target_os = "android"))]
+fn dialog_to_path(fp: FilePath) -> AppResult<PathBuf> {
+    fp.into_path()
+        .map_err(|e| AppError::other("file_path_invalid", json!({ "err": e.to_string() })))
+}
+
+/// `spawn_blocking` 的 JoinError → AppError。
+#[cfg(not(target_os = "android"))]
+fn dialog_join_err(e: tokio::task::JoinError) -> AppError {
+    AppError::other("dialog_task_failed", json!({ "err": e.to_string() }))
+}
+
 /// Download a remote file via native Save As dialog with streaming + progress.
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
@@ -254,15 +271,18 @@ pub async fn sftp_save_file(
     remote_path: String,
     default_name: String,
 ) -> AppResult<Option<String>> {
-    let save_path = rfd::AsyncFileDialog::new()
-        .set_file_name(&default_name)
-        .save_file()
-        .await;
-
-    let Some(handle) = save_path else {
-        return Ok(None);
-    };
-    let local = handle.path().to_path_buf();
+    let dialog_app = app.clone();
+    let picked = tokio::task::spawn_blocking(move || {
+        dialog_app
+            .dialog()
+            .file()
+            .set_file_name(&default_name)
+            .blocking_save_file()
+    })
+    .await
+    .map_err(dialog_join_err)?;
+    let Some(fp) = picked else { return Ok(None) };
+    let local = dialog_to_path(fp)?;
 
     let sftp = get_sftp(&state, &sftp_id)?;
     let transfer_id = uuid::Uuid::new_v4().to_string();
@@ -282,9 +302,13 @@ pub async fn sftp_pick_and_upload(
     sftp_id: String,
     remote_dir: String,
 ) -> AppResult<Option<String>> {
-    let pick = rfd::AsyncFileDialog::new().pick_file().await;
-    let Some(handle) = pick else { return Ok(None) };
-    let local = handle.path().to_path_buf();
+    let dialog_app = app.clone();
+    let picked =
+        tokio::task::spawn_blocking(move || dialog_app.dialog().file().blocking_pick_file())
+            .await
+            .map_err(dialog_join_err)?;
+    let Some(fp) = picked else { return Ok(None) };
+    let local = dialog_to_path(fp)?;
 
     let name = local
         .file_name()
@@ -301,57 +325,118 @@ pub async fn sftp_pick_and_upload(
     let transfer_id = uuid::Uuid::new_v4().to_string();
     let (_guard, cancel) = CancelGuard::register(&state, transfer_id.clone())?;
     let host = crate::emitter::Host::Tauri(app);
-    sftp.upload_streaming(&local, &remote_path, &host, &transfer_id, cancel)
-        .await?;
+    let mut reader = tokio::fs::File::open(&local).await?;
+    let total = reader.metadata().await?.len();
+    sftp.upload_streaming(
+        &mut reader,
+        total,
+        &remote_path,
+        &host,
+        &transfer_id,
+        cancel,
+    )
+    .await?;
     Ok(Some(name))
 }
 
 /// Open native Save-As dialog and return the chosen path. No transfer happens here.
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn sftp_pick_save_path(default_name: String) -> AppResult<Option<String>> {
-    let handle = rfd::AsyncFileDialog::new()
-        .set_file_name(&default_name)
-        .save_file()
-        .await;
-    Ok(handle.map(|h| h.path().display().to_string()))
+pub async fn sftp_pick_save_path(
+    app: tauri::AppHandle,
+    default_name: String,
+) -> AppResult<Option<String>> {
+    let picked = tokio::task::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_file_name(&default_name)
+            .blocking_save_file()
+    })
+    .await
+    .map_err(dialog_join_err)?;
+    match picked {
+        Some(fp) => Ok(Some(dialog_to_path(fp)?.display().to_string())),
+        None => Ok(None),
+    }
 }
 
 /// Open native Open dialog and return the chosen path. No transfer happens here.
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn sftp_pick_open_path() -> AppResult<Option<String>> {
-    let handle = rfd::AsyncFileDialog::new().pick_file().await;
-    Ok(handle.map(|h| h.path().display().to_string()))
+pub async fn sftp_pick_open_path(app: tauri::AppHandle) -> AppResult<Option<String>> {
+    let picked = tokio::task::spawn_blocking(move || app.dialog().file().blocking_pick_file())
+        .await
+        .map_err(dialog_join_err)?;
+    match picked {
+        Some(fp) => Ok(Some(dialog_to_path(fp)?.display().to_string())),
+        None => Ok(None),
+    }
 }
 
 /// Pick a folder via the native dialog. Used both as the destination root
 /// (multi-select download) and the source root (recursive upload) — both
-/// flows want the same rfd `pick_folder()` call, so a single command suffices.
+/// flows want the same `blocking_pick_folder()` call, so a single command suffices.
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn sftp_pick_folder() -> AppResult<Option<String>> {
-    let handle = rfd::AsyncFileDialog::new().pick_folder().await;
-    Ok(handle.map(|h| h.path().display().to_string()))
+pub async fn sftp_pick_folder(app: tauri::AppHandle) -> AppResult<Option<String>> {
+    let picked = tokio::task::spawn_blocking(move || app.dialog().file().blocking_pick_folder())
+        .await
+        .map_err(dialog_join_err)?;
+    match picked {
+        Some(fp) => Ok(Some(dialog_to_path(fp)?.display().to_string())),
+        None => Ok(None),
+    }
 }
 
-/// Pick multiple source files for upload. rfd's `pick_files` supports
-/// multi-selection on every platform we ship to.
+/// Pick multiple source files for upload. `blocking_pick_files` supports
+/// multi-selection on every desktop platform we ship to.
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn sftp_pick_open_files() -> AppResult<Option<Vec<String>>> {
-    let handles = rfd::AsyncFileDialog::new().pick_files().await;
-    Ok(handles.map(|hs| {
-        hs.into_iter()
-            .map(|h| h.path().display().to_string())
-            .collect()
-    }))
+pub async fn sftp_pick_open_files(app: tauri::AppHandle) -> AppResult<Option<Vec<String>>> {
+    let picked = tokio::task::spawn_blocking(move || app.dialog().file().blocking_pick_files())
+        .await
+        .map_err(dialog_join_err)?;
+    let Some(fps) = picked else { return Ok(None) };
+    let paths = fps
+        .into_iter()
+        .map(|fp| dialog_to_path(fp).map(|p| p.display().to_string()))
+        .collect::<AppResult<Vec<_>>>()?;
+    Ok(Some(paths))
 }
 
-/// Stream-download to a caller-supplied local path. transfer_id is used as the
+/// `sftp_io_failed` for a local open failure — same code/i18n as other SFTP IO.
+fn open_err(e: std::io::Error) -> AppError {
+    AppError::sftp(
+        "sftp_io_failed",
+        json!({ "op": "open", "err": e.to_string() }),
+    )
+}
+
+/// Resolve a `FilePath` (a desktop path or a mobile SAF `content://` URI) to a
+/// real `std::fs::File` for reading, via plugin-fs. Desktop paths open directly;
+/// Android URIs resolve to an fd through the ContentResolver bridge.
+fn fs_open_read(app: &tauri::AppHandle, fp: tauri_plugin_fs::FilePath) -> AppResult<std::fs::File> {
+    use tauri_plugin_fs::{FsExt, OpenOptions};
+    let mut opts = OpenOptions::new();
+    opts.read(true);
+    app.fs().open(fp, opts).map_err(open_err)
+}
+
+/// Same as [`fs_open_read`] but opens (create + truncate) for writing — the
+/// mobile download target.
+fn fs_open_write(
+    app: &tauri::AppHandle,
+    fp: tauri_plugin_fs::FilePath,
+) -> AppResult<std::fs::File> {
+    use tauri_plugin_fs::{FsExt, OpenOptions};
+    let mut opts = OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    app.fs().open(fp, opts).map_err(open_err)
+}
+
+/// Stream-download to a caller-supplied local target. transfer_id is used as the
 /// `sftp:progress:{transfer_id}` event suffix (R1) so the frontend listens
 /// per-transfer instead of multiplexing one global stream.
-#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn sftp_download_to(
     app: tauri::AppHandle,
@@ -362,16 +447,30 @@ pub async fn sftp_download_to(
     transfer_id: String,
 ) -> AppResult<()> {
     let sftp = get_sftp(&state, &sftp_id)?;
-    let local = std::path::PathBuf::from(&local_path);
     let (_guard, cancel) = CancelGuard::register(&state, transfer_id.clone())?;
-    let host = crate::emitter::Host::Tauri(app);
-    sftp.download_streaming(&remote_path, &local, &host, &transfer_id, cancel)
-        .await
-        .map(|_| ())
+    let host = crate::emitter::Host::Tauri(app.clone());
+    // Desktop sends a filesystem path → keep the atomic `.part` + rename.
+    // Mobile sends a SAF `content://` URI → open it through plugin-fs (which
+    // resolves the URI to a real fd) and stream straight in. There's no path to
+    // rename through on mobile, so that download has no local atomicity (agreed).
+    match local_path
+        .parse::<tauri_plugin_fs::FilePath>()
+        .expect("FilePath::from_str is infallible")
+    {
+        tauri_plugin_fs::FilePath::Path(p) => sftp
+            .download_streaming(&remote_path, &p, &host, &transfer_id, cancel)
+            .await
+            .map(|_| ()),
+        fp @ tauri_plugin_fs::FilePath::Url(_) => {
+            let mut dst = tokio::fs::File::from_std(fs_open_write(&app, fp)?);
+            sftp.download_streaming_to_writer(&remote_path, &mut dst, &host, &transfer_id, cancel)
+                .await
+                .map(|_| ())
+        }
+    }
 }
 
-/// Stream-upload from a caller-supplied local path. transfer_id mirrors above.
-#[cfg(not(target_os = "android"))]
+/// Stream-upload from a caller-supplied local source. transfer_id mirrors above.
 #[tauri::command]
 pub async fn sftp_upload_from(
     app: tauri::AppHandle,
@@ -382,12 +481,26 @@ pub async fn sftp_upload_from(
     transfer_id: String,
 ) -> AppResult<()> {
     let sftp = get_sftp(&state, &sftp_id)?;
-    let local = std::path::PathBuf::from(&local_path);
     let (_guard, cancel) = CancelGuard::register(&state, transfer_id.clone())?;
-    let host = crate::emitter::Host::Tauri(app);
-    sftp.upload_streaming(&local, &remote_path, &host, &transfer_id, cancel)
-        .await
-        .map(|_| ())
+    let host = crate::emitter::Host::Tauri(app.clone());
+    // Local end is just a reader, so desktop (path) and mobile (content:// URI)
+    // share one path — plugin-fs resolves either to a real fd.
+    let fp = local_path
+        .parse::<tauri_plugin_fs::FilePath>()
+        .expect("FilePath::from_str is infallible");
+    let mut reader = tokio::fs::File::from_std(fs_open_read(&app, fp)?);
+    // content:// fds may not support fstat; fall back to 0 (indeterminate bar).
+    let total = reader.metadata().await.map(|m| m.len()).unwrap_or(0);
+    sftp.upload_streaming(
+        &mut reader,
+        total,
+        &remote_path,
+        &host,
+        &transfer_id,
+        cancel,
+    )
+    .await
+    .map(|_| ())
 }
 
 #[tauri::command]

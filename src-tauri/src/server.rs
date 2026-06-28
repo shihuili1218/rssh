@@ -832,14 +832,15 @@ async fn dispatch_async(
                 crate::commands::sftp::CancelGuard::register(state, transfer_id.clone())
                     .map_err(err_value)?;
             let host = headless_host(state, tx);
+            // Headless server runs on a real host filesystem (never Android), so
+            // open the local path directly as the upload reader. `upload_streaming`
+            // now takes (reader, total, …) — mirror of commands::sftp::sftp_upload_from.
+            let mut reader = tokio::fs::File::open(&local_path)
+                .await
+                .map_err(|e| err_value(AppError::from(e)))?;
+            let total = reader.metadata().await.map(|m| m.len()).unwrap_or(0);
             ok(sftp
-                .upload_streaming(
-                    std::path::Path::new(&local_path),
-                    &remote_path,
-                    &host,
-                    &transfer_id,
-                    flag,
-                )
+                .upload_streaming(&mut reader, total, &remote_path, &host, &transfer_id, flag)
                 .await
                 .map(|_| ()))
         }

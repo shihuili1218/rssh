@@ -457,7 +457,9 @@
         ],
         middle: app.tabs().filter(t => t.type !== "home").map(t => ({kind: "tab" as const, tab: t})),
         footer: [
-            ...(app.isMobile ? [] : [{kind: "pin-window" as const}, {kind: "downloads" as const}]),
+            // Downloads (transfer queue) is now reachable on mobile too — SFTP
+            // single-file transfer runs through it. pin-window stays desktop-only.
+            ...(app.isMobile ? [{kind: "downloads" as const}] : [{kind: "pin-window" as const}, {kind: "downloads" as const}]),
             {kind: "settings" as const},
         ],
     });
@@ -691,7 +693,8 @@
                     onClick: () => { app.setActiveTab(tab.id); app.openSnippetPicker(); },
                 },
             ];
-            // SFTP requires native file dialogs — desktop only.
+            // Tab context menu is a desktop right-click affordance; on mobile
+            // SFTP opens from the keybar instead.
             if (!app.isMobile) {
                 items.push({
                     label: t("tab.context.sftp"),

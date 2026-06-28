@@ -2,6 +2,8 @@
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
   import { t, errMsg } from "../i18n/index.svelte.ts";
+  import { pickTextFile } from "../pick-file.ts";
+  import { saveTextFile, fileStamp } from "../save-file.ts";
 
   let importing = $state(false);
   let msg = $state("");
@@ -14,7 +16,11 @@
 
   async function doExport() {
     try {
-      const path = await invoke<string | null>("export_config_to_file");
+      const json = await invoke<string>("export_config");
+      const path = await saveTextFile(json, {
+        defaultName: `rssh-config-${fileStamp()}.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
       msg = path ? t("import_export.exported_to", { path }) : "";
     } catch (e: any) { msg = `${t("toast.error.export")}: ${errMsg(e)}`; }
     clearMsgLater();
@@ -23,8 +29,13 @@
   async function doImport() {
     importing = true;
     try {
-      const path = await invoke<string | null>("import_config_from_file");
-      msg = path ? t("import_export.imported_from", { path }) : "";
+      const f = await pickTextFile({ accept: ".json,application/json" });
+      if (f) {
+        await invoke("import_config", { json: f.text });
+        msg = t("import_export.imported_from", { path: f.name });
+      } else {
+        msg = "";
+      }
     } catch (e: any) { msg = `${t("toast.error.import")}: ${errMsg(e)}`; }
     finally { importing = false; }
     clearMsgLater();

@@ -14,6 +14,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -89,7 +91,6 @@ portable-pty = "0.8"
 # libudev for port enumeration, so Linux CI/packaging needs `libudev-dev` at
 # build time (see build-linux.sh). Excluded on Android like portable-pty.
 serialport = "4.9.0"
-rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 arboard = "3"
 
 # Keychain — 各平台用各自原生 backend；Android 没有支持，自动降级到 DB

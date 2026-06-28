@@ -453,9 +453,9 @@ pub async fn ai_session_start_impl(
     // 用户写多个 skill 也不会让启动 prompt 爆炸。
     let _ = skill; // 前端不再选；保留参数兼容
     let locale_lbl = locale_label(locale.as_deref().unwrap_or("en"));
-    // 移动端硬阻碍：analyze_locally（spawn window）+ download_file（rfd dialog）
-    // 都在本端无解（见 session.rs:442 / commands.rs:281）。给 LLM 注入声明，
-    // 让它直接引导用户切桌面端，不要在远端硬扛 dump/分析。
+    // 移动端注入能力声明，引导 LLM 切桌面端、别徒劳调工具：analyze_locally 真·阻断
+    // （Tauri 2 mobile 不能 spawn 分析窗口）；download_file 技术上能跑（写 app 数据
+    // 目录），但 analyze_locally 用不了、下下来的文件也取不出私有目录，故一并劝退。
     let is_mobile = cfg!(target_os = "android") || cfg!(target_os = "ios");
     let system_prompt = skills::build_catalog_prompt(&state.db, locale_lbl, is_mobile)?;
     let user_skills_cache = skills::list_user(&state.db)?;
@@ -813,45 +813,16 @@ pub async fn ai_audit_save(
     Ok(())
 }
 
-/// 弹原生 Save 对话框选路径，再保存。返回保存的路径；用户取消返回 None。
-/// Android 无 rfd 依赖，返回未实现错误。
+/// 返回审计日志的人类可读文本（.log 格式）。前端配合 plugin-dialog/plugin-fs
+/// 存盘，桌面 / 移动 / 浏览器统一一套。
 #[tauri::command]
-pub async fn ai_audit_save_pick(
-    state: State<'_, AppState>,
-    tab_id: String,
-) -> AppResult<Option<String>> {
-    #[cfg(target_os = "android")]
-    {
-        let _ = (state, tab_id);
-        Err(AppError::other("android_no_dialog", json!({})))
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        let audit = locked(&state.ai_sessions)?
-            .get(&tab_id)
-            .map(|s| s.audit.clone())
-            .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
-
-        let default_dir = dirs::document_dir().unwrap_or_else(|| PathBuf::from("."));
-        let default_name = format!(
-            "rssh-diagnose-{}-{}.log",
-            &tab_id[..tab_id.len().min(8)],
-            chrono::Local::now().format("%Y%m%d_%H%M%S")
-        );
-
-        let pick = rfd::AsyncFileDialog::new()
-            .set_directory(default_dir)
-            .set_file_name(default_name)
-            .add_filter("Log", &["log", "txt"])
-            .save_file()
-            .await;
-
-        let Some(handle) = pick else { return Ok(None) };
-        let path = handle.path().to_path_buf();
-        let g = audit.lock().map_err(|_| AppError::Lock)?;
-        g.save_to_file(&path)?;
-        Ok(Some(path.to_string_lossy().into_owned()))
-    }
+pub async fn ai_audit_log_text(state: State<'_, AppState>, tab_id: String) -> AppResult<String> {
+    let audit = locked(&state.ai_sessions)?
+        .get(&tab_id)
+        .map(|s| s.audit.clone())
+        .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
+    let g = audit.lock().map_err(|_| AppError::Lock)?;
+    Ok(g.to_log_string())
 }
 
 #[tauri::command]

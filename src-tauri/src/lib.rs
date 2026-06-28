@@ -65,6 +65,8 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .on_window_event(|window, event| {
             match event {
                 tauri::WindowEvent::Destroyed => {
@@ -172,7 +174,6 @@ pub fn run() {
             commands::profile::import_ssh_config,
             commands::profile::read_ssh_config_default,
             commands::profile::import_ssh_entries,
-            commands::profile::pick_private_key_file,
             // groups
             commands::group::list_groups,
             commands::group::create_group,
@@ -264,6 +265,9 @@ pub fn run() {
             commands::sftp::sftp_upload,
             commands::sftp::sftp_mkdir,
             commands::sftp::sftp_close,
+            // Stream transfer to/from a path (desktop) or content:// URI (mobile).
+            commands::sftp::sftp_download_to,
+            commands::sftp::sftp_upload_from,
             // SFTP native file transfer (desktop only)
             #[cfg(not(target_os = "android"))]
             commands::sftp::sftp_save_file,
@@ -277,10 +281,6 @@ pub fn run() {
             commands::sftp::sftp_pick_folder,
             #[cfg(not(target_os = "android"))]
             commands::sftp::sftp_pick_open_files,
-            #[cfg(not(target_os = "android"))]
-            commands::sftp::sftp_download_to,
-            #[cfg(not(target_os = "android"))]
-            commands::sftp::sftp_upload_from,
             commands::sftp::sftp_cancel_transfer,
             commands::sftp::sftp_remove,
             commands::sftp::sftp_rename,
@@ -302,10 +302,6 @@ pub fn run() {
             // sync
             commands::sync::export_config,
             commands::sync::import_config,
-            #[cfg(not(target_os = "android"))]
-            commands::sync::export_config_to_file,
-            #[cfg(not(target_os = "android"))]
-            commands::sync::import_config_from_file,
             commands::sync::github_push,
             commands::sync::github_pull,
             commands::sync::webdav_push,
@@ -331,7 +327,7 @@ pub fn run() {
             ai::commands::ai_command_result,
             ai::commands::ai_command_reject,
             ai::commands::ai_audit_save,
-            ai::commands::ai_audit_save_pick,
+            ai::commands::ai_audit_log_text,
             ai::commands::ai_audit_get,
             ai::commands::ai_list_sessions,
             ai::commands::ai_conversations_list,

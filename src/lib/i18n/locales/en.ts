@@ -74,6 +74,7 @@ const en = {
   // ── SFTP browser ──
   "sftp.up": "← Up",
   "sftp.refresh": "Refresh",
+  "sftp.mobile.hint": "Tip: rotate to landscape for the SFTP panel.",
   "sftp.upload": "⬆ Upload",
   "sftp.upload_files": "Files…",
   "sftp.upload_folder": "Folder…",
@@ -598,7 +599,8 @@ const en = {
   "error.conversation_target_mismatch": "This conversation belongs to a different connection",
   "error.conversation_corrupt": "Conversation archive is corrupt and cannot be restored",
   "error.ai_session_stopped": "AI session has stopped",
-  "error.android_no_dialog": "Android does not support native file dialogs",
+  "error.file_save_unsupported_in_plugin": "Saving files isn't supported in the IDE plugin — use the RSSH desktop app.",
+  "error.file_pick_unsupported_in_plugin": "Choosing files isn't supported in the IDE plugin — paste the content, or use the RSSH desktop app.",
   "error.skill_builtin_readonly": "Skill id '{id}' is built-in; cannot modify",
   "error.skill_builtin_undeletable": "Skill id '{id}' is built-in; cannot delete",
   "error.cmd_rejected_shape": "rssh refused command: {reason}. Try a compliant rewrite.",

@@ -81,69 +81,6 @@ pub fn import_config_impl(state: &AppState, json: String) -> AppResult<()> {
     )
 }
 
-/// 弹原生 Save 对话框选路径，把当前完整配置写入该文件。
-/// 用户取消返回 None；写盘成功返回路径字符串。
-/// Android 无 rfd 依赖，硬阻碍。
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn export_config_to_file(state: State<'_, AppState>) -> AppResult<Option<String>> {
-    // Build payload on the blocking pool — same rationale as the GitHub
-    // commands. After this point everything is either user-driven IO
-    // (the native file dialog) or a single file write.
-    let data_dir = state.data_dir.clone();
-    let payload = run_db_blocking(&state, move |db, ss| {
-        build_export_json_blocking(&db, ss.as_ref(), &data_dir)
-    })
-    .await?;
-
-    let default_dir = dirs::document_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    let default_name = format!(
-        "rssh-config-{}.json",
-        chrono::Local::now().format("%Y%m%d-%H%M%S")
-    );
-
-    let pick = rfd::AsyncFileDialog::new()
-        .set_directory(default_dir)
-        .set_file_name(default_name)
-        .add_filter("JSON", &["json"])
-        .save_file()
-        .await;
-
-    let Some(handle) = pick else { return Ok(None) };
-    let path = handle.path().to_path_buf();
-    std::fs::write(&path, payload.as_bytes())?;
-    Ok(Some(path.to_string_lossy().into_owned()))
-}
-
-/// 弹原生 Open 对话框选 JSON 文件，按 merge_import 语义合并到本地配置。
-/// 用户取消返回 None；导入成功返回文件路径。
-/// Android 无 rfd 依赖，硬阻碍。
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn import_config_from_file(state: State<'_, AppState>) -> AppResult<Option<String>> {
-    let pick = rfd::AsyncFileDialog::new()
-        .add_filter("JSON", &["json"])
-        .pick_file()
-        .await;
-
-    let Some(handle) = pick else { return Ok(None) };
-    let path = handle.path().to_path_buf();
-    let path_for_return = path.clone();
-    let data_dir = state.data_dir.clone();
-
-    // merge_import walks every config category and upserts each row — keep that
-    // off the async worker.
-    run_db_blocking(&state, move |db, ss| {
-        let json = std::fs::read_to_string(&path)?;
-        let data: serde_json::Value = serde_json::from_str(&json)
-            .map_err(|e| AppError::config("json_parse_failed", json!({ "err": e.to_string() })))?;
-        crate::sync::config::merge_import(&db, ss.as_ref(), &data_dir, &data)
-    })
-    .await?;
-
-    Ok(Some(path_for_return.to_string_lossy().into_owned()))
-}
-
 // ---------------------------------------------------------------------------
 // GitHub sync
 // ---------------------------------------------------------------------------
