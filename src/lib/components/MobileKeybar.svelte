@@ -41,6 +41,16 @@
         }
         ai.togglePanel();
     }
+
+    // 移动端唤起 SFTP 时提示一次：建议横屏。与 AI 面板同款，一次 app run 提一次。
+    let sftpHintShown = false;
+    function openSftpPanel() {
+        if (!sftpHintShown) {
+            toast.info(t("sftp.mobile.hint"));
+            sftpHintShown = true;
+        }
+        app.openSftp();
+    }
 </script>
 
 <div class="keybar">
@@ -54,7 +64,7 @@
     <button class="key" onpointerdown={prevent} onclick={() => arrow('C')}>→</button>
     <button class="key" title="Snippets" onpointerdown={prevent} onclick={() => app.openSnippetPicker()}>⚡</button>
     {#if app.activeTab()?.type === "ssh"}
-        <button class="key" title="SFTP" onpointerdown={prevent} onclick={() => app.openSftp()}>📁</button>
+        <button class="key" title="SFTP" onpointerdown={prevent} onclick={openSftpPanel}>📁</button>
     {/if}
     <button class="key" class:active={ai.isOpen()} class:dim={!ai.isOpen() && !canOpenAi} title="AI Chat" onpointerdown={prevent} onclick={toggleAi}>AI</button>
 </div>

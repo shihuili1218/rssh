@@ -74,6 +74,7 @@ const en = {
   // ── SFTP browser ──
   "sftp.up": "← Up",
   "sftp.refresh": "Refresh",
+  "sftp.mobile.hint": "Tip: rotate to landscape for the SFTP panel.",
   "sftp.upload": "⬆ Upload",
   "sftp.upload_files": "Files…",
   "sftp.upload_folder": "Folder…",

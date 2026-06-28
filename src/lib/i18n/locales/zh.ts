@@ -76,6 +76,7 @@ const zh: Messages = {
   // ── SFTP 浏览器 ──
   "sftp.up": "← 上一级",
   "sftp.refresh": "刷新",
+  "sftp.mobile.hint": "建议横屏使用 SFTP 面板。",
   "sftp.upload": "⬆ 上传",
   "sftp.upload_files": "文件…",
   "sftp.upload_folder": "文件夹…",
