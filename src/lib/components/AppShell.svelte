@@ -693,7 +693,8 @@
                     onClick: () => { app.setActiveTab(tab.id); app.openSnippetPicker(); },
                 },
             ];
-            // SFTP requires native file dialogs — desktop only.
+            // Tab context menu is a desktop right-click affordance; on mobile
+            // SFTP opens from the keybar instead.
             if (!app.isMobile) {
                 items.push({
                     label: t("tab.context.sftp"),

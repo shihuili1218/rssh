@@ -453,9 +453,9 @@ pub async fn ai_session_start_impl(
     // 用户写多个 skill 也不会让启动 prompt 爆炸。
     let _ = skill; // 前端不再选；保留参数兼容
     let locale_lbl = locale_label(locale.as_deref().unwrap_or("en"));
-    // 移动端硬阻碍：analyze_locally（spawn window）+ download_file
-    // 都在本端无解（见 session.rs:442 / commands.rs:281）。给 LLM 注入声明，
-    // 让它直接引导用户切桌面端，不要在远端硬扛 dump/分析。
+    // 移动端注入能力声明，引导 LLM 切桌面端、别徒劳调工具：analyze_locally 真·阻断
+    // （Tauri 2 mobile 不能 spawn 分析窗口）；download_file 技术上能跑（写 app 数据
+    // 目录），但 analyze_locally 用不了、下下来的文件也取不出私有目录，故一并劝退。
     let is_mobile = cfg!(target_os = "android") || cfg!(target_os = "ios");
     let system_prompt = skills::build_catalog_prompt(&state.db, locale_lbl, is_mobile)?;
     let user_skills_cache = skills::list_user(&state.db)?;

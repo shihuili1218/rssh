@@ -108,9 +108,9 @@ pub fn delete_user(db: &Db, id: &str) -> AppResult<()> {
 /// `user_locale_label` 是给 LLM 的回复语言提示（如 "English"、"Chinese (Simplified)"），
 /// 由 commands 层根据前端 UI locale 解析后传入。
 ///
-/// `is_mobile` = true 时追加一段移动端能力声明：`analyze_locally` 与 `download_file`
-/// 在该端硬阻碍（Tauri 2 mobile 不能 spawn 窗口分析），
-/// 让 LLM 直接告诉用户改用桌面端，而不是徒劳调用工具撞 NotImplemented。
+/// `is_mobile` = true 时追加一段移动端能力声明：`analyze_locally` 真·阻断（Tauri 2
+/// mobile 不能 spawn 分析窗口），`download_file` 则是劝退（技术上能跑，但没了
+/// analyze_locally，下到私有目录的文件也用不上），让 LLM 引导用户改用桌面端。
 pub fn build_catalog_prompt(
     db: &Db,
     user_locale_label: &str,
