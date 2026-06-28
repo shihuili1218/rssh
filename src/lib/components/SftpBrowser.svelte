@@ -148,7 +148,11 @@
     }
 
     function openEntry(e: RemoteEntry) {
-        if (e.is_dir) listDir(joinRemote(cwd, e.name));
+        if (e.is_dir) { listDir(joinRemote(cwd, e.name)); return; }
+        // Mobile has no select-and-download toolbar and can't rely on long-press,
+        // so tapping a file is the download affordance. Desktop keeps the file
+        // tap inert (it downloads via checkbox selection / context menu).
+        if (app.isMobile) downloadEntry(e);
     }
 
     function basename(p: string): string {
