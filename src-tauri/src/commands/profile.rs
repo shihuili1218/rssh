@@ -105,6 +105,28 @@ pub fn read_ssh_config_default() -> AppResult<Vec<SshConfigEntry>> {
     Ok(crate::ssh::config::parse(&content))
 }
 
+/// 读 `~/.ssh/<name>` 私钥文件原文，供"快速填充默认密钥"用。
+/// name 必须是裸文件名（不含路径分隔符、不含 `..`）——webview 不可信，
+/// 拒绝目录穿越，否则就成了读任意文件的洞。
+/// 文件不存在 → not_found，让前端给友好提示而不是 IO 噪声。
+#[tauri::command]
+pub fn read_default_key_file(name: String) -> AppResult<String> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err(AppError::other("invalid_key_name", json!({ "name": name })));
+    }
+    let home =
+        dirs::home_dir().ok_or_else(|| AppError::other("home_dir_unavailable", json!({})))?;
+    let path = home.join(".ssh").join(&name);
+    match std::fs::read_to_string(&path) {
+        Ok(c) => Ok(c),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(AppError::not_found(
+            "key_file_not_found",
+            json!({ "path": format!("~/.ssh/{name}") }),
+        )),
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// 单条导入失败信息：哪个 host 的哪步出错。前端按表格展示。
 #[derive(Debug, Clone, Serialize)]
 pub struct SshImportError {

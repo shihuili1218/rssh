@@ -559,6 +559,9 @@ fn dispatch(
 
         // ---- ssh config import ----
         "read_ssh_config_default" => ok(crate::commands::profile::read_ssh_config_default()),
+        "read_default_key_file" => {
+            ok(crate::commands::profile::read_default_key_file(arg(&args, "name")?))
+        }
         "import_ssh_entries" => ok(crate::commands::profile::do_import_ssh_entries(
             &state.db,
             state.secret_store.as_ref(),

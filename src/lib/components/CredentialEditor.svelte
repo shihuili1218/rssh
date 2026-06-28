@@ -44,6 +44,18 @@
     finally { picking = false; }
   }
 
+  /** The usual default private keys. One click reads ~/.ssh/<name> on the host
+   *  (where the keys live) and drops it into the textarea — saves hunting for
+   *  the file in a picker. Hidden on mobile: there is no ~/.ssh there. */
+  const DEFAULT_KEY_NAMES = ["id_rsa", "id_ed25519"];
+  async function fillDefaultKey(keyName: string) {
+    picking = true;
+    try {
+      secret = await invoke<string>("read_default_key_file", { name: keyName });
+    } catch (e: any) { toast.error(errMsg(e)); }
+    finally { picking = false; }
+  }
+
   async function save() {
     saving = true;
     try {
@@ -79,9 +91,16 @@
     {:else if credentialType === "key"}
       <label>{t("credential.private_key")}</label>
       <textarea bind:value={secret} rows="6" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
-      <button class="btn btn-sm pick-key" onclick={pickKeyFile} disabled={picking}>
-        {t("credential.pick_key_file")}
-      </button>
+      <div class="key-quick">
+        <button class="btn btn-sm" onclick={pickKeyFile} disabled={picking}>
+          {t("credential.pick_key_file")}
+        </button>
+        {#if !app.isMobile}
+          {#each DEFAULT_KEY_NAMES as keyName}
+            <button class="chip" onclick={() => fillDefaultKey(keyName)} disabled={picking}>~/.ssh/{keyName}</button>
+          {/each}
+        {/if}
+      </div>
       <p class="hint">{t("credential.encrypted_key_hint")}</p>
     {:else if credentialType === "agent"}
       <p class="hint agent-hint">{t("credential.agent_hint")}</p>
@@ -105,7 +124,15 @@
 <style>
   .page { padding: 24px; }
   .form { display: flex; flex-direction: column; gap: 10px; }
-  .pick-key { align-self: flex-start; }
+  .key-quick { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .chip {
+    font-family: monospace; font-size: 12px;
+    padding: 3px 8px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); cursor: pointer;
+  }
+  .chip:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .chip:disabled { opacity: 0.5; cursor: default; }
   textarea { font-family: monospace; font-size: 12px; resize: vertical; }
   .hint { font-size: 13px; color: var(--text-dim); margin: 4px 0; line-height: 1.55; }
   .agent-hint { white-space: pre-line; }

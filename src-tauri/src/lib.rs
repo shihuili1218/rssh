@@ -173,6 +173,7 @@ pub fn run() {
             commands::profile::delete_credential,
             commands::profile::import_ssh_config,
             commands::profile::read_ssh_config_default,
+            commands::profile::read_default_key_file,
             commands::profile::import_ssh_entries,
             // groups
             commands::group::list_groups,
