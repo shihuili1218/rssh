@@ -23,7 +23,7 @@
     import {compileHighlightRules, type CompiledHighlightRule} from "../terminal/highlight.ts";
     import {HighlightDecorator} from "../terminal/highlight-decorations.ts";
     import {t} from "../i18n/index.svelte.ts";
-    import {ACTIONS, matchBinding, type ActionId} from "../keyboard/keymap.ts";
+    import {ACTIONS, matchBinding, optionArrowWordMotion, type ActionId} from "../keyboard/keymap.ts";
     import * as keymap from "../stores/keymap.svelte.ts";
     import BlockContextMenu, {type MenuItem} from "./BlockContextMenu.svelte";
 
@@ -1193,6 +1193,11 @@
         }
         terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
             if (e.type !== "keydown") return true;
+            // macOS Option+←/→ word jump — xterm 6 dropped xterm 5's rewrite to
+            // Meta-b/f (upstream #4538/#5389), so inject it ourselves. input()
+            // feeds the same onData → PTY path as a real keystroke.
+            const wordMotion = optionArrowWordMotion(e, keymap.isMac);
+            if (wordMotion) { e.preventDefault(); terminal.input(wordMotion); return false; }
             for (const a of ACTIONS) {
                 if (a.surface !== "terminal") continue;
                 if (!matchBinding(e, keymap.binding(a.id))) continue;

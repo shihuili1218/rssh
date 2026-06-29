@@ -12,6 +12,7 @@ import {
   isDefaultBinding,
   isModifierKey,
   matchBinding,
+  optionArrowWordMotion,
   parseOverrides,
   reservedConflict,
   serializeOverrides,
@@ -250,6 +251,31 @@ describe("reservedConflict — fixed combos can't be stolen", () => {
     // Same data drives the AppShell cycler predicate, so the two can't drift.
     expect(TAB_CYCLE.length).toBe(2);
     for (const b of TAB_CYCLE) expect(reservedConflict(b)).toBe("shortcut.tab.cycle");
+  });
+});
+
+describe("optionArrowWordMotion — restore xterm-5 macOS word jump", () => {
+  it("maps macOS Option+←/→ to Meta-b / Meta-f (backward/forward word)", () => {
+    expect(optionArrowWordMotion(ev({ key: "ArrowLeft", altKey: true }), true)).toBe("\x1bb");
+    expect(optionArrowWordMotion(ev({ key: "ArrowRight", altKey: true }), true)).toBe("\x1bf");
+  });
+
+  it("does nothing off mac — Linux/Windows keep native Ctrl+Arrow word motion", () => {
+    expect(optionArrowWordMotion(ev({ key: "ArrowLeft", altKey: true }), false)).toBeNull();
+    expect(optionArrowWordMotion(ev({ key: "ArrowRight", altKey: true }), false)).toBeNull();
+  });
+
+  it("only fires on a bare Option+Arrow — any extra modifier falls through to xterm", () => {
+    // Option+Shift+Arrow (selection) and Option+Ctrl+Arrow must reach xterm unchanged.
+    expect(optionArrowWordMotion(ev({ key: "ArrowLeft", altKey: true, shiftKey: true }), true)).toBeNull();
+    expect(optionArrowWordMotion(ev({ key: "ArrowLeft", altKey: true, ctrlKey: true }), true)).toBeNull();
+    expect(optionArrowWordMotion(ev({ key: "ArrowLeft", altKey: true, metaKey: true }), true)).toBeNull();
+  });
+
+  it("ignores arrows without Option, and Option without an arrow", () => {
+    expect(optionArrowWordMotion(ev({ key: "ArrowLeft" }), true)).toBeNull();
+    expect(optionArrowWordMotion(ev({ key: "b", altKey: true }), true)).toBeNull();
+    expect(optionArrowWordMotion(ev({ key: "ArrowUp", altKey: true }), true)).toBeNull();
   });
 });
 

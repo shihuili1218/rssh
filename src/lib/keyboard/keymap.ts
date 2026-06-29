@@ -87,6 +87,27 @@ export function matchBinding(e: KeyEventLike, b: KeyBinding): boolean {
   );
 }
 
+/**
+ * macOS Option+←/→ word motion.
+ *
+ * xterm 5 rewrote Option+Arrow to Meta-b / Meta-f — readline's backward-word /
+ * forward-word — so word jumping worked out of the box on macOS. xterm 6 dropped
+ * that rewrite (upstream issues #4538 / #5389): Option+Arrow now emits `CSI 1;3 D/C`,
+ * which shells don't bind, so only the trailing cursor letter (D/C) leaks into the
+ * line. We restore the old bytes, but for macOS ONLY — Linux/Windows keep their
+ * native Ctrl+Arrow word motion (untouched by xterm 6), so they need nothing here.
+ *
+ * Returns the bytes to inject, or null when this isn't a bare macOS Option+Arrow.
+ * Any extra modifier (Shift/Ctrl/Meta) falls through to xterm unchanged — matching
+ * xterm 5, whose rewrite only fired on the Alt-only combo.
+ */
+export function optionArrowWordMotion(e: KeyEventLike, isMac: boolean): string | null {
+  if (!isMac || !e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return null;
+  if (e.key === "ArrowLeft") return "\x1bb";
+  if (e.key === "ArrowRight") return "\x1bf";
+  return null;
+}
+
 /** Turn a captured keydown into a binding (for the "record a shortcut" UI). */
 export function eventToBinding(e: KeyEventLike): KeyBinding {
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
