@@ -137,6 +137,30 @@
                 },
             },
             {
+                display: "Alt+1 … Alt+9",
+                description: t("shortcut.tab.goto"),
+                // Direct jump to the Nth tab (1-based, by strip order). A fixed
+                // combo like Ctrl+Tab — kept out of the customizable ACTIONS
+                // editor since it is 9 combos, not one bindable action.
+                match: e =>
+                    e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey &&
+                    e.key >= "1" && e.key <= "9",
+                handler: e => {
+                    // Don't hijack keys while the user is recording a new binding.
+                    if (keymap.recording()) return false;
+                    // Alt+N → the Nth tab in strip order (1-based). The fixed Home
+                    // tab lives at index 0, so Alt+1 lands on Home by design (Home
+                    // is the connection-list entry point — handy to reach fast).
+                    // Prefer Alt+1 to jump to the first *session* tab instead?
+                    // Drop the `- 1`:  app.tabs()[Number(e.key)]
+                    // (sessions start at index 1, right after Home). Left as a
+                    // one-line call for whoever owns this — both are defensible.
+                    const tab = app.tabs()[Number(e.key) - 1];
+                    if (!tab) return false; // out of range: don't swallow the key
+                    app.setActiveTab(tab.id);
+                },
+            },
+            {
                 display: "Esc",
                 description: t("shortcut.tab.exit_cycle"),
                 match: e => tabCycling && e.key === "Escape",
