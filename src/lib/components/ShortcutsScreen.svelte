@@ -29,7 +29,7 @@
   const fixed = $derived<[string, string][]>([
     ["Ctrl+Tab", t("shortcuts.next_tab")],
     ["Ctrl+Shift+Tab", t("shortcuts.prev_tab")],
-    [keymap.isMac ? "⌥1 … ⌥9" : "Alt+1 … Alt+9", t("shortcuts.goto_tab")],
+    [keymap.isMac ? "⌘1 … ⌘9" : "Alt+1 … Alt+9", t("shortcuts.goto_tab")],
     ["Esc", t("shortcuts.close_overlay")],
     ["↑ ↓ ← →", t("shortcuts.select_card")],
     ["Enter", t("shortcuts.connect_card")],

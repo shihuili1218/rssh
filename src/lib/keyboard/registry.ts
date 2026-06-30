@@ -52,20 +52,25 @@ export function attachKeyup(handler: (e: KeyboardEvent) => void): () => void {
 }
 
 /**
- * Map an Alt+digit keydown to a target tab-strip index, or null when the event
- * is not a clean Alt+1..9 press (any other modifier held, non-digit, or numpad).
+ * Map a primary-modifier + digit keydown to a target tab-strip index, or null
+ * when it is not a clean <primary>+1..9 press.
+ *
+ * The primary modifier is platform-specific: Cmd (meta) on macOS — where Option
+ * is the terminal's Meta key and Cmd+N is the native tab-switch convention — and
+ * Alt elsewhere. The other modifier of that pair, plus Ctrl and Shift, must be up.
  *
  * Matches by `e.code` (Digit1..Digit9), never `e.key`: `e.key` is layout- and
- * modifier-dependent, so macOS Option (Alt) or a non-US layout turns the
- * digit-row press into another character and the shortcut would silently miss.
- * Numpad is excluded on purpose — Alt+numpad is the Windows Alt-code / macOS
- * special-character entry.
+ * modifier-dependent, so Option/AltGr or a non-US layout turns the digit-row
+ * press into another character and the shortcut would silently miss. Numpad is
+ * excluded on purpose — <mod>+numpad is the Alt-code / special-character entry.
  *
- * Home is the fixed tab at index 0 and is intentionally unreachable: Alt+1 maps
- * to index 1 (the first session tab), Alt+9 to index 9.
+ * Home is the fixed tab at index 0 and is intentionally unreachable: digit 1
+ * maps to index 1 (the first session tab), digit 9 to index 9.
  */
-export function altDigitTabIndex(e: KeyboardEvent): number | null {
-  if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return null;
+export function digitTabIndex(e: KeyboardEvent, isMac: boolean): number | null {
+  const wanted = isMac ? e.metaKey : e.altKey; // Cmd on macOS, Alt elsewhere
+  const banned = isMac ? e.altKey : e.metaKey; // the other of the meta/alt pair
+  if (!wanted || banned || e.ctrlKey || e.shiftKey) return null;
   const m = /^Digit([1-9])$/.exec(e.code);
   return m ? Number(m[1]) : null;
 }
