@@ -148,14 +148,13 @@
                 handler: e => {
                     // Don't hijack keys while the user is recording a new binding.
                     if (keymap.recording()) return false;
-                    // Alt+N → the Nth tab in strip order (1-based). The fixed Home
-                    // tab lives at index 0, so Alt+1 lands on Home by design (Home
-                    // is the connection-list entry point — handy to reach fast).
-                    // Prefer Alt+1 to jump to the first *session* tab instead?
-                    // Drop the `- 1`:  app.tabs()[Number(e.key)]
-                    // (sessions start at index 1, right after Home). Left as a
-                    // one-line call for whoever owns this — both are defensible.
-                    const tab = app.tabs()[Number(e.key) - 1];
+                    // Alt+N → the Nth tab. Off (default) skips the fixed Home
+                    // tab so Alt+1 lands on the first *session* tab (index 1);
+                    // on (Appearance toggle "Alt+N counts Home as tab 1") counts
+                    // Home as tab 1 — Windows Terminal style. The getter is
+                    // preloaded in onMount so it honors a persisted choice.
+                    const idx = Number(e.key) - (app.altTabIncludeHome() ? 1 : 0);
+                    const tab = app.tabs()[idx];
                     if (!tab) return false; // out of range: don't swallow the key
                     app.setActiveTab(tab.id);
                 },
@@ -173,6 +172,10 @@
         keymap.init();
         app.loadProfiles().then(p => profiles = p);
         app.loadGroups().then(g => groups = g);
+        // Preload the Alt+N mapping so the global shortcut honors a persisted
+        // choice from app start (default off = Alt+1 → first session tab,
+        // skipping Home). Fire-and-forget; the handler reads the getter lazily.
+        app.loadAltTabIncludeHome();
         // Crash recovery: reconcile with empty list tells the backend
         // "no sessions are alive" so it cleans up any orphaned resources
         // from a previous crash or hot-reload.

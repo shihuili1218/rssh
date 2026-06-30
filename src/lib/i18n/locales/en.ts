@@ -136,6 +136,8 @@ const en = {
   "settings.appearance.pos.bottom": "Bottom",
   "settings.appearance.tab_mru": "Move focused tab to front",
   "settings.appearance.tab_mru_desc": "Focusing a tab moves it to the front of the tab bar (most-recently-used order). Off keeps tabs in the order they were opened.",
+  "settings.appearance.alt_tab_home": "Alt+N counts Home as tab 1",
+  "settings.appearance.alt_tab_home_desc": "Off (default): Alt+1 jumps to the first session tab (skips Home). On: Alt+1 targets Home, Alt+2+ are the tabs after (like Windows Terminal). With \"Move focused tab to front\" or drag-reorder on, tab order shifts, so Alt+N may not match the tab you expect.",
   "settings.appearance.ai_panel_position": "AI panel position",
   "settings.appearance.color_palette": "Color palette",
   "settings.appearance.surface_style": "Surface style",
