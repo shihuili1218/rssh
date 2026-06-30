@@ -920,6 +920,8 @@ const en = {
   "settings.shell.custom_placeholder": "/usr/local/bin/fish",
   "settings.shell.local_shell": "LOCAL SHELL",
   "settings.shell.custom": "CUSTOM",
+  "settings.shell.open_local_on_startup": "Open on startup",
+  "settings.shell.open_local_on_startup_desc": "When rssh starts, automatically open one local terminal tab.",
   "settings.shell.connection_timeout": "CONNECTION TIMEOUT",
   "settings.shell.timeout_label": "Timeout (seconds)",
   "settings.shell.timeout_hint": "1–300s, default 10s",

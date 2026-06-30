@@ -923,6 +923,8 @@ const zh: Messages = {
   "settings.shell.custom_placeholder": "/usr/local/bin/fish",
   "settings.shell.local_shell": "本地 SHELL",
   "settings.shell.custom": "自定义",
+  "settings.shell.open_local_on_startup": "启动时打开",
+  "settings.shell.open_local_on_startup_desc": "rssh 启动时自动打开一个本地终端标签页。",
   "settings.shell.connection_timeout": "连接超时",
   "settings.shell.timeout_label": "超时（秒）",
   "settings.shell.timeout_hint": "1–300 秒，默认 10 秒",

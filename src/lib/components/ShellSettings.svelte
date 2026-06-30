@@ -13,6 +13,8 @@
   /** 用户选了 Custom 但还没填路径的瞬态标记 —— 不持久化。
    *  避免把占位字符串写进 local_shell 设置导致重启坏 shell。 */
   let pendingCustom = $state(false);
+  /** Auto-open one local terminal on startup — default off (unset reads as off). */
+  let openLocalOnStartup = $state(false);
   let verboseLog = $state(true);
   let connectTimeout = $state(10);
   let copyOnSelect = $state(false);
@@ -39,6 +41,7 @@
       customPath = selectedShell;
     }
     verboseLog = (await invoke<string | null>("get_setting", { key: "verbose_log" })) !== "false";
+    openLocalOnStartup = (await invoke<string | null>("get_setting", { key: "open_local_on_startup" })) === "true";
     const ts = await invoke<string | null>("get_setting", { key: "connect_timeout" });
     if (ts) connectTimeout = parseInt(ts, 10) || 10;
     copyOnSelect = await app.loadCopyOnSelect();
@@ -84,6 +87,10 @@
 
   async function saveVerbose() {
     await invoke("set_setting", { key: "verbose_log", value: String(verboseLog) });
+  }
+
+  async function saveOpenLocalOnStartup() {
+    await invoke("set_setting", { key: "open_local_on_startup", value: String(openLocalOnStartup) });
   }
 
   async function saveTimeout() {
@@ -150,6 +157,17 @@
           </span>
         </label>
       </div>
+    </div>
+    <div class="card-divider"></div>
+    <div class="cmd-block-head">
+      <div class="cmd-block-head-body">
+        <div class="cmd-block-title" class:on={openLocalOnStartup} class:off={!openLocalOnStartup}>{t("settings.shell.open_local_on_startup")}</div>
+        <div class="cmd-block-desc">{t("settings.shell.open_local_on_startup_desc")}</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" bind:checked={openLocalOnStartup} onchange={saveOpenLocalOnStartup} />
+        <span class="slider"></span>
+      </label>
     </div>
   </div>
 

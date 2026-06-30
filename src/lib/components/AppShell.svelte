@@ -178,6 +178,12 @@
         // session in the shared AppState, including other windows' tabs.
         if (!window.__rssh_clone && !window.__rssh_ai_handoff) {
             invoke("reconcile_sessions", { activeIds: [] }).catch(() => {});
+            // Auto-open one local terminal when enabled (Shell settings). Kept inside
+            // the clone/handoff guard so cloned and AI-handoff windows don't get an
+            // extra tab they never asked for. Default off → unset reads as not "true".
+            invoke<string | null>("get_setting", { key: "open_local_on_startup" })
+                .then((v) => { if (v === "true") addLocalTab(); })
+                .catch(() => {});
         }
         consumeCloneQuery();
         consumeAiHandoff();
