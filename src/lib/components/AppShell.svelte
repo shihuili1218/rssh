@@ -144,16 +144,22 @@
                 // editor since it is 9 combos, not one bindable action.
                 match: e =>
                     e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey &&
-                    e.key >= "1" && e.key <= "9",
+                    /^Digit[1-9]$/.test(e.code),
                 handler: e => {
                     // Don't hijack keys while the user is recording a new binding.
                     if (keymap.recording()) return false;
+                    // Match by e.code (Digit1..Digit9), not e.key: e.key is
+                    // layout/modifier-dependent, so macOS Option (Alt) or non-US
+                    // layouts turn a digit-row press into another char and the
+                    // shortcut silently misses. Main keyboard only — numpad is
+                    // excluded since Alt+numpad is the Windows Alt-code / macOS
+                    // special-char system shortcut.
                     // Alt+N → the Nth tab. Off (default) skips the fixed Home
                     // tab so Alt+1 lands on the first *session* tab (index 1);
-                    // on (Appearance toggle "Alt+N counts Home as tab 1") counts
-                    // Home as tab 1 — Windows Terminal style. The getter is
-                    // preloaded in onMount so it honors a persisted choice.
-                    const idx = Number(e.key) - (app.altTabIncludeHome() ? 1 : 0);
+                    // on (the Appearance toggle) counts Home as tab 1 — Windows
+                    // Terminal style. Getter preloaded in onMount.
+                    const n = Number(e.code.slice(5)); // "Digit5" -> 5
+                    const idx = n - (app.altTabIncludeHome() ? 1 : 0);
                     const tab = app.tabs()[idx];
                     if (!tab) return false; // out of range: don't swallow the key
                     app.setActiveTab(tab.id);
