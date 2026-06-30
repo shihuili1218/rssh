@@ -2,6 +2,7 @@
     import { onMount } from "svelte";
     import * as ai from "./store.svelte.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
+    import { truncateCommand, formatBytes } from "./format.ts";
     import type { AuditEntry, AuditLog } from "./types.ts";
 
     let { tabId } = $props<{ tabId: string }>();
@@ -42,6 +43,7 @@
             case "llm_response": return t("ai.audit.summary.llm_response", { tin: k.tokens_in ?? "?", tout: k.tokens_out ?? "?" });
             case "command_proposed": return t("ai.audit.summary.command_proposed", { cmd: k.cmd });
             case "command_rejected": return t("ai.audit.summary.command_rejected", { id: k.id.slice(0, 8), reason: k.reason });
+            case "command_blocked": return t("ai.audit.summary.command_blocked", { cmd: truncateCommand(k.cmd), reason: k.reason });
             case "command_executed": {
                 const trunc = k.truncated_bytes > 0
                     ? t("ai.audit.summary.command_executed_truncated", { bytes: k.truncated_bytes })
@@ -50,8 +52,10 @@
                     id: k.id.slice(0, 8), exit: k.exit_code, dur: k.duration_ms, trunc,
                 });
             }
-            case "download_proposed": return t("ai.audit.summary.download_proposed", { path: k.remote_path });
-            case "download_completed": return t("ai.audit.summary.download_completed", { path: k.local_path, bytes: k.bytes });
+            case "download_proposed": return t("ai.audit.summary.download_proposed", { path: k.remote_path, max_mb: k.max_mb });
+            case "download_completed": return t("ai.audit.summary.download_completed", { path: k.local_path, size: formatBytes(k.bytes) });
+            case "analyze_proposed": return t("ai.audit.summary.analyze_proposed", { path: k.local_path, task: k.task });
+            case "skill_loaded": return t("ai.audit.summary.skill_loaded", { name: k.name, id: k.id });
             case "note": return t("ai.audit.summary.note", { message: k.message });
             case "error": return t("ai.audit.summary.error", { message: k.message });
         }

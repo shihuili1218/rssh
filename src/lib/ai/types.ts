@@ -167,9 +167,12 @@ export type AuditKind =
   | { type: "llm_response"; text: string; tokens_in: number | null; tokens_out: number | null }
   | { type: "command_proposed"; id: string; cmd: string; explain: string; side_effect: string }
   | { type: "command_rejected"; id: string; reason: string }
+  | { type: "command_blocked"; cmd: string; reason: string }
   | { type: "command_executed"; id: string; exit_code: number; output_redacted: string; original_bytes: number; truncated_bytes: number; duration_ms: number }
   | { type: "download_proposed"; id: string; remote_path: string; max_mb: number }
   | { type: "download_completed"; id: string; local_path: string; bytes: number }
+  | { type: "analyze_proposed"; id: string; local_path: string; task: string }
+  | { type: "skill_loaded"; id: string; name: string }
   | { type: "note"; message: string }
   | { type: "error"; message: string };
 
