@@ -606,31 +606,6 @@ export async function setTabMru(v: boolean) {
   await invoke("set_setting", { key: "tab_mru_reorder", value: String(v) });
 }
 
-/* ─── Alt+1..9 tab-jump mapping ─── */
-// Off by default: Alt+N jumps to the Nth *session* tab (skips the fixed
-// Home tab at index 0), so Alt+1 lands on the first session. On makes Home
-// count as tab 1 (Windows Terminal style). Same "true"-enables encoding as
-// _tabMru; the AppShell shortcut handler reads the getter, which is
-// preloaded in AppShell onMount so it honors a persisted choice from start.
-let _altTabIncludeHome = $state(false);
-let _altTabIncludeHomeLoaded = false;
-export function altTabIncludeHome() { return _altTabIncludeHome; }
-export async function loadAltTabIncludeHome(): Promise<boolean> {
-  if (!_altTabIncludeHomeLoaded) {
-    _altTabIncludeHomeLoaded = true;
-    try {
-      const v = await invoke<string | null>("get_setting", { key: "alt_tab_include_home" });
-      _altTabIncludeHome = v === "true";
-    } catch {}
-  }
-  return _altTabIncludeHome;
-}
-export async function setAltTabIncludeHome(v: boolean) {
-  _altTabIncludeHome = v;
-  _altTabIncludeHomeLoaded = true;
-  await invoke("set_setting", { key: "alt_tab_include_home", value: String(v) });
-}
-
 /* ─── Per-tab search pulse (context menu → TerminalPane.openSearch) ─── */
 let _searchRequest = $state<{ tabId: string; n: number } | null>(null);
 export function searchRequest() { return _searchRequest; }

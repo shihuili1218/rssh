@@ -51,13 +51,6 @@
         await app.setTabMru(tabMru);
     }
 
-    // ─── Alt+1..9 mapping — off (default) makes Alt+1 jump to the first
-    //     session tab (skips Home); on counts Home as tab 1 (WT style). ──
-    let altTabIncludeHome = $state(false);
-    async function saveAltTabIncludeHome() {
-        await app.setAltTabIncludeHome(altTabIncludeHome);
-    }
-
     // ─── Theme: palette ──────────────────────────────────────────────
     const palettes = theme.listPalettes();
     let paletteId = $state<PaletteId>(theme.paletteId());
@@ -156,7 +149,6 @@
     }
     onMount(async () => {
         tabMru = await app.loadTabMru();
-        altTabIncludeHome = await app.loadAltTabIncludeHome();
         try {
             fonts = await invoke<FontInfo[]>("list_fonts");
         } catch (e) {
@@ -402,21 +394,6 @@
             </div>
             <label class="switch">
                 <input type="checkbox" bind:checked={tabMru} onchange={saveTabMru} />
-                <span class="slider"></span>
-            </label>
-        </div>
-    </div>
-
-    <div class="card surface-raised toggle-card">
-        <div class="toggle-row">
-            <div class="switch-card-body">
-                <div class="switch-card-title" class:on={altTabIncludeHome} class:off={!altTabIncludeHome}>
-                    {t("settings.appearance.alt_tab_home")}
-                </div>
-                <div class="switch-card-desc">{t("settings.appearance.alt_tab_home_desc")}</div>
-            </div>
-            <label class="switch">
-                <input type="checkbox" bind:checked={altTabIncludeHome} onchange={saveAltTabIncludeHome} />
                 <span class="slider"></span>
             </label>
         </div>

@@ -138,8 +138,6 @@ const zh: Messages = {
   "settings.appearance.pos.bottom": "下",
   "settings.appearance.tab_mru": "聚焦的标签页置前",
   "settings.appearance.tab_mru_desc": "聚焦某个标签页时把它移到标签栏最前（最近使用顺序）。关闭则保持打开时的顺序。",
-  "settings.appearance.alt_tab_home": "Alt+1 跳到 Home 页",
-  "settings.appearance.alt_tab_home_desc": "开启时 Alt+1 跳到 Home 页（对标 Windows Terminal）。关闭则 Alt+1 跳到第一个会话标签页。",
   "settings.appearance.ai_panel_position": "AI 面板位置",
   "settings.appearance.color_palette": "配色",
   "settings.appearance.surface_style": "表面样式",

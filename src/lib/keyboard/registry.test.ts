@@ -8,7 +8,7 @@ vi.mock("../stores/app.svelte.ts", () => ({
   settingsActive,
 }));
 
-import { attachKeyup, attachShortcuts, type Shortcut } from "./registry.ts";
+import { altDigitTabIndex, attachKeyup, attachShortcuts, type Shortcut } from "./registry.ts";
 
 type EventListener = (e: KeyboardEvent) => void;
 
@@ -117,6 +117,33 @@ describe("attachShortcuts", () => {
     expect(handler).toHaveBeenCalledWith(event);
     expect(event.preventDefault).not.toHaveBeenCalled();
     expect(event.stopPropagation).not.toHaveBeenCalled();
+  });
+});
+
+describe("altDigitTabIndex", () => {
+  const ev = (over: Partial<KeyboardEvent>): KeyboardEvent =>
+    ({ altKey: false, ctrlKey: false, metaKey: false, shiftKey: false, code: "", ...over }) as KeyboardEvent;
+
+  it("maps Alt+Digit1..9 to tab index 1..9 (Home at index 0 is skipped)", () => {
+    expect(altDigitTabIndex(ev({ altKey: true, code: "Digit1" }))).toBe(1);
+    expect(altDigitTabIndex(ev({ altKey: true, code: "Digit5" }))).toBe(5);
+    expect(altDigitTabIndex(ev({ altKey: true, code: "Digit9" }))).toBe(9);
+  });
+
+  it("does not map Alt+Digit0 — only 1..9 are bound", () => {
+    expect(altDigitTabIndex(ev({ altKey: true, code: "Digit0" }))).toBeNull();
+  });
+
+  it("requires Alt and rejects any additional modifier", () => {
+    expect(altDigitTabIndex(ev({ code: "Digit1" }))).toBeNull(); // no Alt
+    expect(altDigitTabIndex(ev({ altKey: true, ctrlKey: true, code: "Digit1" }))).toBeNull();
+    expect(altDigitTabIndex(ev({ altKey: true, metaKey: true, code: "Digit1" }))).toBeNull();
+    expect(altDigitTabIndex(ev({ altKey: true, shiftKey: true, code: "Digit1" }))).toBeNull();
+  });
+
+  it("matches the physical digit-row code, excluding numpad and other keys", () => {
+    expect(altDigitTabIndex(ev({ altKey: true, code: "Numpad1" }))).toBeNull();
+    expect(altDigitTabIndex(ev({ altKey: true, code: "KeyA" }))).toBeNull();
   });
 });
 

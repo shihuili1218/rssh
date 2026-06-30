@@ -21,7 +21,7 @@
     import ChatPanel from "../ai/ChatPanel.svelte";
     import * as ai from "../ai/store.svelte.ts";
     import type { AiTargetKind } from "../ai/types.ts";
-    import {attachShortcuts, attachKeyup, type Shortcut} from "../keyboard/registry.ts";
+    import {attachShortcuts, attachKeyup, altDigitTabIndex, type Shortcut} from "../keyboard/registry.ts";
     import {matchBinding, TAB_CYCLE} from "../keyboard/keymap.ts";
     import * as keymap from "../stores/keymap.svelte.ts";
     import {t, errMsg} from "../i18n/index.svelte.ts";
@@ -141,25 +141,15 @@
                 description: t("shortcut.tab.goto"),
                 // Direct jump to the Nth tab (1-based, by strip order). A fixed
                 // combo like Ctrl+Tab — kept out of the customizable ACTIONS
-                // editor since it is 9 combos, not one bindable action.
-                match: e =>
-                    e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey &&
-                    /^Digit[1-9]$/.test(e.code),
+                // editor since it is 9 combos, not one bindable action. Home
+                // (index 0) is skipped, so Alt+1 lands on the first session tab.
+                // See altDigitTabIndex for the e.code-not-e.key rationale.
+                match: e => altDigitTabIndex(e) !== null,
                 handler: e => {
                     // Don't hijack keys while the user is recording a new binding.
                     if (keymap.recording()) return false;
-                    // Match by e.code (Digit1..Digit9), not e.key: e.key is
-                    // layout/modifier-dependent, so macOS Option (Alt) or non-US
-                    // layouts turn a digit-row press into another char and the
-                    // shortcut silently misses. Main keyboard only — numpad is
-                    // excluded since Alt+numpad is the Windows Alt-code / macOS
-                    // special-char system shortcut.
-                    // Alt+N → the Nth tab. Off (default) skips the fixed Home
-                    // tab so Alt+1 lands on the first *session* tab (index 1);
-                    // on (the Appearance toggle) counts Home as tab 1 — Windows
-                    // Terminal style. Getter preloaded in onMount.
-                    const n = Number(e.code.slice(5)); // "Digit5" -> 5
-                    const idx = n - (app.altTabIncludeHome() ? 1 : 0);
+                    const idx = altDigitTabIndex(e);
+                    if (idx === null) return false;
                     const tab = app.tabs()[idx];
                     if (!tab) return false; // out of range: don't swallow the key
                     app.setActiveTab(tab.id);
@@ -178,10 +168,6 @@
         keymap.init();
         app.loadProfiles().then(p => profiles = p);
         app.loadGroups().then(g => groups = g);
-        // Preload the Alt+N mapping so the global shortcut honors a persisted
-        // choice from app start (default off = Alt+1 → first session tab,
-        // skipping Home). Fire-and-forget; the handler reads the getter lazily.
-        app.loadAltTabIncludeHome();
         // Crash recovery: reconcile with empty list tells the backend
         // "no sessions are alive" so it cleans up any orphaned resources
         // from a previous crash or hot-reload.

@@ -136,8 +136,6 @@ const en = {
   "settings.appearance.pos.bottom": "Bottom",
   "settings.appearance.tab_mru": "Move focused tab to front",
   "settings.appearance.tab_mru_desc": "Focusing a tab moves it to the front of the tab bar (most-recently-used order). Off keeps tabs in the order they were opened.",
-  "settings.appearance.alt_tab_home": "Alt+1 jumps to Home",
-  "settings.appearance.alt_tab_home_desc": "On, Alt+1 jumps to Home (Windows Terminal style). Off, Alt+1 jumps to the first session tab.",
   "settings.appearance.ai_panel_position": "AI panel position",
   "settings.appearance.color_palette": "Color palette",
   "settings.appearance.surface_style": "Surface style",

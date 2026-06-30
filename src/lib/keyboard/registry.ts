@@ -50,3 +50,22 @@ export function attachKeyup(handler: (e: KeyboardEvent) => void): () => void {
   window.addEventListener("keyup", handler, { capture: true });
   return () => window.removeEventListener("keyup", handler, { capture: true });
 }
+
+/**
+ * Map an Alt+digit keydown to a target tab-strip index, or null when the event
+ * is not a clean Alt+1..9 press (any other modifier held, non-digit, or numpad).
+ *
+ * Matches by `e.code` (Digit1..Digit9), never `e.key`: `e.key` is layout- and
+ * modifier-dependent, so macOS Option (Alt) or a non-US layout turns the
+ * digit-row press into another character and the shortcut would silently miss.
+ * Numpad is excluded on purpose — Alt+numpad is the Windows Alt-code / macOS
+ * special-character entry.
+ *
+ * Home is the fixed tab at index 0 and is intentionally unreachable: Alt+1 maps
+ * to index 1 (the first session tab), Alt+9 to index 9.
+ */
+export function altDigitTabIndex(e: KeyboardEvent): number | null {
+  if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return null;
+  const m = /^Digit([1-9])$/.exec(e.code);
+  return m ? Number(m[1]) : null;
+}
