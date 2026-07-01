@@ -7,6 +7,7 @@
     import { errMsg, t } from "../i18n/index.svelte.ts";
     import { fileStamp } from "../save-file.ts";
     import { remoteUploadName } from "../sftp-name.ts";
+    import Modal from "./Modal.svelte";
 
     /** Mirrors the backend WalkEntry; rel_path is always '/'-separated. */
     interface WalkEntry { rel_path: string; size: number; }
@@ -638,7 +639,7 @@
          onclick={closeCtxMenu}
          oncontextmenu={(e) => { e.preventDefault(); closeCtxMenu(); }}
          role="presentation"></div>
-    <div class="ctx-menu surface-raised"
+    <div class="ctx-menu surface-menu"
          class:ready={ctxReady}
          bind:this={ctxMenuEl}
          style="left: {ctxMenu.x + ctxDx}px; top: {ctxMenu.y + ctxDy}px;">
@@ -656,72 +657,66 @@
 {/if}
 
 {#if deleteEntry}
-    <div class="modal-overlay" onclick={() => { deleteEntry = null; }}>
-        <div class="modal-card" onclick={(e) => e.stopPropagation()}>
-            <p class="modal-text">{t("sftp.delete.confirm", { name: deleteEntry.name })}</p>
-            <div class="modal-actions">
-                <button class="btn btn-sm" onclick={() => { deleteEntry = null; }}>{t("common.cancel")}</button>
-                <button class="btn btn-sm btn-danger" onclick={doDelete}>{t("common.delete")}</button>
-            </div>
+    <Modal onClose={() => { deleteEntry = null; }}>
+        <p class="modal-text">{t("sftp.delete.confirm", { name: deleteEntry.name })}</p>
+        <div class="modal-actions">
+            <button class="btn btn-sm" onclick={() => { deleteEntry = null; }}>{t("common.cancel")}</button>
+            <button class="btn btn-sm btn-danger" onclick={doDelete}>{t("common.delete")}</button>
         </div>
-    </div>
+    </Modal>
 {/if}
 
 {#if renameEntry}
-    <div class="modal-overlay" onclick={() => { renameEntry = null; }}>
-        <div class="modal-card" onclick={(e) => e.stopPropagation()}>
-            <p class="modal-title">{t("sftp.rename.title")}</p>
-            <input
-                type="text"
-                class="modal-input"
-                bind:this={renameInputEl}
-                bind:value={renameValue}
-                onkeydown={(e) => { if (e.key === "Enter") doRename(); if (e.key === "Escape") renameEntry = null; }}
-            />
-            <div class="modal-actions">
-                <button class="btn btn-sm" onclick={() => { renameEntry = null; }}>{t("common.cancel")}</button>
-                <button class="btn btn-sm" onclick={doRename}>{t("sftp.rename.title")}</button>
-            </div>
+    <Modal onClose={() => { renameEntry = null; }}>
+        <p class="modal-title">{t("sftp.rename.title")}</p>
+        <input
+            type="text"
+            class="modal-input"
+            bind:this={renameInputEl}
+            bind:value={renameValue}
+            onkeydown={(e) => { if (e.key === "Enter") doRename(); }}
+        />
+        <div class="modal-actions">
+            <button class="btn btn-sm" onclick={() => { renameEntry = null; }}>{t("common.cancel")}</button>
+            <button class="btn btn-sm" onclick={doRename}>{t("sftp.rename.title")}</button>
         </div>
-    </div>
+    </Modal>
 {/if}
 
 {#if propsStat || propsLoading}
-    <div class="modal-overlay" onclick={closeProperties}>
-        <div class="modal-card props-card" onclick={(e) => e.stopPropagation()}>
-            {#if propsLoading}
-                <p class="loading">{t("common.loading")}</p>
-            {:else if propsStat}
-                <p class="props-filename">{propsStat.name}</p>
-                <div class="props-spacer"></div>
-                {#if !propsStat.is_dir}
-                    <div class="props-row">
-                        <span class="props-label">{t("sftp.props.size")}</span>
-                        <span class="props-value">{formatSize(propsStat.size)}</span>
-                    </div>
-                {/if}
+    <Modal onClose={closeProperties} style="min-width: 300px;">
+        {#if propsLoading}
+            <p class="loading">{t("common.loading")}</p>
+        {:else if propsStat}
+            <p class="props-filename">{propsStat.name}</p>
+            <div class="props-spacer"></div>
+            {#if !propsStat.is_dir}
                 <div class="props-row">
-                    <span class="props-label">{t("sftp.props.modified")}</span>
-                    <span class="props-value">{formatMtime(propsStat.mtime)}</span>
-                </div>
-                <div class="props-row">
-                    <span class="props-label">{t("sftp.props.owner")}</span>
-                    <span class="props-value">{propsStat.user ?? (propsStat.uid !== undefined && propsStat.uid !== null ? String(propsStat.uid) : "—")}</span>
-                </div>
-                <div class="props-row">
-                    <span class="props-label">{t("sftp.props.group")}</span>
-                    <span class="props-value">{propsStat.group ?? (propsStat.gid !== undefined && propsStat.gid !== null ? String(propsStat.gid) : "—")}</span>
-                </div>
-                <div class="props-row">
-                    <span class="props-label">{t("sftp.props.permissions")}</span>
-                    <span class="props-value">{formatPermissions(propsStat.permissions)}</span>
+                    <span class="props-label">{t("sftp.props.size")}</span>
+                    <span class="props-value">{formatSize(propsStat.size)}</span>
                 </div>
             {/if}
-            <div class="props-ok">
-                <button class="btn btn-sm" onclick={closeProperties}>{t("sftp.props.ok")}</button>
+            <div class="props-row">
+                <span class="props-label">{t("sftp.props.modified")}</span>
+                <span class="props-value">{formatMtime(propsStat.mtime)}</span>
             </div>
+            <div class="props-row">
+                <span class="props-label">{t("sftp.props.owner")}</span>
+                <span class="props-value">{propsStat.user ?? (propsStat.uid !== undefined && propsStat.uid !== null ? String(propsStat.uid) : "—")}</span>
+            </div>
+            <div class="props-row">
+                <span class="props-label">{t("sftp.props.group")}</span>
+                <span class="props-value">{propsStat.group ?? (propsStat.gid !== undefined && propsStat.gid !== null ? String(propsStat.gid) : "—")}</span>
+            </div>
+            <div class="props-row">
+                <span class="props-label">{t("sftp.props.permissions")}</span>
+                <span class="props-value">{formatPermissions(propsStat.permissions)}</span>
+            </div>
+        {/if}
+        <div class="modal-actions" style="margin-top: 16px;">
+            <button class="btn btn-sm" onclick={closeProperties}>{t("sftp.props.ok")}</button>
         </div>
-    </div>
+    </Modal>
 {/if}
 
 <style>
@@ -992,9 +987,6 @@
         z-index: 501;
         min-width: 180px;
         padding: calc(4px * var(--density));
-        background: var(--bg);
-        box-shadow: var(--raised);
-        border-radius: var(--radius);
         display: flex;
         flex-direction: column;
         gap: 1px;
@@ -1021,7 +1013,7 @@
         white-space: nowrap;
     }
     .ctx-item:hover:not(:disabled) {
-        background: var(--surface);
+        background: color-mix(in srgb, var(--text) 8%, transparent);
     }
 
     .ctx-sep {
@@ -1030,27 +1022,7 @@
         margin: 4px 6px;
     }
 
-    /* ── Modal overlay ── */
-
-    .modal-overlay {
-        position: fixed;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.4);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 600;
-    }
-
-    .modal-card {
-        background: var(--surface);
-        border: 1px solid var(--divider);
-        border-radius: 8px;
-        padding: 20px 24px;
-        min-width: 280px;
-        max-width: 90vw;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
-    }
+    /* ── Modal content (scrim + card shell live in Modal.svelte) ── */
 
     .modal-text {
         font-size: 13px;
@@ -1081,21 +1053,11 @@
         border-color: var(--accent);
     }
 
-    .modal-actions {
-        display: flex;
-        justify-content: flex-end;
-        gap: 8px;
-    }
-
     .btn-danger {
         color: var(--error) !important;
     }
 
     /* ── Properties dialog ── */
-
-    .props-card {
-        min-width: 300px;
-    }
 
     .props-filename {
         font-size: 14px;
@@ -1126,12 +1088,6 @@
         color: var(--text);
         text-align: right;
         word-break: break-all;
-    }
-
-    .props-ok {
-        display: flex;
-        justify-content: flex-end;
-        margin-top: 16px;
     }
 
 </style>

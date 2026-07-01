@@ -18,6 +18,11 @@
     --elevation-pressed:
         inset 3px 2px 3px var(--shadow-dark),
         inset -3px -2px 3px var(--shadow-light);
+    /* Scrim-backed dialogs get NO shadow under neu — the puffy dual-shadow reads
+       badly on a floating card, and the scrim already separates them. Context
+       menus have no scrim, so they borrow material's clean drop shadow to lift. */
+    --shadow-popup: none;
+    --shadow-menu:  var(--shadow-float);
 }
 
 /* Accent button keeps its glow. */

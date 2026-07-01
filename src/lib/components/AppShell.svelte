@@ -13,6 +13,7 @@
     import SftpBrowser from "./SftpBrowser.svelte";
     import DownloadsScreen from "./DownloadsScreen.svelte";
     import SnippetPicker from "./SnippetPicker.svelte";
+    import Modal from "./Modal.svelte";
     import * as transfers from "../stores/transfers.svelte.ts";
     import TabContextMenu, {type CtxMenuItem} from "./TabContextMenu.svelte";
     import MenuButton, {type NavItem, navItemKey} from "./MenuButton.svelte";
@@ -1071,18 +1072,15 @@
     <!-- 关闭 tab 二次确认。Tauri webview 不支持原生 confirm()，沿用 ChatPanel/AiSettings
          同款自定义 modal。只有开启「关闭标签页前确认」后 requestCloseTab 才会挂起 closingTab。 -->
     {#if closingTab}
-        <div class="dialog-backdrop" onclick={() => (closingTab = null)} role="presentation">
-            <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()}
-                 role="dialog" aria-modal="true"
-                 aria-labelledby="close-tab-title" aria-describedby="close-tab-body">
-                <h3 id="close-tab-title" class="dialog-title">{t("tab.close_confirm_title")}</h3>
-                <div id="close-tab-body" class="dialog-body">{t("tab.close_confirm_body", { label: closingTab.label })}</div>
-                <div class="btn-row">
-                    <button class="btn btn-sm" onclick={() => (closingTab = null)}>{t("common.cancel")}</button>
-                    <button class="btn btn-sm btn-primary" onclick={confirmCloseTab}>{t("tab.context.close")}</button>
-                </div>
+        <Modal onClose={() => (closingTab = null)} class="stack"
+               aria-labelledby="close-tab-title" aria-describedby="close-tab-body">
+            <h3 id="close-tab-title" class="dialog-title">{t("tab.close_confirm_title")}</h3>
+            <div id="close-tab-body" class="dialog-body">{t("tab.close_confirm_body", { label: closingTab.label })}</div>
+            <div class="modal-actions">
+                <button class="btn btn-sm" onclick={() => (closingTab = null)}>{t("common.cancel")}</button>
+                <button class="btn btn-sm btn-primary" onclick={confirmCloseTab}>{t("tab.context.close")}</button>
             </div>
-        </div>
+        </Modal>
     {/if}
 </div>
 
@@ -1331,26 +1329,7 @@
         opacity: 0.45;
     }
 
-    /* 关闭 tab 二次确认弹窗 —— 跟 ChatPanel 的 clear-context dialog 同款。 */
-    .dialog-backdrop {
-        position: fixed;
-        inset: 0;
-        z-index: 500;
-        background: var(--overlay-strong);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-    .dialog {
-        background: var(--bg);
-        box-shadow: var(--raised);
-        border-radius: var(--radius);
-        padding: calc(24px * var(--density));
-        max-width: 420px;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-    }
+    /* 关闭 tab 二次确认弹窗 —— 外壳（scrim + 卡片）由 Modal.svelte 统一提供。 */
     .dialog-title {
         font-size: 15px;
         font-weight: 600;
@@ -1360,11 +1339,5 @@
         font-size: 13px;
         color: var(--text);
         line-height: 1.55;
-    }
-    .btn-row {
-        display: flex;
-        gap: 8px;
-        justify-content: flex-end;
-        margin-top: 4px;
     }
 </style>

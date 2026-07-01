@@ -21,6 +21,8 @@
     --flat-border-color:   color-mix(in srgb, var(--text) 25%, var(--bg));
     --flat-border:         1px solid var(--flat-border-color);
     --flat-border-strong:  1px solid color-mix(in srgb, var(--text) 35%, var(--bg));
+    --shadow-popup: none;
+    --shadow-menu:  none;
 }
 
 /* Outline raised surfaces with a 1px border so they remain
@@ -29,6 +31,8 @@
 :root[data-shape="flat"] .surface-raised-sm,
 :root[data-shape="flat"] .surface-pressed,
 :root[data-shape="flat"] .surface-flat,
+:root[data-shape="flat"] .surface-popup,
+:root[data-shape="flat"] .surface-menu,
 :root[data-shape="flat"] .neu-raised,
 :root[data-shape="flat"] .neu-sm,
 :root[data-shape="flat"] .neu-pressed,

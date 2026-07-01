@@ -8,6 +8,7 @@
     import { parseCustomTermJson, type TermPaletteRef } from "../themes/term-palettes.ts";
     import { composeTermFontStack, type FontInfo } from "../themes/term-font.ts";
     import FontSelect from "./FontSelect.svelte";
+    import Modal from "./Modal.svelte";
     import { t } from "../i18n/index.svelte.ts";
 
     const SCHEMES_URL = "https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/windowsterminal";
@@ -431,8 +432,7 @@
 </div>
 
 {#if showCustomDialog}
-<div class="dialog-backdrop" onclick={() => showCustomDialog = false} role="presentation">
-    <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+    <Modal onClose={() => showCustomDialog = false} class="stack" style="width: 100%; max-width: 560px;">
         <div class="dialog-title">{t("settings.appearance.term.import_title")}</div>
         <div class="dialog-hint">
             {t("settings.appearance.term.import_hint")}
@@ -449,7 +449,7 @@
         {#if customError}
             <div class="dialog-error">{customError}</div>
         {/if}
-        <div class="dialog-actions">
+        <div class="modal-actions">
             <button class="btn" onclick={() => showCustomDialog = false}>
                 {t("settings.appearance.term.cancel")}
             </button>
@@ -457,8 +457,7 @@
                 {t("settings.appearance.term.import")}
             </button>
         </div>
-    </div>
-</div>
+    </Modal>
 {/if}
 
 <style>
@@ -807,26 +806,7 @@
         font-weight: 500;
     }
 
-    /* ── Custom JSON import dialog ── */
-    .dialog-backdrop {
-        position: fixed;
-        inset: 0;
-        z-index: 500;
-        background: var(--overlay-strong);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 20px;
-    }
-    .dialog {
-        width: min(560px, 100%);
-        max-height: 90vh;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        padding: 24px;
-        overflow-y: auto;
-    }
+    /* ── Custom JSON import dialog (shell provided by Modal.svelte) ── */
     .dialog-title {
         font-size: 15px;
         font-weight: 600;
@@ -864,12 +844,6 @@
         background: color-mix(in srgb, var(--error) 12%, transparent);
         border-radius: var(--radius-sm);
         font-family: monospace;
-    }
-    .dialog-actions {
-        display: flex;
-        justify-content: flex-end;
-        gap: 8px;
-        margin-top: 4px;
     }
 
     /* ── Terminal palette + font card (Selection & Mouse pattern) ── */

@@ -2,6 +2,7 @@
     import {onMount, onDestroy} from "svelte";
     import {invoke} from "@tauri-apps/api/core";
     import { t, errMsg } from "../i18n/index.svelte.ts";
+    import Modal from "./Modal.svelte";
     import type { MessageKey } from "../i18n/locales/en";
 
     /* ── GitHub source state ─────────────────────────────────────────────── */
@@ -401,27 +402,24 @@
 
 <!-- Password dialog -->
 {#if showPwDialog}
-    <div class="dialog-backdrop" onclick={closePwDialog} onkeydown={(e) => e.key === "Escape" && closePwDialog()} role="presentation" tabindex="-1">
-        <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()}
-             role="dialog" aria-modal="true" aria-labelledby="sync-pw-title">
-            <h3 id="sync-pw-title">{pwMode === "push" ? t("sync.set_password") : t("sync.enter_password")}</h3>
-            <input type="password" bind:value={pw1} placeholder={t("sync.password")} autocomplete="new-password"
-                   autofocus aria-describedby={pwError ? "pw-error" : undefined}
+    <Modal onClose={closePwDialog} class="stack" aria-labelledby="sync-pw-title">
+        <h3 id="sync-pw-title" class="dialog-title">{pwMode === "push" ? t("sync.set_password") : t("sync.enter_password")}</h3>
+        <input type="password" bind:value={pw1} placeholder={t("sync.password")} autocomplete="new-password"
+               autofocus aria-describedby={pwError ? "pw-error" : undefined}
+               onkeydown={(e) => { if (e.key === "Enter") confirmPassword(); }}/>
+        {#if pwMode === "push"}
+            <input type="password" bind:value={pw2} placeholder={t("sync.confirm_password")} autocomplete="new-password"
+                   aria-describedby={pwError ? "pw-error" : undefined}
                    onkeydown={(e) => { if (e.key === "Enter") confirmPassword(); }}/>
-            {#if pwMode === "push"}
-                <input type="password" bind:value={pw2} placeholder={t("sync.confirm_password")} autocomplete="new-password"
-                       aria-describedby={pwError ? "pw-error" : undefined}
-                       onkeydown={(e) => { if (e.key === "Enter") confirmPassword(); }}/>
-            {/if}
-            {#if pwError}
-                <div id="pw-error" class="pw-error" role="alert">{pwError}</div>
-            {/if}
-            <div class="btn-row">
-                <button class="btn btn-sm" onclick={closePwDialog}>{t("common.cancel")}</button>
-                <button class="btn btn-accent btn-sm" onclick={confirmPassword}>{t("common.confirm")}</button>
-            </div>
+        {/if}
+        {#if pwError}
+            <div id="pw-error" class="pw-error" role="alert">{pwError}</div>
+        {/if}
+        <div class="btn-row">
+            <button class="btn btn-sm" onclick={closePwDialog}>{t("common.cancel")}</button>
+            <button class="btn btn-accent btn-sm" onclick={confirmPassword}>{t("common.confirm")}</button>
         </div>
-    </div>
+    </Modal>
 {/if}
 
 <style>
@@ -562,29 +560,7 @@
         color: var(--error);
     }
 
-    .dialog-backdrop {
-        position: fixed;
-        inset: 0;
-        z-index: 500;
-        background: var(--overlay-strong);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-
-    .dialog {
-        background: var(--bg);
-        box-shadow: var(--raised);
-        border-radius: var(--radius);
-        padding: calc(24px * var(--density));
-        min-width: 300px;
-        max-width: calc(100vw - 32px);
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-    }
-
-    .dialog h3 {
+    .dialog-title {
         font-size: 16px;
         color: var(--text);
     }

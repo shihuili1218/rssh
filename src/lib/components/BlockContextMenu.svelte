@@ -65,7 +65,7 @@
     });
 </script>
 
-<div bind:this={containerEl} class="block-menu" class:ready role="menu"
+<div bind:this={containerEl} class="block-menu surface-menu" class:ready role="menu"
      style="left: {x + dx}px; top: {y + dy}px;">
     {#each items as item}
         <button
@@ -87,10 +87,6 @@
     .block-menu {
         position: fixed;
         z-index: 9999;
-        background: var(--surface);
-        border: 1px solid var(--divider);
-        border-radius: 4px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
         padding: 4px 0;
         min-width: 120px;
         /* 测量前隐藏，避免初始位置在边缘时闪一下再被 clamp 拉回来 */

@@ -3,6 +3,7 @@
     import type { AiTargetKind, ChatItem, ConversationMeta } from "./types.ts";
     import CommandConfirmDialog from "./CommandConfirmDialog.svelte";
     import AuditPanel from "./AuditPanel.svelte";
+    import Modal from "../components/Modal.svelte";
     import DangerModeToggle from "./DangerModeToggle.svelte";
     import { renderMarkdown } from "./markdown.ts";
     import { formatTokenCount } from "./tokens.ts";
@@ -398,23 +399,19 @@
 <!-- Clear-context confirmation. Tauri webview drops native confirm() silently,
      so we use the same custom modal pattern as AiSettings' danger-mode dialog. -->
 {#if showClearDialog}
-    <div class="dialog-backdrop" onclick={() => (showClearDialog = false)} role="presentation">
-        <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()}
-             role="dialog" aria-modal="true"
-             aria-labelledby="clear-dialog-title"
-             aria-describedby="clear-dialog-body">
-            <h3 id="clear-dialog-title" class="dialog-title">{t("ai.toolbar.clear_confirm_title")}</h3>
-            <div id="clear-dialog-body" class="dialog-body">{t("ai.toolbar.clear_confirm")}</div>
-            <div class="btn-row">
-                <button class="btn btn-sm" onclick={() => (showClearDialog = false)}>
-                    {t("common.cancel")}
-                </button>
-                <button class="btn btn-sm btn-primary" onclick={clearContext}>
-                    {t("ai.toolbar.clear_confirm_action")}
-                </button>
-            </div>
+    <Modal onClose={() => (showClearDialog = false)} class="stack"
+           aria-labelledby="clear-dialog-title" aria-describedby="clear-dialog-body">
+        <h3 id="clear-dialog-title" class="dialog-title">{t("ai.toolbar.clear_confirm_title")}</h3>
+        <div id="clear-dialog-body" class="dialog-body">{t("ai.toolbar.clear_confirm")}</div>
+        <div class="modal-actions">
+            <button class="btn btn-sm" onclick={() => (showClearDialog = false)}>
+                {t("common.cancel")}
+            </button>
+            <button class="btn btn-sm btn-primary" onclick={clearContext}>
+                {t("ai.toolbar.clear_confirm_action")}
+            </button>
         </div>
-    </div>
+    </Modal>
 {/if}
 
 <style>
@@ -659,26 +656,7 @@
         font-family: inherit; font-size: 13px;
     }
 
-    /* Clear-context confirmation modal — mirrors AiSettings' danger-mode dialog. */
-    .dialog-backdrop {
-        position: fixed;
-        inset: 0;
-        z-index: 500;
-        background: var(--overlay-strong);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-    .dialog {
-        background: var(--bg);
-        box-shadow: var(--raised);
-        border-radius: var(--radius);
-        padding: calc(24px * var(--density));
-        max-width: 420px;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-    }
+    /* Clear-context confirmation modal — shell lives in Modal.svelte. */
     .dialog-title {
         font-size: 15px;
         font-weight: 600;
@@ -689,11 +667,5 @@
         color: var(--text);
         line-height: 1.55;
         white-space: pre-line;
-    }
-    .btn-row {
-        display: flex;
-        gap: 8px;
-        justify-content: flex-end;
-        margin-top: 4px;
     }
 </style>

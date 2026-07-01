@@ -73,7 +73,7 @@
      （方向键导航 + roving tabindex），但本组件只有 Esc 关闭，假装是 menu 会让屏幕阅读器
      用户期待方向键导航却得不到。承认它就是一组上下文按钮：<button> 默认就是 button 角色，
      Tab 键可遍历、Enter/Space 可激活，简单诚实。 -->
-<div class="ctx-menu surface-raised"
+<div class="ctx-menu surface-menu"
      class:ready
      bind:this={menuEl}
      style="left: {x + dx}px; top: {y + dy}px;">
@@ -92,7 +92,7 @@
                         {#if item.shortcut}<span class="ctx-shortcut">{item.shortcut}</span>{/if}
                         <span class="ctx-caret" aria-hidden="true">›</span>
                     </button>
-                    <div class="ctx-submenu surface-raised">
+                    <div class="ctx-submenu surface-menu">
                         {#each item.submenu ?? [] as sub, ki (ki)}
                             <button class="ctx-item"
                                     class:disabled={sub.disabled}
@@ -128,9 +128,6 @@
         z-index: 501;
         min-width: 200px;
         padding: calc(4px * var(--density));
-        background: var(--bg);
-        box-shadow: var(--raised);
-        border-radius: var(--radius);
         display: flex;
         flex-direction: column;
         gap: 1px;
@@ -156,7 +153,7 @@
         cursor: pointer;
     }
     .ctx-item:hover:not(:disabled) {
-        background: var(--surface);
+        background: color-mix(in srgb, var(--text) 8%, transparent);
     }
     .ctx-item:disabled,
     .ctx-item.disabled {
@@ -197,9 +194,6 @@
         z-index: 502;
         min-width: 140px;
         padding: calc(4px * var(--density));
-        background: var(--bg);
-        box-shadow: var(--raised);
-        border-radius: var(--radius);
         display: none;
         flex-direction: column;
         gap: 1px;

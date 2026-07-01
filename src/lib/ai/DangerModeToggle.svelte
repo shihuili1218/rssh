@@ -10,6 +10,7 @@
     import type { Snippet } from "svelte";
     import * as ai from "./store.svelte.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
+    import Modal from "../components/Modal.svelte";
 
     let { trigger, onError }: {
         // trigger(requestToggle, saving): the caller wires these onto its control.
@@ -47,42 +48,20 @@
 {@render trigger(requestToggle, saving)}
 
 {#if showDialog}
-    <div class="dialog-backdrop" onclick={() => (showDialog = false)} role="presentation">
-        <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()}
-             role="dialog" aria-modal="true"
-             aria-labelledby="danger-confirm-title" aria-describedby="danger-confirm-body">
-            <h3 id="danger-confirm-title" class="title">{t("ai.settings.danger.confirm_title")}</h3>
-            <div id="danger-confirm-body" class="body">{t("ai.settings.danger.confirm_body")}</div>
-            <div class="btn-row">
-                <button class="btn btn-sm" onclick={() => (showDialog = false)}>{t("common.cancel")}</button>
-                <button class="btn btn-sm btn-danger-solid" onclick={() => apply(true)} disabled={saving}>
-                    {t("ai.settings.danger.confirm_enable")}
-                </button>
-            </div>
+    <Modal onClose={() => (showDialog = false)} class="stack"
+           aria-labelledby="danger-confirm-title" aria-describedby="danger-confirm-body">
+        <h3 id="danger-confirm-title" class="title">{t("ai.settings.danger.confirm_title")}</h3>
+        <div id="danger-confirm-body" class="body">{t("ai.settings.danger.confirm_body")}</div>
+        <div class="modal-actions">
+            <button class="btn btn-sm" onclick={() => (showDialog = false)}>{t("common.cancel")}</button>
+            <button class="btn btn-sm btn-danger-solid" onclick={() => apply(true)} disabled={saving}>
+                {t("ai.settings.danger.confirm_enable")}
+            </button>
         </div>
-    </div>
+    </Modal>
 {/if}
 
 <style>
-    .dialog-backdrop {
-        position: fixed;
-        inset: 0;
-        z-index: 500;
-        background: var(--overlay-strong);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-    .dialog {
-        background: var(--bg);
-        box-shadow: var(--raised);
-        border-radius: var(--radius);
-        padding: calc(24px * var(--density));
-        max-width: 460px;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-    }
     .title {
         font-size: 16px;
         color: var(--error);
@@ -93,12 +72,6 @@
         color: var(--text);
         line-height: 1.55;
         white-space: pre-line;
-    }
-    .btn-row {
-        display: flex;
-        gap: 8px;
-        justify-content: flex-end;
-        margin-top: 4px;
     }
     /* "Enable anyway" — error fill so clicking it reads as stepping on a mine. */
     .btn-danger-solid {

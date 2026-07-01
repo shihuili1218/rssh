@@ -50,6 +50,19 @@
   --overlay-soft:   color-mix(in srgb, var(--black) 40%, transparent);
   --overlay-strong: color-mix(in srgb, var(--black) 50%, transparent);
 
+  /* Floating-popup drop shadow. --shadow-float is the raw value; two semantic
+     tokens pick it per surface type, each shape overriding as needed:
+       --shadow-popup  scrim-backed dialogs (modal, snippet picker) — the scrim
+                       separates them, so neu/flat = none, material = float.
+       --shadow-menu   free-floating context menus (no scrim) — they must lift
+                       off the content, so neu ALSO gets float; only flat (border)
+                       drops it. */
+  --shadow-float:
+      0 4px 8px color-mix(in srgb, var(--shadow-dark) 45%, transparent),
+      0 12px 28px color-mix(in srgb, var(--shadow-dark) 30%, transparent);
+  --shadow-popup: none;
+  --shadow-menu:  var(--shadow-float);
+
   /* ── Density (padding/gap multiplier) ───────────────── */
   /* Default = "cozy" (1.0). Compact (0.85) and comfortable (1.15)
      are set via [data-density="..."] on <html>. */
@@ -135,6 +148,17 @@ html, body {
 .surface-raised-sm { box-shadow: var(--elevation-low);     border-radius: var(--radius-sm); background: var(--bg); }
 .surface-pressed   { box-shadow: var(--elevation-pressed); border-radius: var(--radius); background: var(--bg); }
 .surface-flat      { border-radius: var(--radius); background: var(--bg); }
+
+/* Floating popup surfaces. Same fill/radius; the shadow token differs by whether
+   a scrim backs them (.surface-popup: modal, picker) or not (.surface-menu:
+   context menus). No constant border — flat adds one (flat.css), like .surface-raised. */
+.surface-popup,
+.surface-menu {
+  background: var(--surface);
+  border-radius: var(--radius);
+}
+.surface-popup { box-shadow: var(--shadow-popup); }
+.surface-menu  { box-shadow: var(--shadow-menu); }
 
 /* Legacy aliases — DO NOT use in new code. Use .surface-* above. */
 .neu-raised  { box-shadow: var(--elevation-mid);     border-radius: var(--radius); background: var(--bg); }
@@ -342,6 +366,10 @@ input[type="radio"]:checked::after {
   border-radius: 50%;
   font-size: 16px;
 }
+
+/* Footer button row for dialogs — right-aligned. Modal content uses this
+   instead of each popup re-declaring its own flex/justify-end/gap. */
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 /* ═══════════════════════════════════════════════════════
    Cards & Sections

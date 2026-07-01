@@ -17,6 +17,9 @@
        --radius is aliased to --radius-md in :root, so changing the
        latter cascades to both. */
     --radius-md: 18px;
+    /* Material lifts dialogs too (not just menus) → both tokens take the float. */
+    --shadow-popup: var(--shadow-float);
+    --shadow-menu:  var(--shadow-float);
 }
 
 /* Pressed inputs: tint background instead of inset shadow. Includes the custom

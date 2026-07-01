@@ -41,7 +41,7 @@
 </script>
 
 <div class="picker-backdrop" onclick={() => app.closeSnippetPicker()} role="presentation">
-  <div class="picker surface-raised" onclick={(e) => e.stopPropagation()}
+  <div class="picker surface-popup" onclick={(e) => e.stopPropagation()}
        role="dialog" aria-modal="true" aria-label="Command snippet picker">
     <input bind:this={inputEl} type="text" bind:value={filter} placeholder="Search snippets..."
       onkeydown={handleKey} />
@@ -65,10 +65,8 @@
     display: flex; align-items: flex-start; justify-content: center;
     padding-top: 80px;
   }
+  /* Surface via .surface-popup; .picker keeps only its box layout. */
   .picker {
-    background: var(--bg);
-    box-shadow: var(--raised);
-    border-radius: var(--radius);
     width: 400px; max-height: 360px;
     display: flex; flex-direction: column;
     overflow: hidden;
@@ -89,7 +87,7 @@
     font-family: inherit; cursor: pointer;
     transition: background 0.1s;
   }
-  .picker-item:hover, .picker-item.focused { background: var(--surface); }
+  .picker-item:hover, .picker-item.focused { background: color-mix(in srgb, var(--text) 8%, transparent); }
   .picker-item.focused { outline: 1px solid var(--accent); outline-offset: -1px; }
   .picker-name { font-size: 13px; font-weight: 600; color: var(--text); }
   .picker-cmd { font-size: 11px; font-family: monospace; color: var(--text-sub); }
