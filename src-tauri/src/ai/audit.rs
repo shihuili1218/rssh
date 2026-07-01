@@ -41,6 +41,13 @@ pub enum AuditKind {
         id: String,
         reason: String,
     },
+    /// rssh's own safety layer refused a run_command before it ever reached the
+    /// user as an approval card (blacklist / shape validator). Distinct from
+    /// CommandRejected, which is the *user* rejecting a card.
+    CommandBlocked {
+        cmd: String,
+        reason: String,
+    },
     CommandExecuted {
         id: String,
         exit_code: i32,
@@ -54,10 +61,19 @@ pub enum AuditKind {
         remote_path: String,
         max_mb: u32,
     },
+    AnalyzeProposed {
+        id: String,
+        local_path: String,
+        task: String,
+    },
     DownloadCompleted {
         id: String,
         local_path: String,
         bytes: u64,
+    },
+    SkillLoaded {
+        id: String,
+        name: String,
     },
     Note {
         message: String,
@@ -132,6 +148,10 @@ impl AuditLog {
                 AuditKind::CommandRejected { id, reason } => {
                     s.push_str(&format!("CMD_REJECTED     id={id} reason={reason}\n"));
                 }
+                AuditKind::CommandBlocked { cmd, reason } => {
+                    s.push_str(&format!("CMD_BLOCKED      reason={reason}\n"));
+                    s.push_str(&format!("  cmd:        {cmd}\n"));
+                }
                 AuditKind::CommandExecuted {
                     id,
                     exit_code,
@@ -164,6 +184,17 @@ impl AuditLog {
                     s.push_str(&format!(
                         "DOWNLOAD_DONE    id={id} local={local_path} bytes={bytes}\n"
                     ));
+                }
+                AuditKind::AnalyzeProposed {
+                    id,
+                    local_path,
+                    task,
+                } => {
+                    s.push_str(&format!("ANALYZE_PROPOSED id={id} local={local_path}\n"));
+                    s.push_str(&format!("  task:       {task}\n"));
+                }
+                AuditKind::SkillLoaded { id, name } => {
+                    s.push_str(&format!("SKILL_LOADED     id={id} name={name}\n"));
                 }
                 AuditKind::Note { message } => {
                     s.push_str(&format!("NOTE             {message}\n"));
@@ -207,6 +238,37 @@ mod tests {
             side_effect: "只读".into(),
         });
         assert_eq!(log.entries.len(), 2);
+    }
+
+    #[test]
+    fn new_variants_serialize_with_expected_tags() {
+        // Wire contract with the front-end AuditKind union (src/lib/ai/types.ts):
+        // the panel switches on the snake_case `type` tag, so a drift here would
+        // silently drop the entry from the audit view.
+        let blocked = serde_json::to_value(AuditKind::CommandBlocked {
+            cmd: "rm -rf /".into(),
+            reason: "Destructive command not allowed: rm".into(),
+        })
+        .unwrap();
+        assert_eq!(blocked["type"], "command_blocked");
+        assert_eq!(blocked["cmd"], "rm -rf /");
+
+        let skill = serde_json::to_value(AuditKind::SkillLoaded {
+            id: "user-1".into(),
+            name: "CPU 排查".into(),
+        })
+        .unwrap();
+        assert_eq!(skill["type"], "skill_loaded");
+        assert_eq!(skill["name"], "CPU 排查");
+
+        let analyze = serde_json::to_value(AuditKind::AnalyzeProposed {
+            id: "a1".into(),
+            local_path: "/tmp/h.hprof".into(),
+            task: "find leaks".into(),
+        })
+        .unwrap();
+        assert_eq!(analyze["type"], "analyze_proposed");
+        assert_eq!(analyze["task"], "find leaks");
     }
 
     #[test]

@@ -11,6 +11,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { saveTextFile, fileStamp } from "../save-file.ts";
 import { t, locale as currentLocale } from "../i18n/index.svelte.ts";
 import { extractOutput, findSentinel } from "./pty-output.ts";
+import { truncateCommand } from "./format.ts";
 import { PROBE_COMMAND, classifyProbeBuffer } from "./shell-probe.ts";
 import { restoreTimeline } from "./timeline.ts";
 import type {
@@ -864,6 +865,18 @@ async function attachListeners(info: AiSessionInfo) {
         break;
       }
     }
+  }));
+
+  // load_skill 成功 —— 后端 emit 这个，聊天面板出一条低调的 note 气泡，告诉用户
+  // AI 加载了哪个用户技能（read-only，无审批卡片）。审计日志另有 SkillLoaded 条目。
+  u.push(await listen<{ id: string; name: string }>(`ai:skill_loaded:${tab}`, (e) => {
+    pushChat(tab, { kind: "note", text: t("ai.note.skill_loaded", { name: e.payload.name }), at: Date.now() });
+  }));
+
+  // rssh 黑名单直接拦掉命令（命令从未变成审批卡片）—— 后端 emit 这个，否则安全层
+  // 静默触发，用户只看到 AI 莫名改了方案。命令可能很长，截断显示。
+  u.push(await listen<{ cmd: string; reason: string }>(`ai:command_blocked:${tab}`, (e) => {
+    pushChat(tab, { kind: "note", text: t("ai.note.command_blocked", { cmd: truncateCommand(e.payload.cmd), reason: e.payload.reason }), at: Date.now() });
   }));
 
   u.push(await listen<{ message: string }>(`ai:error:${tab}`, (e) => {

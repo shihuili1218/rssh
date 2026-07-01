@@ -716,9 +716,16 @@ impl Actor {
                 ));
             }
         };
-        self.audit_push(AuditKind::Note {
-            message: format!("loaded user-skill: {} ({})", skill.id, skill.name),
+        self.audit_push(AuditKind::SkillLoaded {
+            id: skill.id.clone(),
+            name: skill.name.clone(),
         });
+        // Surface the skill load in the chat timeline too (audit alone is behind a
+        // toggle). A note bubble keeps it low-key — load_skill is read-only, no card.
+        self.emit(
+            "skill_loaded",
+            json!({ "id": skill.id, "name": skill.name }),
+        );
         // Skill content is operator-curated rssh-side text — already trusted
         // and free of remote secrets. Mark pre_redacted to skip re-scan.
         Ok(Self::make_tool_result(
@@ -945,6 +952,14 @@ impl Actor {
         // 审批卡片：开新窗口副作用比较大（独立窗口、独立 AI 会话、消耗一次 API 调用），
         // 走 command_proposed，前端按 kind="analyze_locally" 决策是否 auto-approve。
         let card_id = uuid::Uuid::new_v4().to_string();
+        // Audit the proposal with the task (the "prompt" handed to the spawned
+        // window's AI) — mirrors DownloadProposed. Without this, analyze_locally
+        // left no audit trail at all until the window actually opened.
+        self.audit_push(AuditKind::AnalyzeProposed {
+            id: card_id.clone(),
+            local_path: input.local_path.clone(),
+            task: input.task.clone(),
+        });
         self.emit(
             "command_proposed",
             json!({
@@ -1069,6 +1084,18 @@ impl Actor {
         };
 
         if let Err(e) = sanitize::validate_with(&input.cmd, &self.cfg.blacklist) {
+            // rssh blocked this before it ever became an approval card. Surface it
+            // in both panels (chat note + audit) — otherwise the safety layer fires
+            // silently and the user only sees the AI inexplicably change tack.
+            let reason = e.to_string();
+            self.audit_push(AuditKind::CommandBlocked {
+                cmd: input.cmd.clone(),
+                reason: reason.clone(),
+            });
+            self.emit(
+                "command_blocked",
+                json!({ "cmd": input.cmd, "reason": reason }),
+            );
             return Ok(self.make_tool_error(
                 &tc.id,
                 &format!("rssh refused the command: {e}. Try a compliant rewrite."),
