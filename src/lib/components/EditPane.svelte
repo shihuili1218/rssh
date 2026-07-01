@@ -8,6 +8,9 @@
   import { shell } from "@codemirror/legacy-modes/mode/shell";
   import { tags as t } from "@lezer/highlight";
   import * as app from "../stores/app.svelte.ts";
+  import SessionMinimap from "./SessionMinimap.svelte";
+  import SessionPreviewPopover from "./SessionPreviewPopover.svelte";
+  import { pickBroadcastText } from "../terminal/broadcast-text.ts";
 
   let { tabId }: { tabId: string } = $props();
 
@@ -33,8 +36,19 @@
   function selectAll() { selectedTabIds = new Set(sessions.map(s => s.tabId)); }
   function selectNone() { selectedTabIds = new Set(); }
 
+  // Hover preview: track which thumbnail the mouse is over + its on-screen box,
+  // so the popover can anchor to it. Cleared on mouseleave.
+  let hoveredTabId = $state<string | null>(null);
+  let hoverAnchor = $state<DOMRect | null>(null);
+  function onHover(tid: string, e: MouseEvent) {
+    hoveredTabId = tid;
+    hoverAnchor = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  }
+  function clearHover() { hoveredTabId = null; hoverAnchor = null; }
+
   function broadcast() {
-    const text = view.state.doc.toString();
+    const ranges = view.state.selection.ranges.map(r => ({ from: r.from, to: r.to }));
+    const text = pickBroadcastText(view.state.doc.toString(), ranges);
     if (!text.trim() || selectedTabIds.size === 0) return;
     app.broadcastToSessions([...selectedTabIds], text + "\n");
   }
@@ -129,11 +143,21 @@
     {:else}
       <div class="session-list">
         {#each sessions as s (s.tabId)}
-          <label class="session-item">
-            <input type="checkbox" checked={selectedTabIds.has(s.tabId)} onchange={() => toggle(s.tabId)} />
-            <span class="session-type">{s.type === "local" ? "$" : s.type === "serial" ? "⎓" : "SSH"}</span>
-            <span class="session-label">{s.label}</span>
-          </label>
+          <button
+            type="button"
+            class="session-item"
+            class:selected={selectedTabIds.has(s.tabId)}
+            onclick={() => toggle(s.tabId)}
+            onmouseenter={(e) => onHover(s.tabId, e)}
+            onmouseleave={clearHover}
+            title={s.label}
+          >
+            <SessionMinimap tabId={s.tabId} />
+            <span class="session-meta">
+              <span class="session-type">{s.type === "local" ? "$" : s.type === "serial" ? "⎓" : "SSH"}</span>
+              <span class="session-label">{s.label}</span>
+            </span>
+          </button>
         {/each}
       </div>
       <div class="select-actions">
@@ -150,6 +174,10 @@
       Broadcast ({selectedTabIds.size})
     </button>
   </div>
+
+  {#if hoveredTabId && hoverAnchor}
+    <SessionPreviewPopover tabId={hoveredTabId} anchor={hoverAnchor} />
+  {/if}
 </div>
 
 <style>
@@ -204,19 +232,37 @@
 
   .session-item {
     display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 8px;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    border: 1px solid transparent;
     border-radius: var(--radius-sm);
     cursor: pointer;
+    font-family: inherit;
     font-size: 12px;
     color: var(--text-sub);
-    transition: background 0.1s;
+    background: none;
+    text-align: left;
+    transition: background 0.1s, border-color 0.1s, box-shadow 0.1s;
   }
   .session-item:hover { background: var(--surface); color: var(--text); }
 
-  .session-item input[type="checkbox"] {
-    accent-color: var(--accent);
+  /* Selected = the codebase's halo language (see TerminalPane .block-halo):
+     a solid accent edge carries the signal, the outer glow is just gravy — so
+     selection stays legible even where WKWebView weakens box-shadow blur. */
+  .session-item.selected {
+    color: var(--text);
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    box-shadow: 0 0 0 1px var(--accent),
+                0 0 12px -2px color-mix(in srgb, var(--accent) 65%, transparent);
+  }
+
+  .session-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
   }
 
   .session-type {
@@ -227,6 +273,8 @@
   }
 
   .session-label {
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import * as ai from "../ai/store.svelte.ts";
+import type { ViewportSnapshot } from "../terminal/viewport-snapshot.ts";
 
 /* ═══════════════════════════════════════════════════════
    Platform
@@ -320,6 +321,12 @@ interface TerminalControls {
    *  see sendToTerminal. */
   sendText(text: string): void;
   focus(): void;
+  /** Read-only minimap projection of the visible viewport, for the broadcast
+   *  editor's session previews. Optional: panes that predate it just show blank. */
+  readViewport?(): ViewportSnapshot | null;
+  /** Read-only text of the visible viewport, one string per row, for the
+   *  hover preview. Optional, same as readViewport. */
+  readViewportText?(): string[] | null;
 }
 const _terminalControls = new Map<string, TerminalControls>();
 export function registerTerminalControls(tabId: string, controls: TerminalControls) {
@@ -345,6 +352,18 @@ export function sendTextToActiveTerminal(text: string) {
  *  to document.body and the user can't type until they click the terminal. */
 export function terminalFocus(tabId: string) {
   _terminalControls.get(tabId)?.focus();
+}
+
+/** Read-only viewport minimap for a tab, or null if the pane can't provide one.
+ *  Reuses the tab's existing terminal buffer — no new connection, no replay. */
+export function readTerminalViewport(tabId: string): ViewportSnapshot | null {
+  return _terminalControls.get(tabId)?.readViewport?.() ?? null;
+}
+
+/** Read-only viewport text (one string per row) for a tab's hover preview, or
+ *  null if unavailable. Reuses the tab's existing terminal buffer. */
+export function readTerminalViewportText(tabId: string): string[] | null {
+  return _terminalControls.get(tabId)?.readViewportText?.() ?? null;
 }
 
 /** Read system clipboard. On desktop, goes through Rust to bypass
