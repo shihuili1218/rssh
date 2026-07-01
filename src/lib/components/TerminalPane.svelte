@@ -15,6 +15,7 @@
     import MobileKeybar from "./MobileKeybar.svelte";
     import {registerRsshOscHandlers} from "../osc/handler.ts";
     import {createCommandBlockTracker, type CommandBlock, type CommandBlockTracker} from "../terminal/command-blocks.ts";
+    import {readViewportSnapshot, readViewportText} from "../terminal/viewport-snapshot.ts";
     import {createFoldStore, type FoldStore} from "../terminal/folds.ts";
     import {extractBlocksText} from "../terminal/block-content.ts";
     import {setupTouchScroll} from "../terminal/touch-scroll.ts";
@@ -1170,6 +1171,8 @@
             paste: pasteText,
             sendText,
             focus: () => terminal.focus(),
+            readViewport: () => readViewportSnapshot(terminal),
+            readViewportText: () => readViewportText(terminal),
         });
 
         // Copy-on-select (left-button mouseup) + right-click action (capture
