@@ -383,11 +383,11 @@
                 readonly={streaming}
             ></textarea>
             {#if streaming}
-                <button class="btn btn-stop" onclick={stopStreaming} title={t("ai.input.stop")}>
+                <button class="btn btn-sm btn-stop" onclick={stopStreaming} title={t("ai.input.stop")}>
                     {t("ai.input.stop")}
                 </button>
             {:else}
-                <button class="btn btn-primary" onclick={send} disabled={!inputText.trim() || busy}>
+                <button class="btn btn-sm btn-primary" onclick={send} disabled={!inputText.trim() || busy}>
                     {busy && !session ? t("ai.input.starting_short") : t("ai.input.send")}
                 </button>
             {/if}
@@ -450,6 +450,8 @@
     }
     .btn-primary { background: var(--accent); color: var(--white); border-color: var(--accent); }
     .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    /* Never let the composer's growing textarea stretch or squeeze the button. */
+    .btn-primary, .btn-stop { flex-shrink: 0; }
     .btn-stop {
         background: var(--error);
         color: var(--white);
@@ -648,7 +650,7 @@
     }
 
     .input-area {
-        display: flex; gap: 8px; padding: 8px;
+        display: flex; align-items: flex-end; gap: 8px; padding: 8px;
         border-top: 1px solid var(--divider);
         flex-shrink: 0;
     }
