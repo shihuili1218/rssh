@@ -1,11 +1,11 @@
 <!-- The one modal shell: scrim + centered card + dismiss behaviour. Every
-     confirm/form popup renders its content as children; the look (border +
-     flat drop shadow, theme-independent) and the close plumbing (scrim click,
-     Esc) live here once instead of being copy-pasted per component.
+     confirm/form popup renders its content as children; the close plumbing
+     (scrim click, Esc) and the surface (.surface-popup) live here once instead
+     of being copy-pasted per component.
 
-     Style is deliberately NOT tied to the shape theme's --raised/--elevation
-     tokens — those turn puffy under the neumorphism shape. A popup's lift off
-     the scrim shouldn't change with the skin. -->
+     The surface is theme-driven: .surface-popup reads --shadow-popup, which each
+     shape overrides — neu = none (the scrim separates the card), material = a
+     drop shadow, flat = a border. Context menus use the sibling .surface-menu. -->
 <script lang="ts">
     import type { Snippet } from "svelte";
     import type { HTMLAttributes } from "svelte/elements";
@@ -23,9 +23,11 @@
         children: Snippet;
     } & HTMLAttributes<HTMLDivElement> = $props();
 
-    // Esc closes only the topmost modal. Capture phase + stopPropagation so it
-    // beats app-level Esc handlers (AppShell closes the SFTP panel / drawer on
-    // Esc); without this, Esc inside a modal would also collapse what's under it.
+    // Esc closes this modal. Capture phase + stopPropagation so it beats the
+    // app-level Esc handler (AppShell closes the SFTP panel / drawer on Esc) —
+    // otherwise Esc would also collapse what's under the modal. These dialogs are
+    // mutually exclusive (never two open at once), so there's no modal stack to
+    // arbitrate; a shared window listener would be needed if that ever changes.
     $effect(() => {
         function onKey(e: KeyboardEvent) {
             if (e.key !== "Escape") return;

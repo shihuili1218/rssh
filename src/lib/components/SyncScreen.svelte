@@ -415,7 +415,7 @@
         {#if pwError}
             <div id="pw-error" class="pw-error" role="alert">{pwError}</div>
         {/if}
-        <div class="btn-row">
+        <div class="modal-actions">
             <button class="btn btn-sm" onclick={closePwDialog}>{t("common.cancel")}</button>
             <button class="btn btn-accent btn-sm" onclick={confirmPassword}>{t("common.confirm")}</button>
         </div>
