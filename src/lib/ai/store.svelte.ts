@@ -579,10 +579,15 @@ export async function executeCommand(
   // \r (not \n) is the cross-platform Enter byte: ConPTY/PowerShell only
   // accepts \r; Unix cooked PTY translates \r → \n via ICRNL. Matches the
   // byte xterm.js sends when the user presses Enter themselves.
+  // Telnet is the exception: this path writes straight to telnet_write,
+  // bypassing the pane's EOL transform, so append the NVT end-of-line
+  // (\r\n — also the telnet profile's default input_newline) or a strict
+  // telnetd never sees Enter. Serial keeps \r (its profile default is cr).
   // If invoke throws (session already closed), listener + execution are
   // already registered → must funnel through finish() to clean up, else
   // isCommandRunning() stays true forever.
-  const data = Array.from(new TextEncoder().encode(proposed.full_cmd + "\r"));
+  const enter = target_kind === "telnet" ? "\r\n" : "\r";
+  const data = Array.from(new TextEncoder().encode(proposed.full_cmd + enter));
   try {
     await invoke(writeCmd, { sessionId: target_session_id, data });
   } catch (e) {

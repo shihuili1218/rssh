@@ -37,4 +37,4 @@ store TRANSPORT/dropEcho/手动 submit、CommandConfirmDialog 提交输出按钮
 **目标**: server.rs ws 方法（telnet_open/write/resize/close）、roadmap.md 勾掉、全量测试、scoped fmt、自审 + codex 二审
 **成功标准**: cargo test --all-features + vitest 全绿
 **测试**: 全量套件
-**状态**: 未开始
+**状态**: 完成

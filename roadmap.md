@@ -5,7 +5,7 @@
 - 无活动锁定密码
 - 增加只读
 - 隐藏标题栏
-- 支持telnet ？
+- ~~支持telnet~~ ✅
 - home搜索框，改成快速连接 ？
 - home页，增加展示：按照分组、按照类型
 - 导入阿里云、aws账号资源
@@ -13,7 +13,7 @@
 - 外观字体只能控制终端，最好要控制全局字体（AI）❌
 - AI 导入～/CLAUDE.md
 - 统一图标：自绘 SVG 替换 emoji（MobileKeybar 的 ⚡/📁、SftpBrowser 的 📁🔗📄），落实 AGENT.md「图标自己画，别用emoji」
-
+- https://linux.do/t/topic/2487408/70
 
 
 ![Stars](https://img.shields.io/github/stars/shihuili1218/rssh)

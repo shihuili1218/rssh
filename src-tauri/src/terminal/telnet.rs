@@ -316,9 +316,14 @@ impl TelnetHandle {
 
     /// Report a new window size via NAWS. A no-op until the server activates
     /// the option (DO NAWS) — the size is remembered and reported then.
+    ///
+    /// The neg lock is held across the write (neg → writer, same order as the
+    /// reader thread): released between them, this report could slip in front
+    /// of the reader's in-flight activation reply and the server would keep
+    /// the stale activation size instead of this one.
     pub fn resize(&self, cols: u16, rows: u16) -> AppResult<()> {
-        let report = locked(&self.neg)?.set_size(cols, rows);
-        match report {
+        let mut neg = locked(&self.neg)?;
+        match neg.set_size(cols, rows) {
             Some(bytes) => locked(&self.writer)?
                 .write_all(&bytes)
                 .map_err(telnet_op_err),
@@ -404,17 +409,25 @@ pub fn open(host: &str, port: u16, sink: TelnetSink) -> AppResult<(String, Telne
             match reader.read(&mut buf) {
                 Ok(0) => break, // TCP EOF — peer closed the connection
                 Ok(n) => {
-                    let (data, reply) = match neg.lock() {
-                        Ok(mut neg) => neg.push(&buf[..n]),
-                        Err(_) => break, // poisoned — a writer panicked; give up
-                    };
-                    if !reply.is_empty() {
-                        // Protocol replies are pre-formed bytes — no IAC escaping.
-                        let sent = writer.lock().map(|mut w| w.write_all(&reply));
-                        if !matches!(sent, Ok(Ok(()))) {
-                            break;
+                    // neg is held across the reply write (neg → writer, same
+                    // order as resize): a concurrent resize() can't interleave
+                    // its NAWS report ahead of the activation reply it belongs
+                    // after. Same order both sides = no deadlock.
+                    let data = {
+                        let mut neg = match neg.lock() {
+                            Ok(g) => g,
+                            Err(_) => break, // poisoned — a peer panicked; give up
+                        };
+                        let (data, reply) = neg.push(&buf[..n]);
+                        if !reply.is_empty() {
+                            // Protocol replies are pre-formed bytes — no IAC escaping.
+                            let sent = writer.lock().map(|mut w| w.write_all(&reply));
+                            if !matches!(sent, Ok(Ok(()))) {
+                                break;
+                            }
                         }
-                    }
+                        data
+                    };
                     if !data.is_empty() {
                         sink(&sid, TelnetOut::Data(data));
                     }

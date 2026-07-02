@@ -1318,8 +1318,11 @@
                 // 若该 tab 有活跃 AI session 且绑的不是新 sid（== 重连后 target_id 换了），
                 // rebind 到新 sid，让 AI actor 后续的 file_ops / SFTP 走新连接。
                 // 首次连接 (sessionForTab 为 undefined) 直接 skip。
+                // Telnet rebinds too: no file_ops/SFTP, but rebind refreshes the
+                // store's cached target_id so post-reconnect internal commands
+                // don't hit the dead session (telnet_not_found).
                 const aiInfo = ai.sessionForTab(tabId);
-                if (aiInfo && aiInfo.target_id !== sid && tabType !== "serial" && tabType !== "telnet") {
+                if (aiInfo && aiInfo.target_id !== sid && tabType !== "serial") {
                     ai.rebindTarget(tabId, tabType, sid).catch((e) =>
                         console.warn("[ai] rebind on reconnect:", e),
                     );
