@@ -560,11 +560,6 @@
         color: var(--error);
     }
 
-    .dialog-title {
-        font-size: 16px;
-        color: var(--text);
-    }
-
     .pw-error {
         font-size: 12px;
         color: var(--error);

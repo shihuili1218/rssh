@@ -658,16 +658,9 @@
         font-family: inherit; font-size: 13px;
     }
 
-    /* Clear-context confirmation modal — shell lives in Modal.svelte. */
-    .dialog-title {
-        font-size: 15px;
-        font-weight: 600;
-        color: var(--text);
-    }
+    /* Clear-context confirmation modal — shell lives in Modal.svelte, typography
+       in global .dialog-title/.dialog-body; only the multi-line body is local. */
     .dialog-body {
-        font-size: 13px;
-        color: var(--text);
-        line-height: 1.55;
         white-space: pre-line;
     }
 </style>

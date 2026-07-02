@@ -371,6 +371,11 @@ input[type="radio"]:checked::after {
    instead of each popup re-declaring its own flex/justify-end/gap. */
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
+/* Dialog typography — title/body for confirm popups rendered inside Modal,
+   shared here for the same reason as .modal-actions. */
+.dialog-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.dialog-body { font-size: 13px; color: var(--text); line-height: 1.55; }
+
 /* ═══════════════════════════════════════════════════════
    Cards & Sections
    ═══════════════════════════════════════════════════════ */
