@@ -96,6 +96,14 @@ pub fn reconcile_sessions_impl(state: &AppState, active_ids: Vec<String>) -> App
         closed += before - serial.len();
     }
 
+    // Telnet —— 同 serial：drop 最后一份 handle 触发 reader 线程退出。
+    {
+        let mut telnet = locked(&state.telnet_sessions)?;
+        let before = telnet.len();
+        telnet.retain(|k, _| alive.contains(k));
+        closed += before - telnet.len();
+    }
+
     // AI 排障会话：key 也是 tab_id（与其他 session 同处 alive 集合）。不在 alive 里的
     // 先发 Stop 让 actor 退出（同 ai_session_stop），再移除——否则重载后 actor 带着
     // 死事件 sink 残留到进程退出。
@@ -171,6 +179,11 @@ pub fn close_window_sessions(state: &AppState, window_label: &str) {
     if let Ok(mut serial) = state.serial_sessions.lock() {
         for id in &ids {
             serial.remove(id);
+        }
+    }
+    if let Ok(mut telnet) = state.telnet_sessions.lock() {
+        for id in &ids {
+            telnet.remove(id);
         }
     }
     if let Ok(mut fwds) = state.active_forwards.lock() {

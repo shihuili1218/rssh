@@ -143,6 +143,7 @@ pub fn run() {
                 pty_sessions: Mutex::new(HashMap::new()),
                 #[cfg(not(target_os = "android"))]
                 serial_sessions: Mutex::new(HashMap::new()),
+                telnet_sessions: Mutex::new(HashMap::new()),
                 sftp_sessions: Mutex::new(HashMap::new()),
                 transfer_cancels: Mutex::new(HashMap::new()),
                 active_forwards: Mutex::new(HashMap::new()),
@@ -255,6 +256,11 @@ pub fn run() {
             commands::serial::update_serial_profile,
             #[cfg(not(target_os = "android"))]
             commands::serial::delete_serial_profile,
+            // Telnet (all platforms — plain TCP)
+            commands::telnet::telnet_open,
+            commands::telnet::telnet_write,
+            commands::telnet::telnet_resize,
+            commands::telnet::telnet_close,
             // SFTP
             commands::sftp::sftp_connect,
             commands::sftp::sftp_connect_session,
