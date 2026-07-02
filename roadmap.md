@@ -9,3 +9,24 @@
 - home搜索框，改成快速连接 ？
 - home页，增加展示：按照分组、按照类型
 - 导入阿里云、aws账号资源
+- AI 上下文管理，压缩、历史记忆(rag?)
+- 外观字体只能控制终端，最好要控制全局字体（AI）❌
+- AI 导入～/CLAUDE.md
+- 统一图标：自绘 SVG 替换 emoji（MobileKeybar 的 ⚡/📁、SftpBrowser 的 📁🔗📄），落实 AGENT.md「图标自己画，别用emoji」
+
+
+
+![Stars](https://img.shields.io/github/stars/shihuili1218/rssh)
+![Forks](https://img.shields.io/github/forks/shihuili1218/rssh)
+![Watchers](https://img.shields.io/github/watchers/shihuili1218/rssh)
+![Contributors](https://img.shields.io/github/contributors/shihuili1218/rssh)
+![Open Issues](https://img.shields.io/github/issues/shihuili1218/rssh)
+![Closed Issues](https://img.shields.io/github/issues-closed/shihuili1218/rssh)
+![Open PRs](https://img.shields.io/github/issues-pr/shihuili1218/rssh)
+![Last Commit](https://img.shields.io/github/last-commit/shihuili1218/rssh)
+![Commit Activity](https://img.shields.io/github/commit-activity/m/shihuili1218/rssh)
+![Commits Since Release](https://img.shields.io/github/commits-since/shihuili1218/rssh/latest)
+![Total Downloads](https://img.shields.io/github/downloads/shihuili1218/rssh/total)
+![Latest Downloads](https://img.shields.io/github/downloads/shihuili1218/rssh/latest/total)
+![Release](https://img.shields.io/github/v/release/shihuili1218/rssh)
+![Release Date](https://img.shields.io/github/release-date/shihuili1218/rssh)
