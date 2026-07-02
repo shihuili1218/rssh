@@ -120,6 +120,7 @@ describe("readViewportText", () => {
       buffer: {
         active: {
           viewportY: 0,
+          baseY: 0,
           cursorX: 0,
           cursorY: 0,
           getLine: () => ({
@@ -132,5 +133,31 @@ describe("readViewportText", () => {
       },
     };
     expect(readViewportText(src)).toEqual(["中"]);
+  });
+});
+
+describe("readViewportSnapshot wide glyphs", () => {
+  it("skips a trailing cell with width 0 in the filled grid", () => {
+    // The trailing half of a wide glyph reports width 0; it must not count as
+    // ink even if some xterm builds echo the character into it.
+    const src: ViewportSource = {
+      cols: 2,
+      rows: 1,
+      buffer: {
+        active: {
+          viewportY: 0,
+          baseY: 0,
+          cursorX: 0,
+          cursorY: 0,
+          getLine: () => ({
+            getCell: (x: number) =>
+              x === 0
+                ? { getChars: () => "中", getWidth: () => 2 }
+                : { getChars: () => "中", getWidth: () => 0 },
+          }),
+        },
+      },
+    };
+    expect([...readViewportSnapshot(src).filled]).toEqual([1, 0]);
   });
 });

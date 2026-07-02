@@ -50,7 +50,9 @@ export function readViewportSnapshot(src: ViewportSource): ViewportSnapshot {
     if (!line) continue;
     const base = r * cols;
     for (let c = 0; c < cols; c++) {
-      const chars = line.getCell(c)?.getChars() ?? "";
+      const cell = line.getCell(c);
+      if (!cell || cell.getWidth() === 0) continue; // skip empty + wide-glyph trailing cell
+      const chars = cell.getChars();
       if (chars !== "" && chars !== " ") filled[base + c] = 1;
     }
   }
