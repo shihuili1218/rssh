@@ -23,6 +23,7 @@ export interface ViewportLine {
 }
 export interface ViewportBuffer {
   viewportY: number;
+  baseY: number;
   cursorX: number;
   cursorY: number;
   getLine(y: number): ViewportLine | undefined;
@@ -54,7 +55,10 @@ export function readViewportSnapshot(src: ViewportSource): ViewportSnapshot {
     }
   }
 
-  const { cursorX: cx, cursorY: cy } = buf;
+  // Cursor row is absolute (baseY + cursorY); translate into the viewport so a
+  // scrolled-back terminal doesn't paint the dot on the wrong row.
+  const cx = buf.cursorX;
+  const cy = buf.baseY + buf.cursorY - buf.viewportY;
   const cursor = cx >= 0 && cx < cols && cy >= 0 && cy < rows ? { x: cx, y: cy } : null;
   return { cols, rows, filled, cursor };
 }

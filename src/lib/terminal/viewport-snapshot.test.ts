@@ -8,17 +8,20 @@ import { readViewportSnapshot, readViewportText, type ViewportSource } from "./v
  */
 function fakeSource(
   lines: string[],
-  opts: { cols?: number; rows?: number; cursorX?: number; cursorY?: number; viewportY?: number } = {},
+  opts: { cols?: number; rows?: number; cursorX?: number; cursorY?: number; viewportY?: number; baseY?: number } = {},
 ): ViewportSource {
   const cols = opts.cols ?? Math.max(1, ...lines.map((l) => l.length));
   const rows = opts.rows ?? lines.length;
   const viewportY = opts.viewportY ?? 0;
+  // Default baseY == viewportY models an unscrolled terminal.
+  const baseY = opts.baseY ?? viewportY;
   return {
     cols,
     rows,
     buffer: {
       active: {
         viewportY,
+        baseY,
         cursorX: opts.cursorX ?? 0,
         cursorY: opts.cursorY ?? 0,
         getLine(y: number) {
@@ -60,6 +63,22 @@ describe("readViewportSnapshot", () => {
 
   it("returns null cursor when out of range", () => {
     const snap = readViewportSnapshot(fakeSource(["xy"], { cols: 2, cursorX: 0, cursorY: 5 }));
+    expect(snap.cursor).toBeNull();
+  });
+
+  it("maps the cursor by absolute row (baseY+cursorY) when scrolled", () => {
+    // viewport shows absolute rows 8..10; cursor absolute row = baseY+cursorY = 10 -> viewport row 2
+    const snap = readViewportSnapshot(
+      fakeSource(["r0", "r1", "r2"], { cols: 2, rows: 3, viewportY: 8, baseY: 10, cursorX: 1, cursorY: 0 }),
+    );
+    expect(snap.cursor).toEqual({ x: 1, y: 2 });
+  });
+
+  it("returns null cursor when scrolled out of the viewport", () => {
+    // cursor absolute row = 10, but viewport shows rows 0..2
+    const snap = readViewportSnapshot(
+      fakeSource(["r0", "r1", "r2"], { cols: 2, rows: 3, viewportY: 0, baseY: 10, cursorX: 0, cursorY: 0 }),
+    );
     expect(snap.cursor).toBeNull();
   });
 

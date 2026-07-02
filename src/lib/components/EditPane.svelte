@@ -147,6 +147,7 @@
             type="button"
             class="session-item"
             class:selected={selectedTabIds.has(s.tabId)}
+            aria-pressed={selectedTabIds.has(s.tabId)}
             onclick={() => toggle(s.tabId)}
             onmouseenter={(e) => onHover(s.tabId, e)}
             onmouseleave={clearHover}
