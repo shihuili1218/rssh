@@ -63,11 +63,11 @@ pub fn update(db: &Db, g: &Group) -> AppResult<()> {
 }
 
 pub fn delete(db: &Db, id: &str) -> AppResult<()> {
-    // 删 group + 清所有指向它的 group_id 必须原子。三张表都引用 groups：
-    // profiles（v10）、forwards（v20）、serial_profiles（v20）。漏清任一张，
-    // 该表的行就留悬空 group_id —— UI 当未分组显示（看着没事），但"按分组同步"
-    // 的过滤里悬空 id 既不匹配任何现存组、也不等于未分组哨兵 ""，于是永久漏同步。
-    // 中途崩 = 残留行指向已删 group，所以包进单事务。
+    // 删 group + 清所有指向它的 group_id 必须原子。四张表都引用 groups：
+    // profiles（v10）、forwards（v20）、serial_profiles（v20）、telnet_profiles（v22）。
+    // 漏清任一张，该表的行就留悬空 group_id —— UI 当未分组显示（看着没事），但
+    // "按分组同步"的过滤里悬空 id 既不匹配任何现存组、也不等于未分组哨兵 ""，
+    // 于是永久漏同步。中途崩 = 残留行指向已删 group，所以包进单事务。
     db.with_transaction(|tx| {
         tx.execute("DELETE FROM groups WHERE id = ?1", params![id])?;
         tx.execute(
@@ -80,6 +80,10 @@ pub fn delete(db: &Db, id: &str) -> AppResult<()> {
         )?;
         tx.execute(
             "UPDATE serial_profiles SET group_id = NULL WHERE group_id = ?1",
+            params![id],
+        )?;
+        tx.execute(
+            "UPDATE telnet_profiles SET group_id = NULL WHERE group_id = ?1",
             params![id],
         )?;
         Ok(())
@@ -182,12 +186,13 @@ mod tests {
         assert!(profile::get(&db, "p3").unwrap().group_id.is_none());
     }
 
-    /// R1 regression: forwards (v20) and serial_profiles (v20) also carry
-    /// group_id. delete() must NULL theirs too — not just profiles' — else the
-    /// rows keep a dangling group_id that "sync by group" silently skips forever
-    /// (it matches no existing group and isn't the "ungrouped" sentinel either).
+    /// R1 regression: forwards (v20), serial_profiles (v20) and telnet_profiles
+    /// (v22) also carry group_id. delete() must NULL theirs too — not just
+    /// profiles' — else the rows keep a dangling group_id that "sync by group"
+    /// silently skips forever (it matches no existing group and isn't the
+    /// "ungrouped" sentinel either).
     #[test]
-    fn delete_clears_dependent_forward_and_serial_group_ids() {
+    fn delete_clears_dependent_forward_serial_and_telnet_group_ids() {
         let db = Db::open_in_memory().unwrap();
         insert(&db, &mk_group("g1", "prod")).unwrap();
         {
@@ -201,6 +206,12 @@ mod tests {
             conn.execute(
                 "INSERT INTO serial_profiles (id, name, port, group_id) \
                  VALUES ('s1', 'ser1', '/dev/ttyUSB0', 'g1')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO telnet_profiles (id, name, host, group_id) \
+                 VALUES ('t1', 'tel1', '10.0.0.1', 'g1')",
                 [],
             )
             .unwrap();
@@ -221,8 +232,16 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
+        let tel_group: Option<String> = conn
+            .query_row(
+                "SELECT group_id FROM telnet_profiles WHERE id = 't1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(fwd_group, None);
         assert_eq!(ser_group, None);
+        assert_eq!(tel_group, None);
     }
 
     #[test]
