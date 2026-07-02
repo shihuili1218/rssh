@@ -150,6 +150,41 @@ pub struct SerialProfile {
     pub group_id: Option<String>,
 }
 
+/// Saved telnet endpoint — a peer of `SerialProfile`: no secret, no FK. Login
+/// happens in-band (the server's own login:/Password: prompts, optionally
+/// scripted via `login_script`), so unlike SSH profiles there is nothing to
+/// link to `credentials`. Only the line-discipline knobs that make sense for
+/// a telnet NVT — no baud/parity/hex/slow_send (UART-isms).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelnetProfile {
+    pub id: String,
+    pub name: String,
+    pub host: String,
+    #[serde(default = "default_telnet_port")]
+    pub port: u16,
+    /// What Enter sends. Default crlf — RFC 854's NVT end-of-line.
+    #[serde(default = "default_telnet_input_newline")]
+    pub input_newline: String, // cr | lf | crlf
+    #[serde(default = "default_output_newline")]
+    pub output_newline: String, // raw | cr | lf | crlf — incoming → CRLF normalization
+    #[serde(default)]
+    pub local_echo: bool,
+    #[serde(default = "default_backspace")]
+    pub backspace: String, // del | bs | csi3 — what Backspace/Delete sends
+    #[serde(default)]
+    pub login_script: String, // expect/send lines, run on connect
+    /// Optional group membership — same `groups` table as profiles/forwards.
+    #[serde(default)]
+    pub group_id: Option<String>,
+}
+
+fn default_telnet_port() -> u16 {
+    23
+}
+fn default_telnet_input_newline() -> String {
+    "crlf".into()
+}
+
 fn default_input_newline() -> String {
     "cr".into()
 }

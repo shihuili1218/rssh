@@ -9,7 +9,7 @@
 （telnet_open/write/resize/close）、state/lifecycle/lib.rs 接线
 **成功标准**: cargo test 绿；协商状态机纯函数可测（ECHO/SGA/NAWS/TTYPE/BINARY、IAC 转义、拒绝未知选项、防协商环）
 **测试**: 状态机单测 + 127.0.0.1 loopback 集成测试（脚本化 telnet server）
-**状态**: 未开始
+**状态**: 完成
 
 ## 第 2 阶段：TelnetProfile 持久化
 **目标**: models.rs `TelnetProfile`（host/port + input_newline=crlf/output_newline/local_echo/backspace/login_script/group_id，
@@ -17,7 +17,7 @@
 commands CRUD、sync/config.rs 导入导出
 **成功标准**: cargo test 绿，含 db roundtrip 测试；sync 导出含 telnet_profiles
 **测试**: 仿 db/serial_profile.rs 测试集
-**状态**: 未开始
+**状态**: 完成
 
 ## 第 3 阶段：前端接入
 **目标**: TabType 加 "telnet"、TerminalPane TRANSPORT 表 + open 分支 + 复用串口行变换管线（EOL/backspace/login_script）、

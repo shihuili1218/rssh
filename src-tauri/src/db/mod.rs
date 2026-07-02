@@ -12,6 +12,7 @@ pub mod secret;
 pub mod serial_profile;
 pub mod settings;
 pub mod snippet;
+pub mod telnet_profile;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};

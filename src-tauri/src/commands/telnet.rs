@@ -1,6 +1,7 @@
 use tauri::{AppHandle, Emitter, State};
 
 use crate::error::{locked, AppError, AppResult};
+use crate::models::TelnetProfile;
 use crate::state::AppState;
 use crate::terminal::telnet;
 
@@ -74,4 +75,31 @@ pub fn telnet_close(state: State<'_, AppState>, session_id: String) -> AppResult
     crate::commands::lifecycle::unregister_window_session(&state, &session_id);
     locked(&state.telnet_sessions)?.remove(&session_id);
     Ok(())
+}
+
+// ── Saved telnet profiles (peer of serial profiles; SQLite-persisted CRUD) ──
+
+#[tauri::command]
+pub fn list_telnet_profiles(state: State<'_, AppState>) -> AppResult<Vec<TelnetProfile>> {
+    crate::db::telnet_profile::list(&state.db)
+}
+
+#[tauri::command]
+pub fn get_telnet_profile(state: State<'_, AppState>, id: String) -> AppResult<TelnetProfile> {
+    crate::db::telnet_profile::get(&state.db, &id)
+}
+
+#[tauri::command]
+pub fn create_telnet_profile(state: State<'_, AppState>, profile: TelnetProfile) -> AppResult<()> {
+    crate::db::telnet_profile::insert(&state.db, &profile)
+}
+
+#[tauri::command]
+pub fn update_telnet_profile(state: State<'_, AppState>, profile: TelnetProfile) -> AppResult<()> {
+    crate::db::telnet_profile::update(&state.db, &profile)
+}
+
+#[tauri::command]
+pub fn delete_telnet_profile(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    crate::db::telnet_profile::delete(&state.db, &id)
 }

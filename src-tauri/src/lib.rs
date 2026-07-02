@@ -261,6 +261,11 @@ pub fn run() {
             commands::telnet::telnet_write,
             commands::telnet::telnet_resize,
             commands::telnet::telnet_close,
+            commands::telnet::list_telnet_profiles,
+            commands::telnet::get_telnet_profile,
+            commands::telnet::create_telnet_profile,
+            commands::telnet::update_telnet_profile,
+            commands::telnet::delete_telnet_profile,
             // SFTP
             commands::sftp::sftp_connect,
             commands::sftp::sftp_connect_session,

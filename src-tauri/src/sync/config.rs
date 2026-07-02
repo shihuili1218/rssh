@@ -15,7 +15,8 @@
 //! Accepts a `serde_json::Value` of the shape:
 //! ```json
 //! { "version": 1, "profiles": [..], "credentials": [..],
-//!   "forwards": [..], "serial_profiles": [..], "groups": [..], "skills": [..] }
+//!   "forwards": [..], "serial_profiles": [..], "telnet_profiles": [..],
+//!   "groups": [..], "skills": [..] }
 //! ```
 //! A missing top-level key means "that category was not synced" → the
 //! corresponding local table is left untouched.
@@ -26,9 +27,13 @@ use serde_json::{json, Value};
 
 use crate::db::ai_command_blacklist::{self, BlacklistRow};
 use crate::db::ai_redact_rule::{self, RedactRuleRow};
-use crate::db::{credential, forward, group, highlight, profile, serial_profile, snippet, Db};
+use crate::db::{
+    credential, forward, group, highlight, profile, serial_profile, snippet, telnet_profile, Db,
+};
 use crate::error::{AppError, AppResult};
-use crate::models::{Credential, Forward, Group, HighlightRule, Profile, SerialProfile, Snippet};
+use crate::models::{
+    Credential, Forward, Group, HighlightRule, Profile, SerialProfile, Snippet, TelnetProfile,
+};
 use crate::secret::{cred_secret_key, SecretStore};
 
 /// Structured record of a failed item. `aggregate_failure` serializes the whole
@@ -157,6 +162,26 @@ pub fn merge_import(db: &Db, ss: &dyn SecretStore, data_dir: &Path, data: &Value
                 }
                 Err(_) => errors.push(ImportError {
                     kind: "serial_profile",
+                    name: None,
+                    code: "parse_failed".into(),
+                }),
+            }
+        }
+    }
+    if let Some(arr) = data["telnet_profiles"].as_array() {
+        for item in arr {
+            match serde_json::from_value::<TelnetProfile>(item.clone()) {
+                Ok(t) => {
+                    if let Err(e) = telnet_profile::insert(db, &t) {
+                        errors.push(ImportError {
+                            kind: "telnet_profile",
+                            name: Some(t.name),
+                            code: e.code().to_string(),
+                        });
+                    }
+                }
+                Err(_) => errors.push(ImportError {
+                    kind: "telnet_profile",
                     name: None,
                     code: "parse_failed".into(),
                 }),
@@ -497,6 +522,9 @@ pub fn build_payload(
     let mut serials = serial_profile::list(db)?;
     retain_by_groups(&mut serials, prefs, |s| s.group_id.as_deref());
     out.insert("serial_profiles".into(), to_val(serials)?);
+    let mut telnets = telnet_profile::list(db)?;
+    retain_by_groups(&mut telnets, prefs, |t| t.group_id.as_deref());
+    out.insert("telnet_profiles".into(), to_val(telnets)?);
     if on(|p| p.skills) {
         out.insert("skills".into(), to_val(crate::ai::skills::list_user(db)?)?);
     }
@@ -711,6 +739,55 @@ mod tests {
 
         let serials = serial_profile::list(&db).unwrap();
         assert!(serials.iter().any(|s| s.id == "s1"), "local serial kept");
+    }
+
+    fn telnet(id: &str, name: &str) -> TelnetProfile {
+        TelnetProfile {
+            id: id.into(),
+            name: name.into(),
+            host: "10.0.0.1".into(),
+            port: 23,
+            input_newline: "crlf".into(),
+            output_newline: "raw".into(),
+            local_echo: false,
+            backspace: "del".into(),
+            login_script: String::new(),
+            group_id: None,
+        }
+    }
+
+    #[test]
+    fn merge_missing_telnet_key_keeps_local() {
+        // payload without a telnet_profiles key must not touch local telnet rows.
+        let (db, ss, dir) = fixture();
+        telnet_profile::insert(&db, &telnet("t1", "Switch")).unwrap();
+
+        let data = payload(json!({ "version": 1, "profiles": [] }));
+        merge_import(&db, &ss, dir.path(), &data).unwrap();
+
+        let telnets = telnet_profile::list(&db).unwrap();
+        assert!(telnets.iter().any(|t| t.id == "t1"), "local telnet kept");
+    }
+
+    #[test]
+    fn merge_imports_telnet_profiles() {
+        let (db, ss, dir) = fixture();
+        let data = payload(json!({
+            "version": 1,
+            "telnet_profiles": [serde_json::to_value(telnet("t1", "Switch")).unwrap()],
+        }));
+        merge_import(&db, &ss, dir.path(), &data).unwrap();
+        assert_eq!(telnet_profile::get(&db, "t1").unwrap().name, "Switch");
+    }
+
+    #[test]
+    fn export_includes_telnet_profiles() {
+        let (db, ss, dir) = fixture();
+        telnet_profile::insert(&db, &telnet("t1", "Switch")).unwrap();
+        let out = build_payload(&db, &ss, dir.path(), &ExportMode::LocalBackup).unwrap();
+        let arr = out["telnet_profiles"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["name"], "Switch");
     }
 
     // ── Phase 2: the five new categories ──────────────────────────────
