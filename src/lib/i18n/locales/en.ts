@@ -943,6 +943,10 @@ const en = {
   "settings.shell.right_click_menu": "System menu (default)",
   "settings.shell.right_click_paste": "Paste",
   "settings.shell.right_click_copy_paste": "Copy if selected, otherwise paste",
+  "settings.shell.right_click_confirm_title": "Turn off the right-click menu?",
+  "settings.shell.right_click_confirm_body": "Right-clicking the terminal will “{action}” directly and the system menu will no longer open. That menu is the entry point for many features — make sure you know their shortcuts.",
+  "settings.shell.right_click_confirm_hint": "You can switch back to the system menu here anytime; shortcuts can be customized on the Shortcuts page.",
+  "settings.shell.right_click_confirm_ok": "Change it",
   // CLI settings
   "settings.cli.installed": "Installed",
   "settings.cli.installed_to": "Installed to {path}",

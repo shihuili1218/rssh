@@ -5,6 +5,7 @@
   import * as transfers from "../stores/transfers.svelte.ts";
   import { t } from "../i18n/index.svelte.ts";
   import Select from "./Select.svelte";
+  import Modal from "./Modal.svelte";
 
   let shells = $state<string[]>([]);
   let selectedShell = $state("");
@@ -107,8 +108,29 @@
     await app.setConfirmCloseTab(confirmCloseTab);
   }
 
+  /** Right-click change awaiting confirmation — non-null opens the dialog.
+   *  Only leaving "menu" needs one: that transition hides the system menu
+   *  (the copy/paste entry point); every other switch changes nothing visible. */
+  let pendingRightClick = $state<app.RightClickAction | null>(null);
+
   function saveRightClickAction(v: app.RightClickAction) {
+    if (v !== "menu" && app.rightClickAction() === "menu") {
+      pendingRightClick = v;
+      return;
+    }
     void app.setRightClickAction(v);
+  }
+
+  function confirmRightClick() {
+    if (pendingRightClick) void app.setRightClickAction(pendingRightClick);
+    pendingRightClick = null;
+  }
+
+  /** bind:value already moved the select; put it back to the committed "menu"
+   *  (the dialog only ever opens while the committed value is "menu"). */
+  function cancelRightClick() {
+    rightClickAction = "menu";
+    pendingRightClick = null;
   }
 
   async function saveSftpMaxConcurrent() {
@@ -245,6 +267,22 @@
       </div>
     </div>
   </div>
+
+  <!-- Leaving "menu" hides the system right-click menu (entry point for many
+       features), so it needs an explicit confirm before committing. -->
+  {#if pendingRightClick}
+    {@const actionLabel = rightClickOptions.find((o) => o.value === pendingRightClick)?.label ?? ""}
+    <Modal onClose={cancelRightClick} class="stack"
+           aria-labelledby="rca-confirm-title" aria-describedby="rca-confirm-body">
+      <h3 id="rca-confirm-title" class="dialog-title">{t("settings.shell.right_click_confirm_title")}</h3>
+      <div id="rca-confirm-body" class="dialog-body">{t("settings.shell.right_click_confirm_body", { action: actionLabel })}</div>
+      <div class="dialog-hint">{t("settings.shell.right_click_confirm_hint")}</div>
+      <div class="modal-actions">
+        <button class="btn btn-sm" onclick={cancelRightClick}>{t("common.cancel")}</button>
+        <button class="btn btn-sm btn-primary" onclick={confirmRightClick}>{t("settings.shell.right_click_confirm_ok")}</button>
+      </div>
+    </Modal>
+  {/if}
 
 </div>
 
@@ -443,5 +481,23 @@
     height: 1px;
     background: var(--divider);
     margin: 2px -18px;
+  }
+
+  /* Right-click confirm dialog — shell (scrim + card) comes from Modal.svelte;
+     .dialog-title/.dialog-body mirror the close-tab confirm in AppShell. */
+  .dialog-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .dialog-body {
+    font-size: 13px;
+    color: var(--text);
+    line-height: 1.55;
+  }
+  .dialog-hint {
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.5;
   }
 </style>

@@ -946,6 +946,10 @@ const zh: Messages = {
   "settings.shell.right_click_menu": "系统菜单（默认）",
   "settings.shell.right_click_paste": "粘贴",
   "settings.shell.right_click_copy_paste": "有选区则复制，否则粘贴",
+  "settings.shell.right_click_confirm_title": "关闭右键菜单？",
+  "settings.shell.right_click_confirm_body": "右键终端将直接「{action}」，不再弹出系统菜单，系统菜单包含了很多特色功能的入口，请确保你足够熟悉它们的快捷键。",
+  "settings.shell.right_click_confirm_hint": "本设置随时可改回「系统菜单」；快捷键可在「快捷键」页自定义。",
+  "settings.shell.right_click_confirm_ok": "确认更改",
   // CLI 设置
   "settings.cli.installed": "已安装",
   "settings.cli.installed_to": "已安装到 {path}",
