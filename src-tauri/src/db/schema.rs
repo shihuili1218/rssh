@@ -339,24 +339,38 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
 
     if version < 21 {
         // Highlight rules unify on regex: the text/regex split is gone and names
-        // are required. Convert every legacy plain-text rule (is_regex=0) into the
-        // equivalent regex by escaping its keyword (matching stays byte-for-byte
-        // unchanged: C++ -> C\+\+, $HOME -> \$HOME), and seed an empty name from
-        // the ORIGINAL keyword so the rule keeps a readable label. Idempotent:
-        // afterwards no is_regex=0 row remains.
-        let stale: Vec<(i64, String, String)> = {
-            let mut stmt =
-                conn.prepare("SELECT id, keyword, name FROM highlights WHERE is_regex = 0")?;
+        // are required. Two orthogonal fixups, applied to every row needing either
+        // — matching stays byte-for-byte unchanged:
+        //   - is_regex=0 (legacy plain text): escape the keyword into the
+        //     equivalent regex (C++ -> C\+\+, $HOME -> \$HOME) and set is_regex=1.
+        //     An already-regex keyword is NEVER re-escaped.
+        //   - name='' (a nameless rule from before names were required — plain OR
+        //     regex, the latter created between v18 and this release): seed the
+        //     name from the ORIGINAL keyword so it keeps a readable label and
+        //     passes the editor's now-required-name check.
+        // Idempotent: afterwards every row has is_regex=1 and a non-empty name, so
+        // the WHERE matches nothing on a second run.
+        let stale: Vec<(i64, String, String, bool)> = {
+            let mut stmt = conn.prepare(
+                "SELECT id, keyword, name, is_regex FROM highlights \
+                 WHERE is_regex = 0 OR trim(name) = ''",
+            )?;
             let rows = stmt.query_map([], |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, String>(2)?,
+                    r.get::<_, bool>(3)?,
                 ))
             })?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
-        for (id, keyword, name) in stale {
+        for (id, keyword, name, is_regex) in stale {
+            let new_keyword = if is_regex {
+                keyword.clone()
+            } else {
+                crate::db::highlight::regex_escape(&keyword)
+            };
             let new_name = if name.trim().is_empty() {
                 keyword.clone()
             } else {
@@ -364,7 +378,7 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
             };
             conn.execute(
                 "UPDATE highlights SET keyword = ?1, name = ?2, is_regex = 1 WHERE id = ?3",
-                params![crate::db::highlight::regex_escape(&keyword), new_name, id],
+                params![new_keyword, new_name, id],
             )?;
         }
     }
@@ -434,5 +448,54 @@ mod tests {
             )
             .unwrap();
         assert_eq!(zeros, 0);
+    }
+
+    #[test]
+    fn migration_21_seeds_names_for_nameless_regex_highlights() {
+        // A regex rule created between v18 (is_regex added) and the required-name
+        // UI: is_regex=1 but name='' (v19's default). v21 must seed its name from
+        // the keyword too — otherwise the row survives with a blank name and the
+        // editor's validateHighlightRule rejects it. The keyword is ALREADY a
+        // regex pattern, so it must NOT be re-escaped.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE highlights (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                keyword TEXT NOT NULL,
+                name TEXT NOT NULL DEFAULT '',
+                color TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                is_regex INTEGER NOT NULL DEFAULT 0,
+                is_case_sensitive INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO highlights (keyword, name, color, enabled, is_regex) VALUES ('\\d+', '', '#0f0', 1, 1);
+            INSERT INTO highlights (keyword, name, color, enabled, is_regex) VALUES ('\\w+', 'words', '#00f', 1, 1);",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 20u32).unwrap();
+
+        migrate(&conn).unwrap();
+
+        // Nameless regex rule: name seeded from keyword, keyword left intact.
+        let (kw, name, isr): (String, String, bool) = conn
+            .query_row(
+                "SELECT keyword, name, is_regex FROM highlights WHERE color = '#0f0'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(kw, r"\d+", "existing regex keyword must not be re-escaped");
+        assert_eq!(name, r"\d+", "empty name seeded from the keyword");
+        assert!(isr);
+
+        // A regex rule that already had a name is left completely untouched.
+        let kw2: String = conn
+            .query_row(
+                "SELECT keyword FROM highlights WHERE name = 'words'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kw2, r"\w+");
     }
 }

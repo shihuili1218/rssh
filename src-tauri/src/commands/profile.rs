@@ -110,6 +110,11 @@ pub fn read_ssh_config_default() -> AppResult<Vec<SshConfigEntry>> {
 /// 与前端 `CredentialEditor.svelte` 的 DEFAULT_KEY_NAMES 保持一致。
 const ALLOWED_DEFAULT_KEYS: &[&str] = &["id_rsa", "id_ed25519"];
 
+/// A real private key is a few KB; anything past 1 MiB is not a key. Matches the
+/// webview pick-file path's cap so both key-import routes reject oversized files
+/// identically (see `pickTextFile({ maxBytes })` in the frontend).
+const MAX_KEY_FILE_BYTES: u64 = 1024 * 1024;
+
 /// 读 `~/.ssh/<name>` 私钥文件原文，供"快速填充默认密钥"用。
 /// name 必须在 `ALLOWED_DEFAULT_KEYS` 白名单内，否则拒绝。
 /// 文件不存在 → not_found，让前端给友好提示而不是 IO 噪声。
@@ -120,12 +125,30 @@ pub fn read_default_key_file(name: String) -> AppResult<String> {
     }
     let home =
         dirs::home_dir().ok_or_else(|| AppError::other("home_dir_unavailable", json!({})))?;
-    let path = home.join(".ssh").join(&name);
-    match std::fs::read_to_string(&path) {
+    read_key_file_capped(&home.join(".ssh").join(&name), &format!("~/.ssh/{name}"))
+}
+
+/// Read a key file's text. Split out from the command so the cap / not-found
+/// logic is unit-testable without a real `~/.ssh`. `display` is the user-facing
+/// path shown on not_found (`~/.ssh/id_rsa`), kept separate from the real fs
+/// path so the error message stays the friendly relative form.
+fn read_key_file_capped(path: &std::path::Path, display: &str) -> AppResult<String> {
+    // Cap before slurping into memory. metadata() follows symlinks, matching
+    // read_to_string; a stat failure (missing / permission) yields 0 here and
+    // falls through to the read below, which maps NotFound → key_file_not_found
+    // and other IO → io_error, so the not-found path keeps its friendly message.
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if size > MAX_KEY_FILE_BYTES {
+        return Err(AppError::other(
+            "key_file_too_large",
+            json!({ "size": size }),
+        ));
+    }
+    match std::fs::read_to_string(path) {
         Ok(c) => Ok(c),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(AppError::not_found(
             "key_file_not_found",
-            json!({ "path": format!("~/.ssh/{name}") }),
+            json!({ "path": display }),
         )),
         Err(e) => Err(e.into()),
     }
@@ -531,5 +554,36 @@ mod tests {
             5
         };
         assert_eq!(res.credentials_created, expected);
+    }
+
+    #[test]
+    fn read_key_file_capped_reads_a_normal_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("id_rsa");
+        std::fs::write(&path, "PEM-CONTENT").unwrap();
+        assert_eq!(
+            read_key_file_capped(&path, "~/.ssh/id_rsa").unwrap(),
+            "PEM-CONTENT"
+        );
+    }
+
+    #[test]
+    fn read_key_file_capped_rejects_oversized_file() {
+        // One byte past the 1 MiB cap — too big to be a private key, so it must
+        // be rejected before it is slurped into memory. Mirrors the webview
+        // pick-file path's guard so both key-import routes behave identically.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("id_rsa");
+        std::fs::write(&path, vec![b'x'; 1024 * 1024 + 1]).unwrap();
+        let err = read_key_file_capped(&path, "~/.ssh/id_rsa").unwrap_err();
+        assert_eq!(err.code(), "key_file_too_large");
+    }
+
+    #[test]
+    fn read_key_file_capped_reports_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("id_rsa");
+        let err = read_key_file_capped(&path, "~/.ssh/id_rsa").unwrap_err();
+        assert_eq!(err.code(), "key_file_not_found");
     }
 }
