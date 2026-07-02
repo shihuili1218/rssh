@@ -1,13 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as app from "../stores/app.svelte.ts";
-  import type { Profile, Credential, Forward, Group, SerialProfile } from "../stores/app.svelte.ts";
+  import type { Profile, Credential, Forward, Group, SerialProfile, TelnetProfile } from "../stores/app.svelte.ts";
 
   let profiles = $state<Profile[]>([]);
   let credentials = $state<Credential[]>([]);
   let forwards = $state<Forward[]>([]);
   let groups = $state<Group[]>([]);
   let serialProfiles = $state<SerialProfile[]>([]);
+  let telnetProfiles = $state<TelnetProfile[]>([]);
   let query = $state("");
 
   // One global nav index into the flat (display-order) item list.
@@ -16,20 +17,20 @@
   // column count. Plain array (not $state): only read inside the key handler.
   let gridEls: HTMLDivElement[] = [];
 
-  // ── Normalize the three config kinds into one shape ──────────────────────
-  // SSH profiles, port forwards and serial profiles all become a HomeItem, so a
-  // single grouping / filtering / keyboard-nav path covers them — no per-kind
-  // sections, no special cases. `kind` + the icon are all that set them apart.
+  // ── Normalize the config kinds into one shape ─────────────────────────────
+  // SSH profiles, port forwards, serial and telnet profiles all become a
+  // HomeItem, so a single grouping / filtering / keyboard-nav path covers them
+  // — no per-kind sections, no special cases. `kind` + the icon set them apart.
   interface HomeItem {
-    kind: "ssh" | "forward" | "serial";
+    kind: "ssh" | "forward" | "serial" | "telnet";
     id: string; // `${kind}:${rawId}` — globally unique for keyed #each + nav
     rawId: string;
     name: string;
     sub: string;
     icon: string;
-    iconClass: string; // "" | "fwd" | "serial"
+    iconClass: string; // "" | "fwd" | "serial" | "telnet"
     group_id: string | null;
-    data: Profile | Forward | SerialProfile;
+    data: Profile | Forward | SerialProfile | TelnetProfile;
   }
 
   let allItems = $derived<HomeItem[]>([
@@ -51,6 +52,11 @@
       kind: "serial", id: `serial:${s.id}`, rawId: s.id, name: s.name,
       sub: `${s.port} · ${s.baud_rate}`,
       icon: "⎓", iconClass: "serial", group_id: s.group_id ?? null, data: s,
+    })),
+    ...telnetProfiles.map((tp): HomeItem => ({
+      kind: "telnet", id: `telnet:${tp.id}`, rawId: tp.id, name: tp.name,
+      sub: `${tp.host}:${tp.port}`,
+      icon: "T", iconClass: "telnet", group_id: tp.group_id ?? null, data: tp,
     })),
   ]);
 
@@ -171,14 +177,16 @@
   });
 
   async function refresh() {
-    [profiles, credentials, forwards, groups, serialProfiles] = await Promise.all([
-      app.loadProfiles(), app.loadCredentials(), app.loadForwards(), app.loadGroups(), app.loadSerialProfiles(),
+    [profiles, credentials, forwards, groups, serialProfiles, telnetProfiles] = await Promise.all([
+      app.loadProfiles(), app.loadCredentials(), app.loadForwards(), app.loadGroups(),
+      app.loadSerialProfiles(), app.loadTelnetProfiles(),
     ]);
   }
 
   function activate(it: HomeItem) {
     if (it.kind === "ssh") connectProfile(it.data as Profile);
     else if (it.kind === "forward") openForward(it.data as Forward);
+    else if (it.kind === "telnet") app.connectTelnetProfile(it.data as TelnetProfile);
     else app.connectSerialProfile(it.data as SerialProfile);
   }
 
@@ -312,6 +320,7 @@
   }
   .card-icon.fwd { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
   .card-icon.serial { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
+  .card-icon.telnet { background: color-mix(in srgb, var(--purple) 15%, transparent); color: var(--purple); }
 
   .card-body { flex: 1; min-width: 0; }
   .card-name { font-weight: 600; font-size: 14px; color: var(--text); margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

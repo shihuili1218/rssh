@@ -95,7 +95,8 @@
                 match: e => matchBinding(e, keymap.binding("tab.openNewWindow")),
                 handler: () => {
                     const tab = app.activeTab();
-                    if (!tab || (tab.type !== "ssh" && tab.type !== "local") || app.isMobile) return false;
+                    // serial excluded: the port is exclusive, a second window would fail.
+                    if (!tab || (tab.type !== "ssh" && tab.type !== "local" && tab.type !== "telnet") || app.isMobile) return false;
                     openInNewWindow(tab);
                 },
             },
@@ -109,7 +110,7 @@
                     // (mirrors MobileKeybar's canOpenAi guard).
                     if (ai.isOpen()) { ai.closePanel(); return; }
                     const tab = app.activeTab();
-                    const canOpen = !!tab && (tab.type === "ssh" || tab.type === "local" || tab.type === "serial") && !!app.sessionIdForTab(tab.id);
+                    const canOpen = !!tab && app.isTerminalTabType(tab.type) && !!app.sessionIdForTab(tab.id);
                     if (!canOpen) return false;
                     ai.openPanel();
                 },
@@ -325,7 +326,7 @@
     let aiVisible = $derived(
         ai.isOpen()
         && !!aiActiveTab
-        && (aiActiveTab.type === "ssh" || aiActiveTab.type === "local" || aiActiveTab.type === "serial")
+        && app.isTerminalTabType(aiActiveTab.type)
         && !!aiSessionId
         && !app.settingsActive()
         // The Transfers popover does not affect AI panel visibility — overlay.
@@ -639,11 +640,12 @@
 
     function buildMenu(tab: Tab): CtxMenuItem[][] {
         const isTerminal = tab.type === "ssh" || tab.type === "local";
-        // Serial is also a text terminal — it gets copy/paste/search/snippets AND
-        // AI (the agent runs commands via manual-submit, no shell sentinel). It does
-        // NOT get open-in-new-window: a serial port is exclusive — a second window
-        // opening the same device would fail.
-        const isTextTerminal = isTerminal || tab.type === "serial";
+        // Serial and telnet are also text terminals — they get copy/paste/search/
+        // snippets AND AI (the agent runs commands via manual-submit, no shell
+        // sentinel). Serial does NOT get open-in-new-window: a serial port is
+        // exclusive — a second window opening the same device would fail. Telnet
+        // has no such exclusivity (each window is its own TCP connection).
+        const isTextTerminal = app.isTerminalTabType(tab.type);
         const isSsh = tab.type === "ssh";
         const sections: CtxMenuItem[][] = [];
 
@@ -779,7 +781,7 @@
         }
 
         // Multi-window requires Tauri WebviewWindowBuilder — desktop only.
-        if (isTerminal && !app.isMobile) {
+        if ((isTerminal || tab.type === "telnet") && !app.isMobile) {
             sections.push([
                 {
                     label: t("tab.context.open_new_window"),
@@ -1033,7 +1035,7 @@
                      oncontextmenu={app.isMobile ? undefined : (e) => openCtxMenu(e, tab)}>
                     {#if tab.type === "home"}
                         <HomeScreen/>
-                    {:else if tab.type === "ssh" || tab.type === "local" || tab.type === "serial"}
+                    {:else if app.isTerminalTabType(tab.type)}
                         <TerminalPane tabId={tab.id} tabType={tab.type} meta={tab.meta ?? {}}/>
                     {:else if tab.type === "forward"}
                         <ForwardPane tabId={tab.id} meta={tab.meta ?? {}}/>

@@ -114,6 +114,7 @@ const en = {
   "settings.section.credentials": "Credentials",
   "settings.section.forwards": "Port Forwards",
   "settings.section.serial": "Serial Consoles",
+  "settings.section.telnet": "Telnet",
   "settings.section.groups": "Groups",
   "settings.section.snippets": "Snippets",
   "settings.section.highlights": "Keyword Highlights",
@@ -393,6 +394,14 @@ const en = {
   "serial.ctl.rts_assert": "Assert RTS",
   "serial.ctl.rts_deassert": "Deassert RTS",
   "serial.ctl.break": "Send break",
+
+  // ── Telnet (line-discipline labels are shared with serial.*) ──
+  "telnet.new": "+ New",
+  "telnet.empty": "No saved telnet connections",
+  "telnet.name_placeholder": "Core switch",
+  "telnet.sec.endpoint": "Endpoint",
+  "telnet.host": "Host",
+  "telnet.port": "Port",
 
   // ── AI Diagnose: ChatPanel ──
   "ai.title.danger_suffix": "DANGER MODE",

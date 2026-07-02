@@ -68,7 +68,7 @@
 
     let {tabId, tabType, meta = {}}: {
         tabId: string;
-        tabType: "ssh" | "local" | "serial";
+        tabType: "ssh" | "local" | "serial" | "telnet";
         meta: Record<string, string>;
     } = $props();
 
@@ -464,14 +464,15 @@
     const isLocal = $derived(tabType === "local");
     const isSsh = $derived(tabType === "ssh");
     // Transport table — the per-tab byte-stream IPC contract lives in DATA, not in
-    // branches. Adding a transport (telnet, …) is one more row, zero code change.
+    // branches. Adding a transport is one more row, zero code change.
     // resize:null means the transport has no rows/cols (serial) → callers skip it.
-    const TRANSPORT: Record<"ssh" | "local" | "serial", {
+    const TRANSPORT: Record<"ssh" | "local" | "serial" | "telnet", {
         write: string; resize: string | null; data: string; close: string; closeCmd: string;
     }> = {
-        ssh:    { write: "ssh_write",    resize: "ssh_resize", data: "ssh:data",    close: "ssh:close",    closeCmd: "ssh_disconnect" },
-        local:  { write: "pty_write",    resize: "pty_resize", data: "pty:data",    close: "pty:close",    closeCmd: "pty_close" },
-        serial: { write: "serial_write", resize: null,         data: "serial:data", close: "serial:close", closeCmd: "serial_close" },
+        ssh:    { write: "ssh_write",    resize: "ssh_resize",    data: "ssh:data",    close: "ssh:close",    closeCmd: "ssh_disconnect" },
+        local:  { write: "pty_write",    resize: "pty_resize",    data: "pty:data",    close: "pty:close",    closeCmd: "pty_close" },
+        serial: { write: "serial_write", resize: null,            data: "serial:data", close: "serial:close", closeCmd: "serial_close" },
+        telnet: { write: "telnet_write", resize: "telnet_resize", data: "telnet:data", close: "telnet:close", closeCmd: "telnet_close" },
     };
     const writeCmd = $derived(TRANSPORT[tabType].write);
     const resizeCmd = $derived(TRANSPORT[tabType].resize);
@@ -479,10 +480,13 @@
     const closeEvent = $derived(TRANSPORT[tabType].close);
     const closeCmd = $derived(TRANSPORT[tabType].closeCmd);
 
-    // ── Serial (Tabby-style) input/output transforms. Driven by the saved
-    //    profile's meta; null for ssh/local so those paths are untouched. ──
-    const serialOpts = $derived(tabType === "serial" ? {
-        inputNewline: meta.input_newline || "cr",
+    // ── Stream (Tabby-style) input/output transforms, shared by serial and
+    //    telnet. Driven by the saved profile's meta; null for ssh/local so those
+    //    paths are untouched. Telnet profiles have no slow_send / hex-mode fields
+    //    (UART-isms) — the defaults below keep those features off for telnet.
+    //    Telnet's Enter default is crlf: RFC 854's NVT end-of-line. ──
+    const streamOpts = $derived(tabType === "serial" || tabType === "telnet" ? {
+        inputNewline: meta.input_newline || (tabType === "telnet" ? "crlf" : "cr"),
         outputNewline: meta.output_newline || "raw",
         localEcho: meta.local_echo === "true",
         backspace: meta.backspace || "del",
@@ -492,15 +496,15 @@
         loginScript: meta.login_script || "",
     } : null);
 
-    function serialInputNewline(): string {
-        return inputNewline(serialOpts?.inputNewline ?? "cr");
+    function streamInputNewline(): string {
+        return inputNewline(streamOpts?.inputNewline ?? "cr");
     }
-    function serialNormalizeOut(text: string): string {
-        return normalizeIncoming(text, serialOpts?.outputNewline ?? "raw");
+    function streamNormalizeOut(text: string): string {
+        return normalizeIncoming(text, streamOpts?.outputNewline ?? "raw");
     }
-    function serialSendBytes(bytes: number[]) {
+    function streamSendBytes(bytes: number[]) {
         if (!sessionId || disconnected || !bytes.length) return;
-        if (!serialOpts?.slowSend) {
+        if (!streamOpts?.slowSend) {
             invoke(writeCmd, { sessionId, data: bytes }).catch(() => {});
             return;
         }
@@ -518,8 +522,8 @@
         };
         tick();
     }
-    function serialSendText(text: string) {
-        serialSendBytes(Array.from(new TextEncoder().encode(text)));
+    function streamSendText(text: string) {
+        streamSendBytes(Array.from(new TextEncoder().encode(text)));
     }
 
     // Cap local input buffers (hex / line editor) so a pathological no-newline
@@ -534,7 +538,7 @@
                 const bytes = parseHexInput(serialHexBuf);
                 serialHexBuf = "";
                 terminal.write("\r\n");
-                serialSendBytes(bytes);
+                streamSendBytes(bytes);
             } else if (ch === "\x7f" || ch === "\b") {
                 if (serialHexBuf) { serialHexBuf = serialHexBuf.slice(0, -1); terminal.write("\b \b"); }
             } else if (/[0-9a-fA-F ]/.test(ch)) {
@@ -552,7 +556,7 @@
         for (const ch of data) {
             if (ch === "\r" || ch === "\n") {
                 terminal.write("\r\n");
-                serialSendText(serialLineBuf + serialInputNewline());
+                streamSendText(serialLineBuf + streamInputNewline());
                 serialLineBuf = "";
             } else if (ch === "\x7f" || ch === "\b") {
                 if (serialLineBuf) { serialLineBuf = serialLineBuf.slice(0, -1); terminal.write("\b \b"); }
@@ -562,23 +566,23 @@
         }
     }
 
-    function serialOnData(data: string) {
+    function streamOnData(data: string) {
         // Local editors (hex / line) own their backspace and never emit the
         // device-backspace byte, so dispatch to them BEFORE the remap below.
-        if (serialOpts?.inputMode === "hex") { serialHexInput(data); return; }
-        if (serialOpts?.inputMode === "line") { serialLineInput(data); return; }
+        if (streamOpts?.inputMode === "hex") { serialHexInput(data); return; }
+        if (streamOpts?.inputMode === "line") { serialLineInput(data); return; }
         // Remap the editing keys (Backspace 0x7f / Delete CSI 3~) to the
         // device's delete byte. del mode leaves both as-is (VT/readline peer);
         // bs/csi3 make BOTH keys emit the one byte the device knows, so Delete
         // deletes instead of echoing a stray `~`.
-        data = remapEditingKeys(data, serialOpts?.backspace ?? "del");
+        data = remapEditingKeys(data, streamOpts?.backspace ?? "del");
         // Convert EVERY line break to the device EOL — handles the single Enter
         // key AND multi-char chunks (native paste / IME), which the old
         // `data === "\r"` check passed through raw. Echo with CRLF so multi-line
         // input renders correctly in xterm.
-        data = normalizeOutgoing(data, serialOpts?.inputNewline ?? "cr");
-        if (serialOpts?.localEcho) terminal.write(data.replace(/\r\n|\r|\n/g, "\r\n"));
-        serialSendText(data);
+        data = normalizeOutgoing(data, streamOpts?.inputNewline ?? "cr");
+        if (streamOpts?.localEcho) terminal.write(data.replace(/\r\n|\r|\n/g, "\r\n"));
+        streamSendText(data);
     }
 
     // ── Login script (expect / send), run on connect. ──
@@ -587,7 +591,7 @@
     let loginBuf = "";
     const loginDecoder = new TextDecoder("utf-8");
     function initLoginScript() {
-        loginSteps = parseLoginScript(serialOpts?.loginScript ?? "");
+        loginSteps = parseLoginScript(streamOpts?.loginScript ?? "");
         loginStepIdx = 0;
         loginBuf = "";
         runLoginSends();
@@ -595,7 +599,7 @@
     /** Fire consecutive `send` steps until the next `expect` (or the end). */
     function runLoginSends() {
         while (loginStepIdx < loginSteps.length && loginSteps[loginStepIdx].kind === "send") {
-            serialSendText(loginSteps[loginStepIdx].text + serialInputNewline());
+            streamSendText(loginSteps[loginStepIdx].text + streamInputNewline());
             loginStepIdx += 1;
         }
     }
@@ -613,15 +617,15 @@
         }
     }
 
-    /** Inject user text as input (snippet / broadcast, and the serial paste
-     *  path). Serial: convert every line break to the device's configured EOL
-     *  and honor slow-send. ssh/local: write raw — the PTY owns its own line
-     *  discipline. Control sequences (arrows / Esc / Tab) must NOT come through
-     *  here — they go raw via the registered terminal writer (writePty). */
+    /** Inject user text as input (snippet / broadcast, and the serial/telnet
+     *  paste path). Stream transports: convert every line break to the device's
+     *  configured EOL and honor slow-send. ssh/local: write raw — the PTY owns
+     *  its own line discipline. Control sequences (arrows / Esc / Tab) must NOT
+     *  come through here — they go raw via the registered terminal writer. */
     function sendText(text: string) {
         if (!text || disconnected || !sessionId) return;
-        if (tabType === "serial") {
-            serialSendText(normalizeOutgoing(text, serialOpts?.inputNewline ?? "cr"));
+        if (streamOpts) {
+            streamSendText(normalizeOutgoing(text, streamOpts.inputNewline));
             return;
         }
         invoke(writeCmd, { sessionId, data: Array.from(new TextEncoder().encode(text)) });
@@ -629,9 +633,9 @@
 
     function pasteText(text: string) {
         if (!text || disconnected || !sessionId) return;
-        // Serial has no bracketed paste and speaks the device's EOL — that's
-        // exactly sendText's job, so reuse it (newline transform + slow-send).
-        if (tabType === "serial") { sendText(text); return; }
+        // Serial/telnet have no bracketed paste and speak the device's EOL —
+        // that's exactly sendText's job (newline transform + slow-send).
+        if (streamOpts) { sendText(text); return; }
         // Collapse every line break to a single CR before sending: the PTY's
         // ICRNL turns each CR into one \n, so a raw CRLF would double (#98).
         // (xterm's prepareTextForTerminal does this; we bypass terminal.paste().)
@@ -713,10 +717,10 @@
     async function wireSessionEvents(sid: string) {
         unlisteners.push(await listen<number[]>(`${dataEvent}:${sid}`, (ev) => {
             const raw = new Uint8Array(ev.payload);
-            if (serialOpts) {
+            if (streamOpts) {
                 feedLoginScript(raw);
-                if (serialOpts.outputMode === "hex") { terminal.write(bytesToHex(raw)); return; }
-                terminal.write(serialNormalizeOut(decoder.decode(raw, { stream: true })));
+                if (streamOpts.outputMode === "hex") { terminal.write(bytesToHex(raw)); return; }
+                terminal.write(streamNormalizeOut(decoder.decode(raw, { stream: true })));
                 return;
             }
             // Write the raw bytes untouched — keyword highlighting is a decoration
@@ -728,8 +732,10 @@
             // Serial: the port just died; free its backend handle NOW so the
             // exclusive OS port is released. Otherwise the reconnect below
             // re-opens the same path while the stale handle still owns it and
-            // fails. ssh/local hold no exclusive OS resource, so they skip this.
-            if (tabType === "serial") invoke("serial_close", { sessionId: sid }).catch(() => {});
+            // fails. Telnet: same eager cleanup — the handle is dead after
+            // Close, dropping it stops the reader thread immediately.
+            // ssh/local hold no exclusive OS resource, so they skip this.
+            if (tabType === "serial" || tabType === "telnet") invoke(closeCmd, { sessionId: sid }).catch(() => {});
             terminal.write("\r\n\x1b[31m--- Disconnected ---\x1b[0m\r\n");
             terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
             setupReconnect();
@@ -743,7 +749,7 @@
 
         dataDisposable = terminal.onData((data: string) => {
             if (disconnected) return;
-            if (serialOpts) { serialOnData(data); return; }
+            if (streamOpts) { streamOnData(data); return; }
             invoke(writeCmd, { sessionId: sid, data: Array.from(new TextEncoder().encode(processInput(data))) });
         });
         resizeDisposable = terminal.onResize(({ cols, rows }) => {
@@ -776,6 +782,21 @@
                 });
             } catch (e: any) {
                 terminal.write(`\x1b[31mSerial open failed: ${e}\x1b[0m\r\n`);
+                terminal.write("\x1b[90mPress any key to retry.\x1b[0m\r\n");
+                disconnected = true;
+                return false;
+            }
+            await wireSessionEvents(sessionId);
+            initLoginScript();
+        } else if (tabType === "telnet") {
+            terminal.write(`\x1b[90mConnecting to ${meta.host}:${meta.port || 23} ...\x1b[0m\r\n`);
+            try {
+                sessionId = await invoke<string>("telnet_open", {
+                    host: meta.host,
+                    port: Number(meta.port) || 23,
+                });
+            } catch (e: any) {
+                terminal.write(`\x1b[31mTelnet open failed: ${e}\x1b[0m\r\n`);
                 terminal.write("\x1b[90mPress any key to retry.\x1b[0m\r\n");
                 disconnected = true;
                 return false;
@@ -1298,7 +1319,7 @@
                 // rebind 到新 sid，让 AI actor 后续的 file_ops / SFTP 走新连接。
                 // 首次连接 (sessionForTab 为 undefined) 直接 skip。
                 const aiInfo = ai.sessionForTab(tabId);
-                if (aiInfo && aiInfo.target_id !== sid && tabType !== "serial") {
+                if (aiInfo && aiInfo.target_id !== sid && tabType !== "serial" && tabType !== "telnet") {
                     ai.rebindTarget(tabId, tabType, sid).catch((e) =>
                         console.warn("[ai] rebind on reconnect:", e),
                     );
@@ -1379,17 +1400,17 @@
         app.unregisterTerminalArrowSender();
         app.unregisterTerminalControls(tabId);
         app.unregisterSession(tabId);
-        // Serial is exempt from the !disconnected guard: serial_close just drops
-        // the backend map entry (idempotent), so always free it on a known
-        // sessionId — otherwise an unplugged-then-closed serial tab leaks its
-        // handle until window-close/reconcile sweeps it. ssh/local keep the guard
-        // (disconnecting an already-dead session is pointless / may error).
-        if (sessionId && (!disconnected || tabType === "serial")) {
+        // Serial/telnet are exempt from the !disconnected guard: their close
+        // command just drops the backend map entry (idempotent), so always free
+        // it on a known sessionId — otherwise an unplugged-then-closed tab leaks
+        // its handle until window-close/reconcile sweeps it. ssh/local keep the
+        // guard (disconnecting an already-dead session is pointless / may error).
+        if (sessionId && (!disconnected || tabType === "serial" || tabType === "telnet")) {
             if (isSsh) {
                 // 把 tabId 一并传给后端做防御性 waiters 清理；漏传不致命。
                 invoke("ssh_disconnect", { sessionId, tabId }).catch(() => {});
             } else {
-                // local PTY / serial：按 transport 选 close 命令（pty_close / serial_close）。
+                // local PTY / serial / telnet：按 transport 选 close 命令。
                 invoke(closeCmd, { sessionId }).catch(() => {});
             }
         }

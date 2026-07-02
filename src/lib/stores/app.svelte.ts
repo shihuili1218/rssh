@@ -13,7 +13,13 @@ export const isMobile =
 /* ═══════════════════════════════════════════════════════
    Types
    ═══════════════════════════════════════════════════════ */
-export type TabType = "home" | "ssh" | "local" | "serial" | "forward" | "edit";
+export type TabType = "home" | "ssh" | "local" | "serial" | "telnet" | "forward" | "edit";
+/** Tab types that render a TerminalPane (byte-stream terminals). These are also
+ *  exactly the AI-capable tabs — one predicate, no per-feature unions to drift. */
+export type TerminalTabType = Exclude<TabType, "home" | "forward" | "edit">;
+export function isTerminalTabType(type: TabType): type is TerminalTabType {
+  return type === "ssh" || type === "local" || type === "serial" || type === "telnet";
+}
 export interface Tab {
   id: string;
   type: TabType;
@@ -32,6 +38,8 @@ export type SettingsPage =
   | "forward-edit"
   | "serial-profiles"
   | "serial-profile-edit"
+  | "telnet-profiles"
+  | "telnet-profile-edit"
   | "snippets"
   | "highlights"
   | "sync"
@@ -76,6 +84,13 @@ export interface SerialProfile {
   input_newline: string; output_newline: string;
   local_echo: boolean; backspace: string; slow_send: boolean;
   input_mode: string; output_mode: string; login_script: string;
+  group_id: string | null;
+}
+export interface TelnetProfile {
+  id: string; name: string; host: string; port: number;
+  // Line-discipline knobs shared with serial (no UART-isms: no baud/hex/slow_send)
+  input_newline: string; output_newline: string;
+  local_echo: boolean; backspace: string; login_script: string;
   group_id: string | null;
 }
 export interface Snippet { name: string; command: string; }
@@ -261,6 +276,7 @@ export function settingsBack() {
   else if (_settingsPage === "credential-edit") _settingsPage = "credentials";
   else if (_settingsPage === "forward-edit") _settingsPage = "forwards";
   else if (_settingsPage === "serial-profile-edit") _settingsPage = "serial-profiles";
+  else if (_settingsPage === "telnet-profile-edit") _settingsPage = "telnet-profiles";
   else if (_settingsPage === "import-ssh-config") _settingsPage = "import-export";
   else _settingsPage = "menu";
 }
@@ -390,7 +406,7 @@ export async function writeClipboard(text: string): Promise<void> {
 interface SessionEntry {
   tabId: string;
   sessionId: string;
-  type: "ssh" | "local" | "serial";
+  type: "ssh" | "local" | "serial" | "telnet";
 }
 export interface SessionInfo extends SessionEntry {
   label: string;
@@ -486,6 +502,26 @@ export function connectSerialProfile(sp: SerialProfile) {
       input_mode: sp.input_mode,
       output_mode: sp.output_mode,
       login_script: sp.login_script,
+    },
+  });
+}
+
+/** Open a terminal tab from a saved telnet profile (Home cards + the manager
+ *  use this). Same contract as connectSerialProfile: meta carries the config
+ *  in snake_case, TerminalPane consumes it verbatim. */
+export function connectTelnetProfile(tp: TelnetProfile) {
+  addTab({
+    id: `telnet:${crypto.randomUUID()}`,
+    type: "telnet",
+    label: tp.name,
+    meta: {
+      host: tp.host,
+      port: String(tp.port),
+      input_newline: tp.input_newline,
+      output_newline: tp.output_newline,
+      local_echo: String(tp.local_echo),
+      backspace: tp.backspace,
+      login_script: tp.login_script,
     },
   });
 }
@@ -699,6 +735,14 @@ export async function loadSerialProfiles(): Promise<SerialProfile[]> {
   // profiles". Mobile stays quiet (expected "not registered").
   return invoke<SerialProfile[]>("list_serial_profiles").catch((e) => {
     if (!isMobile) console.warn("[serial] list_serial_profiles failed:", e);
+    return [];
+  });
+}
+export async function loadTelnetProfiles(): Promise<TelnetProfile[]> {
+  // Registered on every platform (plain TCP), so any failure is a real problem
+  // (DB / serialization) — log it instead of silently showing "no profiles".
+  return invoke<TelnetProfile[]>("list_telnet_profiles").catch((e) => {
+    console.warn("[telnet] list_telnet_profiles failed:", e);
     return [];
   });
 }

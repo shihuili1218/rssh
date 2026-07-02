@@ -24,7 +24,7 @@ commands CRUD、sync/config.rs 导入导出
 connectTelnetProfile、TelnetProfileManager/Editor（抄 Serial 兄弟组件）、HomeScreen/SettingsLayout/AppShell 挂点、i18n en/zh
 **成功标准**: npm run check / vitest 绿；能开 telnet tab 连上真实服务
 **测试**: 现有 vitest 套件 + 手工连接验证
-**状态**: 未开始
+**状态**: 完成
 
 ## 第 4 阶段：AI 面板
 **目标**: ShellKind::Telnet（无 sentinel + 网络设备 prompt 文案）、AiTarget::Telnet、AiTargetKind "telnet"、

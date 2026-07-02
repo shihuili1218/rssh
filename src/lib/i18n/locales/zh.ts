@@ -116,6 +116,7 @@ const zh: Messages = {
   "settings.section.credentials": "凭证",
   "settings.section.forwards": "端口转发",
   "settings.section.serial": "串口控制台",
+  "settings.section.telnet": "Telnet",
   "settings.section.groups": "分组",
   "settings.section.snippets": "命令片段",
   "settings.section.highlights": "关键字高亮",
@@ -396,6 +397,14 @@ const zh: Messages = {
   "serial.ctl.rts_assert": "置位 RTS",
   "serial.ctl.rts_deassert": "复位 RTS",
   "serial.ctl.break": "发送 Break",
+
+  // ── Telnet（行规程文案与 serial.* 共用）──
+  "telnet.new": "+ 新建",
+  "telnet.empty": "暂无已保存的 Telnet 连接",
+  "telnet.name_placeholder": "核心交换机",
+  "telnet.sec.endpoint": "目标",
+  "telnet.host": "主机",
+  "telnet.port": "端口",
 
   // ── AI 排障：ChatPanel ──
   "ai.title.danger_suffix": "危险模式",

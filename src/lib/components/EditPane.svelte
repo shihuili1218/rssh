@@ -155,7 +155,7 @@
           >
             <SessionMinimap tabId={s.tabId} />
             <span class="session-meta">
-              <span class="session-type">{s.type === "local" ? "$" : s.type === "serial" ? "⎓" : "SSH"}</span>
+              <span class="session-type">{s.type === "local" ? "$" : s.type === "serial" ? "⎓" : s.type === "telnet" ? "T" : "SSH"}</span>
               <span class="session-label">{s.label}</span>
             </span>
           </button>
