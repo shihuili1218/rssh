@@ -97,10 +97,19 @@ export type ShellKind = "posix" | "cmd" | "powershell";
 /**
  * Which transport an AI session targets — mirrors Rust `AiTarget` kinds
  * (lowercase wire format). Single source of truth so widening the set (e.g.
- * adding `serial`) lights up every switch via the compiler. `serial` runs
- * without a shell: no sentinel, no meaningful exit code, user-driven completion.
+ * adding `serial`) lights up every switch via the compiler.
  */
-export type AiTargetKind = "ssh" | "local" | "serial";
+export type AiTargetKind = "ssh" | "local" | "serial" | "telnet";
+
+/**
+ * Raw-device targets run without a shell: no sentinel, no meaningful exit
+ * code, user-driven completion ("submit output"). Mirrors Rust
+ * `ShellKind::is_raw_device` — one predicate so the execution paths and the
+ * confirm-dialog affordances can't drift apart.
+ */
+export function isRawDeviceKind(kind: AiTargetKind): boolean {
+  return kind === "serial" || kind === "telnet";
+}
 
 /** Cumulative token spend for one AI session (actor lifetime). */
 export interface TokenUsage {

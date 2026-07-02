@@ -31,6 +31,7 @@ import type {
   SkillRecord,
   TokenUsage,
 } from "./types.ts";
+import { isRawDeviceKind } from "./types.ts";
 
 // ─── Position ────────────────────────────────────────────────────
 // 只支持 left/right。移动端用户横屏即可用——左右布局就够了，没必要再开上下分支。
@@ -438,7 +439,8 @@ type Execution = {
   unlisten: UnlistenFn | null;
   timer: number | null;
   terminate: () => Promise<void>;
-  /** Serial only: user says "done" — report the buffer as a clean result. */
+  /** Raw devices (serial/telnet) only: user says "done" — report the buffer
+   *  as a clean result. */
   submit: () => Promise<void>;
 };
 
@@ -480,13 +482,15 @@ export async function executeCommand(
     ssh:    { write: "ssh_write",    data: "ssh:data" },
     local:  { write: "pty_write",    data: "pty:data" },
     serial: { write: "serial_write", data: "serial:data" },
+    telnet: { write: "telnet_write", data: "telnet:data" },
   };
   const writeCmd = TRANSPORT[target_kind].write;
   const dataEvent = `${TRANSPORT[target_kind].data}:${target_session_id}`;
-  // Serial may not echo the command back (depends on the device / local-echo),
-  // so dropping the first line would silently eat real output. Keep the whole
-  // buffer for serial; an echoed-command line is harmless noise the LLM ignores.
-  const dropEcho = target_kind !== "serial";
+  // A raw device may not echo the command back (depends on the device /
+  // local-echo / telnet ECHO negotiation), so dropping the first line would
+  // silently eat real output. Keep the whole buffer for raw devices; an
+  // echoed-command line is harmless noise the LLM ignores.
+  const dropEcho = !isRawDeviceKind(target_kind);
 
   // Returned Promise resolves only when finish() actually runs, so the
   // UI's "executing" state can cover the whole execution window — not
@@ -517,10 +521,10 @@ export async function executeCommand(
     },
     submit: async () => {
       if (exec.resolved) return;
-      // Serial completion: the user watched the device and says "done". Report
-      // the accumulated output as a NORMAL result — no Ctrl+C (nothing to
-      // interrupt), not flagged early-terminated, exit 0 as the placeholder
-      // (serial has no exit code; the LLM is told via prompt to judge by output).
+      // Raw-device completion: the user watched the device and says "done".
+      // Report the accumulated output as a NORMAL result — no Ctrl+C (nothing
+      // to interrupt), not flagged early-terminated, exit 0 as the placeholder
+      // (no exit code exists; the LLM is told via prompt to judge by output).
       await finish(extractOutput(exec.buffer.view(), undefined, dropEcho), 0, false);
     },
   };
@@ -559,9 +563,9 @@ export async function executeCommand(
       if (exec.resolved) return;
       const chunk = new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(e.payload));
       exec.buffer.append(chunk);
-      // Serial has no sentinel — just accumulate. Completion comes from the user
-      // (submit, wired to the terminate button) or the safety timeout below.
-      if (target_kind === "serial") return;
+      // Raw devices (serial/telnet) have no sentinel — just accumulate.
+      // Completion comes from the user (submit) or the safety timeout below.
+      if (isRawDeviceKind(target_kind)) return;
       const hit = findSentinel(exec.buffer.view(), proposed.sentinel);
       if (hit) void finish(hit.output, hit.exitCode, false);
     });
@@ -600,10 +604,10 @@ export async function terminateCommand(tool_call_id: string): Promise<void> {
 }
 
 /**
- * Serial completion by tool_call_id: the user signals the command is done, so
- * report the accumulated output as a clean result (no Ctrl+C, not early-
- * terminated). Wired to the same button as terminate — on serial the button
- * means "submit output", on ssh/local it means "interrupt".
+ * Raw-device completion by tool_call_id: the user signals the command is done,
+ * so report the accumulated output as a clean result (no Ctrl+C, not early-
+ * terminated). On serial/telnet the card shows "submit output"; on ssh/local
+ * the equivalent slot is "interrupt" (terminate).
  */
 export async function submitCommand(tool_call_id: string): Promise<void> {
   const exec = _runningExecutions.get(tool_call_id);

@@ -34,9 +34,22 @@ pub enum ShellKind {
     /// completion is signaled by the user, not by marker output. Most of the
     /// machinery on this enum (sentinel, exit code) is deliberately inert here.
     Serial,
+    /// A telnet connection. Same no-sentinel machinery as Serial — the typical
+    /// peer is a network-device CLI (Cisco IOS / Huawei VRP / H3C Comware) or a
+    /// BusyBox box, where `; echo "X:$?"` is a syntax error and there is no
+    /// exit-code channel. Distinct variant (not Serial) because the LLM steering
+    /// differs: network-OS commands, not bootloader/AT-modem guesses.
+    Telnet,
 }
 
 impl ShellKind {
+    /// Raw-device targets: no shell to carry a sentinel, no exit code, manual
+    /// (user-driven) completion. One predicate so the sentinel/separator/prompt
+    /// switches can't drift apart as kinds are added.
+    pub fn is_raw_device(self) -> bool {
+        matches!(self, Self::Serial | Self::Telnet)
+    }
+
     /// Generate a fresh sentinel marker (UUID-simple) and the full command
     /// line to paste into the user's terminal. Returns `(marker, full_cmd)`.
     ///
@@ -47,10 +60,11 @@ impl ShellKind {
     /// timeout instead of seeing a sentinel. Returning both from one
     /// function makes that bug unreachable.
     pub fn sentinel_command(self, cmd: &str) -> (String, String) {
-        // Serial has no shell: no `;`/`echo`/`$?` to carry a marker. Paste the
-        // raw command; completion comes from the user (manual submit), not from
-        // a sentinel line in the output. Empty marker = nothing to grep for.
-        if self == Self::Serial {
+        // Raw devices (serial/telnet) have no shell: no `;`/`echo`/`$?` to carry
+        // a marker. Paste the raw command; completion comes from the user
+        // (manual submit), not from a sentinel line. Empty marker = nothing to
+        // grep for.
+        if self.is_raw_device() {
             return (String::new(), cmd.to_string());
         }
         let marker = format!("__rssh_done_{}", uuid::Uuid::new_v4().simple());
@@ -96,10 +110,10 @@ impl ShellKind {
             Self::Powershell => format!(
                 "$LASTEXITCODE=$null; {cmd}; $ok=$?; Write-Output \"{marker}:$(if ($null -ne $LASTEXITCODE) {{$LASTEXITCODE}} elseif ($ok) {{0}} else {{1}})\""
             ),
-            // Serial: no shell to interpret a sentinel — the raw command is the
-            // whole line. Reached only via direct calls; `sentinel_command`
-            // short-circuits Serial before it gets here.
-            Self::Serial => cmd.to_string(),
+            // Raw devices: no shell to interpret a sentinel — the raw command is
+            // the whole line. Reached only via direct calls; `sentinel_command`
+            // short-circuits them before it gets here.
+            Self::Serial | Self::Telnet => cmd.to_string(),
         }
     }
 
@@ -112,6 +126,7 @@ impl ShellKind {
             Self::Cmd => "cmd.exe (Windows)",
             Self::Powershell => "PowerShell",
             Self::Serial => "serial device",
+            Self::Telnet => "telnet device",
         }
     }
 
@@ -125,9 +140,9 @@ impl ShellKind {
             Self::Posix | Self::Powershell => ";",
             // cmd.exe `;` is literal; `&` is the unconditional separator.
             Self::Cmd => "&",
-            // Serial: no shell, no statement separator — we instruct the LLM to
-            // send ONE command per line, so a newline is the only "separator".
-            Self::Serial => "\n",
+            // Raw devices: no shell, no statement separator — we instruct the
+            // LLM to send ONE command per line; a newline is the only "separator".
+            Self::Serial | Self::Telnet => "\n",
         }
     }
 
@@ -137,9 +152,12 @@ impl ShellKind {
     /// single `cmd` argument. Update side-by-side with the templates in
     /// `format_sentinel` if you change conventions.
     pub fn prompt_section(self) -> String {
-        // Serial has no shell — its own guidance, not the (examples/exit_var/tips)
-        // shape the shell families share. Steers the LLM away from shell syntax,
-        // chaining, and any reliance on the (meaningless) exit code.
+        // Raw devices have no shell — their own guidance, not the
+        // (examples/exit_var/tips) shape the shell families share. Steers the
+        // LLM away from shell syntax, chaining, and any reliance on the
+        // (meaningless) exit code. Serial and telnet share the mechanics but
+        // NOT the steering: a serial peer is a bootloader/MCU, a telnet peer is
+        // a network OS — wrong examples send the LLM down the wrong CLI.
         if let Self::Serial = self {
             return "\n---\n\n# Target: serial device\n\n\
                  This session is a **raw serial port** (UART / RS-232), NOT a shell. Behind it \
@@ -155,6 +173,27 @@ impl ShellKind {
                  returned output as the literal device response.\n\
                  - **No shell or filesystem features.** No pipes, redirects, `$(...)`, globbing, or file \
                  operations exist on a bare serial device. Use only plain device commands via run_command.\n"
+                .to_string();
+        }
+        if let Self::Telnet = self {
+            return "\n---\n\n# Target: telnet device\n\n\
+                 This session is a **telnet connection**. The typical peer is a network-device CLI \
+                 (Cisco IOS, Huawei VRP, H3C Comware, MikroTik RouterOS) or an embedded/BusyBox box. \
+                 There MAY be a Unix shell behind it, but you cannot rely on one.\n\n\
+                 - **One command per line.** Do NOT chain commands with `;`, `&&`, `||`, `|`, or any \
+                 other separator — a network OS treats them as part of the command. Each `run_command` \
+                 must carry a single command.\n\
+                 - **No exit code.** Telnet carries no exit status; the `exit=` field in the result is \
+                 a placeholder, NOT a success signal. Judge success ONLY from the output text (error \
+                 messages, prompts, `% Invalid input`, etc.).\n\
+                 - **Completion is user-driven.** Your command is pasted to the connection, then the \
+                 user watches the device and submits the output once it has finished responding. Long \
+                 output may be truncated by the device's pager — asking the user to disable it (e.g. \
+                 `terminal length 0` / `screen-length 0 temporary`) is a reasonable first step on \
+                 network gear.\n\
+                 - **Match the device's CLI dialect.** Read the prompt and early output to identify \
+                 the OS before proposing commands; prefer read-only `show`/`display` commands, and use \
+                 shell/filesystem features only after the output proves a Unix shell is present.\n"
                 .to_string();
         }
         let (examples, exit_var, tips) = match self {
@@ -180,7 +219,9 @@ impl ShellKind {
                  Variables are `$Name`. Use cmdlets (`Get-X` / `Set-X`) over external binaries when both exist. \
                  Redirect to `$null` (PS) not `/dev/null`.",
             ),
-            Self::Serial => unreachable!("serial handled by the early return above"),
+            Self::Serial | Self::Telnet => {
+                unreachable!("raw devices handled by the early returns above")
+            }
         };
         format!(
             "\n---\n\n# Target shell\n\n\
@@ -414,6 +455,45 @@ mod tests {
     }
 
     #[test]
+    fn telnet_sentinel_is_raw_command_no_marker() {
+        // Telnet mirrors serial: no shell → no sentinel wrap, empty marker,
+        // user-driven completion. If a refactor gives telnet a sentinel, the
+        // command line would leak `; echo "…:$?"` onto a Cisco/VRP CLI.
+        let (marker, full) = ShellKind::Telnet.sentinel_command("show version");
+        assert_eq!(marker, "");
+        assert_eq!(full, "show version");
+        assert_eq!(
+            ShellKind::Telnet.format_sentinel("display version", "__rssh_done_x"),
+            "display version"
+        );
+        assert_eq!(ShellKind::Telnet.separator(), "\n");
+    }
+
+    #[test]
+    fn telnet_prompt_section_steers_to_network_cli() {
+        // Telnet steering must differ from serial: network-OS vocabulary, not
+        // bootloader/AT-modem. And it must keep the raw-device invariants
+        // (single command, no exit code, user-driven completion).
+        let p = ShellKind::Telnet.prompt_section();
+        assert!(p.contains("telnet"));
+        assert!(p.contains("One command per line"));
+        assert!(p.contains("No exit code"));
+        assert!(p.contains("Cisco") || p.contains("network-device"));
+        assert!(!p.contains("UART"), "serial steering leaked into telnet");
+        // must show the separators it forbids
+        assert!(p.contains(';') && p.contains("&&"));
+    }
+
+    #[test]
+    fn is_raw_device_covers_exactly_serial_and_telnet() {
+        assert!(ShellKind::Serial.is_raw_device());
+        assert!(ShellKind::Telnet.is_raw_device());
+        assert!(!ShellKind::Posix.is_raw_device());
+        assert!(!ShellKind::Cmd.is_raw_device());
+        assert!(!ShellKind::Powershell.is_raw_device());
+    }
+
+    #[test]
     fn serde_lowercase_roundtrip() {
         // Wire format: lowercase strings. Front-end sends "posix"/"cmd"/
         // "powershell" via the Tauri command; serde rename_all matches.
@@ -432,6 +512,14 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&ShellKind::Serial).unwrap(),
             "\"serial\""
+        );
+
+        // Telnet joins as "telnet".
+        let te: ShellKind = serde_json::from_str("\"telnet\"").unwrap();
+        assert_eq!(te, ShellKind::Telnet);
+        assert_eq!(
+            serde_json::to_string(&ShellKind::Telnet).unwrap(),
+            "\"telnet\""
         );
     }
 }

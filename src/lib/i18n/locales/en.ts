@@ -479,6 +479,7 @@ const en = {
   "ai.cmd.btn.submitting": "⋯ Submitting",
   "ai.cmd.hint.executing": "Command pasted; waiting for sentinel in terminal output…",
   "ai.cmd.hint.executing_serial": "Command sent to the serial device. Click \"Submit output\" once it has finished responding.",
+  "ai.cmd.hint.executing_telnet": "Command sent over telnet. Click \"Submit output\" once the device has finished responding.",
   "ai.cmd.reject.placeholder": "Reason for rejection (lets AI adjust)",
   "ai.cmd.reject.submit": "Submit",
   "ai.cmd.reject.cancel": "Cancel",

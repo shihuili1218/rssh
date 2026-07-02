@@ -16,6 +16,7 @@
     import * as ai from "./store.svelte.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import type { AiSettings, AiTargetKind, CommandKind, CommandProposed, CommandResult } from "./types.ts";
+    import { isRawDeviceKind } from "./types.ts";
 
     let { tabId, targetKind, targetSessionId, cmd, result, rejected } = $props<{
         tabId: string;
@@ -30,7 +31,8 @@
     let rejectReason = $state("");
     let executing = $state(false);
     let terminating = $state(false);
-    // Serial only: the "submit output" button (distinct from terminate) is in flight.
+    // Raw devices (serial/telnet) only: the "submit output" button (distinct
+    // from terminate) is in flight.
     let submitting = $state(false);
 
     let isPending = $derived(!result && !rejected);
@@ -94,9 +96,11 @@
         if (
             isPending
             && !executing
-            // No danger mode on serial: a bare device (firmware / PLC / bootloader)
-            // is too sensitive to auto-paste into. run_command always asks here.
-            && targetKind !== "serial"
+            // No danger mode on raw devices: a bare serial peer (firmware / PLC /
+            // bootloader) or a telnet peer (core switch, router) is too sensitive
+            // to auto-paste into — and the POSIX-oriented blacklist can't catch
+            // network-OS dangers (`reload`, `erase startup-config`). Always ask.
+            && !isRawDeviceKind(targetKind)
             && !ai.isCommandRunning(cmd.tool_call_id)
             && !_ackedToolCalls.has(cmd.tool_call_id)
             && autoApproveAllowed(ai.settings(), cmd.kind)
@@ -187,10 +191,10 @@
     }
 
     /**
-     * Serial-only "submit output": the user watched the device finish responding.
-     * Reports the accumulated buffer as a CLEAN result — no Ctrl+C (nothing to
-     * interrupt), not early-terminated. A dedicated button, fully separate from
-     * terminate, so neither action is overloaded onto the other.
+     * Raw-device-only "submit output": the user watched the device finish
+     * responding. Reports the accumulated buffer as a CLEAN result — no Ctrl+C
+     * (nothing to interrupt), not early-terminated. A dedicated button, fully
+     * separate from terminate, so neither action is overloaded onto the other.
      */
     async function submit() {
         if (submitting) return;
@@ -233,9 +237,9 @@
                 <button class="btn btn-approve" onclick={approve} disabled={executing}>
                     {executing ? t("ai.cmd.btn.executing") : t("ai.cmd.btn.approve")}
                 </button>
-                {#if executing && !isAckOnly && targetKind === "serial"}
-                    <!-- Serial: a dedicated "submit output" button, fully separate from
-                         Terminate. The user clicks it when the device has finished
+                {#if executing && !isAckOnly && isRawDeviceKind(targetKind)}
+                    <!-- Raw devices: a dedicated "submit output" button, fully separate
+                         from Terminate. The user clicks it when the device has finished
                          responding; it reports the buffer as a clean result. -->
                     <button class="btn btn-submit" onclick={submit} disabled={submitting}>
                         {submitting ? t("ai.cmd.btn.submitting") : t("ai.cmd.btn.submit")}
@@ -251,7 +255,7 @@
                 {/if}
             </div>
             {#if executing}
-                <div class="hint">{targetKind === "serial" ? t("ai.cmd.hint.executing_serial") : t("ai.cmd.hint.executing")}</div>
+                <div class="hint">{targetKind === "serial" ? t("ai.cmd.hint.executing_serial") : targetKind === "telnet" ? t("ai.cmd.hint.executing_telnet") : t("ai.cmd.hint.executing")}</div>
             {/if}
         {:else}
             <div class="reject-form">

@@ -207,10 +207,10 @@ impl From<&DiagnoseSession> for AiSessionInfo {
 }
 
 /// What an AI session is attached to. An enum — not a `(kind: String, id: String)`
-/// pair — precisely because the kind is closed ("ssh" | "local"): the type makes
-/// the old stringly-typed `_ => unknown_target_kind` runtime error (which was
-/// duplicated across session start, rebind, and the headless rebind) impossible
-/// to reach. Wire shape: `{ "kind": "ssh"|"local", "id": "<session/pty id>" }`.
+/// pair — precisely because the kind is closed: the type makes the old
+/// stringly-typed `_ => unknown_target_kind` runtime error (which was duplicated
+/// across session start, rebind, and the headless rebind) impossible to reach.
+/// Wire shape: `{ "kind": "ssh"|"local"|"serial"|"telnet", "id": "<session id>" }`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", content = "id", rename_all = "lowercase")]
 pub enum AiTarget {
@@ -219,13 +219,20 @@ pub enum AiTarget {
     /// A connected serial port. No shell behind it — the session runs with
     /// `ShellKind::Serial` (no sentinel, no exit code; user-driven completion).
     Serial(String),
+    /// A connected telnet session. Same raw-device treatment as Serial
+    /// (`ShellKind::Telnet`: no sentinel, user-driven completion), but the LLM
+    /// steering targets network-OS CLIs instead of UART peers.
+    Telnet(String),
 }
 
 impl AiTarget {
-    /// The underlying SSH session / local-PTY / serial-port id, regardless of kind.
+    /// The underlying session id, regardless of kind.
     pub fn id(&self) -> &str {
         match self {
-            AiTarget::Ssh(id) | AiTarget::Local(id) | AiTarget::Serial(id) => id,
+            AiTarget::Ssh(id)
+            | AiTarget::Local(id)
+            | AiTarget::Serial(id)
+            | AiTarget::Telnet(id) => id,
         }
     }
 }
@@ -443,6 +450,15 @@ pub async fn ai_session_start_impl(
         #[cfg(target_os = "android")]
         AiTarget::Serial(_) => {
             return Err(AppError::not_found("serial_session_not_found", json!({})))
+        }
+        AiTarget::Telnet(target_id) => {
+            // Same raw-device path as Serial: validate it exists, run with
+            // ShellKind::Telnet, no ssh_handle (front-end does telnet_write/read).
+            if !locked(&state.telnet_sessions)?.contains_key(target_id) {
+                return Err(AppError::not_found("telnet_session_not_found", json!({})));
+            }
+            initial_shell = super::shell::ShellKind::Telnet;
+            None
         }
     };
 
@@ -742,6 +758,12 @@ pub async fn ai_session_rebind_target(
         AiTarget::Serial(_) => {
             return Err(AppError::not_found("serial_session_not_found", json!({})))
         }
+        AiTarget::Telnet(target_id) => {
+            if !locked(&state.telnet_sessions)?.contains_key(target_id) {
+                return Err(AppError::not_found("telnet_session_not_found", json!({})));
+            }
+            None
+        }
     };
     let target_id = target.id().to_string();
     // Conversation scope guard: the persisted conversation row is keyed by
@@ -871,6 +893,13 @@ pub(crate) fn conversation_target_key(state: &AppState, target: &AiTarget) -> Ap
         #[cfg(target_os = "android")]
         AiTarget::Serial(_) => {
             return Err(AppError::not_found("serial_session_not_found", json!({})))
+        }
+        AiTarget::Telnet(id) => {
+            let g = locked(&state.telnet_sessions)?;
+            let h = g
+                .get(id)
+                .ok_or_else(|| AppError::not_found("telnet_session_not_found", json!({})))?;
+            format!("telnet:{}", h.peer())
         }
     })
 }
@@ -1239,6 +1268,11 @@ mod tests {
             serde_json::from_value(json!({ "kind": "serial", "id": "tty0" })).unwrap();
         assert!(matches!(serial, AiTarget::Serial(ref id) if id == "tty0"));
         assert_eq!(serial.id(), "tty0");
+
+        let telnet: AiTarget =
+            serde_json::from_value(json!({ "kind": "telnet", "id": "t7" })).unwrap();
+        assert!(matches!(telnet, AiTarget::Telnet(ref id) if id == "t7"));
+        assert_eq!(telnet.id(), "t7");
     }
 
     #[test]

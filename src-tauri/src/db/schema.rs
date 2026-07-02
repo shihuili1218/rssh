@@ -265,7 +265,7 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
         // the other is lossy reverse-engineering; storing both is dumb and clear.
         //
         // target_key groups conversations per terminal identity:
-        //   "ssh:<profile_id>" / "local" / "serial:<port_name>"
+        //   "ssh:<profile_id>" / "local" / "serial:<port_name>" / "telnet:<host:port>"
         // One string, no kind column, no special cases.
         //
         // history_json holds UNREDACTED terminal output — same trust domain as

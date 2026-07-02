@@ -482,6 +482,7 @@ const zh: Messages = {
   "ai.cmd.btn.submitting": "⋯ 提交中",
   "ai.cmd.hint.executing": "命令已粘贴并回车，正在等待终端输出 sentinel…",
   "ai.cmd.hint.executing_serial": "命令已发往串口设备。设备响应完成后，点「提交输出」把输出交给 AI。",
+  "ai.cmd.hint.executing_telnet": "命令已通过 telnet 发出。设备响应完成后，点「提交输出」把输出交给 AI。",
   "ai.cmd.reject.placeholder": "拒绝理由（让 AI 调整方案）",
   "ai.cmd.reject.submit": "提交",
   "ai.cmd.reject.cancel": "取消",

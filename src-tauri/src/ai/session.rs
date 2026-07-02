@@ -120,7 +120,8 @@ pub struct DiagnoseSession {
     /// Persistent identity in ai_conversations (resume reuses the old id).
     /// The front-end keys its timeline autosaves on this.
     pub conversation_id: String,
-    /// Conversation scope ("ssh:<profile_id>" / "local" / "serial:<port>").
+    /// Conversation scope ("ssh:<profile_id>" / "local" / "serial:<port>" /
+    /// "telnet:<host:port>").
     /// Fixed for the actor lifetime: rebind rejects a target whose key
     /// differs, so a conversation row can never accumulate another scope's
     /// transcript. Checked by commands layer, never read by the actor.
