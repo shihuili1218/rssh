@@ -806,11 +806,8 @@
         font-weight: 500;
     }
 
-    /* ── Custom JSON import dialog (shell provided by Modal.svelte) ── */
-    .dialog-title {
-        font-size: 15px;
-        font-weight: 600;
-    }
+    /* ── Custom JSON import dialog (shell provided by Modal.svelte, title
+       typography from global .dialog-title) ── */
     .dialog-hint {
         font-size: 12px;
         color: var(--text-sub);

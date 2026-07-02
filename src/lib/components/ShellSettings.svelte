@@ -126,10 +126,9 @@
     pendingRightClick = null;
   }
 
-  /** bind:value already moved the select; put it back to the committed "menu"
-   *  (the dialog only ever opens while the committed value is "menu"). */
+  /** bind:value already moved the select; resync it to the committed value. */
   function cancelRightClick() {
-    rightClickAction = "menu";
+    rightClickAction = app.rightClickAction();
     pendingRightClick = null;
   }
 
@@ -483,18 +482,8 @@
     margin: 2px -18px;
   }
 
-  /* Right-click confirm dialog — shell (scrim + card) comes from Modal.svelte;
-     .dialog-title/.dialog-body mirror the close-tab confirm in AppShell. */
-  .dialog-title {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text);
-  }
-  .dialog-body {
-    font-size: 13px;
-    color: var(--text);
-    line-height: 1.55;
-  }
+  /* Right-click confirm dialog — shell (scrim + card) comes from Modal.svelte,
+     title/body typography from global .dialog-title/.dialog-body. */
   .dialog-hint {
     font-size: 11px;
     color: var(--text-dim);

@@ -1329,15 +1329,6 @@
         opacity: 0.45;
     }
 
-    /* 关闭 tab 二次确认弹窗 —— 外壳（scrim + 卡片）由 Modal.svelte 统一提供。 */
-    .dialog-title {
-        font-size: 15px;
-        font-weight: 600;
-        color: var(--text);
-    }
-    .dialog-body {
-        font-size: 13px;
-        color: var(--text);
-        line-height: 1.55;
-    }
+    /* 关闭 tab 二次确认弹窗 —— 外壳（scrim + 卡片）由 Modal.svelte 统一提供，
+       标题/正文排版用全局 .dialog-title/.dialog-body。 */
 </style>
