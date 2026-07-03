@@ -791,9 +791,13 @@
         } else if (tabType === "telnet") {
             terminal.write(`\x1b[90mConnecting to ${meta.host}:${meta.port || 23} ...\x1b[0m\r\n`);
             try {
+                // cols/rows seed the NAWS activation reply (same as ssh_connect);
+                // the post-connect fit/resize below corrects any later drift.
                 sessionId = await invoke<string>("telnet_open", {
                     host: meta.host,
                     port: Number(meta.port) || 23,
+                    cols: terminal.cols,
+                    rows: terminal.rows,
                 });
             } catch (e: any) {
                 terminal.write(`\x1b[31mTelnet open failed: ${e}\x1b[0m\r\n`);

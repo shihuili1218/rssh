@@ -727,6 +727,8 @@ async fn dispatch_async(
         "telnet_open" => {
             let host: String = arg(&args, "host")?;
             let port = args.get("port").and_then(Value::as_u64).unwrap_or(23) as u16;
+            let cols = args.get("cols").and_then(Value::as_u64).unwrap_or(80) as u16;
+            let rows = args.get("rows").and_then(Value::as_u64).unwrap_or(24) as u16;
             let tx = tx.clone();
             let sink: TelnetSink = Arc::new(move |id: &str, out: TelnetOut| {
                 let msg = match out {
@@ -739,10 +741,11 @@ async fn dispatch_async(
                 };
                 let _ = tx.send(Message::Text(msg.to_string().into()));
             });
-            let (id, handle) = tokio::task::spawn_blocking(move || telnet::open(&host, port, sink))
-                .await
-                .map_err(|e| json!(e.to_string()))?
-                .map_err(err_value)?;
+            let (id, handle) =
+                tokio::task::spawn_blocking(move || telnet::open(&host, port, cols, rows, sink))
+                    .await
+                    .map_err(|e| json!(e.to_string()))?
+                    .map_err(err_value)?;
             locked(&state.telnet_sessions)
                 .map_err(err_value)?
                 .insert(id.clone(), handle);

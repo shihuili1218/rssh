@@ -367,11 +367,30 @@ fn connect(host: &str, port: u16) -> AppResult<TcpStream> {
 
 /// Connect to `host:port` and spawn a reader thread that negotiates telnet
 /// options and pushes terminal bytes to `sink`. Returns `(session_id, handle)`.
-pub fn open(host: &str, port: u16, sink: TelnetSink) -> AppResult<(String, TelnetHandle)> {
+///
+/// `(cols, rows)` seeds the negotiator so the NAWS *activation* reply already
+/// carries the caller's real terminal size (same contract as `ssh_connect`) —
+/// the server's DO NAWS usually arrives before the frontend's first fit/resize
+/// round-trip, and without the seed that reply would report the 80x24 default.
+pub fn open(
+    host: &str,
+    port: u16,
+    cols: u16,
+    rows: u16,
+    sink: TelnetSink,
+) -> AppResult<(String, TelnetHandle)> {
     let peer = format!("{host}:{port}");
     let stream = connect(host, port)?;
     // Interactive session: a keystroke per packet beats Nagle batching.
     let _ = stream.set_nodelay(true);
+    // Bound writes too: without this, a peer that stops reading (device hang,
+    // dead link with no RST) eventually fills the send buffer and write_all
+    // blocks forever — inside a synchronous Tauri command, i.e. a frozen UI.
+    // 5s is generous for a live link; a link that can't drain a keystroke in
+    // 5s is dead and the error surfaces to the terminal instead.
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .map_err(telnet_op_err)?;
 
     // Separate read handle so the blocking read doesn't hold the writer's lock.
     // The 100ms read timeout paces the loop so it notices the close flag; NOT a
@@ -384,10 +403,15 @@ pub fn open(host: &str, port: u16, sink: TelnetSink) -> AppResult<(String, Telne
     let closed = Arc::new(AtomicBool::new(false));
     let reader_closed = closed.clone();
 
+    let mut negotiator = Negotiator::new();
+    // Pre-activation set_size returns None by contract — nothing on the wire,
+    // the size is simply remembered for the activation reply.
+    let _ = negotiator.set_size(cols, rows);
+
     let id = uuid::Uuid::new_v4().to_string();
     let handle = TelnetHandle {
         writer: Arc::new(Mutex::new(stream)),
-        neg: Arc::new(Mutex::new(Negotiator::new())),
+        neg: Arc::new(Mutex::new(negotiator)),
         _guard: Arc::new(CloseGuard { closed }),
         peer: Arc::from(peer.as_str()),
     };
@@ -633,9 +657,11 @@ mod tests {
             s.write_all(&[IAC, DO, OPT_NAWS, IAC, WILL, OPT_ECHO])
                 .unwrap();
             s.write_all(b"login: ").unwrap();
-            // Client must answer WILL NAWS + NAWS report + DO ECHO.
+            // Client must answer WILL NAWS + NAWS report + DO ECHO. The report
+            // must carry the size `open()` was seeded with (97x31, deliberately
+            // non-default) — NOT the 80x24 NVT fallback.
             let mut want = vec![IAC, WILL, OPT_NAWS];
-            want.extend(naws_subneg(80, 24));
+            want.extend(naws_subneg(97, 31));
             want.extend([IAC, DO, OPT_ECHO]);
             let got = read_exact_timeout(&mut s, want.len());
             assert_eq!(got, want);
@@ -649,7 +675,7 @@ mod tests {
         let sink: TelnetSink = Arc::new(move |_id, out| {
             let _ = tx.send(out);
         });
-        let (id, handle) = open("127.0.0.1", port, sink).unwrap();
+        let (id, handle) = open("127.0.0.1", port, 97, 31, sink).unwrap();
         assert!(!id.is_empty());
         assert_eq!(handle.peer(), format!("127.0.0.1:{port}"));
 
@@ -696,7 +722,7 @@ mod tests {
         let sink: TelnetSink = Arc::new(move |_id, out| {
             let _ = tx.send(out);
         });
-        let (_id, _handle) = open("127.0.0.1", port, sink).unwrap();
+        let (_id, _handle) = open("127.0.0.1", port, 80, 24, sink).unwrap();
         // Data then Close, in order.
         let mut saw_data = false;
         loop {
@@ -719,7 +745,7 @@ mod tests {
             l.local_addr().unwrap().port()
         };
         let sink: TelnetSink = Arc::new(|_id, _out| {});
-        let err = match open("127.0.0.1", port, sink) {
+        let err = match open("127.0.0.1", port, 80, 24, sink) {
             Err(e) => e,
             Ok(_) => panic!("connect to a closed port unexpectedly succeeded"),
         };
@@ -755,7 +781,7 @@ mod tests {
         let sink: TelnetSink = Arc::new(move |_id, out| {
             let _ = tx.send(out);
         });
-        let (_id, handle) = open("127.0.0.1", port, sink).unwrap();
+        let (_id, handle) = open("127.0.0.1", port, 80, 24, sink).unwrap();
         // Fit before any negotiation: must be silent (nothing on the wire, or
         // the server's step-1 read would see it instead of the probe).
         handle.resize(100, 30).unwrap();

@@ -8,6 +8,9 @@ use crate::terminal::telnet;
 /// Async on purpose: DNS resolution + TCP connect can block for up to 10s per
 /// address. A sync command would sit on the main thread and freeze the UI, so
 /// the blocking connect runs on a worker via spawn_blocking.
+///
+/// `cols`/`rows` seed the NAWS activation reply with the real terminal size
+/// (same contract as `ssh_connect`).
 #[tauri::command]
 pub async fn telnet_open(
     app: AppHandle,
@@ -15,6 +18,8 @@ pub async fn telnet_open(
     state: State<'_, AppState>,
     host: String,
     port: u16,
+    cols: u16,
+    rows: u16,
 ) -> AppResult<String> {
     // Turn transport-agnostic telnet output into Tauri events. The headless ws
     // server builds a different sink over the same `telnet::open`.
@@ -28,7 +33,7 @@ pub async fn telnet_open(
             }
         });
     let (id, handle) =
-        tauri::async_runtime::spawn_blocking(move || telnet::open(&host, port, sink))
+        tauri::async_runtime::spawn_blocking(move || telnet::open(&host, port, cols, rows, sink))
             .await
             .map_err(|e| {
                 AppError::other(
