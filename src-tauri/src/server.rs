@@ -744,7 +744,14 @@ async fn dispatch_async(
             let (id, handle) =
                 tokio::task::spawn_blocking(move || telnet::open(&host, port, cols, rows, sink))
                     .await
-                    .map_err(|e| json!(e.to_string()))?
+                    // Same coded error as the desktop command, so errMsg() can
+                    // translate it; a bare JoinError string has no protocol prefix.
+                    .map_err(|e| {
+                        err_value(AppError::other(
+                            "task_join_failed",
+                            json!({ "err": e.to_string() }),
+                        ))
+                    })?
                     .map_err(err_value)?;
             locked(&state.telnet_sessions)
                 .map_err(err_value)?

@@ -803,9 +803,10 @@
                     rows: terminal.rows,
                 });
             } catch (e: any) {
-                // errMsg translates the __rssh_err__| protocol string; raw ${e}
-                // would print it verbatim (pre-existing wart in the sibling banners).
-                terminal.write(`\x1b[31mTelnet open failed: ${errMsg(e)}\x1b[0m\r\n`);
+                // errMsg turns the __rssh_err__| protocol string into a full
+                // localized sentence ("Telnet connect to {peer} failed: {err}");
+                // a hardcoded prefix would just duplicate it in English.
+                terminal.write(`\x1b[31m${errMsg(e)}\x1b[0m\r\n`);
                 terminal.write("\x1b[90mPress any key to retry.\x1b[0m\r\n");
                 disconnected = true;
                 return false;
