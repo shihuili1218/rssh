@@ -344,8 +344,11 @@ fn open_err(peer: &str, e: impl std::fmt::Display) -> AppError {
     )
 }
 
-/// Resolve + connect with a bounded timeout per address. Blocking — callers on
-/// an event loop must wrap in spawn_blocking (the Tauri command does).
+/// Resolve, then try each address with a 10s connect timeout. NOT bounded
+/// overall: `to_socket_addrs` blocks on the system resolver (its own timeout
+/// policy), and a multi-A/AAAA host pays up to 10s per address. That's fine —
+/// the whole call runs on a blocking worker (spawn_blocking in both callers),
+/// so a slow resolve delays only this open, never the UI or event loop.
 fn connect(host: &str, port: u16) -> AppResult<TcpStream> {
     let peer = format!("{host}:{port}");
     let addrs: Vec<_> = (host, port)

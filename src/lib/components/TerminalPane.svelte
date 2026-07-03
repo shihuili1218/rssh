@@ -789,13 +789,16 @@
             await wireSessionEvents(sessionId);
             initLoginScript();
         } else if (tabType === "telnet") {
-            terminal.write(`\x1b[90mConnecting to ${meta.host}:${meta.port || 23} ...\x1b[0m\r\n`);
+            // One resolved port for both the banner and the connect — two
+            // different fallback expressions would let the banner lie.
+            const telnetPort = Number(meta.port) || 23;
+            terminal.write(`\x1b[90mConnecting to ${meta.host}:${telnetPort} ...\x1b[0m\r\n`);
             try {
                 // cols/rows seed the NAWS activation reply (same as ssh_connect);
                 // the post-connect fit/resize below corrects any later drift.
                 sessionId = await invoke<string>("telnet_open", {
                     host: meta.host,
-                    port: Number(meta.port) || 23,
+                    port: telnetPort,
                     cols: terminal.cols,
                     rows: terminal.rows,
                 });
