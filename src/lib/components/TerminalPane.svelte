@@ -23,7 +23,7 @@
     import {inputNewline, normalizeIncoming, bytesToHex, parseHexInput, parseLoginScript, remapEditingKeys, normalizeOutgoing, type LoginStep} from "../terminal/serial-transforms.ts";
     import {compileHighlightRules, type CompiledHighlightRule} from "../terminal/highlight.ts";
     import {HighlightDecorator} from "../terminal/highlight-decorations.ts";
-    import {t} from "../i18n/index.svelte.ts";
+    import {t, errMsg} from "../i18n/index.svelte.ts";
     import {ACTIONS, matchBinding, optionArrowWordMotion, type ActionId} from "../keyboard/keymap.ts";
     import * as keymap from "../stores/keymap.svelte.ts";
     import BlockContextMenu, {type MenuItem} from "./BlockContextMenu.svelte";
@@ -803,7 +803,9 @@
                     rows: terminal.rows,
                 });
             } catch (e: any) {
-                terminal.write(`\x1b[31mTelnet open failed: ${e}\x1b[0m\r\n`);
+                // errMsg translates the __rssh_err__| protocol string; raw ${e}
+                // would print it verbatim (pre-existing wart in the sibling banners).
+                terminal.write(`\x1b[31mTelnet open failed: ${errMsg(e)}\x1b[0m\r\n`);
                 terminal.write("\x1b[90mPress any key to retry.\x1b[0m\r\n");
                 disconnected = true;
                 return false;

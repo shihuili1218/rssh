@@ -12,8 +12,9 @@ fn from_row(row: &rusqlite::Row) -> rusqlite::Result<TelnetProfile> {
         id: row.get(0)?,
         name: row.get(1)?,
         host: row.get(2)?,
-        // port is a u16; stored as INTEGER, narrowed here.
-        port: row.get::<_, u32>(3)? as u16,
+        // rusqlite's u16 FromSql is range-checked: a corrupted out-of-range
+        // INTEGER fails loudly instead of silently truncating.
+        port: row.get(3)?,
         input_newline: row.get(4)?,
         output_newline: row.get(5)?,
         local_echo: row.get(6)?,
@@ -61,7 +62,7 @@ pub fn insert_tx(conn: &rusqlite::Connection, t: &TelnetProfile) -> AppResult<()
             t.id,
             t.name,
             t.host,
-            t.port as u32,
+            t.port,
             t.input_newline,
             t.output_newline,
             t.local_echo,
@@ -87,7 +88,7 @@ pub fn update(db: &Db, t: &TelnetProfile) -> AppResult<()> {
         params![
             t.name,
             t.host,
-            t.port as u32,
+            t.port,
             t.input_newline,
             t.output_newline,
             t.local_echo,
@@ -204,12 +205,27 @@ mod tests {
 
     #[test]
     fn high_port_roundtrips() {
-        // u16 boundary through the INTEGER column and the u32 narrowing.
+        // u16 boundary through the INTEGER column.
         let db = Db::open_in_memory().unwrap();
         let mut t = mk("t1", "highport");
         t.port = 65535;
         insert(&db, &t).unwrap();
         assert_eq!(get(&db, "t1").unwrap().port, 65535);
+    }
+
+    #[test]
+    fn out_of_range_port_in_db_fails_loudly() {
+        // The typed API can't store >65535; plant it with raw SQL the way a
+        // corrupted row would arrive. Reading back must error, not truncate.
+        let db = Db::open_in_memory().unwrap();
+        db.lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO telnet_profiles (id, name, host, port) VALUES ('x', 'x', 'h', 70000)",
+                [],
+            )
+            .unwrap();
+        assert!(get(&db, "x").is_err());
     }
 
     #[test]

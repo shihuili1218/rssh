@@ -82,7 +82,9 @@
     display: flex; align-items: center; gap: 8px;
     margin: 20px 0 10px; padding-bottom: 6px;
   }
-  .group-head:first-of-type { margin-top: 0; }
+  /* :first-of-type never matched (the toolbar div is the first of the type);
+     the first section head always sits right after the toolbar. */
+  .toolbar + .group-head { margin-top: 0; }
   .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
   .group-name { font-weight: 600; font-size: 13px; color: var(--text); }
   .group-count {
