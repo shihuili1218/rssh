@@ -1111,6 +1111,12 @@
             fontSize: theme.termFontSize(),
             fontFamily: theme.currentTermFontStack(),
             allowProposedApi: true,
+            // When an app enables mouse tracking (zellij/tmux/vim), xterm hands
+            // drags to that app instead of selecting text. Holding a modifier
+            // forces local selection — Shift on Linux/Win (on by default),
+            // Option/Alt on macOS but ONLY if this flag is set. Without it, Mac
+            // users cannot select at all in mouse mode. Match iTerm2's Option-drag.
+            macOptionClickForcesSelection: true,
             theme: theme.currentTermTheme(),
             // xterm 6 draws its own scrollbar at overviewRuler.width||14 (=14px),
             // out of reach of the global ::-webkit-scrollbar; pin it to the app's 6px.
