@@ -10,13 +10,24 @@ export interface ClipboardWriter {
 }
 
 function decodesToClipboard(selector: string): boolean {
-  return selector.includes("c");
+  return selector === "" || selector.includes("c");
+}
+
+function normalizeBase64(encoded: string): string | null {
+  const compact = encoded.replace(/\s/g, "");
+  if (compact.length > MAX_OSC52_BASE64_CHARS) return null;
+
+  const remainder = compact.length % 4;
+  if (remainder === 1) return null;
+  return compact + "=".repeat((4 - remainder) % 4);
 }
 
 function decodeBase64Utf8(encoded: string): string | null {
-  if (encoded.length > MAX_OSC52_BASE64_CHARS) return null;
+  const normalized = normalizeBase64(encoded);
+  if (normalized === null) return null;
+
   try {
-    const binary = atob(encoded);
+    const binary = atob(normalized);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i += 1) {
       bytes[i] = binary.charCodeAt(i);
@@ -31,7 +42,9 @@ function decodeBase64Utf8(encoded: string): string | null {
  *
  *  Tools like zellij/tmux running inside SSH cannot call the desktop clipboard
  *  directly, so they ask the terminal emulator via OSC 52. We support write-only
- *  clipboard requests and deliberately ignore read queries (`?`).
+ *  clipboard requests and deliberately ignore read queries (`?`). Unlike the
+ *  app-specific OSC 7337 integration, this is a standard terminal clipboard
+ *  protocol; remote sessions are the core use case.
  */
 export function registerClipboardOscHandler(parser: OscParser, clipboard: ClipboardWriter): void {
   parser.registerOscHandler(OSC_CLIPBOARD_ID, (data: string) => {

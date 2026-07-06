@@ -43,6 +43,31 @@ describe("registerClipboardOscHandler", () => {
     expect(clipboard.writeText).toHaveBeenCalledWith("hello from zellij");
   });
 
+  it("treats an empty selector as the default clipboard selection", () => {
+    const { clipboard, dispatch } = setup();
+
+    expect(dispatch(`;${base64Utf8("default clipboard")}`)).toBe(true);
+
+    expect(clipboard.writeText).toHaveBeenCalledWith("default clipboard");
+  });
+
+  it("accepts unpadded base64 payloads", () => {
+    const { clipboard, dispatch } = setup();
+
+    expect(dispatch(`c;${base64Utf8("pa").replace(/=+$/, "")}`)).toBe(true);
+
+    expect(clipboard.writeText).toHaveBeenCalledWith("pa");
+  });
+
+  it("ignores whitespace inside base64 payloads", () => {
+    const { clipboard, dispatch } = setup();
+    const wrapped = base64Utf8("wrapped payload").replace(/(.{4})/g, "$1\n  ");
+
+    expect(dispatch(`c;${wrapped}`)).toBe(true);
+
+    expect(clipboard.writeText).toHaveBeenCalledWith("wrapped payload");
+  });
+
   it("decodes UTF-8 payloads", () => {
     const { clipboard, dispatch } = setup();
 
