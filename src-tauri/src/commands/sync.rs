@@ -332,6 +332,7 @@ mod tests {
             "forwards",
             "groups",
             "serial_profiles",
+            "telnet_profiles",
             "skills",
             "highlights",
             "snippets",

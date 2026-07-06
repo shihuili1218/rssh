@@ -12,6 +12,8 @@
   import ForwardEditor from "./ForwardEditor.svelte";
   import SerialProfileManager from "./SerialProfileManager.svelte";
   import SerialProfileEditor from "./SerialProfileEditor.svelte";
+  import TelnetProfileManager from "./TelnetProfileManager.svelte";
+  import TelnetProfileEditor from "./TelnetProfileEditor.svelte";
   import GroupManager from "./GroupManager.svelte";
   import SnippetManager from "./SnippetManager.svelte";
   import HighlightManager from "./HighlightManager.svelte";
@@ -44,6 +46,8 @@
     "forward-edit":       { component: ForwardEditor, needsId: true },
     "serial-profiles":    { component: SerialProfileManager },
     "serial-profile-edit":{ component: SerialProfileEditor, needsId: true },
+    "telnet-profiles":    { component: TelnetProfileManager },
+    "telnet-profile-edit":{ component: TelnetProfileEditor, needsId: true },
     "groups":             { component: GroupManager },
     "snippets":           { component: SnippetManager },
     "highlights":         { component: HighlightManager },
@@ -77,6 +81,7 @@
     { id: "credentials", label: t("settings.section.credentials"), section: "settings.group.connections" },
     { id: "forwards", label: t("settings.section.forwards"), section: "settings.group.connections" },
     { id: "serial-profiles", label: t("settings.section.serial"), section: "settings.group.connections" },
+    { id: "telnet-profiles", label: t("settings.section.telnet"), section: "settings.group.connections" },
     { id: "groups", label: t("settings.section.groups"), section: "settings.group.connections" },
     { id: "import-export", label: t("settings.section.import_export"), section: "settings.group.connections" },
     { id: "shell-settings", label: t("settings.section.shell"), section: "settings.group.sessions" },
@@ -121,6 +126,7 @@
     if (id === "credentials" && p === "credential-edit") return true;
     if (id === "forwards" && p === "forward-edit") return true;
     if (id === "serial-profiles" && p === "serial-profile-edit") return true;
+    if (id === "telnet-profiles" && p === "telnet-profile-edit") return true;
     if (id === "groups" && p === "group-edit") return true;
     if (id === "import-export" && p === "import-ssh-config") return true;
     return false;

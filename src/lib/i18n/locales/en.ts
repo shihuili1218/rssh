@@ -114,6 +114,7 @@ const en = {
   "settings.section.credentials": "Credentials",
   "settings.section.forwards": "Port Forwards",
   "settings.section.serial": "Serial Consoles",
+  "settings.section.telnet": "Telnet",
   "settings.section.groups": "Groups",
   "settings.section.snippets": "Snippets",
   "settings.section.highlights": "Keyword Highlights",
@@ -394,6 +395,14 @@ const en = {
   "serial.ctl.rts_deassert": "Deassert RTS",
   "serial.ctl.break": "Send break",
 
+  // ── Telnet (line-discipline labels are shared with serial.*) ──
+  "telnet.new": "+ New",
+  "telnet.empty": "No saved telnet connections",
+  "telnet.name_placeholder": "Core switch",
+  "telnet.sec.endpoint": "Endpoint",
+  "telnet.host": "Host",
+  "telnet.port": "Port",
+
   // ── AI Diagnose: ChatPanel ──
   "ai.title.danger_suffix": "DANGER MODE",
   "ai.title.danger_tip": "Auto-approve is ON — AI commands run without confirmation",
@@ -470,6 +479,7 @@ const en = {
   "ai.cmd.btn.submitting": "⋯ Submitting",
   "ai.cmd.hint.executing": "Command pasted; waiting for sentinel in terminal output…",
   "ai.cmd.hint.executing_serial": "Command sent to the serial device. Click \"Submit output\" once it has finished responding.",
+  "ai.cmd.hint.executing_telnet": "Command sent over telnet. Click \"Submit output\" once the device has finished responding.",
   "ai.cmd.reject.placeholder": "Reason for rejection (lets AI adjust)",
   "ai.cmd.reject.submit": "Submit",
   "ai.cmd.reject.cancel": "Cancel",
@@ -627,6 +637,11 @@ const en = {
   "error.host_missing": "Missing host",
   "error.username_missing": "Missing username",
   "error.pty_not_found": "PTY not found",
+  "error.telnet_open_failed": "Telnet connect to {peer} failed: {err}",
+  "error.telnet_op_failed": "Telnet operation failed: {err}",
+  "error.telnet_not_found": "Telnet session not found",
+  "error.telnet_profile_not_found": "Telnet profile not found",
+  "error.task_join_failed": "Background task failed: {err}",
   "error.sftp_session_not_found": "SFTP session not found",
   "error.ssh_session_not_found_msg": "SSH session not found",
   "error.no_pending_auth": "No pending auth request",

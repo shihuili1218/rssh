@@ -91,16 +91,27 @@ export interface ConversationMeta {
   updated_at: number;
 }
 
-/** 远端 shell 三家族 —— 跟 Rust 端 ShellKind 一对一镜像（lowercase wire format）。 */
+/** 远端 shell 三家族（lowercase wire format）。Rust 端 ShellKind 还有
+ *  serial/telnet 两个 raw-device 变体，但它们只在后端由 AiTarget 推出、
+ *  从不走这条 probe 通道 —— 这个类型只覆盖 SSH 探测能产出的家族。 */
 export type ShellKind = "posix" | "cmd" | "powershell";
 
 /**
  * Which transport an AI session targets — mirrors Rust `AiTarget` kinds
  * (lowercase wire format). Single source of truth so widening the set (e.g.
- * adding `serial`) lights up every switch via the compiler. `serial` runs
- * without a shell: no sentinel, no meaningful exit code, user-driven completion.
+ * adding `serial`) lights up every switch via the compiler.
  */
-export type AiTargetKind = "ssh" | "local" | "serial";
+export type AiTargetKind = "ssh" | "local" | "serial" | "telnet";
+
+/**
+ * Raw-device targets run without a shell: no sentinel, no meaningful exit
+ * code, user-driven completion ("submit output"). Mirrors Rust
+ * `ShellKind::is_raw_device` — one predicate so the execution paths and the
+ * confirm-dialog affordances can't drift apart.
+ */
+export function isRawDeviceKind(kind: AiTargetKind): boolean {
+  return kind === "serial" || kind === "telnet";
+}
 
 /** Cumulative token spend for one AI session (actor lifetime). */
 export interface TokenUsage {

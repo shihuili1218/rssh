@@ -2,27 +2,21 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import * as app from "../stores/app.svelte.ts";
-  import type { SerialProfile, Group } from "../stores/app.svelte.ts";
+  import type { TelnetProfile, Group } from "../stores/app.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
   import { t, errMsg } from "../i18n/index.svelte.ts";
 
-  let items = $state<SerialProfile[]>([]);
+  let items = $state<TelnetProfile[]>([]);
   let groups = $state<Group[]>([]);
 
   onMount(async () => {
-    [items, groups] = await Promise.all([app.loadSerialProfiles(), app.loadGroups()]);
+    [items, groups] = await Promise.all([app.loadTelnetProfiles(), app.loadGroups()]);
   });
 
-  /** Compact framing label, e.g. "8N1". parity[0] → N/O/E. */
-  function framing(s: SerialProfile): string {
-    const p = (s.parity[0] ?? "n").toUpperCase();
-    return `${s.data_bits}${p}${s.stop_bits}`;
-  }
-
-  // Grouped view, mirroring ProfileManager: one section per group (sort_order),
-  // then an "Ungrouped" bucket for serial profiles with no group or a deleted
-  // group. Empty groups hidden. Derived, so delete/reload reflows automatically.
-  interface Section { key: string; name: string; color: string | null; items: SerialProfile[]; }
+  // Grouped view, mirroring SerialProfileManager: one section per group
+  // (sort_order), then an "Ungrouped" bucket for profiles with no group or a
+  // deleted group. Empty groups hidden. Derived, so delete/reload reflows.
+  interface Section { key: string; name: string; color: string | null; items: TelnetProfile[]; }
   let sections = $derived.by(() => {
     const known = new Set(groups.map((g) => g.id));
     const out: Section[] = [];
@@ -39,8 +33,8 @@
   async function remove(id: string) {
     deleting = id;
     try {
-      await invoke("delete_serial_profile", { id });
-      items = await app.loadSerialProfiles();
+      await invoke("delete_telnet_profile", { id });
+      items = await app.loadTelnetProfiles();
     } catch (e: any) { toast.error(`${t("toast.error.delete")}: ${errMsg(e)}`); }
     finally { deleting = null; }
   }
@@ -48,7 +42,7 @@
 
 <div class="page">
   <div class="toolbar">
-    <button class="btn btn-accent btn-sm" onclick={() => app.navigate("serial-profile-edit")}>{t("serial.new")}</button>
+    <button class="btn btn-accent btn-sm" onclick={() => app.navigate("telnet-profile-edit")}>{t("telnet.new")}</button>
   </div>
   {#each sections as sec (sec.key)}
     <div class="group-head">
@@ -60,10 +54,10 @@
       <div class="card item-row">
         <div class="item-info">
           <div class="item-name">{s.name}</div>
-          <div class="item-sub">{s.port} · {s.baud_rate} {framing(s)}</div>
+          <div class="item-sub">{s.host}:{s.port}</div>
         </div>
         <div class="item-actions">
-          <button class="btn btn-sm" onclick={() => app.navigate("serial-profile-edit", s.id)}>{t("common.edit")}</button>
+          <button class="btn btn-sm" onclick={() => app.navigate("telnet-profile-edit", s.id)}>{t("common.edit")}</button>
           <button class="btn btn-sm btn-danger" onclick={() => remove(s.id)} disabled={deleting === s.id}>
             {deleting === s.id ? "..." : t("common.delete")}
           </button>
@@ -71,7 +65,7 @@
       </div>
     {/each}
   {:else}
-    <p class="empty">{t("serial.empty")}</p>
+    <p class="empty">{t("telnet.empty")}</p>
   {/each}
 </div>
 

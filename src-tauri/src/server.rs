@@ -26,10 +26,13 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::ai::session::UserAction;
 use crate::error::{locked, AppError, AppResult};
-use crate::models::{Credential, Forward, Group, HighlightRule, Profile, SerialProfile, Snippet};
+use crate::models::{
+    Credential, Forward, Group, HighlightRule, Profile, SerialProfile, Snippet, TelnetProfile,
+};
 use crate::state::AppState;
 use crate::terminal::pty::{self, PtyOut, PtySink};
 use crate::terminal::serial::{self, SerialOut, SerialSink};
+use crate::terminal::telnet::{self, TelnetOut, TelnetSink};
 
 type ConnResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
@@ -59,6 +62,7 @@ fn build_state() -> AppResult<AppState> {
         sessions: Mutex::new(HashMap::new()),
         pty_sessions: Mutex::new(HashMap::new()),
         serial_sessions: Mutex::new(HashMap::new()),
+        telnet_sessions: Mutex::new(HashMap::new()),
         sftp_sessions: Mutex::new(HashMap::new()),
         transfer_cancels: Mutex::new(HashMap::new()),
         active_forwards: Mutex::new(HashMap::new()),
@@ -531,6 +535,59 @@ fn dispatch(
             }
         }
 
+        // ---- telnet (open lives in dispatch_async — blocking DNS+connect) ----
+        "telnet_write" => {
+            let sid: String = arg(&args, "sessionId")?;
+            let data: Vec<u8> = arg(&args, "data")?;
+            let handle = locked(&state.telnet_sessions)
+                .map_err(err_value)?
+                .get(&sid)
+                .cloned();
+            match handle {
+                Some(h) => h.write(&data).map(|_| Value::Null).map_err(err_value),
+                None => Err(json!("telnet_not_found")),
+            }
+        }
+        "telnet_resize" => {
+            let sid: String = arg(&args, "sessionId")?;
+            let cols = args.get("cols").and_then(Value::as_u64).unwrap_or(80) as u16;
+            let rows = args.get("rows").and_then(Value::as_u64).unwrap_or(24) as u16;
+            let handle = locked(&state.telnet_sessions)
+                .map_err(err_value)?
+                .get(&sid)
+                .cloned();
+            match handle {
+                Some(h) => h.resize(cols, rows).map(|_| Value::Null).map_err(err_value),
+                None => Err(json!("telnet_not_found")),
+            }
+        }
+        "telnet_close" => {
+            let sid: String = arg(&args, "sessionId")?;
+            locked(&state.telnet_sessions)
+                .map_err(err_value)?
+                .remove(&sid);
+            Ok(Value::Null)
+        }
+
+        // ---- telnet profiles (CRUD; peer of serial profiles) ----
+        "list_telnet_profiles" => ok(crate::db::telnet_profile::list(&state.db)),
+        "get_telnet_profile" => ok(crate::db::telnet_profile::get(
+            &state.db,
+            &arg::<String>(&args, "id")?,
+        )),
+        "create_telnet_profile" => ok(crate::db::telnet_profile::insert(
+            &state.db,
+            &arg::<TelnetProfile>(&args, "profile")?,
+        )),
+        "update_telnet_profile" => ok(crate::db::telnet_profile::update(
+            &state.db,
+            &arg::<TelnetProfile>(&args, "profile")?,
+        )),
+        "delete_telnet_profile" => ok(crate::db::telnet_profile::delete(
+            &state.db,
+            &arg::<String>(&args, "id")?,
+        )),
+
         // ---- serial profiles (CRUD; peer of forwards) ----
         "list_serial_profiles" => ok(crate::db::serial_profile::list(&state.db)),
         "get_serial_profile" => ok(crate::db::serial_profile::get(
@@ -559,9 +616,9 @@ fn dispatch(
 
         // ---- ssh config import ----
         "read_ssh_config_default" => ok(crate::commands::profile::read_ssh_config_default()),
-        "read_default_key_file" => {
-            ok(crate::commands::profile::read_default_key_file(arg(&args, "name")?))
-        }
+        "read_default_key_file" => ok(crate::commands::profile::read_default_key_file(arg(
+            &args, "name",
+        )?)),
         "import_ssh_entries" => ok(crate::commands::profile::do_import_ssh_entries(
             &state.db,
             state.secret_store.as_ref(),
@@ -665,6 +722,42 @@ async fn dispatch_async(
 ) -> Result<Value, Value> {
     match cmd {
         "ssh_connect" => ssh_connect(state, args, tx).await,
+        // Async like the Tauri command, for the same reason: DNS + TCP connect
+        // can block up to 10s per address and must not stall the ws event loop.
+        "telnet_open" => {
+            let host: String = arg(&args, "host")?;
+            let port = args.get("port").and_then(Value::as_u64).unwrap_or(23) as u16;
+            let cols = args.get("cols").and_then(Value::as_u64).unwrap_or(80) as u16;
+            let rows = args.get("rows").and_then(Value::as_u64).unwrap_or(24) as u16;
+            let tx = tx.clone();
+            let sink: TelnetSink = Arc::new(move |id: &str, out: TelnetOut| {
+                let msg = match out {
+                    TelnetOut::Data(b) => {
+                        json!({ "type": "event", "event": format!("telnet:data:{id}"), "payload": b })
+                    }
+                    TelnetOut::Close => {
+                        json!({ "type": "event", "event": format!("telnet:close:{id}"), "payload": Value::Null })
+                    }
+                };
+                let _ = tx.send(Message::Text(msg.to_string().into()));
+            });
+            let (id, handle) =
+                tokio::task::spawn_blocking(move || telnet::open(&host, port, cols, rows, sink))
+                    .await
+                    // Same coded error as the desktop command, so errMsg() can
+                    // translate it; a bare JoinError string has no protocol prefix.
+                    .map_err(|e| {
+                        err_value(AppError::other(
+                            "task_join_failed",
+                            json!({ "err": e.to_string() }),
+                        ))
+                    })?
+                    .map_err(err_value)?;
+            locked(&state.telnet_sessions)
+                .map_err(err_value)?
+                .insert(id.clone(), handle);
+            Ok(json!(id))
+        }
         "ssh_write" => {
             let sid: String = arg(&args, "sessionId")?;
             let data: Vec<u8> = arg(&args, "data")?;
@@ -1308,6 +1401,15 @@ fn ai_rebind(state: &AppState, args: Value) -> Result<Value, Value> {
                 .contains_key(id)
             {
                 return Err(json!("serial_session_not_found"));
+            }
+            None
+        }
+        AiTarget::Telnet(id) => {
+            if !locked(&state.telnet_sessions)
+                .map_err(err_value)?
+                .contains_key(id)
+            {
+                return Err(json!("telnet_session_not_found"));
             }
             None
         }

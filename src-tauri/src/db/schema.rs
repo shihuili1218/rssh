@@ -2,7 +2,7 @@ use rusqlite::{params, Connection};
 
 use crate::error::AppResult;
 
-const SCHEMA_VERSION: u32 = 21;
+const SCHEMA_VERSION: u32 = 22;
 
 fn column_exists(conn: &Connection, table: &str, col: &str) -> AppResult<bool> {
     let mut stmt = conn.prepare("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2")?;
@@ -265,7 +265,7 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
         // the other is lossy reverse-engineering; storing both is dumb and clear.
         //
         // target_key groups conversations per terminal identity:
-        //   "ssh:<profile_id>" / "local" / "serial:<port_name>"
+        //   "ssh:<profile_id>" / "local" / "serial:<port_name>" / "telnet:<host:port>"
         // One string, no kind column, no special cases.
         //
         // history_json holds UNREDACTED terminal output — same trust domain as
@@ -381,6 +381,29 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
                 params![new_keyword, new_name, id],
             )?;
         }
+    }
+
+    if version < 22 {
+        // Telnet profiles — a peer of serial_profiles: no secret, no FK, just a
+        // named host:port + the line-discipline knobs that make sense for a
+        // telnet NVT (input_newline defaults to crlf — that IS the NVT end-of-
+        // line). No baud/parity/hex/slow_send: those are UART-isms.
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS telnet_profiles (
+                id             TEXT PRIMARY KEY,
+                name           TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                host           TEXT NOT NULL,
+                port           INTEGER NOT NULL DEFAULT 23,
+                input_newline  TEXT NOT NULL DEFAULT 'crlf',
+                output_newline TEXT NOT NULL DEFAULT 'raw',
+                local_echo     INTEGER NOT NULL DEFAULT 0,
+                backspace      TEXT NOT NULL DEFAULT 'del',
+                login_script   TEXT NOT NULL DEFAULT '',
+                group_id       TEXT DEFAULT NULL
+            );
+            ",
+        )?;
     }
 
     if version < SCHEMA_VERSION {

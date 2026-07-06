@@ -116,6 +116,7 @@ const zh: Messages = {
   "settings.section.credentials": "凭证",
   "settings.section.forwards": "端口转发",
   "settings.section.serial": "串口控制台",
+  "settings.section.telnet": "Telnet",
   "settings.section.groups": "分组",
   "settings.section.snippets": "命令片段",
   "settings.section.highlights": "关键字高亮",
@@ -397,6 +398,14 @@ const zh: Messages = {
   "serial.ctl.rts_deassert": "复位 RTS",
   "serial.ctl.break": "发送 Break",
 
+  // ── Telnet（行规程文案与 serial.* 共用）──
+  "telnet.new": "+ 新建",
+  "telnet.empty": "暂无已保存的 Telnet 连接",
+  "telnet.name_placeholder": "核心交换机",
+  "telnet.sec.endpoint": "目标",
+  "telnet.host": "主机",
+  "telnet.port": "端口",
+
   // ── AI 排障：ChatPanel ──
   "ai.title.danger_suffix": "危险模式",
   "ai.title.danger_tip": "已开启自动执行 —— AI 提议的命令将跳过确认直接运行",
@@ -473,6 +482,7 @@ const zh: Messages = {
   "ai.cmd.btn.submitting": "⋯ 提交中",
   "ai.cmd.hint.executing": "命令已粘贴并回车，正在等待终端输出 sentinel…",
   "ai.cmd.hint.executing_serial": "命令已发往串口设备。设备响应完成后，点「提交输出」把输出交给 AI。",
+  "ai.cmd.hint.executing_telnet": "命令已通过 telnet 发出。设备响应完成后，点「提交输出」把输出交给 AI。",
   "ai.cmd.reject.placeholder": "拒绝理由（让 AI 调整方案）",
   "ai.cmd.reject.submit": "提交",
   "ai.cmd.reject.cancel": "取消",
@@ -630,6 +640,11 @@ const zh: Messages = {
   "error.host_missing": "缺少 host",
   "error.username_missing": "缺少 username",
   "error.pty_not_found": "PTY 不存在",
+  "error.telnet_open_failed": "Telnet 连接 {peer} 失败：{err}",
+  "error.telnet_op_failed": "Telnet 操作失败：{err}",
+  "error.telnet_not_found": "Telnet 会话不存在",
+  "error.telnet_profile_not_found": "Telnet 配置不存在",
+  "error.task_join_failed": "后台任务失败：{err}",
   "error.sftp_session_not_found": "SFTP 会话不存在",
   "error.ssh_session_not_found_msg": "SSH 会话不存在",
   "error.no_pending_auth": "无等待中的认证请求",
