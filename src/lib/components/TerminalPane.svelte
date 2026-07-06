@@ -14,6 +14,7 @@
     import * as theme from "../themes/store.svelte.ts";
     import MobileKeybar from "./MobileKeybar.svelte";
     import {registerRsshOscHandlers} from "../osc/handler.ts";
+    import {registerClipboardOscHandler} from "../osc/clipboard.ts";
     import {createCommandBlockTracker, type CommandBlock, type CommandBlockTracker} from "../terminal/command-blocks.ts";
     import {readViewportSnapshot, readViewportText} from "../terminal/viewport-snapshot.ts";
     import {createFoldStore, type FoldStore} from "../terminal/folds.ts";
@@ -1142,6 +1143,14 @@
             fontSize: theme.termFontSize(),
             fontFamily: theme.currentTermFontStack(),
             allowProposedApi: true,
+            /*
+            // When an app enables mouse tracking (zellij/tmux/vim), xterm hands
+            // drags to that app instead of selecting text. Holding a modifier
+            // forces local selection — Shift on Linux/Win (on by default),
+            // Option/Alt on macOS but ONLY if this flag is set. Without it, Mac
+            // users cannot select at all in mouse mode. Match iTerm2's Option-drag.
+            macOptionClickForcesSelection: true,
+            */
             theme: theme.currentTermTheme(),
             // xterm 6 draws its own scrollbar at overviewRuler.width||14 (=14px),
             // out of reach of the global ::-webkit-scrollbar; pin it to the app's 6px.
@@ -1243,6 +1252,14 @@
             }
             return true;
         });
+
+        // OSC 52: terminal apps (zellij/tmux/vim plugins) ask the host terminal
+        // to write selected text into the desktop clipboard.
+        if (tabType !== "serial") {
+            registerClipboardOscHandler(terminal.parser, {
+                writeText: app.writeClipboard,
+            });
+        }
 
         // OSC 7337: rssh CLI → app integration（处理逻辑见 lib/osc/handler.ts）。
         // 仅本地 PTY 注册：open:/fwd: 引用的是本地保存的 profile，远程 SSH/serial

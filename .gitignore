@@ -24,6 +24,7 @@
 *.swo
 
 .claude/
+.codex/
 idea-plugin/build/
 idea-plugin/.gradle/
 idea-plugin/.intellijPlatform
