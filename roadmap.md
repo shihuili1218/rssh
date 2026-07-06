@@ -13,7 +13,8 @@
 - 外观字体只能控制终端，最好要控制全局字体（AI）❌
 - AI 导入～/CLAUDE.md
 - 统一图标：自绘 SVG 替换 emoji（MobileKeybar 的 ⚡/📁、SftpBrowser 的 📁🔗📄），落实 AGENT.md「图标自己画，别用emoji」
-
+- 豆包输入法
+- 接入cloudflare https://linux.do/t/topic/2487408/74
 
 
 ![Stars](https://img.shields.io/github/stars/shihuili1218/rssh)
