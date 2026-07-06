@@ -14,6 +14,7 @@
     import * as theme from "../themes/store.svelte.ts";
     import MobileKeybar from "./MobileKeybar.svelte";
     import {registerRsshOscHandlers} from "../osc/handler.ts";
+    import {registerClipboardOscHandler} from "../osc/clipboard.ts";
     import {createCommandBlockTracker, type CommandBlock, type CommandBlockTracker} from "../terminal/command-blocks.ts";
     import {readViewportSnapshot, readViewportText} from "../terminal/viewport-snapshot.ts";
     import {createFoldStore, type FoldStore} from "../terminal/folds.ts";
@@ -1218,6 +1219,14 @@
             }
             return true;
         });
+
+        // OSC 52: terminal apps (zellij/tmux/vim plugins) ask the host terminal
+        // to write selected text into the desktop clipboard.
+        if (tabType !== "serial") {
+            registerClipboardOscHandler(terminal.parser, {
+                writeText: app.writeClipboard,
+            });
+        }
 
         // OSC 7337: rssh CLI → app integration（处理逻辑见 lib/osc/handler.ts）。
         // 仅本地 PTY 注册：open:/fwd: 引用的是本地保存的 profile，远程 SSH/serial
