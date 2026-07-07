@@ -11,16 +11,10 @@
  *
  * fold 流程：splice 抽出 → push 空行补齐（记下引用）→ drain ybase 再 y → 重排 ydisp
  *
- * unfold 流程：splice 塞回 → 部分 pop 还原 buffer 长度。
- *   能 pop 多少 pop 多少（不是全有全无）：
- *     k_max = min(count, rows - 1 - y)   ← cursor 在屏幕上下移的最大量
- *     遍历 pop k_max 次；遇到末尾不是我们 push 的 blank（用户/xterm 写过）
- *     就把它推回，提前停。
- *   实际 popped 次数 → cursor 下移 popped 行
- *   未 pop 的 (count - popped) → ybase 增长这么多（多余行进 scrollback）
- *
- *   设计核心：cursor-overflow 和 end-not-blank 是物理约束，不是全或无。
- *   尽力 pop 让 buffer 不必要的膨胀降到最小。
+ * unfold 流程：splice 塞回 → 删除本 fold 当初补在 buffer 里的空行。
+ *   补偿空行可能已被后续 fold 推到 buffer 中间；因此不能只看末尾，
+ *   更不能用全局 pushedBlanks 去 pop 其他 fold 的空行。按对象引用找到
+ *   本 fold 自己的空行，确认仍为空后删除，才能让非 LIFO 展开恢复不变量。
  *
  * Auto-unfold 触发：
  *   - 终端 resize（saved 是按旧列宽抓的，新列宽展开会错位）
@@ -45,7 +39,7 @@ export interface Fold {
   count: number;
   /** fold 时实际 push 到末尾的空行数 = count - ybaseDrain。
    *  当 ybase 有足够 scrollback 可以让出空间时，pushCount < count。
-   *  unfold 时必须 pop 这个数（不是 count）才能精确还原长度。 */
+   *  unfold 时最多删除这些补偿空行（不是 count）才能精确还原长度。 */
   pushCount: number;
   /** splice 抽出的 BufferLine 实例（对我们透明） */
   savedLines: unknown[];
@@ -105,16 +99,34 @@ function syncViewport(term: Terminal): void {
   vp?.queueSync();
 }
 
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, n));
+}
+
+function findLineIndex(lines: PrivateBuffer["lines"], needle: unknown): number {
+  for (let i = 0; i < lines.length; i++) {
+    if (lines.get(i) === needle) return i;
+  }
+  return -1;
+}
+
+function isStillBlankLine(line: unknown): boolean {
+  const candidate = line as { getTrimmedLength?: () => number; isWrapped?: boolean } | null;
+  if (candidate && typeof candidate.getTrimmedLength === "function") {
+    return candidate.getTrimmedLength() === 0 && candidate.isWrapped !== true;
+  }
+  return true;
+}
+
 export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): FoldStore {
   // 以 blockId 为键便于 O(1) 判断"该 block 是否折叠"。Fold 的 id 仅用于调试。
   const folds = new Map<number, Fold>();
   const listeners = new Set<() => void>();
   const disposables: IDisposable[] = [];
   let nextId = 1;
-  // 所有 fold 期间 push 进 buffer 末尾的 blank BufferLine 引用集合。
-  // unfold 用它判断"末尾 count 行是否还是我们 push 的空行"——是 → 安全 pop
-  // 让 buffer 长度恢复（无遗留空行、无 scrollbar 虚胀）；否则用户内容已经
-  // 把空行挤走，pop 会吞数据 → 退到 no-pop 路径。
+  // 所有 fold 期间 push 进 buffer 的 blank BufferLine 引用集合。
+  // 每个 Fold 也保存自己的 pushedBlankRefs；unfold 只能删除当前 Fold
+  // 自己的仍为空的引用，避免非 LIFO 展开误删其他 Fold 的补偿行。
   const pushedBlanks = new Set<unknown>();
 
   const emit = () => listeners.forEach((fn) => fn());
@@ -202,42 +214,47 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     }
     const buf = getBuf(term);
     const insertAt = block.start.line + 1;
+    const cursorAbsBefore = buf.ybase + buf.y;
+    let nextCursorAbs = insertAt <= cursorAbsBefore ? cursorAbsBefore + f.count : cursorAbsBefore;
+    let nextYdisp = buf.ydisp;
     const wasLive = buf.ydisp === buf.ybase;
 
     // splice 塞回 → marker 反向迁移
     // 分块插：Array spread 在 V8 上有 ~65k 参数硬上限（large build log /
     // find / 输出轻易就超过）。一次性 splice(...savedLines) 会抛 RangeError。
+    const lengthBeforeInsert = buf.lines.length;
     const SPLICE_CHUNK = 32768;
     for (let i = 0; i < f.savedLines.length; i += SPLICE_CHUNK) {
       const chunk = f.savedLines.slice(i, i + SPLICE_CHUNK);
       buf.lines.splice(insertAt + i, 0, ...chunk);
     }
+    if (insertAt <= nextYdisp) nextYdisp += f.count;
 
-    // 目标：pop 掉 fold 时 push 进末尾的 pushCount 行（只有这些是我们的）。
-    // count = pushCount + ybaseDrain；ybaseDrain 那部分通过"还原 ybase"恢复，
-    // pushCount 那部分通过"pop 末尾 + cursor 下移"恢复。
-    const ybaseDrain = f.count - f.pushCount;
-    const kMax = Math.max(0, Math.min(f.pushCount, term.rows - 1 - buf.y));
-    let popped = 0;
-    while (popped < kMax) {
-      const item = buf.lines.pop();
-      if (!pushedBlanks.has(item)) {
-        buf.lines.push(item);
-        break;
-      }
-      pushedBlanks.delete(item);
-      popped++;
+    // CircularList.splice 会在 maxLength 满时从头 trim；我们直接碰私有
+    // lines，必须自己把 cursor/viewport 的绝对行同步扣回来。
+    const trimmedDuringInsert = Math.max(0, lengthBeforeInsert + f.count - buf.lines.length);
+    if (trimmedDuringInsert > 0) {
+      nextCursorAbs = Math.max(0, nextCursorAbs - trimmedDuringInsert);
+      nextYdisp = Math.max(0, nextYdisp - trimmedDuringInsert);
     }
 
-    const remaining = f.pushCount - popped;
-    // 完全 pop（popped == pushCount）：ybase 恢复 ybaseDrain；linesLen 与 fold 前一致
-    // 部分 pop：未 pop 的 remaining 行只能让 ybase 多长，linesLen 暂时膨胀
-    buf.ybase += ybaseDrain + remaining;
-    buf.y += popped;
+    // 删除本 fold 自己补的空行。后续 fold 可能把这些行从末尾推到中间，
+    // 所以按当前 index 从下往上 splice，避免 index 级联偏移。
+    const removable = f.pushedBlankRefs
+      .map((line) => ({ line, index: findLineIndex(buf.lines, line) }))
+      .filter(({ line, index }) => index >= 0 && isStillBlankLine(line))
+      .sort((a, b) => b.index - a.index);
 
-    if (wasLive) buf.ydisp = buf.ybase;
-    else if (buf.ydisp >= insertAt) buf.ydisp += f.count;
-    if (buf.ydisp > buf.ybase) buf.ydisp = buf.ybase;
+    for (const { line, index } of removable) {
+      buf.lines.splice(index, 1);
+      pushedBlanks.delete(line);
+      if (index < nextCursorAbs) nextCursorAbs--;
+      if (index < nextYdisp) nextYdisp--;
+    }
+
+    buf.ybase = Math.max(0, buf.lines.length - term.rows);
+    buf.y = clamp(nextCursorAbs - buf.ybase, 0, term.rows - 1);
+    buf.ydisp = wasLive ? buf.ybase : clamp(nextYdisp, 0, buf.ybase);
 
     // 重装 block.end：splice 时它被 dispose，block-bar 渲染依赖它的位置
     try {
@@ -249,8 +266,8 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
       // addMarker 异常则保持 end=disposed，block-bar 会回退到 cursor 位置 — 可接受
     }
 
-    // 清剩余 refs：pop 循环已删过 popped 个，剩下 remaining 个还在 Set 里。
-    // discardFold 是幂等的（重复 delete 同 key 是 no-op），统一收口更清楚。
+    // 清剩余 refs：已删除的上面删过；未删除（被写入/被 trim）也要从
+    // 全局集合里释放。discardFold 是幂等的，统一收口更清楚。
     discardFold(f);
     folds.delete(blockId);
     syncViewport(term);
