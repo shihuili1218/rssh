@@ -31,8 +31,9 @@ function fakeBlankLine(): FakeLine {
   return line;
 }
 
-function fakeTerm(opts: { rows: number; initialLines: number; cursorY: number; ybase?: number }) {
+function fakeTerm(opts: { rows: number; initialLines: number; cursorY: number; ybase?: number; maxLength?: number }) {
   const rows = opts.rows;
+  const maxLength = opts.maxLength;
   let ybase = opts.ybase ?? 0;
   let ydisp = ybase;
   let y = opts.cursorY;
@@ -63,6 +64,21 @@ function fakeTerm(opts: { rows: number; initialLines: number; cursorY: number; y
     return m;
   };
 
+  function trimHead(count: number) {
+    if (count <= 0) return;
+    lineArray.splice(0, count);
+    for (const m of markers) {
+      if (m.isDisposed) continue;
+      m.line -= count;
+      if (m.line < 0) m.dispose();
+    }
+  }
+
+  function enforceMaxLength() {
+    if (!maxLength || lineArray.length <= maxLength) return;
+    trimHead(lineArray.length - maxLength);
+  }
+
   // CircularList 的子集 + xterm Buffer.addMarker 内嵌的迁移逻辑
   const lines = {
     get length() {
@@ -89,6 +105,7 @@ function fakeTerm(opts: { rows: number; initialLines: number; cursorY: number; y
           if (m.isDisposed) continue;
           if (m.line >= start) m.line += items.length;
         }
+        enforceMaxLength();
       }
     },
     push(item: FakeLine) {
@@ -139,6 +156,7 @@ function fakeTerm(opts: { rows: number; initialLines: number; cursorY: number; y
     term: term as unknown as Parameters<typeof createFoldStore>[0],
     buffer,
     lineContents: () => lineArray.map((l) => l.content),
+    lineRefs: () => [...lineArray],
     markers,
     makeMarker,
     triggerResize: () => resizeListeners.forEach((fn) => fn()),
@@ -356,21 +374,22 @@ describe("FoldStore — unfold() effects", () => {
     expect(f.lineContents()).toContain("<user-output>");
   });
 
-  it("unfold removes compensation lines even when cursor screen headroom is small", () => {
-    // 旧实现只能从末尾 pop，受 rows - 1 - y 限制。新实现按引用删除
-    // 仍为空的补偿行，因此不需要为了 cursor headroom 留下多余 buffer 行。
+  it("unfold keeps blank compensation lines the cursor has consumed", () => {
     const f = fakeTerm({ rows: 10, initialLines: 10, cursorY: 9 });
     const s = f.makeMarker(0);
     const e = f.makeMarker(8);
     const tracker = fakeTracker([makeBlock(1, s, e)]);
     const store = createFoldStore(f.term, tracker);
     store.fold(1);
-    f.buffer.y = 8;
+    const consumed = store.getFold(1)!.pushedBlankRefs[0] as FakeLine;
+    // The cursor has moved onto the first compensation blank. It still renders
+    // blank, but it now represents real terminal output and must be preserved.
+    f.buffer.y = 2;
     const afterFold = f.snapshot();
     store.unfold(1);
     const afterUnfold = f.snapshot();
-    expect(afterUnfold.length).toBe(afterFold.length);
-    expect(afterUnfold.ybase).toBe(0);
+    expect(afterUnfold.length).toBe(afterFold.length + 1);
+    expect(f.lineRefs()).toContain(consumed);
   });
 
   it("unfold keeps a compensation line that was replaced by user output", () => {
@@ -454,6 +473,24 @@ describe("FoldStore — unfold() effects", () => {
     s.dispose();
     expect(store.unfold(1)).toBe(false);
     expect(store.isFolded(1)).toBe(false);
+  });
+
+  it("unfold drops fold record if insert trimming disposes block.start", () => {
+    const f = fakeTerm({ rows: 5, initialLines: 5, cursorY: 4, maxLength: 5 });
+    const s = f.makeMarker(0);
+    const e = f.makeMarker(2);
+    const block = makeBlock(1, s, e);
+    const tracker = fakeTracker([block]);
+    const store = createFoldStore(f.term, tracker);
+
+    store.fold(1);
+    const markerCountAfterFold = f.markers.length;
+
+    expect(store.unfold(1)).toBe(false);
+    expect(s.isDisposed).toBe(true);
+    expect(store.isFolded(1)).toBe(false);
+    expect(f.markers.length).toBe(markerCountAfterFold);
+    expect(block.end?.isDisposed).toBe(true);
   });
 });
 

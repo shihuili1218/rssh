@@ -219,6 +219,16 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     let nextYdisp = buf.ydisp;
     const wasLive = buf.ydisp === buf.ybase;
 
+    // Compensation refs below the active cursor are still untouched screen
+    // padding. Refs at/above the cursor may have been consumed by real output,
+    // even if they still render as blank lines, so unfold must preserve them.
+    const untouchedBlankRefs = new Set(
+      f.pushedBlankRefs.filter((line) => {
+        const index = findLineIndex(buf.lines, line);
+        return index > cursorAbsBefore && isStillBlankLine(line);
+      }),
+    );
+
     // splice 塞回 → marker 反向迁移
     // 分块插：Array spread 在 V8 上有 ~65k 参数硬上限（large build log /
     // find / 输出轻易就超过）。一次性 splice(...savedLines) 会抛 RangeError。
@@ -237,10 +247,18 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
       nextCursorAbs = Math.max(0, nextCursorAbs - trimmedDuringInsert);
       nextYdisp = Math.max(0, nextYdisp - trimmedDuringInsert);
     }
+    if (block.start.isDisposed || block.start.line < 0) {
+      discardFold(f);
+      folds.delete(blockId);
+      syncViewport(term);
+      term.refresh(0, term.rows - 1);
+      emit();
+      return false;
+    }
 
     // 删除本 fold 自己补的空行。后续 fold 可能把这些行从末尾推到中间，
     // 所以按当前 index 从下往上 splice，避免 index 级联偏移。
-    const removable = f.pushedBlankRefs
+    const removable = Array.from(untouchedBlankRefs)
       .map((line) => ({ line, index: findLineIndex(buf.lines, line) }))
       .filter(({ line, index }) => index >= 0 && isStillBlankLine(line))
       .sort((a, b) => b.index - a.index);

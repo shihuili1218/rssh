@@ -847,7 +847,7 @@
         } else {
             // SSH: listen on tabId FIRST for connection logs + auth prompts
             const logUn = await listen<number[]>(`ssh:data:${tabId}`, (ev) => {
-                terminal.write(new Uint8Array(ev.payload));
+                writeRawOutput(new Uint8Array(ev.payload));
             });
             const authUn = await listen<AuthPromptData>(`ssh:auth_prompt:${tabId}`, (ev) => {
                 authPrompt = ev.payload;
@@ -874,6 +874,7 @@
                 logUn(); authUn(); passUn(); hkUn();
                 passphraseInputDisposable?.dispose(); passphraseInputDisposable = undefined;
                 hostKeyInputDisposable?.dispose(); hostKeyInputDisposable = undefined;
+                writeBatcher?.flush();
                 terminal.write(`\x1b[31mConnection failed: ${e}\x1b[0m\r\n`);
                 terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
                 disconnected = true;
