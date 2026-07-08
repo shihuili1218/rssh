@@ -191,6 +191,12 @@ pub fn run() {
             commands::forward::forward_start,
             commands::forward::forward_stats,
             commands::forward::forward_stop,
+            // dynamic discovery
+            commands::discovery::list_dynamic_discovery_sources,
+            commands::discovery::save_dynamic_discovery_sources,
+            commands::discovery::dynamic_discovery_tool_status,
+            commands::discovery::list_dynamic_discovery_contexts,
+            commands::discovery::discover_dynamic_targets,
             // settings & snippets & highlights
             commands::settings::get_setting,
             commands::settings::set_setting,
@@ -225,6 +231,8 @@ pub fn run() {
             commands::pty::refresh_shells,
             #[cfg(not(target_os = "android"))]
             commands::pty::pty_spawn,
+            #[cfg(not(target_os = "android"))]
+            commands::pty::pty_spawn_connector,
             #[cfg(not(target_os = "android"))]
             commands::pty::pty_write,
             #[cfg(not(target_os = "android"))]

@@ -8,7 +8,7 @@
     import {ImageAddon} from "@xterm/addon-image";
     import {invoke} from "@tauri-apps/api/core";
     import {listen, type UnlistenFn} from "@tauri-apps/api/event";
-    import type {HighlightRule} from "../stores/app.svelte.ts";
+    import type {ConnectorSpec, HighlightRule} from "../stores/app.svelte.ts";
     import * as app from "../stores/app.svelte.ts";
     import * as ai from "../ai/store.svelte.ts";
     import * as theme from "../themes/store.svelte.ts";
@@ -69,7 +69,7 @@
 
     let {tabId, tabType, meta = {}}: {
         tabId: string;
-        tabType: "ssh" | "local" | "serial" | "telnet";
+        tabType: app.TerminalTabType;
         meta: Record<string, string>;
     } = $props();
 
@@ -463,15 +463,18 @@
     let mobileTouchScrollCleanup: (() => void) | undefined;
 
     const isLocal = $derived(tabType === "local");
+    const isPtyConnector = $derived(tabType === "docker_exec" || tabType === "kubectl_exec");
     const isSsh = $derived(tabType === "ssh");
     // Transport table — the per-tab byte-stream IPC contract lives in DATA, not in
     // branches. Adding a transport is one more row, zero code change.
     // resize:null means the transport has no rows/cols (serial) → callers skip it.
-    const TRANSPORT: Record<"ssh" | "local" | "serial" | "telnet", {
+    const TRANSPORT: Record<app.TerminalTabType, {
         write: string; resize: string | null; data: string; close: string; closeCmd: string;
     }> = {
         ssh:    { write: "ssh_write",    resize: "ssh_resize",    data: "ssh:data",    close: "ssh:close",    closeCmd: "ssh_disconnect" },
         local:  { write: "pty_write",    resize: "pty_resize",    data: "pty:data",    close: "pty:close",    closeCmd: "pty_close" },
+        docker_exec:  { write: "pty_write", resize: "pty_resize", data: "pty:data", close: "pty:close", closeCmd: "pty_close" },
+        kubectl_exec: { write: "pty_write", resize: "pty_resize", data: "pty:data", close: "pty:close", closeCmd: "pty_close" },
         serial: { write: "serial_write", resize: null,            data: "serial:data", close: "serial:close", closeCmd: "serial_close" },
         telnet: { write: "telnet_write", resize: "telnet_resize", data: "telnet:data", close: "telnet:close", closeCmd: "telnet_close" },
     };
@@ -814,9 +817,14 @@
             }
             await wireSessionEvents(sessionId);
             initLoginScript();
-        } else if (isLocal) {
+        } else if (isLocal || isPtyConnector) {
             try {
-                sessionId = await invoke<string>("pty_spawn", { cols: terminal.cols, rows: terminal.rows });
+                if (isPtyConnector) {
+                    const spec = JSON.parse(meta.connectorSpec || "{}") as ConnectorSpec;
+                    sessionId = await invoke<string>("pty_spawn_connector", { cols: terminal.cols, rows: terminal.rows, spec });
+                } else {
+                    sessionId = await invoke<string>("pty_spawn", { cols: terminal.cols, rows: terminal.rows });
+                }
             } catch (e: any) {
                 terminal.write(`\x1b[31mLaunch failed: ${e}\x1b[0m\r\n`);
                 return false;
@@ -1349,7 +1357,7 @@
                 // store's cached target_id so post-reconnect internal commands
                 // don't hit the dead session (telnet_not_found).
                 const aiInfo = ai.sessionForTab(tabId);
-                if (aiInfo && aiInfo.target_id !== sid && tabType !== "serial") {
+                if (aiInfo && aiInfo.target_id !== sid && app.isAiCapableTabType(tabType) && tabType !== "serial") {
                     ai.rebindTarget(tabId, tabType, sid).catch((e) =>
                         console.warn("[ai] rebind on reconnect:", e),
                     );

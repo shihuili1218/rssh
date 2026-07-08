@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as app from "../stores/app.svelte.ts";
-  import type { Profile, Credential, Forward, Group, SerialProfile, TelnetProfile } from "../stores/app.svelte.ts";
+  import type { Profile, Credential, Forward, Group, SerialProfile, TelnetProfile, DynamicDiscoveredTarget, ConnectorSpec } from "../stores/app.svelte.ts";
 
   let profiles = $state<Profile[]>([]);
   let credentials = $state<Credential[]>([]);
@@ -9,6 +9,7 @@
   let groups = $state<Group[]>([]);
   let serialProfiles = $state<SerialProfile[]>([]);
   let telnetProfiles = $state<TelnetProfile[]>([]);
+  let dynamicTargets = $state<DynamicDiscoveredTarget[]>([]);
   let query = $state("");
 
   // One global nav index into the flat (display-order) item list.
@@ -17,50 +18,82 @@
   // column count. Plain array (not $state): only read inside the key handler.
   let gridEls: HTMLDivElement[] = [];
 
-  // ── Normalize the config kinds into one shape ─────────────────────────────
-  // SSH profiles, port forwards, serial and telnet profiles all become a
-  // HomeItem, so a single grouping / filtering / keyboard-nav path covers them
-  // — no per-kind sections, no special cases. `kind` + the icon set them apart.
+  // ── Normalize saved and discovered targets into one shape ──────────────────
+  // Static profiles and dynamic connector results share the same HomeItem path.
+  // Opening behavior lives on the item itself, so Home does not assume that every
+  // discovered target is a container/pod connector.
+  type HomeItemKind = "ssh" | "forward" | "serial" | "telnet" | ConnectorSpec["type"];
+
   interface HomeItem {
-    kind: "ssh" | "forward" | "serial" | "telnet";
-    id: string; // `${kind}:${rawId}` — globally unique for keyed #each + nav
-    rawId: string;
+    kind: HomeItemKind;
+    id: string; // Globally unique for keyed #each + nav.
     name: string;
     sub: string;
     icon: string;
-    iconClass: string; // "" | "fwd" | "serial" | "telnet"
+    iconClass: string;
     group_id: string | null;
-    data: Profile | Forward | SerialProfile | TelnetProfile;
+    pinProfileId: string | null;
+    open: () => void;
+  }
+
+  function dynamicTargetPresentation(target: DynamicDiscoveredTarget): Pick<HomeItem, "icon" | "iconClass"> {
+    switch (target.connector_spec.type) {
+      case "docker_exec":
+        return { icon: "D", iconClass: "docker" };
+      case "kubectl_exec":
+        return { icon: "K", iconClass: "k8s" };
+    }
+
+    const _exhaustive: never = target.connector_spec;
+    throw new Error(`Unsupported connector spec: ${JSON.stringify(_exhaustive)}`);
   }
 
   let allItems = $derived<HomeItem[]>([
     ...profiles.map((p): HomeItem => {
       const cred = credentials.find((c) => c.id === p.credential_id);
       return {
-        kind: "ssh", id: `ssh:${p.id}`, rawId: p.id, name: p.name,
+        kind: "ssh", id: `ssh:${p.id}`, name: p.name,
         sub: `${cred?.username ?? "?"}@${p.host}:${p.port}`,
-        icon: "S", iconClass: "", group_id: p.group_id ?? null, data: p,
+        icon: "S", iconClass: "", group_id: p.group_id ?? null,
+        pinProfileId: p.id, open: () => connectProfile(p),
       };
     }),
     ...forwards.map((f): HomeItem => ({
-      kind: "forward", id: `forward:${f.id}`, rawId: f.id, name: f.name,
+      kind: "forward", id: `forward:${f.id}`, name: f.name,
       sub: `:${f.local_port} → ${f.remote_host}:${f.remote_port}`,
       icon: f.type === "dynamic" ? "D" : f.type === "local" ? "L" : "R",
-      iconClass: "fwd", group_id: f.group_id ?? null, data: f,
+      iconClass: "fwd", group_id: f.group_id ?? null,
+      pinProfileId: null, open: () => openForward(f),
     })),
     ...serialProfiles.map((s): HomeItem => ({
-      kind: "serial", id: `serial:${s.id}`, rawId: s.id, name: s.name,
+      kind: "serial", id: `serial:${s.id}`, name: s.name,
       sub: `${s.port} · ${s.baud_rate}`,
-      icon: "⎓", iconClass: "serial", group_id: s.group_id ?? null, data: s,
+      icon: "⎓", iconClass: "serial", group_id: s.group_id ?? null,
+      pinProfileId: null, open: () => app.connectSerialProfile(s),
     })),
     ...telnetProfiles.map((tp): HomeItem => ({
-      kind: "telnet", id: `telnet:${tp.id}`, rawId: tp.id, name: tp.name,
+      kind: "telnet", id: `telnet:${tp.id}`, name: tp.name,
       sub: `${tp.host}:${tp.port}`,
-      icon: "T", iconClass: "telnet", group_id: tp.group_id ?? null, data: tp,
+      icon: "T", iconClass: "telnet", group_id: tp.group_id ?? null,
+      pinProfileId: null, open: () => app.connectTelnetProfile(tp),
     })),
+    ...dynamicTargets.map((target): HomeItem => {
+      const presentation = dynamicTargetPresentation(target);
+      return {
+        kind: target.connector_spec.type,
+        id: `dynamic:${target.source_id}:${target.id}`,
+        name: target.name,
+        sub: `${target.source_name} · ${target.sub}`,
+        icon: presentation.icon,
+        iconClass: presentation.iconClass,
+        group_id: null,
+        pinProfileId: null,
+        open: () => app.connectDynamicTarget(target),
+      };
+    }),
   ]);
 
-  // Search filters all three kinds at once (#4): match the name or the sub-line
+  // Search filters all item kinds at once (#4): match the name or the sub-line
   // (which carries host / ports / baud), case-insensitive.
   let filtered = $derived(
     query
@@ -177,17 +210,26 @@
   });
 
   async function refresh() {
-    [profiles, credentials, forwards, groups, serialProfiles, telnetProfiles] = await Promise.all([
+    const [p, c, f, g, s, t, d] = await Promise.all([
       app.loadProfiles(), app.loadCredentials(), app.loadForwards(), app.loadGroups(),
-      app.loadSerialProfiles(), app.loadTelnetProfiles(),
+      app.loadSerialProfiles(), app.loadTelnetProfiles(), app.discoverDynamicTargets(),
     ]);
+    profiles = p;
+    credentials = c;
+    forwards = f;
+    groups = g;
+    serialProfiles = s;
+    telnetProfiles = t;
+    dynamicTargets = d.targets;
   }
 
   function activate(it: HomeItem) {
-    if (it.kind === "ssh") connectProfile(it.data as Profile);
-    else if (it.kind === "forward") openForward(it.data as Forward);
-    else if (it.kind === "telnet") app.connectTelnetProfile(it.data as TelnetProfile);
-    else app.connectSerialProfile(it.data as SerialProfile);
+    it.open();
+  }
+
+  function toggleProfilePin(profileId: string) {
+    if (app.isProfilePinned(profileId)) app.unpinProfile(profileId);
+    else app.pinProfile(profileId);
   }
 
   function connectProfile(p: Profile) {
@@ -249,13 +291,13 @@
                 <div class="card-sub">{it.sub}</div>
               </div>
             </button>
-            {#if it.kind === "ssh"}
+            {#if it.pinProfileId}
               <button
                 class="pin-btn"
-                class:pinned={app.isProfilePinned(it.rawId)}
-                title={app.isProfilePinned(it.rawId) ? "Unpin" : "Pin to sidebar"}
-                onclick={(e) => { e.stopPropagation(); app.isProfilePinned(it.rawId) ? app.unpinProfile(it.rawId) : app.pinProfile(it.rawId); }}
-              >{app.isProfilePinned(it.rawId) ? "★" : "☆"}</button>
+                class:pinned={app.isProfilePinned(it.pinProfileId)}
+                title={app.isProfilePinned(it.pinProfileId) ? "Unpin" : "Pin to sidebar"}
+                onclick={(e) => { e.stopPropagation(); if (it.pinProfileId) toggleProfilePin(it.pinProfileId); }}
+              >{app.isProfilePinned(it.pinProfileId) ? "★" : "☆"}</button>
             {/if}
           </div>
         {/each}
@@ -321,6 +363,8 @@
   .card-icon.fwd { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
   .card-icon.serial { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
   .card-icon.telnet { background: color-mix(in srgb, var(--purple) 15%, transparent); color: var(--purple); }
+  .card-icon.docker { background: var(--accent-soft); color: var(--accent); }
+  .card-icon.k8s { background: color-mix(in srgb, var(--purple) 15%, transparent); color: var(--purple); }
 
   .card-body { flex: 1; min-width: 0; }
   .card-name { font-weight: 600; font-size: 14px; color: var(--text); margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

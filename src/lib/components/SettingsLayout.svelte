@@ -14,6 +14,7 @@
   import SerialProfileEditor from "./SerialProfileEditor.svelte";
   import TelnetProfileManager from "./TelnetProfileManager.svelte";
   import TelnetProfileEditor from "./TelnetProfileEditor.svelte";
+  import DynamicDiscoverySettings from "./DynamicDiscoverySettings.svelte";
   import GroupManager from "./GroupManager.svelte";
   import SnippetManager from "./SnippetManager.svelte";
   import HighlightManager from "./HighlightManager.svelte";
@@ -48,6 +49,7 @@
     "serial-profile-edit":{ component: SerialProfileEditor, needsId: true },
     "telnet-profiles":    { component: TelnetProfileManager },
     "telnet-profile-edit":{ component: TelnetProfileEditor, needsId: true },
+    "dynamic-discovery":  { component: DynamicDiscoverySettings },
     "groups":             { component: GroupManager },
     "snippets":           { component: SnippetManager },
     "highlights":         { component: HighlightManager },
@@ -82,6 +84,7 @@
     { id: "forwards", label: t("settings.section.forwards"), section: "settings.group.connections" },
     { id: "serial-profiles", label: t("settings.section.serial"), section: "settings.group.connections" },
     { id: "telnet-profiles", label: t("settings.section.telnet"), section: "settings.group.connections" },
+    { id: "dynamic-discovery", label: t("settings.section.dynamic_discovery"), section: "settings.group.connections" },
     { id: "groups", label: t("settings.section.groups"), section: "settings.group.connections" },
     { id: "import-export", label: t("settings.section.import_export"), section: "settings.group.connections" },
     { id: "shell-settings", label: t("settings.section.shell"), section: "settings.group.sessions" },

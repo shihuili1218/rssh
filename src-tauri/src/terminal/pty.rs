@@ -327,6 +327,47 @@ pub fn spawn(
     sink: PtySink,
     shell_override: Option<String>,
 ) -> AppResult<(String, PtyHandle)> {
+    let shell = shell_override
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(default_shell);
+    let mut cmd = CommandBuilder::new(&shell);
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    cmd.env("RSSH_APP", "1");
+    if !cfg!(target_os = "windows") {
+        cmd.arg("-l");
+    }
+    spawn_builder(cols, rows, sink, cmd, shell)
+}
+
+/// Start a specific local program under a PTY. Used by dynamic connectors such
+/// as `docker exec` / `kubectl exec`: the frontend still sees the same PTY
+/// transport, but the first process is the connector command instead of the
+/// user's login shell.
+pub fn spawn_command(
+    cols: u16,
+    rows: u16,
+    sink: PtySink,
+    program: String,
+    args: Vec<String>,
+) -> AppResult<(String, PtyHandle)> {
+    let mut cmd = CommandBuilder::new(&program);
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    cmd.env("RSSH_APP", "1");
+    for arg in args {
+        cmd.arg(arg);
+    }
+    spawn_builder(cols, rows, sink, cmd, program)
+}
+
+fn spawn_builder(
+    cols: u16,
+    rows: u16,
+    sink: PtySink,
+    cmd: CommandBuilder,
+    shell_path: String,
+) -> AppResult<(String, PtyHandle)> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -337,17 +378,6 @@ pub fn spawn(
         })
         .map_err(|e| AppError::pty("pty_op_failed", serde_json::json!({ "err": e.to_string() })))?;
 
-    let shell = shell_override
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(default_shell);
-
-    let mut cmd = CommandBuilder::new(&shell);
-    cmd.env("TERM", "xterm-256color");
-    cmd.env("COLORTERM", "truecolor");
-    cmd.env("RSSH_APP", "1");
-    if !cfg!(target_os = "windows") {
-        cmd.arg("-l");
-    }
     let child = pair
         .slave
         .spawn_command(cmd)
@@ -367,7 +397,7 @@ pub fn spawn(
     let handle = PtyHandle {
         writer: Arc::new(Mutex::new(writer)),
         master: Arc::new(Mutex::new(pair.master)),
-        shell_path: Arc::from(shell.as_str()),
+        shell_path: Arc::from(shell_path.as_str()),
         _reaper: Arc::new(ChildReaper {
             child: Mutex::new(Some(child)),
         }),

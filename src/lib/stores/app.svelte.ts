@@ -13,11 +13,15 @@ export const isMobile =
 /* ═══════════════════════════════════════════════════════
    Types
    ═══════════════════════════════════════════════════════ */
-export type TabType = "home" | "ssh" | "local" | "serial" | "telnet" | "forward" | "edit";
-/** Tab types that render a TerminalPane (byte-stream terminals). These are also
- *  exactly the AI-capable tabs — one predicate, no per-feature unions to drift. */
+export type TabType = "home" | "ssh" | "local" | "serial" | "telnet" | "docker_exec" | "kubectl_exec" | "forward" | "edit";
+/** Tab types that render a TerminalPane (byte-stream terminals). */
 export type TerminalTabType = Exclude<TabType, "home" | "forward" | "edit">;
 export function isTerminalTabType(type: TabType): type is TerminalTabType {
+  return type === "ssh" || type === "local" || type === "serial" || type === "telnet"
+    || type === "docker_exec" || type === "kubectl_exec";
+}
+export type AiCapableTabType = "ssh" | "local" | "serial" | "telnet";
+export function isAiCapableTabType(type: TabType): type is AiCapableTabType {
   return type === "ssh" || type === "local" || type === "serial" || type === "telnet";
 }
 export interface Tab {
@@ -40,6 +44,7 @@ export type SettingsPage =
   | "serial-profile-edit"
   | "telnet-profiles"
   | "telnet-profile-edit"
+  | "dynamic-discovery"
   | "snippets"
   | "highlights"
   | "sync"
@@ -92,6 +97,43 @@ export interface TelnetProfile {
   input_newline: string; output_newline: string;
   local_echo: boolean; backspace: string; login_script: string;
   group_id: string | null;
+}
+export type DynamicPlatform = "docker" | "k8s";
+export type ConnectorSpec =
+  | { type: "docker_exec"; context: string; container_id: string; container_name: string; shell: string }
+  | { type: "kubectl_exec"; context: string; namespace: string; pod: string; container: string | null; shell: string };
+export type DynamicDiscoverySource =
+  | { id: string; name: string; enabled: boolean; platform: "docker"; context: string; shell: string }
+  | { id: string; name: string; enabled: boolean; platform: "k8s"; context: string; namespace: string | null; shell: string };
+export interface DynamicDiscoveryContext {
+  platform: DynamicPlatform;
+  name: string;
+  current: boolean;
+}
+export interface DynamicDiscoveryToolStatus {
+  platform: DynamicPlatform;
+  available: boolean;
+  version: string | null;
+  error: string | null;
+}
+export interface DynamicDiscoveredTarget {
+  id: string;
+  source_id: string;
+  source_name: string;
+  platform: DynamicPlatform;
+  name: string;
+  sub: string;
+  connector_spec: ConnectorSpec;
+}
+export interface DynamicDiscoveryError {
+  source_id: string;
+  source_name: string;
+  platform: DynamicPlatform;
+  message: string;
+}
+export interface DynamicDiscoverySnapshot {
+  targets: DynamicDiscoveredTarget[];
+  errors: DynamicDiscoveryError[];
 }
 export interface Snippet { name: string; command: string; }
 export interface HighlightRule { keyword: string; name: string; color: string; enabled: boolean; is_regex: boolean; is_case_sensitive: boolean; }
@@ -406,7 +448,7 @@ export async function writeClipboard(text: string): Promise<void> {
 interface SessionEntry {
   tabId: string;
   sessionId: string;
-  type: "ssh" | "local" | "serial" | "telnet";
+  type: TerminalTabType;
 }
 export interface SessionInfo extends SessionEntry {
   label: string;
@@ -524,6 +566,34 @@ export function connectTelnetProfile(tp: TelnetProfile) {
       login_script: tp.login_script,
     },
   });
+}
+
+export function connectDynamicTarget(target: DynamicDiscoveredTarget) {
+  const spec = target.connector_spec;
+  const tabType = connectorTabType(spec);
+  addTab({
+    id: `${tabType}:${crypto.randomUUID()}`,
+    type: tabType,
+    label: target.name,
+    meta: {
+      connectorSpec: JSON.stringify(spec),
+      dynamicTargetId: target.id,
+      sourceId: target.source_id,
+      sourceName: target.source_name,
+    },
+  });
+}
+
+function connectorTabType(spec: ConnectorSpec): Extract<TerminalTabType, ConnectorSpec["type"]> {
+  switch (spec.type) {
+    case "docker_exec":
+      return "docker_exec";
+    case "kubectl_exec":
+      return "kubectl_exec";
+  }
+
+  const _exhaustive: never = spec;
+  throw new Error(`Unsupported connector spec: ${JSON.stringify(_exhaustive)}`);
 }
 
 /* ─── Terminal command block side-bar ─── */
@@ -744,6 +814,24 @@ export async function loadTelnetProfiles(): Promise<TelnetProfile[]> {
   return invoke<TelnetProfile[]>("list_telnet_profiles").catch((e) => {
     console.warn("[telnet] list_telnet_profiles failed:", e);
     return [];
+  });
+}
+export async function loadDynamicDiscoverySources(): Promise<DynamicDiscoverySource[]> {
+  return invoke<DynamicDiscoverySource[]>("list_dynamic_discovery_sources");
+}
+export async function saveDynamicDiscoverySources(sources: DynamicDiscoverySource[]): Promise<void> {
+  await invoke("save_dynamic_discovery_sources", { sources });
+}
+export async function dynamicDiscoveryToolStatus(platform: DynamicPlatform): Promise<DynamicDiscoveryToolStatus> {
+  return invoke<DynamicDiscoveryToolStatus>("dynamic_discovery_tool_status", { platform });
+}
+export async function loadDynamicDiscoveryContexts(platform: DynamicPlatform): Promise<DynamicDiscoveryContext[]> {
+  return invoke<DynamicDiscoveryContext[]>("list_dynamic_discovery_contexts", { platform });
+}
+export async function discoverDynamicTargets(): Promise<DynamicDiscoverySnapshot> {
+  return invoke<DynamicDiscoverySnapshot>("discover_dynamic_targets").catch((e) => {
+    console.warn("[dynamic-discovery] discover failed:", e);
+    return { targets: [], errors: [{ source_id: "", source_name: "dynamic discovery", platform: "docker", message: String(e) }] };
   });
 }
 export async function loadSnippets(): Promise<Snippet[]> {

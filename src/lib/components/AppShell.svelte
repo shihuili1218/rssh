@@ -96,7 +96,7 @@
                 handler: () => {
                     const tab = app.activeTab();
                     // serial excluded: the port is exclusive, a second window would fail.
-                    if (!tab || (tab.type !== "ssh" && tab.type !== "local" && tab.type !== "telnet") || app.isMobile) return false;
+                    if (!tab || !canOpenTabInNewWindow(tab) || app.isMobile) return false;
                     openInNewWindow(tab);
                 },
             },
@@ -110,7 +110,7 @@
                     // (mirrors MobileKeybar's canOpenAi guard).
                     if (ai.isOpen()) { ai.closePanel(); return; }
                     const tab = app.activeTab();
-                    const canOpen = !!tab && app.isTerminalTabType(tab.type) && !!app.sessionIdForTab(tab.id);
+                    const canOpen = !!tab && app.isAiCapableTabType(tab.type) && !!app.sessionIdForTab(tab.id);
                     if (!canOpen) return false;
                     ai.openPanel();
                 },
@@ -326,7 +326,7 @@
     let aiVisible = $derived(
         ai.isOpen()
         && !!aiActiveTab
-        && app.isTerminalTabType(aiActiveTab.type)
+        && app.isAiCapableTabType(aiActiveTab.type)
         && !!aiSessionId
         && !app.settingsActive()
         // The Transfers popover does not affect AI panel visibility — overlay.
@@ -638,8 +638,11 @@
         });
     }
 
+    function canOpenTabInNewWindow(tab: Tab): boolean {
+        return app.isTerminalTabType(tab.type) && tab.type !== "serial";
+    }
+
     function buildMenu(tab: Tab): CtxMenuItem[][] {
-        const isTerminal = tab.type === "ssh" || tab.type === "local";
         // Serial and telnet are also text terminals — they get copy/paste/search/
         // snippets AND AI (the agent runs commands via manual-submit, no shell
         // sentinel). Serial does NOT get open-in-new-window: a serial port is
@@ -767,8 +770,8 @@
             {label: t("tab.context.close"), shortcut: keymap.format("tab.close"), onClick: () => requestCloseTab(tab.id)},
         ]);
 
-        // AI 排障入口（ssh/local/serial tab 才有，且需要已经连上 = 有 sessionId）
-        if (isTextTerminal) {
+        // AI 排障入口（ssh/local/serial/telnet tab 才有，且需要已经连上 = 有 sessionId）
+        if (app.isAiCapableTabType(tab.type)) {
             const sid = app.sessionIdForTab(tab.id);
             sections.push([
                 {
@@ -781,7 +784,7 @@
         }
 
         // Multi-window requires Tauri WebviewWindowBuilder — desktop only.
-        if ((isTerminal || tab.type === "telnet") && !app.isMobile) {
+        if (canOpenTabInNewWindow(tab) && !app.isMobile) {
             sections.push([
                 {
                     label: t("tab.context.open_new_window"),

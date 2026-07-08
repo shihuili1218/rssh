@@ -178,6 +178,120 @@ pub struct TelnetProfile {
     pub group_id: Option<String>,
 }
 
+// --- Dynamic discovery ---
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DynamicDiscoveryPlatform {
+    Docker,
+    #[serde(rename = "k8s")]
+    K8s,
+}
+
+fn default_container_shell() -> String {
+    "sh".into()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "platform", rename_all = "snake_case")]
+pub enum DynamicDiscoveryConfig {
+    Docker {
+        context: String,
+        #[serde(default = "default_container_shell")]
+        shell: String,
+    },
+    #[serde(rename = "k8s")]
+    K8s {
+        context: String,
+        #[serde(default)]
+        namespace: Option<String>,
+        #[serde(default = "default_container_shell")]
+        shell: String,
+    },
+}
+
+impl DynamicDiscoveryConfig {
+    pub fn platform(&self) -> DynamicDiscoveryPlatform {
+        match self {
+            Self::Docker { .. } => DynamicDiscoveryPlatform::Docker,
+            Self::K8s { .. } => DynamicDiscoveryPlatform::K8s,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DynamicDiscoverySource {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    #[serde(flatten)]
+    pub config: DynamicDiscoveryConfig,
+}
+
+impl DynamicDiscoverySource {
+    pub fn platform(&self) -> DynamicDiscoveryPlatform {
+        self.config.platform()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DynamicDiscoveryContext {
+    pub platform: DynamicDiscoveryPlatform,
+    pub name: String,
+    pub current: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DynamicDiscoveryToolStatus {
+    pub platform: DynamicDiscoveryPlatform,
+    pub available: bool,
+    pub version: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ConnectorSpec {
+    DockerExec {
+        context: String,
+        container_id: String,
+        container_name: String,
+        shell: String,
+    },
+    KubectlExec {
+        context: String,
+        namespace: String,
+        pod: String,
+        container: Option<String>,
+        shell: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DynamicDiscoveredTarget {
+    pub id: String,
+    pub source_id: String,
+    pub source_name: String,
+    pub platform: DynamicDiscoveryPlatform,
+    pub name: String,
+    pub sub: String,
+    pub connector_spec: ConnectorSpec,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DynamicDiscoveryError {
+    pub source_id: String,
+    pub source_name: String,
+    pub platform: DynamicDiscoveryPlatform,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DynamicDiscoverySnapshot {
+    pub targets: Vec<DynamicDiscoveredTarget>,
+    pub errors: Vec<DynamicDiscoveryError>,
+}
+
 fn default_telnet_port() -> u16 {
     23
 }

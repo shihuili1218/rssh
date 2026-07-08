@@ -1,6 +1,7 @@
 use tauri::{AppHandle, Emitter, State};
 
 use crate::error::{locked, AppError, AppResult};
+use crate::models::ConnectorSpec;
 use crate::state::AppState;
 use crate::terminal::pty;
 
@@ -24,6 +25,96 @@ pub fn pty_spawn(
         }
     });
     let (id, handle) = pty::spawn(cols, rows, sink, shell)?;
+    locked(&state.pty_sessions)?.insert(id.clone(), handle);
+    crate::commands::lifecycle::register_window_session(&state, window.label(), &id);
+    Ok(id)
+}
+
+fn connector_command(spec: ConnectorSpec) -> AppResult<(String, Vec<String>)> {
+    match spec {
+        ConnectorSpec::DockerExec {
+            context,
+            container_id,
+            shell,
+            ..
+        } => {
+            if context.trim().is_empty()
+                || container_id.trim().is_empty()
+                || shell.trim().is_empty()
+            {
+                return Err(AppError::config(
+                    "dynamic_discovery_connector_invalid",
+                    serde_json::json!({}),
+                ));
+            }
+            Ok((
+                "docker".into(),
+                vec![
+                    "--context".into(),
+                    context,
+                    "exec".into(),
+                    "-it".into(),
+                    container_id,
+                    shell,
+                ],
+            ))
+        }
+        ConnectorSpec::KubectlExec {
+            context,
+            namespace,
+            pod,
+            container,
+            shell,
+        } => {
+            if context.trim().is_empty()
+                || namespace.trim().is_empty()
+                || pod.trim().is_empty()
+                || shell.trim().is_empty()
+            {
+                return Err(AppError::config(
+                    "dynamic_discovery_connector_invalid",
+                    serde_json::json!({}),
+                ));
+            }
+            let mut args = vec![
+                "--context".into(),
+                context,
+                "exec".into(),
+                "-n".into(),
+                namespace,
+                "-it".into(),
+                pod,
+            ];
+            if let Some(c) = container.filter(|c| !c.trim().is_empty()) {
+                args.push("-c".into());
+                args.push(c);
+            }
+            args.push("--".into());
+            args.push(shell);
+            Ok(("kubectl".into(), args))
+        }
+    }
+}
+
+#[tauri::command]
+pub fn pty_spawn_connector(
+    app: AppHandle,
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    cols: u16,
+    rows: u16,
+    spec: ConnectorSpec,
+) -> AppResult<String> {
+    let sink: pty::PtySink = std::sync::Arc::new(move |id: &str, out: pty::PtyOut| match out {
+        pty::PtyOut::Data(b) => {
+            let _ = app.emit(&format!("pty:data:{id}"), b);
+        }
+        pty::PtyOut::Close => {
+            let _ = app.emit(&format!("pty:close:{id}"), ());
+        }
+    });
+    let (program, args) = connector_command(spec)?;
+    let (id, handle) = pty::spawn_command(cols, rows, sink, program, args)?;
     locked(&state.pty_sessions)?.insert(id.clone(), handle);
     crate::commands::lifecycle::register_window_session(&state, window.label(), &id);
     Ok(id)

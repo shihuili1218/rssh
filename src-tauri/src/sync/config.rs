@@ -32,7 +32,8 @@ use crate::db::{
 };
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    Credential, Forward, Group, HighlightRule, Profile, SerialProfile, Snippet, TelnetProfile,
+    Credential, DynamicDiscoverySource, Forward, Group, HighlightRule, Profile, SerialProfile,
+    Snippet, TelnetProfile,
 };
 use crate::secret::{cred_secret_key, SecretStore};
 
@@ -329,6 +330,34 @@ pub fn merge_import(db: &Db, ss: &dyn SecretStore, data_dir: &Path, data: &Value
             }),
         }
     }
+    // dynamic_discovery_sources — identity = id; settings-backed, merged
+    // additively so a remote delete does not wipe local source config.
+    if let Some(v) = data
+        .get("dynamic_discovery_sources")
+        .filter(|v| !v.is_null())
+    {
+        match serde_json::from_value::<Vec<DynamicDiscoverySource>>(v.clone()) {
+            Ok(incoming) => {
+                let local = crate::commands::discovery::read_dynamic_discovery_sources_from_db(db)
+                    .unwrap_or_default();
+                let merged = merge_dynamic_discovery_sources(local, incoming);
+                if let Err(e) =
+                    crate::commands::discovery::save_dynamic_discovery_sources_to_db(db, merged)
+                {
+                    errors.push(ImportError {
+                        kind: "dynamic_discovery_source",
+                        name: None,
+                        code: e.code().to_string(),
+                    });
+                }
+            }
+            Err(_) => errors.push(ImportError {
+                kind: "dynamic_discovery_source",
+                name: None,
+                code: "parse_failed".into(),
+            }),
+        }
+    }
     // ai — provider settings (an object, not a list of rows)
     if let Some(ai) = data.get("ai").filter(|v| !v.is_null()) {
         if let Err(e) = crate::ai::commands::import_ai_settings(db, ss, ai) {
@@ -368,6 +397,20 @@ fn parse_skill(item: &Value) -> AppResult<Option<crate::db::ai_skill::UserSkill>
         description: s.description,
         content: s.content,
     }))
+}
+
+fn merge_dynamic_discovery_sources(
+    mut local: Vec<DynamicDiscoverySource>,
+    incoming: Vec<DynamicDiscoverySource>,
+) -> Vec<DynamicDiscoverySource> {
+    for source in incoming {
+        if let Some(existing) = local.iter_mut().find(|it| it.id == source.id) {
+            *existing = source;
+        } else {
+            local.push(source);
+        }
+    }
+    local
 }
 
 // ---------------------------------------------------------------------------
@@ -525,6 +568,10 @@ pub fn build_payload(
     let mut telnets = telnet_profile::list(db)?;
     retain_by_groups(&mut telnets, prefs, |t| t.group_id.as_deref());
     out.insert("telnet_profiles".into(), to_val(telnets)?);
+    out.insert(
+        "dynamic_discovery_sources".into(),
+        to_val(crate::commands::discovery::read_dynamic_discovery_sources_from_db(db)?)?,
+    );
     if on(|p| p.skills) {
         out.insert("skills".into(), to_val(crate::ai::skills::list_user(db)?)?);
     }
@@ -756,6 +803,18 @@ mod tests {
         }
     }
 
+    fn docker_source(id: &str, name: &str, context: &str) -> DynamicDiscoverySource {
+        DynamicDiscoverySource {
+            id: id.into(),
+            name: name.into(),
+            enabled: true,
+            config: crate::models::DynamicDiscoveryConfig::Docker {
+                context: context.into(),
+                shell: "sh".into(),
+            },
+        }
+    }
+
     #[test]
     fn merge_missing_telnet_key_keeps_local() {
         // payload without a telnet_profiles key must not touch local telnet rows.
@@ -788,6 +847,54 @@ mod tests {
         let arr = out["telnet_profiles"].as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["name"], "Switch");
+    }
+
+    #[test]
+    fn export_includes_dynamic_discovery_sources() {
+        let (db, ss, dir) = fixture();
+        crate::commands::discovery::save_dynamic_discovery_sources_to_db(
+            &db,
+            vec![docker_source("dyn1", "Docker Dev", "desktop-linux")],
+        )
+        .unwrap();
+
+        let out = build_payload(&db, &ss, dir.path(), &ExportMode::LocalBackup).unwrap();
+        let arr = out["dynamic_discovery_sources"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["id"], "dyn1");
+        assert_eq!(arr[0]["name"], "Docker Dev");
+    }
+
+    #[test]
+    fn merge_dynamic_discovery_sources_by_id() {
+        let (db, ss, dir) = fixture();
+        crate::commands::discovery::save_dynamic_discovery_sources_to_db(
+            &db,
+            vec![
+                docker_source("keep", "Local Only", "local"),
+                docker_source("same", "Old", "old-context"),
+            ],
+        )
+        .unwrap();
+
+        let data = json!({
+            "version": 1,
+            "dynamic_discovery_sources": [
+                serde_json::to_value(docker_source("same", "New", "new-context")).unwrap(),
+                serde_json::to_value(docker_source("new", "Remote", "remote-context")).unwrap(),
+            ],
+        });
+        merge_import(&db, &ss, dir.path(), &data).unwrap();
+
+        let sources =
+            crate::commands::discovery::read_dynamic_discovery_sources_from_db(&db).unwrap();
+        assert!(
+            sources.iter().any(|s| s.id == "keep"),
+            "local-only source survives"
+        );
+        let same = sources.iter().find(|s| s.id == "same").unwrap();
+        assert_eq!(same.name, "New", "same id overwritten");
+        assert!(sources.iter().any(|s| s.id == "new"), "remote source added");
     }
 
     // ── Phase 2: the five new categories ──────────────────────────────
