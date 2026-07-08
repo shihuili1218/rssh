@@ -103,11 +103,19 @@ function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
 }
 
-function findLineIndex(lines: PrivateBuffer["lines"], needle: unknown): number {
+function indexLineRefs(lines: PrivateBuffer["lines"], refs: Iterable<unknown>): Map<unknown, number> {
+  const targets = new Set(refs);
+  const indices = new Map<unknown, number>();
+  if (targets.size === 0) return indices;
+
   for (let i = 0; i < lines.length; i++) {
-    if (lines.get(i) === needle) return i;
+    const line = lines.get(i);
+    if (targets.has(line)) {
+      indices.set(line, i);
+      if (indices.size === targets.size) break;
+    }
   }
-  return -1;
+  return indices;
 }
 
 function isStillBlankLine(line: unknown): boolean {
@@ -222,10 +230,11 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     // Compensation refs below the active cursor are still untouched screen
     // padding. Refs at/above the cursor may have been consumed by real output,
     // even if they still render as blank lines, so unfold must preserve them.
+    const blankRefIndicesBeforeInsert = indexLineRefs(buf.lines, f.pushedBlankRefs);
     const untouchedBlankRefs = new Set(
       f.pushedBlankRefs.filter((line) => {
-        const index = findLineIndex(buf.lines, line);
-        return index > cursorAbsBefore && isStillBlankLine(line);
+        const index = blankRefIndicesBeforeInsert.get(line);
+        return index !== undefined && index > cursorAbsBefore && isStillBlankLine(line);
       }),
     );
 
@@ -258,9 +267,10 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
 
     // 删除本 fold 自己补的空行。后续 fold 可能把这些行从末尾推到中间，
     // 所以按当前 index 从下往上 splice，避免 index 级联偏移。
+    const removableIndices = indexLineRefs(buf.lines, untouchedBlankRefs);
     const removable = Array.from(untouchedBlankRefs)
-      .map((line) => ({ line, index: findLineIndex(buf.lines, line) }))
-      .filter(({ line, index }) => index >= 0 && isStillBlankLine(line))
+      .map((line) => ({ line, index: removableIndices.get(line) }))
+      .filter((item): item is { line: unknown; index: number } => item.index !== undefined && isStillBlankLine(item.line))
       .sort((a, b) => b.index - a.index);
 
     for (const { line, index } of removable) {

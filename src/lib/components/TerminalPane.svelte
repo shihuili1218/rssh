@@ -97,6 +97,7 @@
         promptText: string,
         opts: { echo: boolean; onSubmit: (value: string) => void; onCancel: () => void },
     ): IDisposable {
+        writeBatcher?.flush();
         terminal.write(`\r\n${promptText}`);
 
         let buffer = "";
