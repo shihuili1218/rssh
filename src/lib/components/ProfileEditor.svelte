@@ -5,6 +5,7 @@
   import type { Credential, Profile, Group, SshAlgorithmCatalog, SshAlgorithms } from "../stores/app.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
   import { t, errMsg } from "../i18n/index.svelte.ts";
+  import type { MessageKey } from "../i18n/locales/en.ts";
   import Select from "./Select.svelte";
 
   let { id = null }: { id: string | null } = $props();
@@ -17,7 +18,7 @@
     mac: [],
     compression: [],
   });
-  const algorithmCategories: Array<{ id: AlgorithmCategory; labelKey: string }> = [
+  const algorithmCategories: Array<{ id: AlgorithmCategory; labelKey: MessageKey }> = [
     { id: "kex", labelKey: "profile.algorithms.kex" },
     { id: "key", labelKey: "profile.algorithms.key" },
     { id: "cipher", labelKey: "profile.algorithms.cipher" },

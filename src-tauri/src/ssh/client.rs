@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use russh::client;
@@ -657,14 +657,14 @@ pub async fn establish_via_chain(
 
 fn dial_ctx_for_profile(
     profile: &Profile,
-    known_hosts_path: &PathBuf,
+    known_hosts_path: &Path,
     timeout_secs: u64,
     log: &LogFn,
     ctx: Option<&AuthCtx>,
 ) -> DialCtx {
     DialCtx {
         config: client_config_for_profile(profile),
-        known_hosts_path: known_hosts_path.clone(),
+        known_hosts_path: known_hosts_path.to_path_buf(),
         timeout_secs,
         log: log.clone(),
         prompt_ctx: ctx.cloned(),

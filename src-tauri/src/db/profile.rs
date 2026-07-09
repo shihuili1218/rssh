@@ -26,10 +26,16 @@ fn parse_algorithms(raw: Option<String>) -> SshAlgorithms {
     if raw.trim().is_empty() {
         return SshAlgorithms::default();
     }
-    serde_json::from_str::<Option<SshAlgorithms>>(&raw)
-        .ok()
-        .flatten()
-        .unwrap_or_default()
+    match serde_json::from_str::<Option<SshAlgorithms>>(&raw) {
+        Ok(v) => v.unwrap_or_default(),
+        Err(e) => {
+            log::warn!(
+                "failed to parse profile.algorithms JSON ({} bytes), using defaults: {e}",
+                raw.len()
+            );
+            SshAlgorithms::default()
+        }
+    }
 }
 
 fn algorithms_json(p: &Profile) -> AppResult<String> {

@@ -433,7 +433,7 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
             }
             conn.execute(
                 "UPDATE profiles SET algorithms = ?1 \
-                 WHERE algorithms IS NULL OR trim(algorithms) = '' OR algorithms = 'null'",
+                 WHERE algorithms IS NULL OR trim(algorithms) = '' OR trim(algorithms) = 'null'",
                 params![default_json],
             )?;
         }
@@ -605,7 +605,8 @@ mod tests {
                 algorithms         TEXT
             );
             INSERT INTO profiles (id, name, host, port, credential_id, algorithms)
-              VALUES ('p1', 'P1', 'h.example', 22, 'c1', NULL);",
+              VALUES ('p1', 'P1', 'h.example', 22, 'c1', NULL),
+                     ('p2', 'P2', 'h.example', 22, 'c1', ' null ');",
         )
         .unwrap();
         conn.pragma_update(None, "user_version", 22u32).unwrap();
@@ -614,6 +615,15 @@ mod tests {
 
         let raw: String = conn
             .query_row("SELECT algorithms FROM profiles WHERE id = 'p1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let algorithms: crate::models::SshAlgorithms = serde_json::from_str(&raw).unwrap();
+        assert!(algorithms
+            .cipher
+            .contains(&"chacha20-poly1305@openssh.com".into()));
+        let raw: String = conn
+            .query_row("SELECT algorithms FROM profiles WHERE id = 'p2'", [], |r| {
                 r.get(0)
             })
             .unwrap();

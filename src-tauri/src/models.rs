@@ -81,7 +81,11 @@ fn deserialize_ssh_algorithms<'de, D>(deserializer: D) -> Result<SshAlgorithms, 
 where
     D: Deserializer<'de>,
 {
-    Ok(Option::<SshAlgorithms>::deserialize(deserializer)?.unwrap_or_default())
+    let value = serde_json::Value::deserialize(deserializer)?;
+    if value.is_null() {
+        return Ok(SshAlgorithms::default());
+    }
+    Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
 pub fn default_ssh_algorithms() -> SshAlgorithms {
@@ -567,5 +571,23 @@ mod tests {
             let json = serde_json::to_string(&t).unwrap();
             assert_eq!(json, format!("\"{}\"", t.as_str()));
         }
+    }
+
+    #[test]
+    fn profile_malformed_algorithms_deserializes_to_default() {
+        let p: Profile = serde_json::from_value(serde_json::json!({
+            "id": "p1",
+            "name": "P1",
+            "host": "h.example",
+            "port": 22,
+            "credential_id": "c1",
+            "bastion_profile_id": null,
+            "init_command": null,
+            "group_id": null,
+            "algorithms": { "kex": "not-a-list" }
+        }))
+        .unwrap();
+
+        assert_eq!(p.algorithms, SshAlgorithms::default());
     }
 }
