@@ -86,6 +86,7 @@ mod tests {
             bastion_profile_id: bastion_id.map(|s| s.to_string()),
             init_command: None,
             group_id: None,
+            algorithms: Default::default(),
         }
     }
 

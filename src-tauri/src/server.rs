@@ -279,6 +279,7 @@ fn dispatch(
             &state.db,
             &arg::<String>(&args, "id")?,
         )),
+        "ssh_algorithm_catalog" => ok(Ok::<_, AppError>(crate::ssh::algorithms::catalog())),
         // Parse-only (no native dialog): the frontend reads ~/.ssh/config text and
         // sends it; returns the parsed entries. import_ssh_config returns a bare Vec.
         "import_ssh_config" => ok(Ok::<_, AppError>(

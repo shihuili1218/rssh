@@ -2,11 +2,23 @@ use rusqlite::{params, Connection};
 
 use crate::error::AppResult;
 
-const SCHEMA_VERSION: u32 = 22;
+const SCHEMA_VERSION: u32 = 23;
 
 fn column_exists(conn: &Connection, table: &str, col: &str) -> AppResult<bool> {
     let mut stmt = conn.prepare("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2")?;
     Ok(stmt.exists([table, col])?)
+}
+
+fn table_exists(conn: &Connection, table: &str) -> AppResult<bool> {
+    let mut stmt =
+        conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")?;
+    Ok(stmt.exists([table])?)
+}
+
+fn default_algorithms_json() -> AppResult<String> {
+    serde_json::to_string(&crate::models::default_ssh_algorithms()).map_err(|e| {
+        crate::error::AppError::other("serde_failed", serde_json::json!({ "err": e.to_string() }))
+    })
 }
 
 pub fn migrate(conn: &Connection) -> AppResult<()> {
@@ -406,6 +418,27 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
         )?;
     }
 
+    if version < 23 {
+        // Per-profile SSH algorithm preferences. New rows get the current safe
+        // default list, and old/partially-migrated rows with NULL/empty payloads
+        // are normalized here so sync/export always sees a concrete JSON object.
+        if table_exists(conn, "profiles")? {
+            let default_json = default_algorithms_json()?;
+            if !column_exists(conn, "profiles", "algorithms")? {
+                let escaped = default_json.replace('\'', "''");
+                conn.execute_batch(&format!(
+                    "ALTER TABLE profiles ADD COLUMN algorithms TEXT NOT NULL DEFAULT '{}';",
+                    escaped
+                ))?;
+            }
+            conn.execute(
+                "UPDATE profiles SET algorithms = ?1 \
+                 WHERE algorithms IS NULL OR trim(algorithms) = '' OR trim(algorithms) = 'null'",
+                params![default_json],
+            )?;
+        }
+    }
+
     if version < SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
@@ -520,5 +553,83 @@ mod tests {
             )
             .unwrap();
         assert_eq!(kw2, r"\w+");
+    }
+
+    #[test]
+    fn migration_23_adds_default_profile_algorithms() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE profiles (
+                id                 TEXT PRIMARY KEY,
+                name               TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                host               TEXT NOT NULL,
+                port               INTEGER NOT NULL DEFAULT 22,
+                credential_id      TEXT NOT NULL DEFAULT '',
+                bastion_profile_id TEXT,
+                init_command       TEXT,
+                group_id           TEXT DEFAULT NULL
+            );
+            INSERT INTO profiles (id, name, host, port, credential_id)
+              VALUES ('p1', 'P1', 'h.example', 22, 'c1');",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 22u32).unwrap();
+
+        migrate(&conn).unwrap();
+
+        let raw: String = conn
+            .query_row("SELECT algorithms FROM profiles WHERE id = 'p1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let algorithms: crate::models::SshAlgorithms = serde_json::from_str(&raw).unwrap();
+        assert!(algorithms.kex.contains(&"curve25519-sha256".into()));
+        assert!(!algorithms
+            .kex
+            .contains(&"diffie-hellman-group1-sha1".into()));
+    }
+
+    #[test]
+    fn migration_23_normalizes_null_profile_algorithms() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE profiles (
+                id                 TEXT PRIMARY KEY,
+                name               TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                host               TEXT NOT NULL,
+                port               INTEGER NOT NULL DEFAULT 22,
+                credential_id      TEXT NOT NULL DEFAULT '',
+                bastion_profile_id TEXT,
+                init_command       TEXT,
+                group_id           TEXT DEFAULT NULL,
+                algorithms         TEXT
+            );
+            INSERT INTO profiles (id, name, host, port, credential_id, algorithms)
+              VALUES ('p1', 'P1', 'h.example', 22, 'c1', NULL),
+                     ('p2', 'P2', 'h.example', 22, 'c1', ' null ');",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 22u32).unwrap();
+
+        migrate(&conn).unwrap();
+
+        let raw: String = conn
+            .query_row("SELECT algorithms FROM profiles WHERE id = 'p1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let algorithms: crate::models::SshAlgorithms = serde_json::from_str(&raw).unwrap();
+        assert!(algorithms
+            .cipher
+            .contains(&"chacha20-poly1305@openssh.com".into()));
+        let raw: String = conn
+            .query_row("SELECT algorithms FROM profiles WHERE id = 'p2'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let algorithms: crate::models::SshAlgorithms = serde_json::from_str(&raw).unwrap();
+        assert!(algorithms
+            .cipher
+            .contains(&"chacha20-poly1305@openssh.com".into()));
     }
 }

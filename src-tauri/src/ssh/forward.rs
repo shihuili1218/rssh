@@ -20,8 +20,7 @@ use std::sync::Arc as StdArc;
 /// `start_dynamic` all took these six parameters identically — they are one
 /// concept ("how to reach the endpoint"), so they travel as one value.
 pub struct ConnTarget {
-    pub host: String,
-    pub port: u16,
+    pub profile: Profile,
     pub credential: Credential,
     pub bastion_chain: Vec<(Profile, Credential)>,
     pub known_hosts_path: PathBuf,
@@ -136,8 +135,7 @@ async fn connect_authed(
     client::ForwardedChannelSender,
 )> {
     let ConnTarget {
-        host,
-        port,
+        profile,
         credential,
         bastion_chain,
         known_hosts_path,
@@ -146,8 +144,7 @@ async fn connect_authed(
     let log: LogFn = StdArc::new(|_: String| ());
     let (mut handle, fwd_sender) = client::establish_via_chain(
         bastion_chain,
-        host,
-        port,
+        profile,
         known_hosts_path,
         timeout_secs,
         log,
@@ -159,7 +156,7 @@ async fn connect_authed(
 }
 
 pub async fn start_local(forward: Forward, target: ConnTarget) -> AppResult<ForwardHandle> {
-    let (mut handle, _fwd) = connect_authed(target).await?;
+    let (handle, _fwd) = connect_authed(target).await?;
 
     let remote_host = forward.remote_host.clone();
     let remote_port = forward.remote_port;
@@ -234,7 +231,7 @@ pub async fn start_local(forward: Forward, target: ConnTarget) -> AppResult<Forw
 // ---------------------------------------------------------------------------
 
 pub async fn start_remote(forward: Forward, target: ConnTarget) -> AppResult<ForwardHandle> {
-    let (mut handle, fwd_sender) = connect_authed(target).await?;
+    let (handle, fwd_sender) = connect_authed(target).await?;
 
     // Register a channel to receive forwarded connections from the Handler
     let (ch_tx, mut ch_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -412,7 +409,7 @@ async fn socks5_handshake(stream: &mut TcpStream) -> std::io::Result<(String, u1
 }
 
 pub async fn start_dynamic(forward: Forward, target: ConnTarget) -> AppResult<ForwardHandle> {
-    let (mut handle, _fwd) = connect_authed(target).await?;
+    let (handle, _fwd) = connect_authed(target).await?;
 
     let local_port = forward.local_port;
 

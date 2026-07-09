@@ -167,6 +167,7 @@ pub fn run() {
             commands::profile::create_profile,
             commands::profile::update_profile,
             commands::profile::delete_profile,
+            commands::profile::ssh_algorithm_catalog,
             commands::profile::list_credentials,
             commands::profile::get_credential,
             commands::profile::create_credential,

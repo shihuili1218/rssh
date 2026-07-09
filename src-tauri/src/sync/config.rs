@@ -663,6 +663,7 @@ mod tests {
             bastion_profile_id: None,
             init_command: None,
             group_id: None,
+            algorithms: Default::default(),
         }
     }
 
@@ -713,6 +714,47 @@ mod tests {
         assert!(creds.iter().any(|c| c.id == "remote"), "remote added");
         let profs = profile::list(&db).unwrap();
         assert_eq!(profs.len(), 2);
+    }
+
+    #[test]
+    fn merge_defaults_null_profile_algorithms() {
+        let (db, ss, dir) = fixture();
+        let data = payload(json!({
+            "version": 1,
+            "profiles": [{
+                "id": "p1",
+                "name": "P1",
+                "host": "h.example",
+                "port": 22,
+                "credential_id": "c1",
+                "bastion_profile_id": null,
+                "init_command": null,
+                "group_id": null,
+                "algorithms": null
+            }]
+        }));
+
+        merge_import(&db, &ss, dir.path(), &data).unwrap();
+
+        let got = profile::get(&db, "p1").unwrap();
+        assert_eq!(got.algorithms, crate::models::SshAlgorithms::default());
+    }
+
+    #[test]
+    fn export_includes_profile_algorithms() {
+        let (db, ss, dir) = fixture();
+        let mut p = prof("p1", "P1", "c1");
+        p.algorithms.kex.push("diffie-hellman-group1-sha1".into());
+        profile::insert(&db, &p).unwrap();
+
+        let out = build_payload(&db, &ss, dir.path(), &ExportMode::LocalBackup).unwrap();
+        let algorithms = &out["profiles"][0]["algorithms"];
+        assert!(algorithms.is_object());
+        assert!(algorithms["kex"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "diffie-hellman-group1-sha1"));
     }
 
     #[test]

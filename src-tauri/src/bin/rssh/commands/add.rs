@@ -71,6 +71,7 @@ fn add_profile(conn: &CliCtx) -> AppResult<()> {
         bastion_profile_id,
         init_command,
         group_id,
+        algorithms: Default::default(),
     };
     rssh_lib::db::profile::insert(conn, &p)?;
     println!("Profile '{}' created.", p.name);

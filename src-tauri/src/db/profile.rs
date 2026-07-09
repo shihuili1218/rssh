@@ -1,8 +1,9 @@
 use rusqlite::params;
+use serde_json::json;
 
 use super::Db;
 use crate::error::{AppError, AppResult};
-use crate::models::{validate_name, Profile};
+use crate::models::{validate_name, Profile, SshAlgorithms};
 
 fn row_to_profile(row: &rusqlite::Row) -> rusqlite::Result<Profile> {
     Ok(Profile {
@@ -14,13 +15,38 @@ fn row_to_profile(row: &rusqlite::Row) -> rusqlite::Result<Profile> {
         bastion_profile_id: row.get(5)?,
         init_command: row.get(6)?,
         group_id: row.get(7)?,
+        algorithms: parse_algorithms(row.get(8)?),
     })
+}
+
+fn parse_algorithms(raw: Option<String>) -> SshAlgorithms {
+    let Some(raw) = raw else {
+        return SshAlgorithms::default();
+    };
+    if raw.trim().is_empty() {
+        return SshAlgorithms::default();
+    }
+    match serde_json::from_str::<Option<SshAlgorithms>>(&raw) {
+        Ok(v) => v.unwrap_or_default(),
+        Err(e) => {
+            log::warn!(
+                "failed to parse profile.algorithms JSON ({} bytes), using defaults: {e}",
+                raw.len()
+            );
+            SshAlgorithms::default()
+        }
+    }
+}
+
+fn algorithms_json(p: &Profile) -> AppResult<String> {
+    serde_json::to_string(&p.algorithms)
+        .map_err(|e| AppError::other("serde_failed", json!({ "err": e.to_string() })))
 }
 
 pub fn list(db: &Db) -> AppResult<Vec<Profile>> {
     let conn = db.lock()?;
     let mut stmt = conn.prepare(
-        "SELECT id, name, host, port, credential_id, bastion_profile_id, init_command, group_id FROM profiles ORDER BY name ASC",
+        "SELECT id, name, host, port, credential_id, bastion_profile_id, init_command, group_id, algorithms FROM profiles ORDER BY name ASC",
     )?;
     let rows = stmt.query_map([], |row| row_to_profile(row))?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -29,7 +55,7 @@ pub fn list(db: &Db) -> AppResult<Vec<Profile>> {
 pub fn get(db: &Db, id: &str) -> AppResult<Profile> {
     let conn = db.lock()?;
     conn.query_row(
-        "SELECT id, name, host, port, credential_id, bastion_profile_id, init_command, group_id FROM profiles WHERE id = ?1",
+        "SELECT id, name, host, port, credential_id, bastion_profile_id, init_command, group_id, algorithms FROM profiles WHERE id = ?1",
         params![id],
         |row| row_to_profile(row),
     ).map_err(|e| match e {
@@ -57,14 +83,15 @@ fn validate_for_write(p: &Profile) -> AppResult<()> {
 
 pub fn insert_tx(conn: &rusqlite::Connection, p: &Profile) -> AppResult<()> {
     validate_for_write(p)?;
+    let algorithms = algorithms_json(p)?;
     conn.execute(
-        "INSERT INTO profiles (id, name, host, port, credential_id, bastion_profile_id, init_command, group_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+        "INSERT INTO profiles (id, name, host, port, credential_id, bastion_profile_id, init_command, group_id, algorithms) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
          ON CONFLICT(id) DO UPDATE SET \
          name=excluded.name, host=excluded.host, port=excluded.port, \
          credential_id=excluded.credential_id, bastion_profile_id=excluded.bastion_profile_id, \
-         init_command=excluded.init_command, group_id=excluded.group_id",
-        params![p.id, p.name, p.host, p.port as u32, p.credential_id, p.bastion_profile_id, p.init_command, p.group_id],
+         init_command=excluded.init_command, group_id=excluded.group_id, algorithms=excluded.algorithms",
+        params![p.id, p.name, p.host, p.port as u32, p.credential_id, p.bastion_profile_id, p.init_command, p.group_id, algorithms],
     )?;
     Ok(())
 }
@@ -77,9 +104,10 @@ pub fn insert(db: &Db, p: &Profile) -> AppResult<()> {
 pub fn update(db: &Db, p: &Profile) -> AppResult<()> {
     validate_for_write(p)?;
     let conn = db.lock()?;
+    let algorithms = algorithms_json(p)?;
     conn.execute(
-        "UPDATE profiles SET name=?1, host=?2, port=?3, credential_id=?4, bastion_profile_id=?5, init_command=?6, group_id=?7 WHERE id=?8",
-        params![p.name, p.host, p.port as u32, p.credential_id, p.bastion_profile_id, p.init_command, p.group_id, p.id],
+        "UPDATE profiles SET name=?1, host=?2, port=?3, credential_id=?4, bastion_profile_id=?5, init_command=?6, group_id=?7, algorithms=?8 WHERE id=?9",
+        params![p.name, p.host, p.port as u32, p.credential_id, p.bastion_profile_id, p.init_command, p.group_id, algorithms, p.id],
     )?;
     Ok(())
 }
@@ -125,6 +153,7 @@ mod tests {
             bastion_profile_id: None,
             init_command: None,
             group_id: None,
+            algorithms: SshAlgorithms::default(),
         }
     }
 
@@ -137,6 +166,7 @@ mod tests {
         assert_eq!(got.name, "alpha");
         assert_eq!(got.host, "h.example");
         assert_eq!(got.port, 22);
+        assert_eq!(got.algorithms, SshAlgorithms::default());
     }
 
     #[test]
@@ -159,6 +189,21 @@ mod tests {
         let got = get(&db, "p1").unwrap();
         assert_eq!(got.host, "new.example");
         assert_eq!(got.port, 2222);
+    }
+
+    #[test]
+    fn algorithms_roundtrip() {
+        let db = Db::open_in_memory().unwrap();
+        let mut p = mk("p1", "alpha");
+        p.algorithms.kex.push("diffie-hellman-group1-sha1".into());
+        p.algorithms.cipher = vec!["aes128-ctr".into()];
+        insert(&db, &p).unwrap();
+        let got = get(&db, "p1").unwrap();
+        assert!(got
+            .algorithms
+            .kex
+            .contains(&"diffie-hellman-group1-sha1".into()));
+        assert_eq!(got.algorithms.cipher, vec!["aes128-ctr"]);
     }
 
     #[test]
