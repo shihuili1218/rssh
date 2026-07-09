@@ -85,7 +85,13 @@ where
     if value.is_null() {
         return Ok(SshAlgorithms::default());
     }
-    Ok(serde_json::from_value(value).unwrap_or_default())
+    match serde_json::from_value(value) {
+        Ok(algorithms) => Ok(algorithms),
+        Err(e) => {
+            log::warn!("failed to deserialize profile.algorithms, using defaults: {e}");
+            Ok(SshAlgorithms::default())
+        }
+    }
 }
 
 pub fn default_ssh_algorithms() -> SshAlgorithms {
