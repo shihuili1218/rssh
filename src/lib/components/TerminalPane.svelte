@@ -22,6 +22,7 @@
     import {createTerminalWriteBatcher, type TerminalWriteBatcher} from "../terminal/write-batcher.ts";
     import {extractBlocksText} from "../terminal/block-content.ts";
     import {setupTouchScroll} from "../terminal/touch-scroll.ts";
+    import {setupXtermIme229Workaround} from "../terminal/xterm-ime-229-workaround.ts";
     import {renderBlocksToBlob} from "../terminal/block-to-image.ts";
     import {inputNewline, normalizeIncoming, bytesToHex, parseHexInput, parseLoginScript, remapEditingKeys, normalizeOutgoing, type LoginStep} from "../terminal/serial-transforms.ts";
     import {compileHighlightRules, type CompiledHighlightRule} from "../terminal/highlight.ts";
@@ -473,6 +474,7 @@
     let resizeDisposable: IDisposable | undefined;
     let reconnectDisposable: IDisposable | undefined;
     let resizeObs: ResizeObserver;
+    let ime229WorkaroundCleanup: (() => void) | undefined;
     let mobileKeyboardCleanup: (() => void) | undefined;
     let mobileTouchScrollCleanup: (() => void) | undefined;
 
@@ -1199,6 +1201,11 @@
             pixelLimit: app.isMobile ? 4_000_000 : 16_000_000,
         }));
         terminal.open(containerEl);
+        ime229WorkaroundCleanup = setupXtermIme229Workaround({
+            terminal,
+            host: containerEl,
+            enabled: keymap.isMac,
+        });
         terminal.unicode.activeVersion = "11";
         writeBatcher = createTerminalWriteBatcher({
             write: (data) => terminal.write(data),
@@ -1453,6 +1460,8 @@
         passphraseInputDisposable?.dispose();
         hostKeyInputDisposable?.dispose();
         resizeObs?.disconnect();
+        ime229WorkaroundCleanup?.();
+        ime229WorkaroundCleanup = undefined;
         mobileKeyboardCleanup?.();
         mobileTouchScrollCleanup?.();
         writeBatcher?.dispose();
