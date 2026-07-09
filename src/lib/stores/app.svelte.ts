@@ -65,10 +65,22 @@ export type SettingsPage =
 export interface Group {
   id: string; name: string; color: string; sort_order: number;
 }
+export interface SshAlgorithms {
+  kex: string[];
+  key: string[];
+  cipher: string[];
+  mac: string[];
+  compression: string[];
+}
+export interface SshAlgorithmCatalog {
+  defaults: SshAlgorithms;
+  supported: SshAlgorithms;
+}
 export interface Profile {
   id: string; name: string; host: string; port: number;
   credential_id: string; bastion_profile_id: string | null; init_command: string | null;
   group_id: string | null;
+  algorithms: SshAlgorithms;
 }
 export interface Credential {
   id: string; name: string; username: string;

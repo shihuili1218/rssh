@@ -4,7 +4,7 @@ use tauri::State;
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
-use crate::models::{Credential, CredentialType, Profile};
+use crate::models::{Credential, CredentialType, Profile, SshAlgorithmCatalog};
 use crate::secret::{cred_secret_key, SecretStore};
 use crate::ssh::config::SshConfigEntry;
 use crate::state::AppState;
@@ -32,6 +32,11 @@ pub fn update_profile(state: State<AppState>, profile: Profile) -> Result<(), Ap
 #[tauri::command]
 pub fn delete_profile(state: State<AppState>, id: String) -> Result<(), AppError> {
     crate::db::profile::delete(&state.db, &id)
+}
+
+#[tauri::command]
+pub fn ssh_algorithm_catalog() -> SshAlgorithmCatalog {
+    crate::ssh::algorithms::catalog()
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +230,7 @@ pub fn do_import_ssh_entries(
             bastion_profile_id: None,
             init_command: None,
             group_id: None,
+            algorithms: Default::default(),
         };
         if let Err(e) = crate::db::profile::insert(db, &profile) {
             result.errors.push(SshImportError {

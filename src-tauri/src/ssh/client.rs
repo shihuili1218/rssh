@@ -116,7 +116,16 @@ pub(crate) fn null_logger() -> LogFn {
 
 /// 默认 SSH 客户端配置：开启 keepalive，远端死了 90 秒内能断开。
 pub fn default_client_config() -> Arc<client::Config> {
+    client_config_for_algorithms(&crate::models::SshAlgorithms::default())
+}
+
+pub fn client_config_for_profile(profile: &Profile) -> Arc<client::Config> {
+    client_config_for_algorithms(&profile.algorithms)
+}
+
+fn client_config_for_algorithms(algorithms: &crate::models::SshAlgorithms) -> Arc<client::Config> {
     let mut cfg = client::Config::default();
+    crate::ssh::algorithms::apply_to_config(&mut cfg, algorithms);
     cfg.keepalive_interval = Some(Duration::from_secs(30));
     cfg.keepalive_max = 3;
     Arc::new(cfg)
@@ -532,50 +541,51 @@ where
 /// 链中每一跳直接 authenticate；target 的 authenticate 由调用方负责。
 /// 返回 `(target_handle, target_fwd_sender)` —— remote 转发用 fwd_sender，其余可丢弃。
 ///
-/// All inputs are owned: chain by value, target_host as String, log as Arc<dyn>.
+/// All inputs are owned: chain by value, target profile by value, log as Arc<dyn>.
 /// Owned-everywhere is correct here, not just convenient — these data flow
 /// in one direction (DB → connect → live session), there's no other party
 /// holding references. Borrowed parameters in async fns hand-cuff us with
 /// HRTB-Send headaches when awaited under #[tauri::command].
 pub async fn establish_via_chain(
     bastion_chain: Vec<(Profile, Credential)>,
-    target_host: String,
-    target_port: u16,
+    target_profile: Profile,
     known_hosts_path: PathBuf,
     timeout_secs: u64,
     log: LogFn,
     ctx: Option<&AuthCtx>,
 ) -> AppResult<(client::Handle<SshHandler>, ForwardedChannelSender)> {
-    // The dial context is constant across every hop; only host/port (and the
-    // tunnel stream) change. Build it once and hand a clone to each hop.
-    let dial = DialCtx {
-        config: default_client_config(),
-        known_hosts_path,
-        timeout_secs,
-        log: log.clone(),
-        prompt_ctx: ctx.cloned(),
-    };
-
     if bastion_chain.is_empty() {
+        let target_host = target_profile.host.clone();
+        let target_port = target_profile.port;
         log(format!(
             "TCP connecting to {}:{} ...",
             target_host, target_port
         ));
-        let (h, fwd) = ssh_connect_with_forward(dial, target_host, target_port).await?;
+        let (h, fwd) = ssh_connect_with_forward(
+            dial_ctx_for_profile(&target_profile, &known_hosts_path, timeout_secs, &log, ctx),
+            target_host,
+            target_port,
+        )
+        .await?;
         log(format!("TCP connected. SSH handshake OK."));
         return Ok((h, fwd));
     }
 
     let mut hops = bastion_chain.into_iter();
     let (first_p, first_c) = hops.next().unwrap();
-    let first_name = first_p.name;
-    let first_host = first_p.host;
+    let first_name = first_p.name.clone();
+    let first_host = first_p.host.clone();
     let first_port = first_p.port;
     log(format!(
         "Connecting to bastion {} ({}:{}) ...",
         first_name, first_host, first_port
     ));
-    let mut hop = ssh_connect(dial.clone(), first_host, first_port).await?;
+    let mut hop = ssh_connect(
+        dial_ctx_for_profile(&first_p, &known_hosts_path, timeout_secs, &log, ctx),
+        first_host,
+        first_port,
+    )
+    .await?;
     log(format!(
         "Bastion {} connected. Authenticating as {} ({}) ...",
         first_name,
@@ -587,8 +597,8 @@ pub async fn establish_via_chain(
 
     let mut prev_name = first_name;
     for (next_p, next_c) in hops {
-        let next_name = next_p.name;
-        let next_host = next_p.host;
+        let next_name = next_p.name.clone();
+        let next_host = next_p.host.clone();
         let next_port = next_p.port;
         log(format!(
             "Opening tunnel through {} to bastion {} ({}:{}) ...",
@@ -602,8 +612,13 @@ pub async fn establish_via_chain(
             format!("{} → {}", prev_name, next_name),
         )
         .await?;
-        let (new_hop, _) =
-            ssh_connect_stream(dial.clone(), tunnel.into_stream(), next_host, next_port).await?;
+        let (new_hop, _) = ssh_connect_stream(
+            dial_ctx_for_profile(&next_p, &known_hosts_path, timeout_secs, &log, ctx),
+            tunnel.into_stream(),
+            next_host,
+            next_port,
+        )
+        .await?;
         hop = new_hop;
         log(format!(
             "Bastion {} connected. Authenticating as {} ({}) ...",
@@ -616,6 +631,8 @@ pub async fn establish_via_chain(
         prev_name = next_name;
     }
 
+    let target_host = target_profile.host.clone();
+    let target_port = target_profile.port;
     log(format!(
         "Opening tunnel through {} to target {}:{} ...",
         prev_name, target_host, target_port
@@ -629,7 +646,29 @@ pub async fn establish_via_chain(
     )
     .await?;
     log(format!("Tunnel established. SSH handshake with target ..."));
-    ssh_connect_stream(dial, tunnel.into_stream(), target_host, target_port).await
+    ssh_connect_stream(
+        dial_ctx_for_profile(&target_profile, &known_hosts_path, timeout_secs, &log, ctx),
+        tunnel.into_stream(),
+        target_host,
+        target_port,
+    )
+    .await
+}
+
+fn dial_ctx_for_profile(
+    profile: &Profile,
+    known_hosts_path: &PathBuf,
+    timeout_secs: u64,
+    log: &LogFn,
+    ctx: Option<&AuthCtx>,
+) -> DialCtx {
+    DialCtx {
+        config: client_config_for_profile(profile),
+        known_hosts_path: known_hosts_path.clone(),
+        timeout_secs,
+        log: log.clone(),
+        prompt_ctx: ctx.cloned(),
+    }
 }
 
 /// 在已建好的 SSH 连接上开 direct-tcpip 隧道，带超时。
@@ -792,8 +831,7 @@ pub async fn connect(
 
     let (mut handle, _fwd) = establish_via_chain(
         bastion_chain,
-        profile.host.clone(),
-        profile.port,
+        profile.clone(),
         known_hosts_path,
         timeout_secs,
         log.clone(),

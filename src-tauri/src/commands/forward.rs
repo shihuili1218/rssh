@@ -78,8 +78,7 @@ pub async fn forward_start_impl(state: &AppState, forward_id: String) -> AppResu
     }
     let known_hosts_path = crate::ssh::known_hosts::path_for(&state.data_dir);
     let target = fwd::ConnTarget {
-        host: p.host.clone(),
-        port: p.port,
+        profile: p,
         credential: c,
         bastion_chain: chain,
         known_hosts_path,

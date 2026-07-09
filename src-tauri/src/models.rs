@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::{AppError, AppResult};
 
@@ -41,6 +41,121 @@ pub struct Profile {
     pub init_command: Option<String>,
     #[serde(default)]
     pub group_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_ssh_algorithms")]
+    pub algorithms: SshAlgorithms,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SshAlgorithms {
+    #[serde(default = "default_kex_algorithms")]
+    pub kex: Vec<String>,
+    #[serde(default = "default_key_algorithms")]
+    pub key: Vec<String>,
+    #[serde(default = "default_cipher_algorithms")]
+    pub cipher: Vec<String>,
+    #[serde(default = "default_mac_algorithms")]
+    pub mac: Vec<String>,
+    #[serde(default = "default_compression_algorithms")]
+    pub compression: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SshAlgorithmCatalog {
+    pub defaults: SshAlgorithms,
+    pub supported: SshAlgorithms,
+}
+
+impl Default for SshAlgorithms {
+    fn default() -> Self {
+        Self {
+            kex: default_kex_algorithms(),
+            key: default_key_algorithms(),
+            cipher: default_cipher_algorithms(),
+            mac: default_mac_algorithms(),
+            compression: default_compression_algorithms(),
+        }
+    }
+}
+
+fn deserialize_ssh_algorithms<'de, D>(deserializer: D) -> Result<SshAlgorithms, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<SshAlgorithms>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+pub fn default_ssh_algorithms() -> SshAlgorithms {
+    SshAlgorithms::default()
+}
+
+fn default_kex_algorithms() -> Vec<String> {
+    [
+        "mlkem768x25519-sha256",
+        "curve25519-sha256",
+        "curve25519-sha256@libssh.org",
+        "diffie-hellman-group-exchange-sha256",
+        "diffie-hellman-group18-sha512",
+        "diffie-hellman-group17-sha512",
+        "diffie-hellman-group16-sha512",
+        "diffie-hellman-group15-sha512",
+        "diffie-hellman-group14-sha256",
+        "ext-info-c",
+        "ext-info-s",
+        "kex-strict-c-v00@openssh.com",
+        "kex-strict-s-v00@openssh.com",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+fn default_key_algorithms() -> Vec<String> {
+    [
+        "ssh-ed25519",
+        "ecdsa-sha2-nistp256",
+        "ecdsa-sha2-nistp384",
+        "ecdsa-sha2-nistp521",
+        "rsa-sha2-512",
+        "rsa-sha2-256",
+        "ssh-rsa",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+fn default_cipher_algorithms() -> Vec<String> {
+    [
+        "chacha20-poly1305@openssh.com",
+        "aes256-gcm@openssh.com",
+        "aes256-ctr",
+        "aes192-ctr",
+        "aes128-ctr",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+fn default_mac_algorithms() -> Vec<String> {
+    [
+        "hmac-sha2-512-etm@openssh.com",
+        "hmac-sha2-256-etm@openssh.com",
+        "hmac-sha2-512",
+        "hmac-sha2-256",
+        "hmac-sha1-etm@openssh.com",
+        "hmac-sha1",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+fn default_compression_algorithms() -> Vec<String> {
+    ["none", "zlib", "zlib@openssh.com"]
+        .into_iter()
+        .map(String::from)
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
