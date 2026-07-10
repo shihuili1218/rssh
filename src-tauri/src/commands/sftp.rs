@@ -75,7 +75,7 @@ pub async fn sftp_connect(
     .await?;
     let id = uuid::Uuid::new_v4().to_string();
 
-    crate::commands::lifecycle::insert_ready_session(
+    crate::commands::lifecycle::publish_session(
         &state,
         &state.sftp_sessions,
         id.clone(),
@@ -107,7 +107,7 @@ pub async fn sftp_connect_session(
     .await?;
     let id = uuid::Uuid::new_v4().to_string();
 
-    crate::commands::lifecycle::insert_ready_session(
+    crate::commands::lifecycle::publish_session(
         &state,
         &state.sftp_sessions,
         id.clone(),
@@ -253,7 +253,7 @@ pub async fn sftp_mkdir(
 
 #[tauri::command]
 pub async fn sftp_close(state: State<'_, AppState>, sftp_id: String) -> AppResult<()> {
-    locked(&state.sftp_sessions)?.remove(&sftp_id);
+    crate::commands::lifecycle::take_session(&state, &state.sftp_sessions, &sftp_id)?;
     Ok(())
 }
 

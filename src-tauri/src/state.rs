@@ -16,28 +16,20 @@ use crate::terminal::serial::SerialHandle;
 use crate::terminal::telnet::TelnetHandle;
 
 pub enum SessionSlot<T> {
-    /// Reserved but not yet published. Reconcile marks a pending slot when it
-    /// has deliberately retained it, so activation knows whether the startup
-    /// race has already been handled.
-    Pending { reconciled: bool },
-    /// A handle that became ready before its reservation was ever observed by
-    /// reconcile gets one keep-alive pass. This closes the Pending -> Ready
-    /// race without making every Ready session permanently exempt from reap.
-    Ready {
-        handle: T,
-        protect_next_reconcile: bool,
+    /// Reserved but not yet published. The nonce binds activation and cleanup
+    /// to this exact reservation, so a cancelled id can be reused without an
+    /// older opener publishing into or deleting the replacement slot.
+    Pending {
+        nonce: uuid::Uuid,
     },
+    Ready(T),
 }
 
 impl<T> SessionSlot<T> {
-    pub fn pending() -> Self {
-        Self::Pending { reconciled: false }
-    }
-
     pub fn ready(&self) -> Option<&T> {
         match self {
             Self::Pending { .. } => None,
-            Self::Ready { handle, .. } => Some(handle),
+            Self::Ready(handle) => Some(handle),
         }
     }
 }

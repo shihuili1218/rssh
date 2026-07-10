@@ -179,7 +179,6 @@ pub fn pty_resize(
 
 #[tauri::command]
 pub fn pty_close(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
-    crate::commands::lifecycle::unregister_window_session(&state, &session_id);
-    locked(&state.pty_sessions)?.remove(&session_id);
+    crate::commands::lifecycle::take_window_session(&state, &state.pty_sessions, &session_id)?;
     Ok(())
 }

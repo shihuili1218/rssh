@@ -95,7 +95,7 @@ pub async fn forward_start_impl(state: &AppState, forward_id: String) -> AppResu
     .await?;
     let active_id = uuid::Uuid::new_v4().to_string();
 
-    crate::commands::lifecycle::insert_ready_session(
+    crate::commands::lifecycle::publish_session(
         state,
         &state.active_forwards,
         active_id.clone(),
@@ -119,9 +119,9 @@ pub fn forward_stats(
 
 #[tauri::command]
 pub fn forward_stop(state: State<'_, AppState>, active_id: String) -> AppResult<()> {
-    let handle = locked(&state.active_forwards)?
-        .remove(&active_id)
-        .ok_or_else(|| AppError::not_found("fwd_not_found", json!({})))?;
+    let handle =
+        crate::commands::lifecycle::take_session(&state, &state.active_forwards, &active_id)?
+            .ok_or_else(|| AppError::not_found("fwd_not_found", json!({})))?;
     handle.stop();
     Ok(())
 }

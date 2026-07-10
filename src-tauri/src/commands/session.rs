@@ -88,13 +88,13 @@ pub async fn ssh_connect(
     }
 
     let session_id = result.session_id;
-    crate::commands::lifecycle::insert_ready_session(
+    crate::commands::lifecycle::publish_window_session(
         &state,
         &state.sessions,
+        window.label(),
         session_id.clone(),
         result.handle,
     )?;
-    crate::commands::lifecycle::register_window_session(&state, window.label(), &session_id);
 
     Ok(session_id)
 }
@@ -126,8 +126,6 @@ pub async fn ssh_disconnect(
     session_id: String,
     tab_id: Option<String>,
 ) -> AppResult<()> {
-    crate::commands::lifecycle::unregister_window_session(&state, &session_id);
-
     // 0) 防御性清理三张 waiters，避免任何遗留 sender 永挂。
     if let Some(tid) = tab_id.as_deref() {
         let _ = locked(&state.auth_waiters).map(|mut m| m.remove(tid));
@@ -137,15 +135,14 @@ pub async fn ssh_disconnect(
 
     // 1) 先把挂在这条 SSH 上的 SFTP children 清掉。Drop Arc 让传输任务下次
     //    访问 channel 时立刻 IO error 退出 —— 不依赖 frontend 的 finally。
-    {
-        let mut sftp = locked(&state.sftp_sessions)?;
-        sftp.retain(|_, h| h.parent_ssh_id() != Some(&session_id));
-    }
+    crate::commands::lifecycle::retain_sessions(&state, &state.sftp_sessions, |_, h| {
+        h.parent_ssh_id() != Some(&session_id)
+    })?;
 
     // 2) 拿走 SessionHandle 并强切 TCP（不只是 shell channel）。
-    let session = locked(&state.sessions)?
-        .remove(&session_id)
-        .ok_or_else(|| AppError::not_found("session_not_found", json!({})))?;
+    let session =
+        crate::commands::lifecycle::take_window_session(&state, &state.sessions, &session_id)?
+            .ok_or_else(|| AppError::not_found("session_not_found", json!({})))?;
     session.force_disconnect();
     Ok(())
 }

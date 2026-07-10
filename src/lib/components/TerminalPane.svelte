@@ -23,6 +23,7 @@
     import {extractBlocksText} from "../terminal/block-content.ts";
     import {setupTouchScroll} from "../terminal/touch-scroll.ts";
     import {setupXtermIme229Workaround} from "../terminal/xterm-ime-229-workaround.ts";
+    import {createReservedSessionAttempt} from "../terminal/reserved-session-attempt.ts";
     import {renderBlocksToBlob} from "../terminal/block-to-image.ts";
     import {inputNewline, normalizeIncoming, bytesToHex, parseHexInput, parseLoginScript, remapEditingKeys, normalizeOutgoing, type LoginStep} from "../terminal/serial-transforms.ts";
     import {compileHighlightRules, type CompiledHighlightRule} from "../terminal/highlight.ts";
@@ -167,10 +168,8 @@
     let searchAddon: SearchAddon;
     let sessionId = $state<string | null>(null);
     let eventSessionId = $state<string | null>(null);
-    // `connectAndWire` crosses several awaits. Keep the in-flight backend id
-    // separate from the public Ready id so closing a tab can cancel Pending
-    // reservations without advertising them as connected sessions.
-    let pendingSessionId: string | null = null;
+    // `connectAndWire` crosses several awaits. The generation guards the whole
+    // component flow; ReservedSessionAttempt owns the finer Pending/Ready state.
     let connectGeneration = 0;
     let destroyed = false;
     let disconnected = $state(false);
@@ -509,6 +508,7 @@
     const isLocal = $derived(tabType === "local");
     const isPtyConnector = $derived(tabType === "docker_exec" || tabType === "kubectl_exec");
     const isSsh = $derived(tabType === "ssh");
+    const isReservedTransport = $derived(tabType === "telnet" || isLocal || isPtyConnector);
     // Transport table — the per-tab byte-stream IPC contract lives in DATA, not in
     // branches. Adding a transport is one more row, zero code change.
     // resize:null means the transport has no rows/cols (serial) → callers skip it.
@@ -571,7 +571,7 @@
         // An early Close can arrive before open/spawn publishes its Pending
         // handle. Wait for that attempt to settle before accepting another
         // reconnect; otherwise two attempts can race to overwrite sessionId.
-        if (!pendingSessionId) setupReconnect();
+        if (!reservedSessionAttempt.isPending()) setupReconnect();
     }
     function handleStreamWriteFailure(sid: string, error: unknown) {
         // A delayed rejection from an old session must not tear down a fresh
@@ -836,48 +836,70 @@
 
     let decoder = new TextDecoder("utf-8");
 
+    function acceptsSessionEvent(sid: string): boolean {
+        return isReservedTransport
+            ? reservedSessionAttempt.accepts(sid)
+            : eventSessionId === sid;
+    }
+
     /** Wire Tauri event listeners for session data + close.
      *
      * The frontend reserves the canonical session id before spawn, so listeners
      * exist before a fast child process or peer can produce its first byte. */
-    async function wireSessionEvents(sid: string) {
-        unlisteners.push(await listen<number[]>(`${dataEvent}:${sid}`, (ev) => {
-            if (eventSessionId !== sid) return;
-            const raw = new Uint8Array(ev.payload);
-            if (streamOpts) {
-                stageLoginScript(raw);
-                if (streamOpts.outputMode === "hex") { terminal.write(bytesToHex(raw)); return; }
-                terminal.write(streamNormalizeOut(decoder.decode(raw, { stream: true })));
-                return;
-            }
-            // Write the raw bytes untouched — keyword highlighting is a decoration
-            // layer over the parsed grid (HighlightDecorator), not a byte rewrite.
-            writeRawOutput(raw);
-        }));
-        if (tabType === "telnet") {
-            unlisteners.push(await listen<boolean>(`telnet:echo:${sid}`, (ev) => {
-                if (eventSessionId !== sid) return;
-                telnetRemoteEcho = ev.payload;
+    async function createSessionEventSubscription(sid: string): Promise<UnlistenFn> {
+        const listeners: UnlistenFn[] = [];
+        try {
+            listeners.push(await listen<number[]>(`${dataEvent}:${sid}`, (ev) => {
+                if (!acceptsSessionEvent(sid)) return;
+                const raw = new Uint8Array(ev.payload);
+                if (streamOpts) {
+                    stageLoginScript(raw);
+                    if (streamOpts.outputMode === "hex") { terminal.write(bytesToHex(raw)); return; }
+                    terminal.write(streamNormalizeOut(decoder.decode(raw, { stream: true })));
+                    return;
+                }
+                // Write the raw bytes untouched — keyword highlighting is a decoration
+                // layer over the parsed grid (HighlightDecorator), not a byte rewrite.
+                writeRawOutput(raw);
             }));
-        }
-        unlisteners.push(await listen(`${closeEvent}:${sid}`, () => {
-            if (eventSessionId !== sid) return;
-            // A queued close from the previous connection must not tear down a
-            // freshly reconnected session.
-            if (sessionId !== null && sessionId !== sid) return;
-            // Serial: the port just died; free its backend handle NOW so the
-            // exclusive OS port is released. Otherwise the reconnect below
-            // re-opens the same path while the stale handle still owns it and
-            // fails. Telnet: same eager cleanup — the handle is dead after
-            // Close, dropping it stops the reader thread immediately.
-            // ssh/local hold no exclusive OS resource, so they skip this.
-            if ((tabType === "serial" || tabType === "telnet")
-                && (sessionId === sid || pendingSessionId === sid)) {
-                invoke(closeCmd, { sessionId: sid }).catch(() => {});
+            if (tabType === "telnet") {
+                listeners.push(await listen<boolean>(`telnet:echo:${sid}`, (ev) => {
+                    if (!acceptsSessionEvent(sid)) return;
+                    telnetRemoteEcho = ev.payload;
+                }));
             }
-            announceDisconnected();
-        }));
+            listeners.push(await listen(`${closeEvent}:${sid}`, () => {
+                if (!acceptsSessionEvent(sid)) return;
+                // A queued close from the previous connection must not tear down a
+                // freshly reconnected session.
+                if (sessionId !== null && sessionId !== sid) return;
+                // Serial: the port just died; free its backend handle NOW so the
+                // exclusive OS port is released. Otherwise the reconnect below
+                // re-opens the same path while the stale handle still owns it and
+                // fails. Telnet: same eager cleanup — the handle is dead after
+                // Close, dropping it stops the reader thread immediately.
+                if ((tabType === "serial" || tabType === "telnet")
+                    && (sessionId === sid || reservedSessionAttempt.isPending())) {
+                    invoke(closeCmd, { sessionId: sid }).catch(() => {});
+                }
+                announceDisconnected();
+            }));
+        } catch (error) {
+            listeners.forEach((unlisten) => unlisten());
+            throw error;
+        }
+        return () => listeners.splice(0).forEach((unlisten) => unlisten());
     }
+
+    async function wireSessionEvents(sid: string): Promise<void> {
+        unlisteners.push(await createSessionEventSubscription(sid));
+    }
+
+    const reservedSessionAttempt = createReservedSessionAttempt({
+        makeId: () => crypto.randomUUID(),
+        wireEvents: createSessionEventSubscription,
+        close: async (sid) => { await invoke(closeCmd, { sessionId: sid }); },
+    });
 
     /** Register terminal input + resize handlers (disposes old ones first). */
     function wireSessionInput(sid: string) {
@@ -902,19 +924,16 @@
         // Cleanup previous
         clearSessionEventListeners();
         const supersededReady = sessionId;
-        if (supersededReady) {
+        if (isReservedTransport) {
+            reservedSessionAttempt.cancel();
+        } else if (supersededReady) {
             const args = isSsh
                 ? { sessionId: supersededReady, tabId }
                 : { sessionId: supersededReady };
             invoke(closeCmd, args).catch(() => {});
         }
-        const supersededPending = pendingSessionId;
-        if (supersededPending) {
-            invoke(closeCmd, { sessionId: supersededPending }).catch(() => {});
-        }
         disconnected = false;
         sessionId = null;
-        pendingSessionId = null;
         eventSessionId = null;
         serialHexBuf = "";
         serialLineBuf = "";
@@ -951,7 +970,6 @@
             // different fallback expressions would let the banner lie.
             const telnetPort = Number(meta.port) || 23;
             terminal.write(`\x1b[90mConnecting to ${meta.host}:${telnetPort} ...\x1b[0m\r\n`);
-            let reservedSessionId: string | null = null;
             try {
                 if (meta.profileId) {
                     telnetLoginScript = "";
@@ -968,36 +986,27 @@
                     }
                 }
                 if (!isCurrent()) return false;
-                // A fresh key per connection prevents delayed events from the
-                // previous backend handle from tearing down a new reconnect.
-                reservedSessionId = crypto.randomUUID();
-                pendingSessionId = reservedSessionId;
-                eventSessionId = reservedSessionId;
-                await wireSessionEvents(reservedSessionId);
-                if (!isCurrent() || pendingSessionId !== reservedSessionId) {
-                    clearSessionEventListeners();
-                    return false;
-                }
                 // cols/rows seed the NAWS activation reply (same as ssh_connect);
                 // the post-connect fit/resize below corrects any later drift.
-                const openedSessionId = await invoke<string>("telnet_open", {
-                    host: meta.host,
-                    port: telnetPort,
-                    cols: terminal.cols,
-                    rows: terminal.rows,
-                    sessionId: reservedSessionId,
-                    inputNewline: streamOpts?.inputNewline ?? "crlf",
-                });
-                if (pendingSessionId === reservedSessionId) pendingSessionId = null;
+                const opened = await reservedSessionAttempt.open((reservedId) =>
+                    invoke<string>("telnet_open", {
+                        host: meta.host,
+                        port: telnetPort,
+                        cols: terminal.cols,
+                        rows: terminal.rows,
+                        sessionId: reservedId,
+                        inputNewline: streamOpts?.inputNewline ?? "crlf",
+                    }),
+                );
+                if (opened.kind === "cancelled") return false;
+                sessionId = opened.sessionId;
                 if (!isCurrent()) {
-                    await invoke(closeCmd, { sessionId: openedSessionId }).catch(() => {});
+                    reservedSessionAttempt.cancel();
+                    sessionId = null;
                     return false;
                 }
-                sessionId = openedSessionId;
             } catch (e: any) {
-                if (pendingSessionId === reservedSessionId) pendingSessionId = null;
                 if (!isCurrent()) {
-                    clearSessionEventListeners();
                     return false;
                 }
                 // errMsg turns the __rssh_err__| protocol string into a full
@@ -1012,44 +1021,34 @@
             // open command returns its backend id. Dispose that returned handle;
             // otherwise the dead session remains in the backend map.
             if (disconnected) {
-                await invoke(closeCmd, { sessionId }).catch(() => {});
+                reservedSessionAttempt.cancel();
                 return false;
             }
             initLoginScript();
         } else if (isLocal || isPtyConnector) {
-            let reservedSessionId: string | null = null;
             try {
-                reservedSessionId = crypto.randomUUID();
-                pendingSessionId = reservedSessionId;
-                eventSessionId = reservedSessionId;
-                await wireSessionEvents(reservedSessionId);
-                if (!isCurrent() || pendingSessionId !== reservedSessionId) {
-                    clearSessionEventListeners();
-                    return false;
-                }
-                let openedSessionId: string;
-                if (isPtyConnector) {
-                    const spec = JSON.parse(meta.connectorSpec || "{}") as ConnectorSpec;
-                    openedSessionId = await invoke<string>("pty_spawn_connector", {
-                        cols: terminal.cols, rows: terminal.rows, spec,
-                        sessionId: reservedSessionId,
-                    });
-                } else {
-                    openedSessionId = await invoke<string>("pty_spawn", {
+                const opened = await reservedSessionAttempt.open((reservedId) => {
+                    if (isPtyConnector) {
+                        const spec = JSON.parse(meta.connectorSpec || "{}") as ConnectorSpec;
+                        return invoke<string>("pty_spawn_connector", {
+                            cols: terminal.cols, rows: terminal.rows, spec,
+                            sessionId: reservedId,
+                        });
+                    }
+                    return invoke<string>("pty_spawn", {
                         cols: terminal.cols, rows: terminal.rows,
-                        sessionId: reservedSessionId,
+                        sessionId: reservedId,
                     });
-                }
-                if (pendingSessionId === reservedSessionId) pendingSessionId = null;
+                });
+                if (opened.kind === "cancelled") return false;
+                sessionId = opened.sessionId;
                 if (!isCurrent()) {
-                    await invoke(closeCmd, { sessionId: openedSessionId }).catch(() => {});
+                    reservedSessionAttempt.cancel();
+                    sessionId = null;
                     return false;
                 }
-                sessionId = openedSessionId;
             } catch (e: any) {
-                if (pendingSessionId === reservedSessionId) pendingSessionId = null;
                 if (!isCurrent()) {
-                    clearSessionEventListeners();
                     return false;
                 }
                 terminal.write(`\x1b[31mLaunch failed: ${e}\x1b[0m\r\n`);
@@ -1057,7 +1056,7 @@
                 return false;
             }
             if (disconnected) {
-                await invoke(closeCmd, { sessionId }).catch(() => {});
+                reservedSessionAttempt.cancel();
                 return false;
             }
         } else {
@@ -1671,13 +1670,7 @@
     onDestroy(() => {
         destroyed = true;
         connectGeneration += 1;
-        const startingSessionId = pendingSessionId;
-        pendingSessionId = null;
-        if (startingSessionId) {
-            // Closing before open/spawn returns removes the backend Pending
-            // slot. A late handle then fails activation and is dropped.
-            invoke(closeCmd, { sessionId: startingSessionId }).catch(() => {});
-        }
+        reservedSessionAttempt.destroy();
         unsubscribeTheme?.();
         unsubscribeFont?.();
         window.removeEventListener("mousedown", onWindowMouseDown);
@@ -1714,12 +1707,10 @@
         app.unregisterTerminalArrowSender();
         app.unregisterTerminalControls(tabId);
         app.unregisterSession(tabId);
-        // Serial/telnet are exempt from the !disconnected guard: their close
-        // command just drops the backend map entry (idempotent), so always free
-        // it on a known sessionId — otherwise an unplugged-then-closed tab leaks
-        // its handle until window-close/reconcile sweeps it. ssh/local keep the
-        // guard (disconnecting an already-dead session is pointless / may error).
-        if (sessionId && (!disconnected || tabType === "serial" || tabType === "telnet")) {
+        // Reserved transports were closed above by reservedSessionAttempt.destroy().
+        // Serial remains exempt from the disconnected guard because its close
+        // command idempotently drops the exclusive port handle.
+        if (sessionId && !isReservedTransport && (!disconnected || tabType === "serial")) {
             if (isSsh) {
                 // 把 tabId 一并传给后端做防御性 waiters 清理；漏传不致命。
                 invoke("ssh_disconnect", { sessionId, tabId }).catch(() => {});

@@ -27,6 +27,7 @@
     import * as keymap from "../stores/keymap.svelte.ts";
     import {t, errMsg} from "../i18n/index.svelte.ts";
     import {toast} from "../stores/toast.svelte.ts";
+    import {initializePrimarySessionWindow} from "./primary-session-window.ts";
 
     let drawerOpen = $state(false);
     let focusIdx = $state(-1);
@@ -36,6 +37,8 @@
     let menuCtx = $state<{ x: number; y: number; tab: Tab } | null>(null);
     let pinnedMenu = $state<{ x: number; y: number } | null>(null);
     let pinned = $state(false);
+    const bypassStartupReconcile = !!window.__rssh_clone || !!window.__rssh_ai_handoff;
+    let resourcePanesAllowed = $state(bypassStartupReconcile);
 
     function togglePin() {
         pinned = !pinned;
@@ -170,22 +173,21 @@
         keymap.init();
         app.loadProfiles().then(p => profiles = p);
         app.loadGroups().then(g => groups = g);
-        // Crash recovery: reconcile with empty list tells the backend
-        // "no sessions are alive" so it cleans up any orphaned resources
-        // from a previous crash or hot-reload.
+        // Crash recovery must settle before any pane can create a replacement
+        // backend resource. Otherwise reconcile([]) can race that new session.
         //
         // Skip this in cloned windows (window.__rssh_clone is set by
         // open_tab_in_new_window) and AI handoff windows (window.__rssh_ai_handoff
         // is set by analyze_locally tool): passing activeIds=[] would nuke every
         // session in the shared AppState, including other windows' tabs.
-        if (!window.__rssh_clone && !window.__rssh_ai_handoff) {
-            invoke("reconcile_sessions", { activeIds: [] }).catch(() => {});
-            // Auto-open one local terminal when enabled (Shell settings). Kept inside
-            // the clone/handoff guard so cloned and AI-handoff windows don't get an
-            // extra tab they never asked for. Default off → unset reads as not "true".
-            invoke<string | null>("get_setting", { key: "open_local_on_startup" })
-                .then((v) => { if (v === "true") addLocalTab(); })
-                .catch(() => {});
+        if (!bypassStartupReconcile) {
+            void initializePrimarySessionWindow({
+                reconcile: () => invoke("reconcile_sessions", { activeIds: [] }),
+                allowResourcePanes: () => { resourcePanesAllowed = true; },
+                loadAutoOpenLocal: async () =>
+                    await invoke<string | null>("get_setting", { key: "open_local_on_startup" }) === "true",
+                openLocal: addLocalTab,
+            });
         }
         consumeCloneQuery();
         consumeAiHandoff();
@@ -1009,7 +1011,7 @@
              active tab 没开 / 进入 settings / downloads 时整块 aside 走 .hidden 收掉视觉宽度，但 DOM 留着。
              SFTP 走 AI 对侧：aiPos=right(default) → SFTP 视觉左、handle 右边缘；
              aiPos=left 下 .content.ai-left 翻 row → SFTP 视觉右、handle 左边缘。 -->
-        {#if sftpTabs.length > 0}
+        {#if resourcePanesAllowed && sftpTabs.length > 0}
             <aside class="sftp-side" class:hidden={!sftpVisible} style={sftpSideStyle}>
                 <div class="sftp-resize-handle"
                      class:on-left={aiPos === "left"}
@@ -1038,9 +1040,9 @@
                      oncontextmenu={app.isMobile ? undefined : (e) => openCtxMenu(e, tab)}>
                     {#if tab.type === "home"}
                         <HomeScreen/>
-                    {:else if app.isTerminalTabType(tab.type)}
+                    {:else if app.isTerminalTabType(tab.type) && resourcePanesAllowed}
                         <TerminalPane tabId={tab.id} tabType={tab.type} meta={tab.meta ?? {}}/>
-                    {:else if tab.type === "forward"}
+                    {:else if tab.type === "forward" && resourcePanesAllowed}
                         <ForwardPane tabId={tab.id} meta={tab.meta ?? {}}/>
                     {:else if tab.type === "edit"}
                         <EditPane tabId={tab.id} />

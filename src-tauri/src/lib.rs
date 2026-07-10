@@ -13,6 +13,7 @@ pub use ssh::bastion;
 pub mod server;
 mod state;
 pub mod sync;
+mod telnet_profile;
 mod terminal;
 
 use std::collections::HashMap;

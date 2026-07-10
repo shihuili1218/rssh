@@ -57,6 +57,7 @@ pub struct SessionReservation<'a, T> {
     publication_lock: &'a Mutex<()>,
     sessions: &'a Mutex<HashMap<String, SessionSlot<T>>>,
     session_id: String,
+    nonce: uuid::Uuid,
     /// Desktop commands also register the pending id under a window. Keep the
     /// ownership entry under the same RAII boundary so cancellation cannot
     /// leave either half behind.
@@ -68,28 +69,21 @@ impl<T> SessionReservation<'_, T> {
     pub fn activate(mut self, handle: T) -> AppResult<()> {
         let _publication = locked(self.publication_lock)?;
         let mut sessions = locked(self.sessions)?;
-        match sessions.get_mut(&self.session_id) {
-            Some(slot @ SessionSlot::Pending { .. }) => {
-                let protect_next_reconcile = match slot {
-                    SessionSlot::Pending { reconciled } => !*reconciled,
-                    SessionSlot::Ready { .. } => unreachable!(),
-                };
-                *slot = SessionSlot::Ready {
-                    handle,
-                    protect_next_reconcile,
-                };
-                self.armed = false;
-                Ok(())
-            }
-            Some(SessionSlot::Ready { .. }) => Err(AppError::config(
-                "session_id_conflict",
-                serde_json::json!({ "id": self.session_id }),
-            )),
-            None => Err(AppError::not_found(
+        let Some(slot) = sessions.get_mut(&self.session_id) else {
+            return Err(AppError::not_found(
                 "session_reservation_lost",
                 serde_json::json!({ "id": self.session_id }),
-            )),
+            ));
+        };
+        if !matches!(slot, SessionSlot::Pending { nonce } if *nonce == self.nonce) {
+            return Err(AppError::not_found(
+                "session_reservation_lost",
+                serde_json::json!({ "id": self.session_id }),
+            ));
         }
+        *slot = SessionSlot::Ready(handle);
+        self.armed = false;
+        Ok(())
     }
 }
 
@@ -98,20 +92,32 @@ impl<T> Drop for SessionReservation<'_, T> {
         if !self.armed {
             return;
         }
-        if let Ok(mut sessions) = self.sessions.lock() {
-            if matches!(
-                sessions.get(&self.session_id),
-                Some(SessionSlot::Pending { .. })
-            ) {
-                sessions.remove(&self.session_id);
-            }
+        let Ok(_publication) = self.publication_lock.lock() else {
+            return;
+        };
+        let Ok(mut sessions) = self.sessions.lock() else {
+            return;
+        };
+        let mut owners = match self.window_sessions {
+            Some(window_sessions) => match window_sessions.lock() {
+                Ok(owners) => Some(owners),
+                Err(_) => return,
+            },
+            None => None,
+        };
+        let owns_slot = matches!(
+            sessions.get(&self.session_id),
+            Some(SessionSlot::Pending { nonce }) if *nonce == self.nonce
+        );
+        if !owns_slot {
+            return;
         }
-        if let Some(window_sessions) = self.window_sessions {
-            if let Ok(mut owners) = window_sessions.lock() {
-                for ids in owners.values_mut() {
-                    ids.remove(&self.session_id);
-                }
+        sessions.remove(&self.session_id);
+        if let Some(owners) = owners.as_mut() {
+            for ids in owners.values_mut() {
+                ids.remove(&self.session_id);
             }
+            owners.retain(|_, ids| !ids.is_empty());
         }
     }
 }
@@ -128,12 +134,14 @@ fn reserve_slot<'a, T>(
             serde_json::json!({ "id": session_id }),
         ));
     }
-    slots.insert(session_id.to_owned(), SessionSlot::pending());
+    let nonce = uuid::Uuid::new_v4();
+    slots.insert(session_id.to_owned(), SessionSlot::Pending { nonce });
     drop(slots);
     Ok(SessionReservation {
         publication_lock,
         sessions,
         session_id: session_id.to_owned(),
+        nonce,
         window_sessions: None,
         armed: true,
     })
@@ -158,13 +166,21 @@ pub fn reserve_window_session<'a, T>(
     let _global = locked(&state.session_id_reservation_lock)?;
     ensure_session_id_available(state, session_id)?;
     let mut reservation = reserve_slot(&state.session_id_reservation_lock, sessions, session_id)?;
-    {
-        let mut owners = locked(&state.window_sessions)?;
-        owners
-            .entry(window_label.to_owned())
-            .or_default()
-            .insert(session_id.to_owned());
-    }
+    let mut owners = match locked(&state.window_sessions) {
+        Ok(owners) => owners,
+        Err(error) => {
+            // Reservation cleanup takes the publication lock too. Release the
+            // lock held by this constructor before dropping the armed guard.
+            drop(_global);
+            drop(reservation);
+            return Err(error);
+        }
+    };
+    owners
+        .entry(window_label.to_owned())
+        .or_default()
+        .insert(session_id.to_owned());
+    drop(owners);
     reservation.window_sessions = Some(&state.window_sessions);
     Ok(reservation)
 }
@@ -172,7 +188,7 @@ pub fn reserve_window_session<'a, T>(
 /// Publish a fully-open resource that generates its own UUID. Holding the same
 /// global lock as Pending reservation makes the bare id a process-wide key
 /// across every UUID-keyed connection map consumed by `reconcile_sessions`.
-pub fn insert_ready_session<T>(
+pub fn publish_session<T>(
     state: &AppState,
     sessions: &Mutex<HashMap<String, T>>,
     session_id: String,
@@ -185,21 +201,65 @@ pub fn insert_ready_session<T>(
     Ok(())
 }
 
-fn retain_slot_for_reconcile<T>(slot: &mut SessionSlot<T>, active: bool) -> bool {
-    match slot {
-        SessionSlot::Pending { reconciled } => {
-            *reconciled = true;
-            true
-        }
-        SessionSlot::Ready {
-            protect_next_reconcile,
-            ..
-        } => {
-            let retain = active || *protect_next_reconcile;
-            *protect_next_reconcile = false;
-            retain
-        }
+/// Atomically publish a ready handle and register its owning window.
+pub fn publish_window_session<T>(
+    state: &AppState,
+    sessions: &Mutex<HashMap<String, T>>,
+    window_label: &str,
+    session_id: String,
+    handle: T,
+) -> AppResult<()> {
+    let _global = locked(&state.session_id_reservation_lock)?;
+    ensure_session_id_available(state, &session_id)?;
+    let mut sessions = locked(sessions)?;
+    let mut owners = locked(&state.window_sessions)?;
+    let old = sessions.insert(session_id.clone(), handle);
+    debug_assert!(old.is_none());
+    owners
+        .entry(window_label.to_owned())
+        .or_default()
+        .insert(session_id);
+    Ok(())
+}
+
+/// Atomically remove a window-owned slot and its secondary owner entry.
+pub fn take_window_session<T>(
+    state: &AppState,
+    sessions: &Mutex<HashMap<String, T>>,
+    session_id: &str,
+) -> AppResult<Option<T>> {
+    let _global = locked(&state.session_id_reservation_lock)?;
+    let mut sessions = locked(sessions)?;
+    let mut owners = locked(&state.window_sessions)?;
+    let removed = sessions.remove(session_id);
+    for ids in owners.values_mut() {
+        ids.remove(session_id);
     }
+    owners.retain(|_, ids| !ids.is_empty());
+    Ok(removed)
+}
+
+/// Remove a non-window-owned slot under the publication lock.
+pub fn take_session<T>(
+    state: &AppState,
+    sessions: &Mutex<HashMap<String, T>>,
+    session_id: &str,
+) -> AppResult<Option<T>> {
+    let _global = locked(&state.session_id_reservation_lock)?;
+    Ok(locked(sessions)?.remove(session_id))
+}
+
+/// Retain a subset of a session map under the same publication lock used by
+/// insert/take. This is used for dependent-resource cleanup such as SFTP
+/// children when their parent SSH session closes.
+pub fn retain_sessions<T>(
+    state: &AppState,
+    sessions: &Mutex<HashMap<String, T>>,
+    mut keep: impl FnMut(&String, &mut T) -> bool,
+) -> AppResult<()> {
+    let _global = locked(&state.session_id_reservation_lock)?;
+    locked(sessions)?.retain(|id, handle| keep(id, handle));
+    Ok(())
 }
 
 /// Transport-agnostic body shared by the Tauri command and the headless server.
@@ -273,7 +333,7 @@ pub fn reconcile_sessions_impl(state: &AppState, active_ids: Vec<String>) -> App
     {
         let mut pty = locked(&state.pty_sessions)?;
         let before = pty.len();
-        pty.retain(|k, slot| retain_slot_for_reconcile(slot, alive.contains(k)));
+        pty.retain(|k, _| alive.contains(k));
         closed += before - pty.len();
     }
 
@@ -291,7 +351,7 @@ pub fn reconcile_sessions_impl(state: &AppState, active_ids: Vec<String>) -> App
     {
         let mut telnet = locked(&state.telnet_sessions)?;
         let before = telnet.len();
-        telnet.retain(|k, slot| retain_slot_for_reconcile(slot, alive.contains(k)));
+        telnet.retain(|k, _| alive.contains(k));
         closed += before - telnet.len();
     }
 
@@ -332,24 +392,6 @@ pub fn reconcile_sessions_impl(state: &AppState, active_ids: Vec<String>) -> App
     owners.retain(|_, ids| !ids.is_empty());
 
     Ok(closed)
-}
-
-/// 注册 session 归属窗口（session 创建时调用）。
-pub fn register_window_session(state: &AppState, window_label: &str, session_id: &str) {
-    if let Ok(mut ws) = state.window_sessions.lock() {
-        ws.entry(window_label.to_string())
-            .or_default()
-            .insert(session_id.to_string());
-    }
-}
-
-/// 取消 session 的窗口归属（session 单独关闭时调用）。
-pub fn unregister_window_session(state: &AppState, session_id: &str) {
-    if let Ok(mut ws) = state.window_sessions.lock() {
-        for set in ws.values_mut() {
-            set.remove(session_id);
-        }
-    }
 }
 
 /// 关闭指定窗口拥有的所有 session —— 窗口销毁时调用。
@@ -522,18 +564,14 @@ mod tests {
         }
 
         assert!(!sessions.lock().unwrap().contains_key("id"));
-        assert!(!owners.lock().unwrap()["main"].contains("id"));
+        assert!(!owners.lock().unwrap().contains_key("main"));
     }
 
     #[cfg(not(target_os = "android"))]
     #[test]
     fn same_id_cannot_be_reserved_in_two_transport_maps() {
         let state = empty_state();
-        state
-            .pty_sessions
-            .lock()
-            .unwrap()
-            .insert("id".into(), SessionSlot::pending());
+        let _pty = reserve_session(&state, &state.pty_sessions, "id").unwrap();
 
         let err = match reserve_session(&state, &state.telnet_sessions, "id") {
             Ok(_) => panic!("cross-transport duplicate unexpectedly reserved"),
@@ -543,7 +581,7 @@ mod tests {
 
         let unrelated_ready_map = Mutex::new(HashMap::<String, u8>::new());
         assert_eq!(
-            insert_ready_session(&state, &unrelated_ready_map, "id".into(), 7)
+            publish_session(&state, &unrelated_ready_map, "id".into(), 7)
                 .unwrap_err()
                 .code(),
             "session_id_conflict"
@@ -553,11 +591,7 @@ mod tests {
     #[test]
     fn reconcile_prunes_stale_window_owners_before_id_reuse() {
         let state = empty_state();
-        state
-            .telnet_sessions
-            .lock()
-            .unwrap()
-            .insert("live".into(), SessionSlot::pending());
+        let _live = reserve_window_session(&state, &state.telnet_sessions, "main", "live").unwrap();
         state.window_sessions.lock().unwrap().extend([
             (
                 "main".into(),
@@ -566,7 +600,7 @@ mod tests {
             ("old".into(), HashSet::from(["stale".into()])),
         ]);
 
-        reconcile_sessions_impl(&state, Vec::new()).unwrap();
+        reconcile_sessions_impl(&state, vec!["live".into()]).unwrap();
 
         let owners = state.window_sessions.lock().unwrap();
         assert_eq!(owners["main"], HashSet::from(["live".into()]));
@@ -574,37 +608,70 @@ mod tests {
     }
 
     #[test]
-    fn ready_before_reconcile_is_protected_exactly_once() {
-        let publication_lock = Mutex::new(());
-        let sessions = Mutex::new(HashMap::<String, SessionSlot<u8>>::new());
-        let reservation = reserve_slot(&publication_lock, &sessions, "id").unwrap();
-        reservation.activate(7).unwrap();
+    fn publish_and_take_window_session_update_handle_and_owner_atomically() {
+        let state = empty_state();
+        let sessions = Mutex::new(HashMap::<String, u8>::new());
 
-        let mut sessions = sessions.lock().unwrap();
-        let slot = sessions.get_mut("id").unwrap();
-        assert!(retain_slot_for_reconcile(slot, false));
-        assert!(!retain_slot_for_reconcile(slot, false));
+        publish_window_session(&state, &sessions, "main", "id".into(), 7).unwrap();
+
+        assert_eq!(sessions.lock().unwrap().get("id"), Some(&7));
+        assert_eq!(
+            state.window_sessions.lock().unwrap()["main"],
+            HashSet::from(["id".into()])
+        );
+
+        assert_eq!(
+            take_window_session(&state, &sessions, "id").unwrap(),
+            Some(7)
+        );
+        assert!(!sessions.lock().unwrap().contains_key("id"));
+        assert!(!state.window_sessions.lock().unwrap().contains_key("main"));
     }
 
     #[test]
-    fn pending_seen_by_reconcile_does_not_protect_ready_again() {
-        let publication_lock = Mutex::new(());
+    fn old_reservation_cannot_activate_or_drop_a_reused_id() {
+        let state = empty_state();
         let sessions = Mutex::new(HashMap::<String, SessionSlot<u8>>::new());
-        let reservation = reserve_slot(&publication_lock, &sessions, "id").unwrap();
-        {
-            let mut sessions = sessions.lock().unwrap();
-            assert!(retain_slot_for_reconcile(
-                sessions.get_mut("id").unwrap(),
-                false,
-            ));
-        }
+        let old = reserve_window_session(&state, &sessions, "old", "id").unwrap();
 
-        reservation.activate(7).unwrap();
+        assert!(take_window_session(&state, &sessions, "id")
+            .unwrap()
+            .is_some());
+        let new = reserve_window_session(&state, &sessions, "new", "id").unwrap();
 
-        let mut sessions = sessions.lock().unwrap();
-        assert!(!retain_slot_for_reconcile(
-            sessions.get_mut("id").unwrap(),
-            false,
-        ));
+        assert_eq!(
+            old.activate(7).unwrap_err().code(),
+            "session_reservation_lost"
+        );
+        assert!(sessions.lock().unwrap().contains_key("id"));
+        assert!(state.window_sessions.lock().unwrap()["new"].contains("id"));
+
+        new.activate(8).unwrap();
+        assert_eq!(
+            sessions
+                .lock()
+                .unwrap()
+                .get("id")
+                .and_then(SessionSlot::ready),
+            Some(&8)
+        );
+    }
+
+    #[test]
+    fn reconcile_removes_unreported_pending_without_late_drop_touching_reuse() {
+        let state = empty_state();
+        let old = reserve_window_session(&state, &state.telnet_sessions, "old", "id").unwrap();
+
+        reconcile_sessions_impl(&state, Vec::new()).unwrap();
+
+        assert!(!state.telnet_sessions.lock().unwrap().contains_key("id"));
+        assert!(!state.window_sessions.lock().unwrap().contains_key("old"));
+
+        let new = reserve_window_session(&state, &state.telnet_sessions, "new", "id").unwrap();
+        drop(old);
+
+        assert!(state.telnet_sessions.lock().unwrap().contains_key("id"));
+        assert!(state.window_sessions.lock().unwrap()["new"].contains("id"));
+        drop(new);
     }
 }

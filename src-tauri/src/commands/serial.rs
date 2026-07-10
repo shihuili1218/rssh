@@ -30,13 +30,13 @@ pub fn serial_open(
             }
         });
     let (id, handle) = serial::open(&port, config, sink)?;
-    crate::commands::lifecycle::insert_ready_session(
+    crate::commands::lifecycle::publish_window_session(
         &state,
         &state.serial_sessions,
+        window.label(),
         id.clone(),
         handle,
     )?;
-    crate::commands::lifecycle::register_window_session(&state, window.label(), &id);
     Ok(id)
 }
 
@@ -90,8 +90,7 @@ pub fn serial_send_break(state: State<'_, AppState>, session_id: String) -> AppR
 
 #[tauri::command]
 pub fn serial_close(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
-    crate::commands::lifecycle::unregister_window_session(&state, &session_id);
-    locked(&state.serial_sessions)?.remove(&session_id);
+    crate::commands::lifecycle::take_window_session(&state, &state.serial_sessions, &session_id)?;
     Ok(())
 }
 

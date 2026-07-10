@@ -465,7 +465,8 @@ fn dispatch(
         }
         "pty_close" => {
             let sid: String = arg(&args, "sessionId")?;
-            locked(&state.pty_sessions).map_err(err_value)?.remove(&sid);
+            crate::commands::lifecycle::take_session(state, &state.pty_sessions, &sid)
+                .map_err(err_value)?;
             Ok(Value::Null)
         }
 
@@ -487,7 +488,7 @@ fn dispatch(
                 let _ = tx.send(Message::Text(msg.to_string().into()));
             });
             let (id, handle) = serial::open(&port, config, sink).map_err(err_value)?;
-            crate::commands::lifecycle::insert_ready_session(
+            crate::commands::lifecycle::publish_session(
                 state,
                 &state.serial_sessions,
                 id.clone(),
@@ -510,9 +511,8 @@ fn dispatch(
         }
         "serial_close" => {
             let sid: String = arg(&args, "sessionId")?;
-            locked(&state.serial_sessions)
-                .map_err(err_value)?
-                .remove(&sid);
+            crate::commands::lifecycle::take_session(state, &state.serial_sessions, &sid)
+                .map_err(err_value)?;
             Ok(Value::Null)
         }
         "serial_set_dtr" => {
@@ -594,52 +594,37 @@ fn dispatch(
         }
         "telnet_close" => {
             let sid: String = arg(&args, "sessionId")?;
-            locked(&state.telnet_sessions)
-                .map_err(err_value)?
-                .remove(&sid);
+            crate::commands::lifecycle::take_session(state, &state.telnet_sessions, &sid)
+                .map_err(err_value)?;
             Ok(Value::Null)
         }
 
         // ---- telnet profiles (CRUD; peer of serial profiles) ----
-        "list_telnet_profiles" => ok(crate::db::telnet_profile::list(&state.db)),
+        "list_telnet_profiles" => ok(crate::telnet_profile::list_metadata(&state.db)),
         "get_telnet_profile" => {
             let id: String = arg(&args, "id")?;
-            let mut profile = crate::db::telnet_profile::get(&state.db, &id).map_err(err_value)?;
-            crate::commands::telnet::hydrate_login_script(
-                &mut profile,
-                &state.db,
-                state.secret_store.as_ref(),
-            )
-            .map_err(err_value)?;
+            let profile =
+                crate::telnet_profile::get_full(&state.db, state.secret_store.as_ref(), &id)
+                    .map_err(err_value)?;
             Ok(json!(profile))
         }
         "create_telnet_profile" => {
             let profile: TelnetProfile = arg(&args, "profile")?;
-            let update = crate::commands::telnet::LoginScriptUpdate::from_profile(&profile);
-            crate::commands::telnet::insert_profile(
-                &state.db,
-                state.secret_store.as_ref(),
-                &profile,
-                update,
-            )
-            .map_err(err_value)?;
+            let intent = crate::telnet_profile::LoginScriptIntent::from_profile(&profile);
+            crate::telnet_profile::upsert(&state.db, state.secret_store.as_ref(), &profile, intent)
+                .map_err(err_value)?;
             Ok(Value::Null)
         }
         "update_telnet_profile" => {
             let profile: TelnetProfile = arg(&args, "profile")?;
-            let update = crate::commands::telnet::LoginScriptUpdate::from_profile(&profile);
-            crate::commands::telnet::update_profile(
-                &state.db,
-                state.secret_store.as_ref(),
-                &profile,
-                update,
-            )
-            .map_err(err_value)?;
+            let intent = crate::telnet_profile::LoginScriptIntent::from_profile(&profile);
+            crate::telnet_profile::update(&state.db, state.secret_store.as_ref(), &profile, intent)
+                .map_err(err_value)?;
             Ok(Value::Null)
         }
         "delete_telnet_profile" => {
             let id: String = arg(&args, "id")?;
-            crate::commands::telnet::delete_profile(&state.db, state.secret_store.as_ref(), &id)
+            crate::telnet_profile::delete(&state.db, state.secret_store.as_ref(), &id)
                 .map_err(err_value)?;
             Ok(Value::Null)
         }
@@ -692,9 +677,12 @@ fn dispatch(
         // ---- port forwarding: stop + live stats (start is async, see dispatch_async) ----
         "forward_stop" => {
             let active_id: String = arg(&args, "activeId")?;
-            match locked(&state.active_forwards)
-                .map_err(err_value)?
-                .remove(&active_id)
+            match crate::commands::lifecycle::take_session(
+                state,
+                &state.active_forwards,
+                &active_id,
+            )
+            .map_err(err_value)?
             {
                 Some(h) => {
                     h.stop();
@@ -871,11 +859,13 @@ async fn dispatch_async(
                 let _ = locked(&state.passphrase_waiters).map(|mut m| m.remove(tid));
                 let _ = locked(&state.host_key_waiters).map(|mut m| m.remove(tid));
             }
+            crate::commands::lifecycle::retain_sessions(state, &state.sftp_sessions, |_, h| {
+                h.parent_ssh_id() != Some(&sid)
+            })
+            .map_err(err_value)?;
+            match crate::commands::lifecycle::take_session(state, &state.sessions, &sid)
+                .map_err(err_value)?
             {
-                let mut sftp = locked(&state.sftp_sessions).map_err(err_value)?;
-                sftp.retain(|_, h| h.parent_ssh_id() != Some(&sid));
-            }
-            match locked(&state.sessions).map_err(err_value)?.remove(&sid) {
                 Some(s) => {
                     s.force_disconnect();
                     Ok(Value::Null)
@@ -955,9 +945,9 @@ async fn dispatch_async(
             ok(h.mkdir(&arg::<String>(&args, "path")?).await)
         }
         "sftp_close" => {
-            locked(&state.sftp_sessions)
-                .map_err(err_value)?
-                .remove(&arg::<String>(&args, "sftpId")?);
+            let sftp_id: String = arg(&args, "sftpId")?;
+            crate::commands::lifecycle::take_session(state, &state.sftp_sessions, &sftp_id)
+                .map_err(err_value)?;
             Ok(Value::Null)
         }
         "sftp_cancel_transfer" => {
@@ -1370,7 +1360,7 @@ async fn ssh_connect(
         }
     }
     let session_id = result.session_id;
-    crate::commands::lifecycle::insert_ready_session(
+    crate::commands::lifecycle::publish_session(
         state,
         &state.sessions,
         session_id.clone(),
@@ -1577,7 +1567,7 @@ async fn sftp_connect(state: &Arc<AppState>, args: Value) -> Result<Value, Value
     .await
     .map_err(err_value)?;
     let id = uuid::Uuid::new_v4().to_string();
-    crate::commands::lifecycle::insert_ready_session(
+    crate::commands::lifecycle::publish_session(
         state,
         &state.sftp_sessions,
         id.clone(),
@@ -1605,7 +1595,7 @@ async fn sftp_connect_session(state: &Arc<AppState>, args: Value) -> Result<Valu
     .await
     .map_err(err_value)?;
     let id = uuid::Uuid::new_v4().to_string();
-    crate::commands::lifecycle::insert_ready_session(
+    crate::commands::lifecycle::publish_session(
         state,
         &state.sftp_sessions,
         id.clone(),

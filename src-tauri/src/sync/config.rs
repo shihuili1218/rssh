@@ -27,7 +27,6 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use crate::commands::telnet::{self as telnet_commands, LoginScriptUpdate};
 use crate::db::ai_command_blacklist::{self, BlacklistRow};
 use crate::db::ai_redact_rule::{self, RedactRuleRow};
 use crate::db::{
@@ -39,6 +38,7 @@ use crate::models::{
     Snippet, TelnetProfile,
 };
 use crate::secret::{cred_secret_key, SecretStore};
+use crate::telnet_profile::{self as telnet_profiles, LoginScriptIntent};
 
 /// Structured record of a failed item. `aggregate_failure` serializes the whole
 /// Vec into AppError params so the frontend can render every failure at once,
@@ -177,16 +177,16 @@ pub fn merge_import(db: &Db, ss: &dyn SecretStore, data_dir: &Path, data: &Value
             match serde_json::from_value::<TelnetProfile>(item.clone()) {
                 Ok(t) => {
                     let update = if !t.login_script.is_empty() {
-                        LoginScriptUpdate::Set(t.login_script.clone())
+                        LoginScriptIntent::Set(t.login_script.clone())
                     } else if t.save_script_to_remote {
                         // When upload is explicitly enabled, an empty script is
                         // an intentional clear. With upload disabled it is only
                         // a scrubbed placeholder and must preserve local state.
-                        LoginScriptUpdate::Delete
+                        LoginScriptIntent::Delete
                     } else {
-                        LoginScriptUpdate::Preserve
+                        LoginScriptIntent::Preserve
                     };
-                    if let Err(e) = telnet_commands::insert_profile(db, ss, &t, update) {
+                    if let Err(e) = telnet_profiles::upsert(db, ss, &t, update) {
                         errors.push(ImportError {
                             kind: "telnet_profile",
                             name: Some(t.name.clone()),
@@ -588,7 +588,7 @@ pub fn build_payload(
         if prefs.is_some() && !telnet.save_script_to_remote {
             telnet.login_script.clear();
         } else {
-            telnet_commands::hydrate_login_script(telnet, db, ss)?;
+            telnet_profiles::hydrate(db, ss, telnet)?;
         }
     }
     out.insert("telnet_profiles".into(), to_val(telnets)?);
@@ -878,13 +878,12 @@ mod tests {
         script: &str,
     ) {
         profile.login_script = script.into();
-        telnet_commands::insert_profile(db, ss, &profile, LoginScriptUpdate::Set(script.into()))
-            .unwrap();
+        telnet_profiles::upsert(db, ss, &profile, LoginScriptIntent::Set(script.into())).unwrap();
     }
 
     fn stored_telnet_script(db: &Db, ss: &dyn SecretStore, id: &str) -> String {
         let mut profile = telnet_profile::get(db, id).unwrap();
-        telnet_commands::hydrate_login_script(&mut profile, db, ss).unwrap();
+        telnet_profiles::hydrate(db, ss, &mut profile).unwrap();
         profile.login_script
     }
 
