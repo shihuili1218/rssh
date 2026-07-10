@@ -9,8 +9,10 @@
 //! Per-row failures are collected and reported together, never aborting the
 //! rest of the import.
 //!
-//! `secret` of None or empty is treated as "keep local" (so pushing a scrubbed
-//! credential and pulling it back doesn't wipe the local password).
+//! Credential `secret` of None or empty is treated as "keep local". Telnet
+//! login scripts carry an explicit upload-policy bit: empty + disabled means
+//! preserve (scrubbed), while empty + enabled means propagate an intentional
+//! script clear.
 //!
 //! Accepts a `serde_json::Value` of the shape:
 //! ```json
@@ -25,6 +27,7 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
+use crate::commands::telnet::{self as telnet_commands, LoginScriptUpdate};
 use crate::db::ai_command_blacklist::{self, BlacklistRow};
 use crate::db::ai_redact_rule::{self, RedactRuleRow};
 use crate::db::{
@@ -173,10 +176,20 @@ pub fn merge_import(db: &Db, ss: &dyn SecretStore, data_dir: &Path, data: &Value
         for item in arr {
             match serde_json::from_value::<TelnetProfile>(item.clone()) {
                 Ok(t) => {
-                    if let Err(e) = telnet_profile::insert(db, &t) {
+                    let update = if !t.login_script.is_empty() {
+                        LoginScriptUpdate::Set(t.login_script.clone())
+                    } else if t.save_script_to_remote {
+                        // When upload is explicitly enabled, an empty script is
+                        // an intentional clear. With upload disabled it is only
+                        // a scrubbed placeholder and must preserve local state.
+                        LoginScriptUpdate::Delete
+                    } else {
+                        LoginScriptUpdate::Preserve
+                    };
+                    if let Err(e) = telnet_commands::insert_profile(db, ss, &t, update) {
                         errors.push(ImportError {
                             kind: "telnet_profile",
-                            name: Some(t.name),
+                            name: Some(t.name.clone()),
                             code: e.code().to_string(),
                         });
                     }
@@ -338,12 +351,7 @@ pub fn merge_import(db: &Db, ss: &dyn SecretStore, data_dir: &Path, data: &Value
     {
         match serde_json::from_value::<Vec<DynamicDiscoverySource>>(v.clone()) {
             Ok(incoming) => {
-                let local = crate::commands::discovery::read_dynamic_discovery_sources_from_db(db)
-                    .unwrap_or_default();
-                let merged = merge_dynamic_discovery_sources(local, incoming);
-                if let Err(e) =
-                    crate::commands::discovery::save_dynamic_discovery_sources_to_db(db, merged)
-                {
+                if let Err(e) = merge_and_save_dynamic_discovery_sources(db, incoming) {
                     errors.push(ImportError {
                         kind: "dynamic_discovery_source",
                         name: None,
@@ -411,6 +419,15 @@ fn merge_dynamic_discovery_sources(
         }
     }
     local
+}
+
+fn merge_and_save_dynamic_discovery_sources(
+    db: &Db,
+    incoming: Vec<DynamicDiscoverySource>,
+) -> AppResult<()> {
+    let local = crate::commands::discovery::read_dynamic_discovery_sources_from_db(db)?;
+    let merged = merge_dynamic_discovery_sources(local, incoming);
+    crate::commands::discovery::save_dynamic_discovery_sources_to_db(db, merged)
 }
 
 // ---------------------------------------------------------------------------
@@ -567,6 +584,13 @@ pub fn build_payload(
     out.insert("serial_profiles".into(), to_val(serials)?);
     let mut telnets = telnet_profile::list(db)?;
     retain_by_groups(&mut telnets, prefs, |t| t.group_id.as_deref());
+    for telnet in &mut telnets {
+        if prefs.is_some() && !telnet.save_script_to_remote {
+            telnet.login_script.clear();
+        } else {
+            telnet_commands::hydrate_login_script(telnet, db, ss)?;
+        }
+    }
     out.insert("telnet_profiles".into(), to_val(telnets)?);
     out.insert(
         "dynamic_discovery_sources".into(),
@@ -839,10 +863,29 @@ mod tests {
             input_newline: "crlf".into(),
             output_newline: "raw".into(),
             local_echo: false,
+            echo_mode: Some(crate::models::TelnetEchoMode::Auto),
             backspace: "del".into(),
             login_script: String::new(),
+            save_script_to_remote: false,
             group_id: None,
         }
+    }
+
+    fn insert_telnet_with_script(
+        db: &Db,
+        ss: &dyn SecretStore,
+        mut profile: TelnetProfile,
+        script: &str,
+    ) {
+        profile.login_script = script.into();
+        telnet_commands::insert_profile(db, ss, &profile, LoginScriptUpdate::Set(script.into()))
+            .unwrap();
+    }
+
+    fn stored_telnet_script(db: &Db, ss: &dyn SecretStore, id: &str) -> String {
+        let mut profile = telnet_profile::get(db, id).unwrap();
+        telnet_commands::hydrate_login_script(&mut profile, db, ss).unwrap();
+        profile.login_script
     }
 
     fn docker_source(id: &str, name: &str, context: &str) -> DynamicDiscoverySource {
@@ -892,6 +935,99 @@ mod tests {
     }
 
     #[test]
+    fn telnet_login_script_uses_secret_store_across_import_and_export() {
+        let (db, ss, dir) = fixture();
+        let mut remote = telnet("t1", "Switch");
+        remote.login_script = "expect Password:\nsend hunter2".into();
+        let data = json!({
+            "version": 1,
+            "telnet_profiles": [serde_json::to_value(remote).unwrap()],
+        });
+
+        merge_import(&db, &ss, dir.path(), &data).unwrap();
+
+        assert!(telnet_profile::get(&db, "t1")
+            .unwrap()
+            .login_script
+            .is_empty());
+        assert_eq!(
+            stored_telnet_script(&db, &ss, "t1"),
+            "expect Password:\nsend hunter2"
+        );
+        let out = build_payload(&db, &ss, dir.path(), &ExportMode::LocalBackup).unwrap();
+        assert_eq!(
+            out["telnet_profiles"][0]["login_script"],
+            "expect Password:\nsend hunter2"
+        );
+    }
+
+    #[test]
+    fn scrubbed_telnet_script_does_not_erase_local_secret() {
+        let (db, ss, dir) = fixture();
+        insert_telnet_with_script(&db, &ss, telnet("t1", "Local"), "local script");
+        let data = json!({
+            "version": 1,
+            "telnet_profiles": [serde_json::to_value(telnet("t1", "Remote")).unwrap()],
+        });
+
+        merge_import(&db, &ss, dir.path(), &data).unwrap();
+
+        assert_eq!(stored_telnet_script(&db, &ss, "t1"), "local script");
+    }
+
+    #[test]
+    fn explicit_remote_telnet_script_clear_deletes_local_secret() {
+        let (db, ss, dir) = fixture();
+        insert_telnet_with_script(&db, &ss, telnet("t1", "Local"), "local script");
+        let mut remote = telnet("t1", "Remote");
+        remote.save_script_to_remote = true;
+        let data = json!({
+            "version": 1,
+            "telnet_profiles": [serde_json::to_value(remote).unwrap()],
+        });
+
+        merge_import(&db, &ss, dir.path(), &data).unwrap();
+
+        assert!(stored_telnet_script(&db, &ss, "t1").is_empty());
+    }
+
+    #[test]
+    fn remote_push_scrubs_telnet_script_unless_enabled() {
+        let (db, ss, dir) = fixture();
+        let mut local_only = telnet("local", "Local only");
+        local_only.save_script_to_remote = false;
+        insert_telnet_with_script(&db, &ss, local_only, "local secret");
+        let mut shared = telnet("shared", "Shared");
+        shared.save_script_to_remote = true;
+        insert_telnet_with_script(&db, &ss, shared, "shared secret");
+
+        let prefs = read_sync_prefs(&db).unwrap();
+        let out = build_payload(&db, &ss, dir.path(), &ExportMode::RemotePush(prefs)).unwrap();
+        let rows = out["telnet_profiles"].as_array().unwrap();
+        let by_id = |id: &str| rows.iter().find(|row| row["id"] == id).unwrap();
+
+        assert_eq!(by_id("local")["login_script"], "");
+        assert_eq!(by_id("shared")["login_script"], "shared secret");
+    }
+
+    #[test]
+    fn export_keeps_legacy_script_when_secret_migration_has_not_finished() {
+        let (db, ss, dir) = fixture();
+        db.with_transaction(|tx| {
+            tx.execute(
+                "INSERT INTO telnet_profiles (id, name, host, login_script) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params!["legacy", "Legacy", "10.0.0.2", "send old-secret"],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let out = build_payload(&db, &ss, dir.path(), &ExportMode::LocalBackup).unwrap();
+
+        assert_eq!(out["telnet_profiles"][0]["login_script"], "send old-secret");
+    }
+
+    #[test]
     fn export_includes_dynamic_discovery_sources() {
         let (db, ss, dir) = fixture();
         crate::commands::discovery::save_dynamic_discovery_sources_to_db(
@@ -937,6 +1073,34 @@ mod tests {
         let same = sources.iter().find(|s| s.id == "same").unwrap();
         assert_eq!(same.name, "New", "same id overwritten");
         assert!(sources.iter().any(|s| s.id == "new"), "remote source added");
+    }
+
+    #[test]
+    fn merge_keeps_invalid_local_discovery_settings_untouched() {
+        let (db, ss, dir) = fixture();
+        crate::db::settings::set(
+            &db,
+            crate::commands::discovery::SOURCES_SETTING_KEY,
+            "not-json",
+        )
+        .unwrap();
+        let data = json!({
+            "version": 1,
+            "dynamic_discovery_sources": [
+                serde_json::to_value(docker_source("remote", "Remote", "remote-context"))
+                    .unwrap(),
+            ],
+        });
+
+        let err = merge_import(&db, &ss, dir.path(), &data).unwrap_err();
+
+        assert_eq!(err.code(), "import_partial_failed");
+        assert_eq!(
+            crate::db::settings::get(&db, crate::commands::discovery::SOURCES_SETTING_KEY,)
+                .unwrap()
+                .as_deref(),
+            Some("not-json"),
+        );
     }
 
     // ── Phase 2: the five new categories ──────────────────────────────

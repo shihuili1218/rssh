@@ -95,7 +95,12 @@ pub async fn forward_start_impl(state: &AppState, forward_id: String) -> AppResu
     .await?;
     let active_id = uuid::Uuid::new_v4().to_string();
 
-    locked(&state.active_forwards)?.insert(active_id.clone(), handle);
+    crate::commands::lifecycle::insert_ready_session(
+        state,
+        &state.active_forwards,
+        active_id.clone(),
+        handle,
+    )?;
 
     Ok(active_id)
 }

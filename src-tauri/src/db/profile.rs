@@ -78,6 +78,12 @@ fn validate_for_write(p: &Profile) -> AppResult<()> {
             serde_json::json!({ "id": p.id, "name": p.name }),
         ));
     }
+    if let Err(category) = crate::ssh::algorithms::validate_policy(&p.algorithms) {
+        return Err(AppError::config(
+            "profile_algorithms_invalid",
+            serde_json::json!({ "category": category }),
+        ));
+    }
     Ok(())
 }
 
@@ -292,6 +298,18 @@ mod tests {
         assert_eq!(
             update(&db, &bad).unwrap_err().code(),
             "name_has_control_char"
+        );
+    }
+
+    #[test]
+    fn insert_rejects_marker_only_kex_policy() {
+        let db = Db::open_in_memory().unwrap();
+        let mut bad = mk("p1", "alpha");
+        bad.algorithms.kex = vec!["ext-info-c".into(), "kex-strict-c-v00@openssh.com".into()];
+
+        assert_eq!(
+            insert(&db, &bad).unwrap_err().code(),
+            "profile_algorithms_invalid"
         );
     }
 }

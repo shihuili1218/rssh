@@ -322,6 +322,7 @@ fn default_shell() -> String {
 }
 
 pub fn spawn(
+    session_id: String,
     cols: u16,
     rows: u16,
     sink: PtySink,
@@ -337,7 +338,7 @@ pub fn spawn(
     if !cfg!(target_os = "windows") {
         cmd.arg("-l");
     }
-    spawn_builder(cols, rows, sink, cmd, shell)
+    spawn_builder(session_id, cols, rows, sink, cmd, shell)
 }
 
 /// Start a specific local program under a PTY. Used by dynamic connectors such
@@ -345,6 +346,7 @@ pub fn spawn(
 /// transport, but the first process is the connector command instead of the
 /// user's login shell.
 pub fn spawn_command(
+    session_id: String,
     cols: u16,
     rows: u16,
     sink: PtySink,
@@ -358,10 +360,11 @@ pub fn spawn_command(
     for arg in args {
         cmd.arg(arg);
     }
-    spawn_builder(cols, rows, sink, cmd, program)
+    spawn_builder(session_id, cols, rows, sink, cmd, program)
 }
 
 fn spawn_builder(
+    session_id: String,
     cols: u16,
     rows: u16,
     sink: PtySink,
@@ -393,7 +396,6 @@ fn spawn_builder(
         .take_writer()
         .map_err(|e| AppError::pty("pty_op_failed", serde_json::json!({ "err": e.to_string() })))?;
 
-    let id = uuid::Uuid::new_v4().to_string();
     let handle = PtyHandle {
         writer: Arc::new(Mutex::new(writer)),
         master: Arc::new(Mutex::new(pair.master)),
@@ -404,7 +406,7 @@ fn spawn_builder(
     };
 
     // 读取线程：PTY stdout → Tauri 事件
-    let pty_id = id.clone();
+    let pty_id = session_id.clone();
     std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
         let mut reader = reader;
@@ -417,5 +419,5 @@ fn spawn_builder(
         sink(&pty_id, PtyOut::Close);
     });
 
-    Ok((id, handle))
+    Ok((session_id, handle))
 }

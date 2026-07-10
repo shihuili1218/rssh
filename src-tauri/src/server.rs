@@ -29,7 +29,7 @@ use crate::error::{locked, AppError, AppResult};
 use crate::models::{
     Credential, Forward, Group, HighlightRule, Profile, SerialProfile, Snippet, TelnetProfile,
 };
-use crate::state::AppState;
+use crate::state::{AppState, SessionSlot};
 use crate::terminal::pty::{self, PtyOut, PtySink};
 use crate::terminal::serial::{self, SerialOut, SerialSink};
 use crate::terminal::telnet::{self, TelnetOut, TelnetSink};
@@ -59,6 +59,7 @@ fn build_state() -> AppResult<AppState> {
     Ok(AppState {
         db,
         secret_store: secret_system.store,
+        session_id_reservation_lock: Mutex::new(()),
         sessions: Mutex::new(HashMap::new()),
         pty_sessions: Mutex::new(HashMap::new()),
         serial_sessions: Mutex::new(HashMap::new()),
@@ -403,8 +404,17 @@ fn dispatch(
         // ---- local PTY ----
         "list_shells" => Ok(json!(pty::available_shells())),
         "pty_spawn" => {
-            let cols = args.get("cols").and_then(Value::as_u64).unwrap_or(80) as u16;
-            let rows = args.get("rows").and_then(Value::as_u64).unwrap_or(24) as u16;
+            let cols = checked_u16_arg(&args, "cols", 80)?;
+            let rows = checked_u16_arg(&args, "rows", 24)?;
+            let requested_id = optional_string_arg(&args, "sessionId")?;
+            let session_id =
+                crate::commands::lifecycle::resolve_session_id(requested_id).map_err(err_value)?;
+            let reservation = crate::commands::lifecycle::reserve_session(
+                state,
+                &state.pty_sessions,
+                &session_id,
+            )
+            .map_err(err_value)?;
             let shell = crate::db::settings::get(&state.db, "local_shell")
                 .ok()
                 .flatten()
@@ -421,10 +431,9 @@ fn dispatch(
                 };
                 let _ = tx.send(Message::Text(msg.to_string().into()));
             });
-            let (id, handle) = pty::spawn(cols, rows, sink, shell).map_err(err_value)?;
-            locked(&state.pty_sessions)
-                .map_err(err_value)?
-                .insert(id.clone(), handle);
+            let (id, handle) =
+                pty::spawn(session_id, cols, rows, sink, shell).map_err(err_value)?;
+            reservation.activate(handle).map_err(err_value)?;
             Ok(json!(id))
         }
         "pty_write" => {
@@ -433,6 +442,7 @@ fn dispatch(
             let handle = locked(&state.pty_sessions)
                 .map_err(err_value)?
                 .get(&sid)
+                .and_then(SessionSlot::ready)
                 .cloned();
             match handle {
                 Some(h) => h.write(&data).map(|_| Value::Null).map_err(err_value),
@@ -441,11 +451,12 @@ fn dispatch(
         }
         "pty_resize" => {
             let sid: String = arg(&args, "sessionId")?;
-            let cols = args.get("cols").and_then(Value::as_u64).unwrap_or(80) as u16;
-            let rows = args.get("rows").and_then(Value::as_u64).unwrap_or(24) as u16;
+            let cols = checked_u16_arg(&args, "cols", 80)?;
+            let rows = checked_u16_arg(&args, "rows", 24)?;
             let handle = locked(&state.pty_sessions)
                 .map_err(err_value)?
                 .get(&sid)
+                .and_then(SessionSlot::ready)
                 .cloned();
             match handle {
                 Some(h) => h.resize(cols, rows).map(|_| Value::Null).map_err(err_value),
@@ -476,9 +487,13 @@ fn dispatch(
                 let _ = tx.send(Message::Text(msg.to_string().into()));
             });
             let (id, handle) = serial::open(&port, config, sink).map_err(err_value)?;
-            locked(&state.serial_sessions)
-                .map_err(err_value)?
-                .insert(id.clone(), handle);
+            crate::commands::lifecycle::insert_ready_session(
+                state,
+                &state.serial_sessions,
+                id.clone(),
+                handle,
+            )
+            .map_err(err_value)?;
             Ok(json!(id))
         }
         "serial_write" => {
@@ -543,19 +558,34 @@ fn dispatch(
             let handle = locked(&state.telnet_sessions)
                 .map_err(err_value)?
                 .get(&sid)
+                .and_then(SessionSlot::ready)
                 .cloned();
             match handle {
                 Some(h) => h.write(&data).map(|_| Value::Null).map_err(err_value),
                 None => Err(json!("telnet_not_found")),
             }
         }
-        "telnet_resize" => {
+        "telnet_write_line" => {
             let sid: String = arg(&args, "sessionId")?;
-            let cols = args.get("cols").and_then(Value::as_u64).unwrap_or(80) as u16;
-            let rows = args.get("rows").and_then(Value::as_u64).unwrap_or(24) as u16;
+            let text: String = arg(&args, "text")?;
             let handle = locked(&state.telnet_sessions)
                 .map_err(err_value)?
                 .get(&sid)
+                .and_then(SessionSlot::ready)
+                .cloned();
+            match handle {
+                Some(h) => h.write_line(&text).map(|_| Value::Null).map_err(err_value),
+                None => Err(json!("telnet_not_found")),
+            }
+        }
+        "telnet_resize" => {
+            let sid: String = arg(&args, "sessionId")?;
+            let cols = checked_u16_arg(&args, "cols", 80)?;
+            let rows = checked_u16_arg(&args, "rows", 24)?;
+            let handle = locked(&state.telnet_sessions)
+                .map_err(err_value)?
+                .get(&sid)
+                .and_then(SessionSlot::ready)
                 .cloned();
             match handle {
                 Some(h) => h.resize(cols, rows).map(|_| Value::Null).map_err(err_value),
@@ -572,22 +602,47 @@ fn dispatch(
 
         // ---- telnet profiles (CRUD; peer of serial profiles) ----
         "list_telnet_profiles" => ok(crate::db::telnet_profile::list(&state.db)),
-        "get_telnet_profile" => ok(crate::db::telnet_profile::get(
-            &state.db,
-            &arg::<String>(&args, "id")?,
-        )),
-        "create_telnet_profile" => ok(crate::db::telnet_profile::insert(
-            &state.db,
-            &arg::<TelnetProfile>(&args, "profile")?,
-        )),
-        "update_telnet_profile" => ok(crate::db::telnet_profile::update(
-            &state.db,
-            &arg::<TelnetProfile>(&args, "profile")?,
-        )),
-        "delete_telnet_profile" => ok(crate::db::telnet_profile::delete(
-            &state.db,
-            &arg::<String>(&args, "id")?,
-        )),
+        "get_telnet_profile" => {
+            let id: String = arg(&args, "id")?;
+            let mut profile = crate::db::telnet_profile::get(&state.db, &id).map_err(err_value)?;
+            crate::commands::telnet::hydrate_login_script(
+                &mut profile,
+                &state.db,
+                state.secret_store.as_ref(),
+            )
+            .map_err(err_value)?;
+            Ok(json!(profile))
+        }
+        "create_telnet_profile" => {
+            let profile: TelnetProfile = arg(&args, "profile")?;
+            let update = crate::commands::telnet::LoginScriptUpdate::from_profile(&profile);
+            crate::commands::telnet::insert_profile(
+                &state.db,
+                state.secret_store.as_ref(),
+                &profile,
+                update,
+            )
+            .map_err(err_value)?;
+            Ok(Value::Null)
+        }
+        "update_telnet_profile" => {
+            let profile: TelnetProfile = arg(&args, "profile")?;
+            let update = crate::commands::telnet::LoginScriptUpdate::from_profile(&profile);
+            crate::commands::telnet::update_profile(
+                &state.db,
+                state.secret_store.as_ref(),
+                &profile,
+                update,
+            )
+            .map_err(err_value)?;
+            Ok(Value::Null)
+        }
+        "delete_telnet_profile" => {
+            let id: String = arg(&args, "id")?;
+            crate::commands::telnet::delete_profile(&state.db, state.secret_store.as_ref(), &id)
+                .map_err(err_value)?;
+            Ok(Value::Null)
+        }
 
         // ---- serial profiles (CRUD; peer of forwards) ----
         "list_serial_profiles" => ok(crate::db::serial_profile::list(&state.db)),
@@ -727,14 +782,36 @@ async fn dispatch_async(
         // can block up to 10s per address and must not stall the ws event loop.
         "telnet_open" => {
             let host: String = arg(&args, "host")?;
-            let port = args.get("port").and_then(Value::as_u64).unwrap_or(23) as u16;
-            let cols = args.get("cols").and_then(Value::as_u64).unwrap_or(80) as u16;
-            let rows = args.get("rows").and_then(Value::as_u64).unwrap_or(24) as u16;
+            let port = checked_u16_arg(&args, "port", 23)?;
+            let cols = checked_u16_arg(&args, "cols", 80)?;
+            let rows = checked_u16_arg(&args, "rows", 24)?;
+            let input_newline = match args.get("inputNewline") {
+                None => "crlf".to_owned(),
+                Some(Value::String(value)) => value.clone(),
+                Some(_) => {
+                    return Err(err_value(AppError::config(
+                        "telnet_profile_invalid",
+                        json!({ "field": "input_newline" }),
+                    )))
+                }
+            };
+            let requested_id = optional_string_arg(&args, "sessionId")?;
+            let session_id =
+                crate::commands::lifecycle::resolve_session_id(requested_id).map_err(err_value)?;
+            let reservation = crate::commands::lifecycle::reserve_session(
+                state,
+                &state.telnet_sessions,
+                &session_id,
+            )
+            .map_err(err_value)?;
             let tx = tx.clone();
             let sink: TelnetSink = Arc::new(move |id: &str, out: TelnetOut| {
                 let msg = match out {
                     TelnetOut::Data(b) => {
                         json!({ "type": "event", "event": format!("telnet:data:{id}"), "payload": b })
+                    }
+                    TelnetOut::RemoteEcho(enabled) => {
+                        json!({ "type": "event", "event": format!("telnet:echo:{id}"), "payload": enabled })
                     }
                     TelnetOut::Close => {
                         json!({ "type": "event", "event": format!("telnet:close:{id}"), "payload": Value::Null })
@@ -742,21 +819,32 @@ async fn dispatch_async(
                 };
                 let _ = tx.send(Message::Text(msg.to_string().into()));
             });
-            let (id, handle) =
-                tokio::task::spawn_blocking(move || telnet::open(&host, port, cols, rows, sink))
-                    .await
-                    // Same coded error as the desktop command, so errMsg() can
-                    // translate it; a bare JoinError string has no protocol prefix.
-                    .map_err(|e| {
-                        err_value(AppError::other(
-                            "task_join_failed",
-                            json!({ "err": e.to_string() }),
-                        ))
-                    })?
-                    .map_err(err_value)?;
-            locked(&state.telnet_sessions)
-                .map_err(err_value)?
-                .insert(id.clone(), handle);
+            let spawn_session_id = session_id.clone();
+            let opened = tokio::task::spawn_blocking(move || {
+                telnet::open(
+                    spawn_session_id,
+                    &host,
+                    port,
+                    cols,
+                    rows,
+                    &input_newline,
+                    sink,
+                )
+            })
+            .await
+            // Same coded error as the desktop command, so errMsg() can
+            // translate it; a bare JoinError string has no protocol prefix.
+            .map_err(|e| {
+                err_value(AppError::other(
+                    "task_join_failed",
+                    json!({ "err": e.to_string() }),
+                ))
+            });
+            let (id, handle) = match opened {
+                Ok(result) => result.map_err(err_value)?,
+                Err(e) => return Err(e),
+            };
+            reservation.activate(handle).map_err(err_value)?;
             Ok(json!(id))
         }
         "ssh_write" => {
@@ -1281,10 +1369,15 @@ async fn ssh_connect(
                 .map_err(err_value)?;
         }
     }
-    locked(&state.sessions)
-        .map_err(err_value)?
-        .insert(result.session_id.clone(), result.handle);
-    Ok(json!(result.session_id))
+    let session_id = result.session_id;
+    crate::commands::lifecycle::insert_ready_session(
+        state,
+        &state.sessions,
+        session_id.clone(),
+        result.handle,
+    )
+    .map_err(err_value)?;
+    Ok(json!(session_id))
 }
 
 /// Serve an embedded frontend asset over HTTP/1.1 (one-shot, Connection: close).
@@ -1388,9 +1481,11 @@ fn ai_rebind(state: &AppState, args: Value) -> Result<Value, Value> {
                 .clone(),
         ),
         AiTarget::Local(id) => {
-            if !locked(&state.pty_sessions)
+            if locked(&state.pty_sessions)
                 .map_err(err_value)?
-                .contains_key(id)
+                .get(id)
+                .and_then(SessionSlot::ready)
+                .is_none()
             {
                 return Err(json!("local_pty_not_found"));
             }
@@ -1406,9 +1501,11 @@ fn ai_rebind(state: &AppState, args: Value) -> Result<Value, Value> {
             None
         }
         AiTarget::Telnet(id) => {
-            if !locked(&state.telnet_sessions)
+            if locked(&state.telnet_sessions)
                 .map_err(err_value)?
-                .contains_key(id)
+                .get(id)
+                .and_then(SessionSlot::ready)
+                .is_none()
             {
                 return Err(json!("telnet_session_not_found"));
             }
@@ -1480,9 +1577,13 @@ async fn sftp_connect(state: &Arc<AppState>, args: Value) -> Result<Value, Value
     .await
     .map_err(err_value)?;
     let id = uuid::Uuid::new_v4().to_string();
-    locked(&state.sftp_sessions)
-        .map_err(err_value)?
-        .insert(id.clone(), std::sync::Arc::new(handle));
+    crate::commands::lifecycle::insert_ready_session(
+        state,
+        &state.sftp_sessions,
+        id.clone(),
+        std::sync::Arc::new(handle),
+    )
+    .map_err(err_value)?;
     Ok(json!(id))
 }
 
@@ -1504,9 +1605,13 @@ async fn sftp_connect_session(state: &Arc<AppState>, args: Value) -> Result<Valu
     .await
     .map_err(err_value)?;
     let id = uuid::Uuid::new_v4().to_string();
-    locked(&state.sftp_sessions)
-        .map_err(err_value)?
-        .insert(id.clone(), std::sync::Arc::new(handle));
+    crate::commands::lifecycle::insert_ready_session(
+        state,
+        &state.sftp_sessions,
+        id.clone(),
+        std::sync::Arc::new(handle),
+    )
+    .map_err(err_value)?;
     Ok(json!(id))
 }
 
@@ -1522,6 +1627,32 @@ fn ok<T: serde::Serialize>(r: AppResult<T>) -> Result<Value, Value> {
 fn arg<T: serde::de::DeserializeOwned>(args: &Value, key: &str) -> Result<T, Value> {
     serde_json::from_value(args.get(key).cloned().unwrap_or(Value::Null))
         .map_err(|e| json!(format!("bad arg '{key}': {e}")))
+}
+
+fn checked_u16_arg(args: &Value, key: &'static str, default: u16) -> Result<u16, Value> {
+    let Some(value) = args.get(key) else {
+        return Ok(default);
+    };
+    let Some(value) = value.as_u64() else {
+        return Err(err_value(AppError::config(
+            "numeric_arg_invalid",
+            json!({ "field": key }),
+        )));
+    };
+    u16::try_from(value).map_err(|_| {
+        err_value(AppError::config(
+            "numeric_arg_invalid",
+            json!({ "field": key }),
+        ))
+    })
+}
+
+fn optional_string_arg(args: &Value, key: &'static str) -> Result<Option<String>, Value> {
+    match args.get(key) {
+        None => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(err_value(AppError::config("session_id_invalid", json!({})))),
+    }
 }
 
 fn save_cred_secret(state: &AppState, c: &Credential) -> Result<(), Value> {

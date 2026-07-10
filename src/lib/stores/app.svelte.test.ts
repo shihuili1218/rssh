@@ -148,3 +148,47 @@ describe("MRU toggle disables reordering", () => {
     expect(app.tabs().map((t) => t.id)).toEqual(["home", "a", "b"]);
   });
 });
+
+describe("connectTelnetProfile", () => {
+  it("carries the explicit echo mode into the terminal tab", async () => {
+    const app = await loadAppModule();
+
+    app.connectTelnetProfile({
+      id: "telnet-1",
+      name: "switch",
+      host: "192.0.2.10",
+      port: 23,
+      input_newline: "crlf",
+      output_newline: "raw",
+      local_echo: false,
+      echo_mode: "off",
+      backspace: "del",
+      login_script: "send super-secret",
+      group_id: null,
+    });
+
+    expect(app.tabs()[1].meta?.echo_mode).toBe("off");
+    expect(app.tabs()[1].meta?.profileId).toBe("telnet-1");
+    expect(app.tabs()[1].meta?.login_script).toBeUndefined();
+  });
+
+  it("maps the legacy local_echo flag when echo_mode is absent", async () => {
+    const app = await loadAppModule();
+    const legacy = {
+      id: "telnet-legacy",
+      name: "legacy switch",
+      host: "192.0.2.11",
+      port: 23,
+      input_newline: "crlf",
+      output_newline: "raw",
+      local_echo: true,
+      backspace: "del",
+      login_script: "",
+      group_id: null,
+    };
+
+    app.connectTelnetProfile(legacy);
+
+    expect(app.tabs()[1].meta?.echo_mode).toBe("on");
+  });
+});

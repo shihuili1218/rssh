@@ -99,6 +99,8 @@ pub fn default_ssh_algorithms() -> SshAlgorithms {
 }
 
 fn default_kex_algorithms() -> Vec<String> {
+    // ext-info-* and kex-strict-* are protocol markers, not selectable KEX.
+    // ssh::algorithms adds the client-side markers to russh at runtime.
     [
         "mlkem768x25519-sha256",
         "curve25519-sha256",
@@ -109,10 +111,6 @@ fn default_kex_algorithms() -> Vec<String> {
         "diffie-hellman-group16-sha512",
         "diffie-hellman-group15-sha512",
         "diffie-hellman-group14-sha256",
-        "ext-info-c",
-        "ext-info-s",
-        "kex-strict-c-v00@openssh.com",
-        "kex-strict-s-v00@openssh.com",
     ]
     .into_iter()
     .map(String::from)
@@ -275,11 +273,33 @@ pub struct SerialProfile {
     pub group_id: Option<String>,
 }
 
-/// Saved telnet endpoint — a peer of `SerialProfile`: no secret, no FK. Login
-/// happens in-band (the server's own login:/Password: prompts, optionally
-/// scripted via `login_script`), so unlike SSH profiles there is nothing to
-/// link to `credentials`. Only the line-discipline knobs that make sense for
-/// a telnet NVT — no baud/parity/hex/slow_send (UART-isms).
+/// How local echo is selected for a telnet session.
+///
+/// `Auto` follows RFC 854 ECHO negotiation, while `On` / `Off` are explicit
+/// user overrides for broken peers. The old `local_echo` boolean remains in
+/// `TelnetProfile` as a wire-compatibility field for pre-v0.2.12 clients.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TelnetEchoMode {
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+impl TelnetEchoMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::On => "on",
+            Self::Off => "off",
+        }
+    }
+}
+
+/// Saved telnet endpoint — a peer of `SerialProfile`, with its optional login
+/// script stored separately in `SecretStore`. Only line-discipline knobs that
+/// make sense for a telnet NVT live here — no baud/parity/hex/slow_send.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelnetProfile {
     pub id: String,
@@ -294,13 +314,32 @@ pub struct TelnetProfile {
     pub output_newline: String, // raw | cr | lf | crlf — incoming → CRLF normalization
     #[serde(default)]
     pub local_echo: bool,
+    /// Explicit three-state echo policy. `None` means a legacy payload: derive
+    /// it from `local_echo` (`true` -> On, `false` -> Off).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub echo_mode: Option<TelnetEchoMode>,
     #[serde(default = "default_backspace")]
     pub backspace: String, // del | bs | csi3 — what Backspace/Delete sends
     #[serde(default)]
     pub login_script: String, // expect/send lines, run on connect
+    /// Upload the script inside the already-encrypted remote sync payload.
+    /// False scrubs it while preserving any receiving device's local script.
+    #[serde(default)]
+    pub save_script_to_remote: bool,
     /// Optional group membership — same `groups` table as profiles/forwards.
     #[serde(default)]
     pub group_id: Option<String>,
+}
+
+impl TelnetProfile {
+    pub fn resolved_echo_mode(&self) -> TelnetEchoMode {
+        self.echo_mode.unwrap_or(if self.local_echo {
+            TelnetEchoMode::On
+        } else {
+            // Preserve the pre-echo_mode checkbox semantics for legacy data.
+            TelnetEchoMode::Off
+        })
+    }
 }
 
 // --- Dynamic discovery ---

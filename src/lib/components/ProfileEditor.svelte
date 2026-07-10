@@ -55,7 +55,10 @@
     ...groups.map((g) => ({ value: g.id, label: g.name })),
   ]);
   let algorithmSelectionComplete = $derived(
-    algorithmCategories.every((category) => algorithms[category.id].length > 0),
+    algorithmCategories.every((category) => {
+      const supported = algorithmCatalog?.supported[category.id] ?? [];
+      return algorithms[category.id].some((name) => supported.includes(name));
+    }),
   );
 
   onMount(async () => {

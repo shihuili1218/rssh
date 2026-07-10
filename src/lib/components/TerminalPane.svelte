@@ -8,7 +8,7 @@
     import {ImageAddon} from "@xterm/addon-image";
     import {invoke} from "@tauri-apps/api/core";
     import {listen, type UnlistenFn} from "@tauri-apps/api/event";
-    import type {ConnectorSpec, HighlightRule} from "../stores/app.svelte.ts";
+    import type {ConnectorSpec, HighlightRule, TelnetProfile} from "../stores/app.svelte.ts";
     import * as app from "../stores/app.svelte.ts";
     import * as ai from "../ai/store.svelte.ts";
     import * as theme from "../themes/store.svelte.ts";
@@ -166,7 +166,19 @@
     let fitAddon: FitAddon;
     let searchAddon: SearchAddon;
     let sessionId = $state<string | null>(null);
+    let eventSessionId = $state<string | null>(null);
+    // `connectAndWire` crosses several awaits. Keep the in-flight backend id
+    // separate from the public Ready id so closing a tab can cancel Pending
+    // reservations without advertising them as connected sessions.
+    let pendingSessionId: string | null = null;
+    let connectGeneration = 0;
+    let destroyed = false;
     let disconnected = $state(false);
+    let telnetRemoteEcho = $state(false);
+    // Telnet scripts are fetched into component memory by profile id. They must
+    // never enter tab meta, which is cloned through localStorage for a new
+    // headless window.
+    let telnetLoginScript = $state("");
     let showSearch = $state(false);
     let searchQuery = $state("");
 
@@ -182,6 +194,18 @@
 
     function schedulePaintTick() {
         paintScheduler?.schedule();
+    }
+
+    function fitTerminal() {
+        // saved fold lines have the current column geometry. Expand them before
+        // FitAddon calls terminal.resize(), including while the alt buffer is
+        // active; FoldStore itself is bound to the normal history buffer.
+        const proposed = fitAddon?.proposeDimensions();
+        if (proposed && terminal
+            && (proposed.cols !== terminal.cols || proposed.rows !== terminal.rows)) {
+            foldStore?.unfoldAll();
+        }
+        fitAddon?.fit();
     }
 
     function writeRawOutput(raw: Uint8Array) {
@@ -470,6 +494,10 @@
 
     // Listener tracking — disposed on cleanup/reconnect
     let unlisteners: UnlistenFn[] = [];
+    function clearSessionEventListeners() {
+        unlisteners.forEach((unlisten) => unlisten());
+        unlisteners = [];
+    }
     let dataDisposable: IDisposable | undefined;
     let resizeDisposable: IDisposable | undefined;
     let reconnectDisposable: IDisposable | undefined;
@@ -509,11 +537,16 @@
         inputNewline: meta.input_newline || (tabType === "telnet" ? "crlf" : "cr"),
         outputNewline: meta.output_newline || "raw",
         localEcho: meta.local_echo === "true",
+        echoMode: tabType === "telnet"
+            ? (meta.echo_mode === "on" || meta.echo_mode === "off" || meta.echo_mode === "auto"
+                ? meta.echo_mode
+                : (meta.local_echo === "true" ? "on" : "off"))
+            : null,
         backspace: meta.backspace || "del",
         slowSend: meta.slow_send === "true",
         inputMode: meta.input_mode || "normal",
         outputMode: meta.output_mode || "text",
-        loginScript: meta.login_script || "",
+        loginScript: tabType === "telnet" ? telnetLoginScript : (meta.login_script || ""),
     } : null);
 
     function streamInputNewline(): string {
@@ -522,21 +555,52 @@
     function streamNormalizeOut(text: string): string {
         return normalizeIncoming(text, streamOpts?.outputNewline ?? "raw");
     }
+    function streamLocalEchoEnabled(): boolean {
+        if (tabType !== "telnet") return streamOpts?.localEcho ?? false;
+        if (streamOpts?.echoMode === "on") return true;
+        if (streamOpts?.echoMode === "off") return false;
+        return !telnetRemoteEcho;
+    }
+    function announceDisconnected(reason?: string) {
+        if (disconnected) return;
+        writeBatcher?.flush();
+        disconnected = true;
+        if (reason) terminal.write(`\r\n\x1b[31m${reason}\x1b[0m\r\n`);
+        terminal.write("\r\n\x1b[31m--- Disconnected ---\x1b[0m\r\n");
+        terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
+        // An early Close can arrive before open/spawn publishes its Pending
+        // handle. Wait for that attempt to settle before accepting another
+        // reconnect; otherwise two attempts can race to overwrite sessionId.
+        if (!pendingSessionId) setupReconnect();
+    }
+    function handleStreamWriteFailure(sid: string, error: unknown) {
+        // A delayed rejection from an old session must not tear down a fresh
+        // reconnect. The session identity is the boundary, not timing.
+        if (sessionId !== sid || disconnected) return;
+        console.warn(`[${tabType}] write failed:`, error);
+        invoke(closeCmd, { sessionId: sid }).catch((closeError) =>
+            console.warn(`[${tabType}] close after write failure failed:`, closeError),
+        );
+        announceDisconnected(`Write failed: ${errMsg(error)}`);
+    }
     function streamSendBytes(bytes: number[]) {
         if (!sessionId || disconnected || !bytes.length) return;
+        const sid = sessionId;
         if (!streamOpts?.slowSend) {
-            invoke(writeCmd, { sessionId, data: bytes }).catch(() => {});
+            invoke(writeCmd, { sessionId: sid, data: bytes }).catch((error) =>
+                handleStreamWriteFailure(sid, error),
+            );
             return;
         }
         // Slow devices / bootloaders: one byte at a time, ~5ms apart.
-        const sid = sessionId;
         let i = 0;
         const tick = () => {
             // Stop when finished, disconnected, OR the session was swapped out by a
             // fast reconnect — otherwise queued ticks keep writing to the stale sid.
-            // .catch swallows the reject that a closed session raises mid-loop.
             if (i >= bytes.length || disconnected || sessionId !== sid) return;
-            invoke(writeCmd, { sessionId: sid, data: [bytes[i]] }).catch(() => {});
+            invoke(writeCmd, { sessionId: sid, data: [bytes[i]] }).catch((error) =>
+                handleStreamWriteFailure(sid, error),
+            );
             i += 1;
             setTimeout(tick, 5);
         };
@@ -544,6 +608,11 @@
     }
     function streamSendText(text: string) {
         streamSendBytes(Array.from(new TextEncoder().encode(text)));
+    }
+    function streamEchoText(text: string) {
+        if (streamLocalEchoEnabled()) {
+            terminal.write(text.replace(/\r\n|\r|\n/g, "\r\n"));
+        }
     }
 
     // Cap local input buffers (hex / line editor) so a pathological no-newline
@@ -601,7 +670,7 @@
         // `data === "\r"` check passed through raw. Echo with CRLF so multi-line
         // input renders correctly in xterm.
         data = normalizeOutgoing(data, streamOpts?.inputNewline ?? "cr");
-        if (streamOpts?.localEcho) terminal.write(data.replace(/\r\n|\r|\n/g, "\r\n"));
+        streamEchoText(data);
         streamSendText(data);
     }
 
@@ -609,12 +678,44 @@
     let loginSteps: LoginStep[] = [];
     let loginStepIdx = 0;
     let loginBuf = "";
-    const loginDecoder = new TextDecoder("utf-8");
+    let loginDecoder = new TextDecoder("utf-8");
+    let loginScriptReady = false;
+    let earlyLoginChunks: Uint8Array[] = [];
+    let earlyLoginBytes = 0;
+    const EARLY_LOGIN_CAP = 4096;
+    function stageLoginScript(raw: Uint8Array) {
+        if (loginScriptReady) {
+            feedLoginScript(raw);
+            return;
+        }
+        const chunk = raw.length > EARLY_LOGIN_CAP ? raw.slice(-EARLY_LOGIN_CAP) : raw.slice();
+        earlyLoginChunks.push(chunk);
+        earlyLoginBytes += chunk.length;
+        let overflow = earlyLoginBytes - EARLY_LOGIN_CAP;
+        while (overflow > 0 && earlyLoginChunks.length > 0) {
+            const oldest = earlyLoginChunks[0];
+            if (oldest.length <= overflow) {
+                earlyLoginChunks.shift();
+                earlyLoginBytes -= oldest.length;
+                overflow -= oldest.length;
+            } else {
+                earlyLoginChunks[0] = oldest.slice(overflow);
+                earlyLoginBytes -= overflow;
+                overflow = 0;
+            }
+        }
+    }
     function initLoginScript() {
         loginSteps = parseLoginScript(streamOpts?.loginScript ?? "");
         loginStepIdx = 0;
         loginBuf = "";
+        loginDecoder = new TextDecoder("utf-8");
+        loginScriptReady = true;
         runLoginSends();
+        const staged = earlyLoginChunks;
+        earlyLoginChunks = [];
+        earlyLoginBytes = 0;
+        for (const raw of staged) feedLoginScript(raw);
     }
     /** Fire consecutive `send` steps until the next `expect` (or the end). */
     function runLoginSends() {
@@ -645,7 +746,9 @@
     function sendText(text: string) {
         if (!text || disconnected || !sessionId) return;
         if (streamOpts) {
-            streamSendText(normalizeOutgoing(text, streamOpts.inputNewline));
+            const normalized = normalizeOutgoing(text, streamOpts.inputNewline);
+            streamEchoText(normalized);
+            streamSendText(normalized);
             return;
         }
         invoke(writeCmd, { sessionId, data: Array.from(new TextEncoder().encode(text)) });
@@ -731,14 +834,18 @@
 
     // ─── Shared connect/wire helpers ───
 
-    const decoder = new TextDecoder("utf-8");
+    let decoder = new TextDecoder("utf-8");
 
-    /** Wire Tauri event listeners for session data + close. */
+    /** Wire Tauri event listeners for session data + close.
+     *
+     * The frontend reserves the canonical session id before spawn, so listeners
+     * exist before a fast child process or peer can produce its first byte. */
     async function wireSessionEvents(sid: string) {
         unlisteners.push(await listen<number[]>(`${dataEvent}:${sid}`, (ev) => {
+            if (eventSessionId !== sid) return;
             const raw = new Uint8Array(ev.payload);
             if (streamOpts) {
-                feedLoginScript(raw);
+                stageLoginScript(raw);
                 if (streamOpts.outputMode === "hex") { terminal.write(bytesToHex(raw)); return; }
                 terminal.write(streamNormalizeOut(decoder.decode(raw, { stream: true })));
                 return;
@@ -747,19 +854,28 @@
             // layer over the parsed grid (HighlightDecorator), not a byte rewrite.
             writeRawOutput(raw);
         }));
+        if (tabType === "telnet") {
+            unlisteners.push(await listen<boolean>(`telnet:echo:${sid}`, (ev) => {
+                if (eventSessionId !== sid) return;
+                telnetRemoteEcho = ev.payload;
+            }));
+        }
         unlisteners.push(await listen(`${closeEvent}:${sid}`, () => {
-            writeBatcher?.flush();
-            disconnected = true;
+            if (eventSessionId !== sid) return;
+            // A queued close from the previous connection must not tear down a
+            // freshly reconnected session.
+            if (sessionId !== null && sessionId !== sid) return;
             // Serial: the port just died; free its backend handle NOW so the
             // exclusive OS port is released. Otherwise the reconnect below
             // re-opens the same path while the stale handle still owns it and
             // fails. Telnet: same eager cleanup — the handle is dead after
             // Close, dropping it stops the reader thread immediately.
             // ssh/local hold no exclusive OS resource, so they skip this.
-            if (tabType === "serial" || tabType === "telnet") invoke(closeCmd, { sessionId: sid }).catch(() => {});
-            terminal.write("\r\n\x1b[31m--- Disconnected ---\x1b[0m\r\n");
-            terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
-            setupReconnect();
+            if ((tabType === "serial" || tabType === "telnet")
+                && (sessionId === sid || pendingSessionId === sid)) {
+                invoke(closeCmd, { sessionId: sid }).catch(() => {});
+            }
+            announceDisconnected();
         }));
     }
 
@@ -780,13 +896,33 @@
 
     /** Full connect cycle: spawn session, wire events + input. */
     async function connectAndWire(): Promise<boolean> {
+        if (destroyed) return false;
+        const generation = ++connectGeneration;
+        const isCurrent = () => !destroyed && connectGeneration === generation;
         // Cleanup previous
-        unlisteners.forEach(u => u());
-        unlisteners = [];
+        clearSessionEventListeners();
+        const supersededReady = sessionId;
+        if (supersededReady) {
+            const args = isSsh
+                ? { sessionId: supersededReady, tabId }
+                : { sessionId: supersededReady };
+            invoke(closeCmd, args).catch(() => {});
+        }
+        const supersededPending = pendingSessionId;
+        if (supersededPending) {
+            invoke(closeCmd, { sessionId: supersededPending }).catch(() => {});
+        }
         disconnected = false;
         sessionId = null;
+        pendingSessionId = null;
+        eventSessionId = null;
         serialHexBuf = "";
         serialLineBuf = "";
+        telnetRemoteEcho = false;
+        loginScriptReady = false;
+        earlyLoginChunks = [];
+        earlyLoginBytes = 0;
+        decoder = new TextDecoder("utf-8");
 
         if (tabType === "serial") {
             try {
@@ -807,6 +943,7 @@
                 disconnected = true;
                 return false;
             }
+            eventSessionId = sessionId;
             await wireSessionEvents(sessionId);
             initLoginScript();
         } else if (tabType === "telnet") {
@@ -814,16 +951,55 @@
             // different fallback expressions would let the banner lie.
             const telnetPort = Number(meta.port) || 23;
             terminal.write(`\x1b[90mConnecting to ${meta.host}:${telnetPort} ...\x1b[0m\r\n`);
+            let reservedSessionId: string | null = null;
             try {
+                if (meta.profileId) {
+                    telnetLoginScript = "";
+                    try {
+                        const profile = await invoke<TelnetProfile>("get_telnet_profile", {
+                            id: meta.profileId,
+                        });
+                        telnetLoginScript = profile.login_script;
+                    } catch (error) {
+                        // Deleting a saved profile must not kill an already-open
+                        // terminal tab. Connect without automation and make the
+                        // missing secret explicit instead of reusing stale memory.
+                        terminal.write(`\x1b[33m${t("telnet.login_script_unavailable", { error: errMsg(error) })}\x1b[0m\r\n`);
+                    }
+                }
+                if (!isCurrent()) return false;
+                // A fresh key per connection prevents delayed events from the
+                // previous backend handle from tearing down a new reconnect.
+                reservedSessionId = crypto.randomUUID();
+                pendingSessionId = reservedSessionId;
+                eventSessionId = reservedSessionId;
+                await wireSessionEvents(reservedSessionId);
+                if (!isCurrent() || pendingSessionId !== reservedSessionId) {
+                    clearSessionEventListeners();
+                    return false;
+                }
                 // cols/rows seed the NAWS activation reply (same as ssh_connect);
                 // the post-connect fit/resize below corrects any later drift.
-                sessionId = await invoke<string>("telnet_open", {
+                const openedSessionId = await invoke<string>("telnet_open", {
                     host: meta.host,
                     port: telnetPort,
                     cols: terminal.cols,
                     rows: terminal.rows,
+                    sessionId: reservedSessionId,
+                    inputNewline: streamOpts?.inputNewline ?? "crlf",
                 });
+                if (pendingSessionId === reservedSessionId) pendingSessionId = null;
+                if (!isCurrent()) {
+                    await invoke(closeCmd, { sessionId: openedSessionId }).catch(() => {});
+                    return false;
+                }
+                sessionId = openedSessionId;
             } catch (e: any) {
+                if (pendingSessionId === reservedSessionId) pendingSessionId = null;
+                if (!isCurrent()) {
+                    clearSessionEventListeners();
+                    return false;
+                }
                 // errMsg turns the __rssh_err__| protocol string into a full
                 // localized sentence ("Telnet connect to {peer} failed: {err}");
                 // a hardcoded prefix would just duplicate it in English.
@@ -832,21 +1008,58 @@
                 disconnected = true;
                 return false;
             }
-            await wireSessionEvents(sessionId);
-            initLoginScript();
-        } else if (isLocal || isPtyConnector) {
-            try {
-                if (isPtyConnector) {
-                    const spec = JSON.parse(meta.connectorSpec || "{}") as ConnectorSpec;
-                    sessionId = await invoke<string>("pty_spawn_connector", { cols: terminal.cols, rows: terminal.rows, spec });
-                } else {
-                    sessionId = await invoke<string>("pty_spawn", { cols: terminal.cols, rows: terminal.rows });
-                }
-            } catch (e: any) {
-                terminal.write(`\x1b[31mLaunch failed: ${e}\x1b[0m\r\n`);
+            // A peer can close after emitting the close event but before the
+            // open command returns its backend id. Dispose that returned handle;
+            // otherwise the dead session remains in the backend map.
+            if (disconnected) {
+                await invoke(closeCmd, { sessionId }).catch(() => {});
                 return false;
             }
-            await wireSessionEvents(sessionId);
+            initLoginScript();
+        } else if (isLocal || isPtyConnector) {
+            let reservedSessionId: string | null = null;
+            try {
+                reservedSessionId = crypto.randomUUID();
+                pendingSessionId = reservedSessionId;
+                eventSessionId = reservedSessionId;
+                await wireSessionEvents(reservedSessionId);
+                if (!isCurrent() || pendingSessionId !== reservedSessionId) {
+                    clearSessionEventListeners();
+                    return false;
+                }
+                let openedSessionId: string;
+                if (isPtyConnector) {
+                    const spec = JSON.parse(meta.connectorSpec || "{}") as ConnectorSpec;
+                    openedSessionId = await invoke<string>("pty_spawn_connector", {
+                        cols: terminal.cols, rows: terminal.rows, spec,
+                        sessionId: reservedSessionId,
+                    });
+                } else {
+                    openedSessionId = await invoke<string>("pty_spawn", {
+                        cols: terminal.cols, rows: terminal.rows,
+                        sessionId: reservedSessionId,
+                    });
+                }
+                if (pendingSessionId === reservedSessionId) pendingSessionId = null;
+                if (!isCurrent()) {
+                    await invoke(closeCmd, { sessionId: openedSessionId }).catch(() => {});
+                    return false;
+                }
+                sessionId = openedSessionId;
+            } catch (e: any) {
+                if (pendingSessionId === reservedSessionId) pendingSessionId = null;
+                if (!isCurrent()) {
+                    clearSessionEventListeners();
+                    return false;
+                }
+                terminal.write(`\x1b[31mLaunch failed: ${e}\x1b[0m\r\n`);
+                disconnected = true;
+                return false;
+            }
+            if (disconnected) {
+                await invoke(closeCmd, { sessionId }).catch(() => {});
+                return false;
+            }
         } else {
             // SSH: listen on tabId FIRST for connection logs + auth prompts
             const logUn = await listen<number[]>(`ssh:data:${tabId}`, (ev) => {
@@ -886,14 +1099,24 @@
             logUn(); authUn(); passUn(); hkUn();
             passphraseInputDisposable?.dispose(); passphraseInputDisposable = undefined;
             hostKeyInputDisposable?.dispose(); hostKeyInputDisposable = undefined;
+            eventSessionId = sessionId;
             await wireSessionEvents(sessionId);
+        }
+
+        if (!isCurrent()) {
+            const staleSessionId = sessionId;
+            sessionId = null;
+            if (staleSessionId) {
+                await invoke(closeCmd, { sessionId: staleSessionId }).catch(() => {});
+            }
+            return false;
         }
 
         wireSessionInput(sessionId!);
 
         // Sync initial size
         requestAnimationFrame(() => {
-            fitAddon.fit();
+            fitTerminal();
             if (sessionId && !disconnected && resizeCmd) {
                 invoke(resizeCmd, { sessionId, cols: terminal.cols, rows: terminal.rows });
             }
@@ -939,7 +1162,9 @@
 
     async function reconnect() {
         terminal.write("\r\n\x1b[36mReconnecting ...\x1b[0m\r\n");
+        const generation = connectGeneration + 1;
         const ok = await connectAndWire();
+        if (destroyed || connectGeneration !== generation) return;
         setupReconnect();
         if (!ok) {
             disconnected = true;
@@ -1213,7 +1438,7 @@
         // Keyword highlighting lives here: a decoration layer over the parsed
         // cell grid. The reactive $effect above feeds it the compiled rules.
         highlightDecorator = new HighlightDecorator(terminal);
-        fitAddon.fit();
+        fitTerminal();
 
         // Terminal font: the chosen family (prepended to the base stack) and
         // pixel size. Registered after open()+fit() because the immediate
@@ -1223,7 +1448,7 @@
             if (!terminal) return;
             terminal.options.fontFamily = font.family;
             terminal.options.fontSize = font.size;
-            fitAddon?.fit();
+            fitTerminal();
         });
 
         // 移动端：xterm 的 helper-textarea 一旦 focus 就会召系统键盘，
@@ -1350,7 +1575,10 @@
         await app.loadAutoColorBlocks();
 
         // Connect
+        if (destroyed) return;
+        const generation = connectGeneration + 1;
         await connectAndWire();
+        if (destroyed || connectGeneration !== generation) return;
         setupReconnect();
 
         terminal.onTitleChange((title) => {
@@ -1369,7 +1597,7 @@
             // collapses dimensions to zero) — fitting at 0×0 corrupts
             // xterm's column count and causes the narrow-tab bug.
             const { width, height } = entries[0].contentRect;
-            if (width > 0 && height > 0) fitAddon?.fit();
+            if (width > 0 && height > 0) fitTerminal();
         });
         resizeObs.observe(containerEl);
     });
@@ -1405,7 +1633,7 @@
     // effect self-dependent via `++`, causing an update loop).
     $effect(() => {
         app.commandBlockBar(); // subscribe
-        fitAddon?.fit();
+        fitTerminal();
     });
 
     // Focus terminal + register writer when this tab becomes active.
@@ -1414,11 +1642,16 @@
     // ensures the computed dimensions are stable before we fit.
     $effect(() => {
         if (app.activeTabId() === tabId && !app.settingsActive()) {
-            requestAnimationFrame(() => requestAnimationFrame(() => fitAddon?.fit()));
+            requestAnimationFrame(() => requestAnimationFrame(fitTerminal));
             terminal?.focus();
             const writePty = (text: string) => {
                 if (sessionId && !disconnected) {
-                    invoke(writeCmd, {sessionId, data: Array.from(new TextEncoder().encode(text))});
+                    if (streamOpts) {
+                        streamSendText(text);
+                    } else {
+                        invoke(writeCmd, {sessionId, data: Array.from(new TextEncoder().encode(text))})
+                            .catch((e) => console.warn(`[${tabType}] control write failed:`, e));
+                    }
                 }
             };
             app.registerTerminalWriter(writePty);
@@ -1436,13 +1669,22 @@
     });
 
     onDestroy(() => {
+        destroyed = true;
+        connectGeneration += 1;
+        const startingSessionId = pendingSessionId;
+        pendingSessionId = null;
+        if (startingSessionId) {
+            // Closing before open/spawn returns removes the backend Pending
+            // slot. A late handle then fails activation and is dropped.
+            invoke(closeCmd, { sessionId: startingSessionId }).catch(() => {});
+        }
         unsubscribeTheme?.();
         unsubscribeFont?.();
         window.removeEventListener("mousedown", onWindowMouseDown);
         window.removeEventListener("keydown", onWindowKeyDown);
         containerEl?.removeEventListener("mouseup", onSelectMouseUp);
         containerEl?.removeEventListener("contextmenu", onTerminalContextMenu, { capture: true });
-        unlisteners.forEach(u => u());
+        clearSessionEventListeners();
         dataDisposable?.dispose();
         resizeDisposable?.dispose();
         reconnectDisposable?.dispose();

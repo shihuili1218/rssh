@@ -14,21 +14,37 @@ pub fn catalog() -> SshAlgorithmCatalog {
 }
 
 pub fn apply_to_config(config: &mut russh::client::Config, algorithms: &SshAlgorithms) {
-    if let Some(kex) = parse_kex(&algorithms.kex) {
-        config.preferred.kex = Cow::Owned(kex);
+    config.preferred.kex = Cow::Owned(parse_kex(&algorithms.kex));
+    config.preferred.key = Cow::Owned(parse_key(&algorithms.key));
+    config.preferred.cipher = Cow::Owned(parse_cipher(&algorithms.cipher));
+    config.preferred.mac = Cow::Owned(parse_mac(&algorithms.mac));
+    config.preferred.compression = Cow::Owned(parse_compression(&algorithms.compression));
+}
+
+/// Validate the persisted user policy, not russh's runtime-only KEX markers.
+/// Unknown names may coexist with supported names for forward compatibility,
+/// but every category must retain at least one algorithm we can actually use.
+pub fn validate_policy(algorithms: &SshAlgorithms) -> Result<(), &'static str> {
+    if !algorithms
+        .kex
+        .iter()
+        .any(|name| selectable_kex_name(name).is_some())
+    {
+        return Err("kex");
     }
-    if let Some(key) = parse_key(&algorithms.key) {
-        config.preferred.key = Cow::Owned(key);
+    if parse_key(&algorithms.key).is_empty() {
+        return Err("key");
     }
-    if let Some(cipher) = parse_cipher(&algorithms.cipher) {
-        config.preferred.cipher = Cow::Owned(cipher);
+    if parse_cipher(&algorithms.cipher).is_empty() {
+        return Err("cipher");
     }
-    if let Some(mac) = parse_mac(&algorithms.mac) {
-        config.preferred.mac = Cow::Owned(mac);
+    if parse_mac(&algorithms.mac).is_empty() {
+        return Err("mac");
     }
-    if let Some(compression) = parse_compression(&algorithms.compression) {
-        config.preferred.compression = Cow::Owned(compression);
+    if parse_compression(&algorithms.compression).is_empty() {
+        return Err("compression");
     }
+    Ok(())
 }
 
 fn supported_algorithms() -> SshAlgorithms {
@@ -79,56 +95,56 @@ fn append_new<'a>(mut base: Vec<String>, rest: impl IntoIterator<Item = &'a str>
     base
 }
 
-fn parse_kex(items: &[String]) -> Option<Vec<kex::Name>> {
-    let parsed = items
+fn parse_kex(items: &[String]) -> Vec<kex::Name> {
+    let mut parsed = items
         .iter()
-        .filter_map(|name| kex_name(name.as_str()))
+        .filter_map(|name| selectable_kex_name(name.as_str()))
         .collect::<Vec<_>>();
-    (!parsed.is_empty()).then_some(parsed)
+    parsed.extend([
+        kex::EXTENSION_SUPPORT_AS_CLIENT,
+        kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT,
+    ]);
+    parsed
 }
 
-fn parse_key(items: &[String]) -> Option<Vec<Algorithm>> {
-    let parsed = items
+fn parse_key(items: &[String]) -> Vec<Algorithm> {
+    items
         .iter()
         .filter(|name| supported_key_algorithm(name))
         .filter_map(|name| Algorithm::from_str(name).ok())
-        .collect::<Vec<_>>();
-    (!parsed.is_empty()).then_some(parsed)
+        .collect()
 }
 
-fn parse_cipher(items: &[String]) -> Option<Vec<cipher::Name>> {
-    let parsed = items
+fn parse_cipher(items: &[String]) -> Vec<cipher::Name> {
+    items
         .iter()
         .filter_map(|name| cipher::Name::try_from(name.as_str()).ok())
         .filter(|name| name.as_ref() != "clear" && name.as_ref() != "none")
-        .collect::<Vec<_>>();
-    (!parsed.is_empty()).then_some(parsed)
+        .collect()
 }
 
-fn parse_mac(items: &[String]) -> Option<Vec<mac::Name>> {
-    let parsed = items
+fn parse_mac(items: &[String]) -> Vec<mac::Name> {
+    items
         .iter()
         .filter_map(|name| mac::Name::try_from(name.as_str()).ok())
         .filter(|name| name.as_ref() != "none")
-        .collect::<Vec<_>>();
-    (!parsed.is_empty()).then_some(parsed)
+        .collect()
 }
 
-fn parse_compression(items: &[String]) -> Option<Vec<compression::Name>> {
-    let parsed = items
+fn parse_compression(items: &[String]) -> Vec<compression::Name> {
+    items
         .iter()
         .filter_map(|name| compression::Name::try_from(name.as_str()).ok())
-        .collect::<Vec<_>>();
-    (!parsed.is_empty()).then_some(parsed)
+        .collect()
 }
 
-fn kex_name(name: &str) -> Option<kex::Name> {
+fn selectable_kex_name(name: &str) -> Option<kex::Name> {
     match name {
-        "ext-info-c" => Some(kex::EXTENSION_SUPPORT_AS_CLIENT),
-        "ext-info-s" => Some(kex::EXTENSION_SUPPORT_AS_SERVER),
-        "kex-strict-c-v00@openssh.com" => Some(kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT),
-        "kex-strict-s-v00@openssh.com" => Some(kex::EXTENSION_OPENSSH_STRICT_KEX_AS_SERVER),
-        "none" => None,
+        "none"
+        | "ext-info-c"
+        | "ext-info-s"
+        | "kex-strict-c-v00@openssh.com"
+        | "kex-strict-s-v00@openssh.com" => None,
         _ => kex::Name::try_from(name).ok(),
     }
 }
@@ -165,6 +181,20 @@ mod tests {
     }
 
     #[test]
+    fn catalog_does_not_expose_kex_protocol_markers_as_algorithms() {
+        let c = catalog();
+        for marker in [
+            "ext-info-c",
+            "ext-info-s",
+            "kex-strict-c-v00@openssh.com",
+            "kex-strict-s-v00@openssh.com",
+        ] {
+            assert!(!c.defaults.kex.iter().any(|item| item == marker));
+            assert!(!c.supported.kex.iter().any(|item| item == marker));
+        }
+    }
+
+    #[test]
     fn apply_config_filters_disabled_no_encryption_names() {
         let algorithms = SshAlgorithms {
             kex: vec!["curve25519-sha256".into()],
@@ -182,5 +212,109 @@ mod tests {
         assert_eq!(config.preferred.key[0].as_str(), "ssh-ed25519");
         assert_eq!(config.preferred.mac.len(), 1);
         assert_eq!(config.preferred.mac[0].as_ref(), "hmac-sha1");
+    }
+
+    #[test]
+    fn apply_config_adds_client_kex_protocol_markers_outside_user_policy() {
+        let algorithms = SshAlgorithms {
+            kex: vec!["curve25519-sha256".into()],
+            ..SshAlgorithms::default()
+        };
+        let mut config = russh::client::Config::default();
+
+        apply_to_config(&mut config, &algorithms);
+
+        let names = config
+            .preferred
+            .kex
+            .iter()
+            .map(AsRef::<str>::as_ref)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "curve25519-sha256",
+                "ext-info-c",
+                "kex-strict-c-v00@openssh.com",
+            ]
+        );
+    }
+
+    #[test]
+    fn apply_config_does_not_turn_marker_only_policy_into_real_kex() {
+        let algorithms = SshAlgorithms {
+            kex: vec![
+                "ext-info-c".into(),
+                "ext-info-s".into(),
+                "kex-strict-c-v00@openssh.com".into(),
+                "kex-strict-s-v00@openssh.com".into(),
+            ],
+            ..SshAlgorithms::default()
+        };
+        let mut config = russh::client::Config::default();
+
+        apply_to_config(&mut config, &algorithms);
+
+        assert_eq!(
+            config
+                .preferred
+                .kex
+                .iter()
+                .map(AsRef::<str>::as_ref)
+                .collect::<Vec<_>>(),
+            vec!["ext-info-c", "kex-strict-c-v00@openssh.com"]
+        );
+    }
+
+    #[test]
+    fn apply_config_fails_closed_when_policy_has_no_supported_cipher() {
+        let algorithms = SshAlgorithms {
+            cipher: vec!["unknown-cipher".into(), "clear".into(), "none".into()],
+            ..SshAlgorithms::default()
+        };
+        let mut config = russh::client::Config::default();
+
+        apply_to_config(&mut config, &algorithms);
+
+        assert!(config.preferred.cipher.is_empty());
+    }
+
+    #[test]
+    fn apply_config_fails_closed_when_policy_has_no_supported_host_key() {
+        let algorithms = SshAlgorithms {
+            key: vec!["unknown-host-key".into()],
+            ..SshAlgorithms::default()
+        };
+        let mut config = russh::client::Config::default();
+
+        apply_to_config(&mut config, &algorithms);
+
+        assert!(config.preferred.key.is_empty());
+    }
+
+    #[test]
+    fn apply_config_fails_closed_when_policy_has_no_supported_mac() {
+        let algorithms = SshAlgorithms {
+            mac: vec!["unknown-mac".into(), "none".into()],
+            ..SshAlgorithms::default()
+        };
+        let mut config = russh::client::Config::default();
+
+        apply_to_config(&mut config, &algorithms);
+
+        assert!(config.preferred.mac.is_empty());
+    }
+
+    #[test]
+    fn apply_config_fails_closed_when_policy_has_no_supported_compression() {
+        let algorithms = SshAlgorithms {
+            compression: vec!["unknown-compression".into()],
+            ..SshAlgorithms::default()
+        };
+        let mut config = russh::client::Config::default();
+
+        apply_to_config(&mut config, &algorithms);
+
+        assert!(config.preferred.compression.is_empty());
     }
 }

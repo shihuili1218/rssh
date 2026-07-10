@@ -75,7 +75,12 @@ pub async fn sftp_connect(
     .await?;
     let id = uuid::Uuid::new_v4().to_string();
 
-    locked(&state.sftp_sessions)?.insert(id.clone(), Arc::new(handle));
+    crate::commands::lifecycle::insert_ready_session(
+        &state,
+        &state.sftp_sessions,
+        id.clone(),
+        Arc::new(handle),
+    )?;
 
     Ok(id)
 }
@@ -102,7 +107,12 @@ pub async fn sftp_connect_session(
     .await?;
     let id = uuid::Uuid::new_v4().to_string();
 
-    locked(&state.sftp_sessions)?.insert(id.clone(), Arc::new(handle));
+    crate::commands::lifecycle::insert_ready_session(
+        &state,
+        &state.sftp_sessions,
+        id.clone(),
+        Arc::new(handle),
+    )?;
 
     Ok(id)
 }

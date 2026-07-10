@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use futures_util::{stream, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
 use tauri::State;
@@ -117,7 +118,7 @@ fn validate_arg(label: &'static str, value: &str) -> AppResult<()> {
 fn normalize_optional_namespace(namespace: Option<String>) -> Option<String> {
     namespace.and_then(|ns| {
         let trimmed = ns.trim().to_string();
-        if trimmed.is_empty() || trimmed == "*" || trimmed.eq_ignore_ascii_case("all") {
+        if trimmed.is_empty() || trimmed == "*" {
             None
         } else {
             Some(trimmed)
@@ -249,7 +250,7 @@ async fn list_docker_contexts() -> AppResult<Vec<DynamicDiscoveryContext>> {
         5,
     )
     .await?;
-    Ok(parse_docker_contexts(&out.stdout))
+    parse_docker_contexts(&out.stdout)
 }
 
 async fn list_k8s_contexts() -> AppResult<Vec<DynamicDiscoveryContext>> {
@@ -286,11 +287,42 @@ pub async fn discover_dynamic_targets(
 async fn discover_sources(
     sources: Vec<DynamicDiscoverySource>,
 ) -> AppResult<DynamicDiscoverySnapshot> {
+    Ok(discover_sources_with(
+        sources,
+        |source| async move { discover_source(&source).await },
+    )
+    .await)
+}
+
+async fn discover_sources_with<F, Fut>(
+    sources: Vec<DynamicDiscoverySource>,
+    discover: F,
+) -> DynamicDiscoverySnapshot
+where
+    F: Fn(DynamicDiscoverySource) -> Fut,
+    Fut: std::future::Future<Output = AppResult<Vec<DynamicDiscoveredTarget>>>,
+{
     let mut targets = Vec::new();
     let mut errors = Vec::new();
 
-    for source in sources.into_iter().filter(|s| s.enabled) {
-        match discover_source(&source).await {
+    const MAX_CONCURRENT_SOURCES: usize = 4;
+    let pending = sources
+        .into_iter()
+        .filter(|s| s.enabled)
+        .enumerate()
+        .map(|(index, source)| {
+            let result = discover(source.clone());
+            async move { (index, source, result.await) }
+        });
+    let mut results = stream::iter(pending)
+        .buffer_unordered(MAX_CONCURRENT_SOURCES)
+        .collect::<Vec<_>>()
+        .await;
+    // Network/process completion order is nondeterministic; preserve configured
+    // source order for the error list while still discovering concurrently.
+    results.sort_by_key(|(index, _, _)| *index);
+    for (_, source, result) in results {
+        match result {
             Ok(mut found) => targets.append(&mut found),
             Err(e) => errors.push(DynamicDiscoveryError {
                 source_id: source.id.clone(),
@@ -307,7 +339,7 @@ async fn discover_sources(
             .then_with(|| a.name.cmp(&b.name))
             .then_with(|| a.id.cmp(&b.id))
     });
-    Ok(DynamicDiscoverySnapshot { targets, errors })
+    DynamicDiscoverySnapshot { targets, errors }
 }
 
 async fn discover_source(
@@ -328,17 +360,42 @@ async fn discover_source(
 #[derive(Deserialize)]
 struct DockerContextRow {
     #[serde(rename = "Name")]
-    name: Option<String>,
+    name: String,
     #[serde(rename = "Current")]
     current: Option<serde_json::Value>,
 }
 
-fn parse_docker_contexts(stdout: &str) -> Vec<DynamicDiscoveryContext> {
+fn parse_docker_json_lines<T>(stdout: &str, command: &'static str) -> AppResult<Vec<T>>
+where
+    T: serde::de::DeserializeOwned,
+{
     stdout
         .lines()
-        .filter_map(|line| serde_json::from_str::<DockerContextRow>(line).ok())
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(index, line)| {
+            serde_json::from_str::<T>(line).map_err(|e| {
+                AppError::other(
+                    "dynamic_discovery_parse_failed",
+                    json!({
+                        "platform": "docker",
+                        "command": command,
+                        "line": index + 1,
+                        "err": e.to_string(),
+                    }),
+                )
+            })
+        })
+        .collect()
+}
+
+fn parse_docker_contexts(stdout: &str) -> AppResult<Vec<DynamicDiscoveryContext>> {
+    let rows = parse_docker_json_lines::<DockerContextRow>(stdout, "context ls")?;
+
+    Ok(rows
+        .into_iter()
         .filter_map(|row| {
-            let name = row.name?.trim().to_string();
+            let name = row.name.trim().to_string();
             if name.is_empty() {
                 return None;
             }
@@ -353,7 +410,7 @@ fn parse_docker_contexts(stdout: &str) -> Vec<DynamicDiscoveryContext> {
                 current,
             })
         })
-        .collect()
+        .collect())
 }
 
 fn parse_k8s_contexts(stdout: &str, current: Option<&str>) -> Vec<DynamicDiscoveryContext> {
@@ -399,7 +456,7 @@ async fn discover_docker(
         8,
     )
     .await?;
-    Ok(parse_docker_ps(source, context, shell, &out.stdout))
+    parse_docker_ps(source, context, shell, &out.stdout)
 }
 
 fn parse_docker_ps(
@@ -407,10 +464,11 @@ fn parse_docker_ps(
     context: &str,
     shell: &str,
     stdout: &str,
-) -> Vec<DynamicDiscoveredTarget> {
-    stdout
-        .lines()
-        .filter_map(|line| serde_json::from_str::<DockerPsRow>(line).ok())
+) -> AppResult<Vec<DynamicDiscoveredTarget>> {
+    let rows = parse_docker_json_lines::<DockerPsRow>(stdout, "ps")?;
+
+    Ok(rows
+        .into_iter()
         .filter(|row| !row.id.trim().is_empty())
         .map(|row| {
             let container_name = row
@@ -436,7 +494,7 @@ fn parse_docker_ps(
                 },
             }
         })
-        .collect()
+        .collect())
 }
 
 #[derive(Deserialize)]
@@ -509,7 +567,12 @@ fn parse_k8s_pods(
     let list: K8sPodList = serde_json::from_str(stdout).map_err(|e| {
         AppError::other(
             "dynamic_discovery_parse_failed",
-            json!({ "platform": "k8s", "err": e.to_string() }),
+            json!({
+                "platform": "k8s",
+                "command": "get pods",
+                "line": e.line(),
+                "err": e.to_string(),
+            }),
         )
     })?;
     let mut targets = Vec::new();
@@ -594,14 +657,70 @@ mod tests {
     }
 
     #[test]
+    fn namespace_named_all_is_preserved_when_sources_are_saved() {
+        let db = crate::db::Db::open_in_memory().unwrap();
+        let mut source = k8s_source();
+        let DynamicDiscoveryConfig::K8s { namespace, .. } = &mut source.config else {
+            unreachable!();
+        };
+        *namespace = Some(" all ".into());
+
+        save_dynamic_discovery_sources_to_db(&db, vec![source]).unwrap();
+
+        let saved = read_dynamic_discovery_sources_from_db(&db).unwrap();
+        let DynamicDiscoveryConfig::K8s { namespace, .. } = &saved[0].config else {
+            unreachable!();
+        };
+        assert_eq!(namespace.as_deref(), Some("all"));
+    }
+
+    #[test]
+    fn empty_and_star_namespaces_still_mean_all_namespaces() {
+        let db = crate::db::Db::open_in_memory().unwrap();
+        let mut empty = k8s_source();
+        let DynamicDiscoveryConfig::K8s { namespace, .. } = &mut empty.config else {
+            unreachable!();
+        };
+        *namespace = Some("  ".into());
+        let mut star = k8s_source();
+        star.id = "src3".into();
+        let DynamicDiscoveryConfig::K8s { namespace, .. } = &mut star.config else {
+            unreachable!();
+        };
+        *namespace = Some(" * ".into());
+
+        save_dynamic_discovery_sources_to_db(&db, vec![empty, star]).unwrap();
+
+        let saved = read_dynamic_discovery_sources_from_db(&db).unwrap();
+        assert!(saved.iter().all(|source| matches!(
+            &source.config,
+            DynamicDiscoveryConfig::K8s {
+                namespace: None,
+                ..
+            }
+        )));
+    }
+
+    #[test]
     fn docker_context_json_lines_parse_current() {
         let out = r#"{"Name":"default","Current":true}
 {"Name":"prod","Current":false}"#;
-        let contexts = parse_docker_contexts(out);
+        let contexts = parse_docker_contexts(out).unwrap();
         assert_eq!(contexts.len(), 2);
         assert_eq!(contexts[0].name, "default");
         assert!(contexts[0].current);
         assert_eq!(contexts[1].name, "prod");
+    }
+
+    #[test]
+    fn malformed_docker_context_json_reports_its_line() {
+        let out = concat!("{\"Name\":\"default\",\"Current\":true}\n", "{broken}\n",);
+
+        let err = parse_docker_contexts(out).unwrap_err();
+
+        assert_eq!(err.code(), "dynamic_discovery_parse_failed");
+        assert!(err.to_string().contains("\"line\":2"));
+        assert!(err.to_string().contains("\"command\":\"context ls\""));
     }
 
     #[test]
@@ -615,13 +734,48 @@ mod tests {
     #[test]
     fn docker_ps_becomes_docker_exec_targets() {
         let out = r#"{"ID":"abc123","Image":"nginx:latest","Names":"web","Status":"Up 2 minutes"}"#;
-        let targets = parse_docker_ps(&docker_source(), "prod", "sh", out);
+        let targets = parse_docker_ps(&docker_source(), "prod", "sh", out).unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].id, "docker_exec:prod:abc123");
         assert!(matches!(
             targets[0].connector_spec,
             ConnectorSpec::DockerExec { .. }
         ));
+    }
+
+    #[test]
+    fn malformed_docker_ps_json_reports_its_line() {
+        let out = concat!(
+            "{\"ID\":\"abc123\",\"Image\":\"nginx\",\"Names\":\"web\",\"Status\":\"Up\"}\n",
+            "not-json\n",
+        );
+
+        let err = parse_docker_ps(&docker_source(), "prod", "sh", out).unwrap_err();
+
+        assert_eq!(err.code(), "dynamic_discovery_parse_failed");
+        assert!(err.to_string().contains("\"line\":2"));
+        assert!(err.to_string().contains("\"command\":\"ps\""));
+    }
+
+    #[tokio::test]
+    async fn enabled_sources_are_discovered_concurrently() {
+        let mut second = docker_source();
+        second.id = "src2".into();
+        second.name = "Docker 2".into();
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            discover_sources_with(vec![docker_source(), second], move |_| {
+                let barrier = barrier.clone();
+                async move {
+                    barrier.wait().await;
+                    Ok(Vec::new())
+                }
+            }),
+        )
+        .await
+        .expect("one slow source must not block the next source from starting");
     }
 
     #[test]

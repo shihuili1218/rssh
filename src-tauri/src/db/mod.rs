@@ -100,6 +100,24 @@ impl Db {
         tx.commit()?;
         Ok(result)
     }
+
+    /// Flush and truncate the WAL after sensitive plaintext has been replaced.
+    /// SQLite may return a successful row with `busy != 0`; treat that as a
+    /// retryable failure instead of pretending the old WAL pages are gone.
+    pub(crate) fn checkpoint_truncate(&self) -> AppResult<()> {
+        let conn = self.lock()?;
+        let (busy, _log, _checkpointed): (i64, i64, i64) =
+            conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?;
+        if busy != 0 {
+            return Err(AppError::other(
+                "db_wal_checkpoint_busy",
+                serde_json::json!({}),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Data dir: desktop uses `~/.rssh`, Android uses `app_data_dir` (handled

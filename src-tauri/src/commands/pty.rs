@@ -3,6 +3,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::error::{locked, AppError, AppResult};
 use crate::models::ConnectorSpec;
 use crate::state::AppState;
+use crate::state::SessionSlot;
 use crate::terminal::pty;
 
 #[tauri::command]
@@ -12,8 +13,16 @@ pub fn pty_spawn(
     state: State<'_, AppState>,
     cols: u16,
     rows: u16,
+    session_id: Option<String>,
 ) -> AppResult<String> {
+    let session_id = crate::commands::lifecycle::resolve_session_id(session_id)?;
     let shell = crate::db::settings::get(&state.db, "local_shell")?.filter(|s| !s.is_empty());
+    let reservation = crate::commands::lifecycle::reserve_window_session(
+        &state,
+        &state.pty_sessions,
+        window.label(),
+        &session_id,
+    )?;
     // Turn transport-agnostic PTY output into Tauri events. The headless ws
     // server builds a different sink over the same `pty::spawn`.
     let sink: pty::PtySink = std::sync::Arc::new(move |id: &str, out: pty::PtyOut| match out {
@@ -24,9 +33,8 @@ pub fn pty_spawn(
             let _ = app.emit(&format!("pty:close:{id}"), ());
         }
     });
-    let (id, handle) = pty::spawn(cols, rows, sink, shell)?;
-    locked(&state.pty_sessions)?.insert(id.clone(), handle);
-    crate::commands::lifecycle::register_window_session(&state, window.label(), &id);
+    let (id, handle) = pty::spawn(session_id, cols, rows, sink, shell)?;
+    reservation.activate(handle)?;
     Ok(id)
 }
 
@@ -104,7 +112,16 @@ pub fn pty_spawn_connector(
     cols: u16,
     rows: u16,
     spec: ConnectorSpec,
+    session_id: Option<String>,
 ) -> AppResult<String> {
+    let session_id = crate::commands::lifecycle::resolve_session_id(session_id)?;
+    let (program, args) = connector_command(spec)?;
+    let reservation = crate::commands::lifecycle::reserve_window_session(
+        &state,
+        &state.pty_sessions,
+        window.label(),
+        &session_id,
+    )?;
     let sink: pty::PtySink = std::sync::Arc::new(move |id: &str, out: pty::PtyOut| match out {
         pty::PtyOut::Data(b) => {
             let _ = app.emit(&format!("pty:data:{id}"), b);
@@ -113,10 +130,8 @@ pub fn pty_spawn_connector(
             let _ = app.emit(&format!("pty:close:{id}"), ());
         }
     });
-    let (program, args) = connector_command(spec)?;
-    let (id, handle) = pty::spawn_command(cols, rows, sink, program, args)?;
-    locked(&state.pty_sessions)?.insert(id.clone(), handle);
-    crate::commands::lifecycle::register_window_session(&state, window.label(), &id);
+    let (id, handle) = pty::spawn_command(session_id, cols, rows, sink, program, args)?;
+    reservation.activate(handle)?;
     Ok(id)
 }
 
@@ -141,6 +156,7 @@ pub fn refresh_shells() -> AppResult<Vec<String>> {
 pub fn pty_write(state: State<'_, AppState>, session_id: String, data: Vec<u8>) -> AppResult<()> {
     let handle = locked(&state.pty_sessions)?
         .get(&session_id)
+        .and_then(SessionSlot::ready)
         .cloned()
         .ok_or_else(|| AppError::not_found("pty_not_found", serde_json::json!({})))?;
     handle.write(&data)
@@ -155,6 +171,7 @@ pub fn pty_resize(
 ) -> AppResult<()> {
     let handle = locked(&state.pty_sessions)?
         .get(&session_id)
+        .and_then(SessionSlot::ready)
         .cloned()
         .ok_or_else(|| AppError::not_found("pty_not_found", serde_json::json!({})))?;
     handle.resize(cols, rows)

@@ -2,7 +2,7 @@ use rusqlite::{params, Connection};
 
 use crate::error::AppResult;
 
-const SCHEMA_VERSION: u32 = 23;
+const SCHEMA_VERSION: u32 = 24;
 
 fn column_exists(conn: &Connection, table: &str, col: &str) -> AppResult<bool> {
     let mut stmt = conn.prepare("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2")?;
@@ -396,10 +396,10 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
     }
 
     if version < 22 {
-        // Telnet profiles — a peer of serial_profiles: no secret, no FK, just a
-        // named host:port + the line-discipline knobs that make sense for a
-        // telnet NVT (input_newline defaults to crlf — that IS the NVT end-of-
-        // line). No baud/parity/hex/slow_send: those are UART-isms.
+        // Telnet profiles — a peer of serial_profiles: named host:port + the
+        // line-discipline knobs that make sense for an NVT. login_script began
+        // in this table; migration v2 moves its contents to SecretStore and
+        // keeps the column empty for schema compatibility.
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS telnet_profiles (
@@ -410,8 +410,13 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
                 input_newline  TEXT NOT NULL DEFAULT 'crlf',
                 output_newline TEXT NOT NULL DEFAULT 'raw',
                 local_echo     INTEGER NOT NULL DEFAULT 0,
+                echo_mode      TEXT DEFAULT NULL,
+                echo_write_version INTEGER NOT NULL DEFAULT 0,
                 backspace      TEXT NOT NULL DEFAULT 'del',
                 login_script   TEXT NOT NULL DEFAULT '',
+                login_script_version TEXT DEFAULT NULL,
+                login_script_legacy_pending INTEGER NOT NULL DEFAULT 0,
+                save_script_to_remote INTEGER NOT NULL DEFAULT 0,
                 group_id       TEXT DEFAULT NULL
             );
             ",
@@ -437,6 +442,97 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
                 params![default_json],
             )?;
         }
+    }
+
+    if version < 24 && table_exists(conn, "telnet_profiles")? {
+        // RFC ECHO negotiation needs three states: automatic, forced on and
+        // forced off. Preserve the legacy bool exactly for existing profiles.
+        if !column_exists(conn, "telnet_profiles", "echo_mode")? {
+            conn.execute_batch(
+                "ALTER TABLE telnet_profiles ADD COLUMN echo_mode TEXT DEFAULT NULL;",
+            )?;
+        }
+        if !column_exists(conn, "telnet_profiles", "echo_write_version")? {
+            conn.execute_batch(
+                "ALTER TABLE telnet_profiles ADD COLUMN echo_write_version INTEGER NOT NULL DEFAULT 0;",
+            )?;
+        }
+        if !column_exists(conn, "telnet_profiles", "login_script_version")? {
+            conn.execute_batch(
+                "ALTER TABLE telnet_profiles ADD COLUMN login_script_version TEXT DEFAULT NULL;",
+            )?;
+        }
+        if !column_exists(conn, "telnet_profiles", "login_script_legacy_pending")? {
+            conn.execute_batch(
+                "ALTER TABLE telnet_profiles ADD COLUMN login_script_legacy_pending INTEGER NOT NULL DEFAULT 0;",
+            )?;
+        }
+        if !column_exists(conn, "telnet_profiles", "save_script_to_remote")? {
+            conn.execute_batch(
+                "ALTER TABLE telnet_profiles ADD COLUMN save_script_to_remote INTEGER NOT NULL DEFAULT 0;",
+            )?;
+        }
+        // Older binaries name local_echo/login_script in every profile write.
+        // New writes advance echo_write_version atomically; triggers use that
+        // writer marker to recognize legacy writes even when a bool is
+        // unchanged. Install the triggers before the final backfill: a legacy
+        // process writing concurrently is then covered either by the trigger
+        // or by the scan, with no unobserved gap.
+        //
+        // The scrubbed legacy column cannot distinguish "left untouched" from
+        // "clear". Therefore an empty legacy write means Preserve; only a
+        // non-empty value replaces the active versioned secret.
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS telnet_profiles_legacy_echo_update;
+             DROP TRIGGER IF EXISTS telnet_profiles_legacy_script_insert;
+             DROP TRIGGER IF EXISTS telnet_profiles_legacy_script_update;
+
+             CREATE TRIGGER telnet_profiles_legacy_echo_update
+             AFTER UPDATE OF local_echo ON telnet_profiles
+             WHEN NEW.echo_write_version = OLD.echo_write_version
+             BEGIN
+               UPDATE telnet_profiles
+               SET echo_mode = CASE WHEN NEW.local_echo != 0 THEN 'on' ELSE 'off' END
+               WHERE id = NEW.id;
+             END;
+
+             CREATE TRIGGER telnet_profiles_legacy_script_insert
+             AFTER INSERT ON telnet_profiles
+             WHEN NEW.echo_write_version = 0 AND NEW.login_script != ''
+             BEGIN
+               UPDATE telnet_profiles
+               SET login_script_legacy_pending = 1,
+                   echo_write_version = echo_write_version + 1
+               WHERE id = NEW.id;
+             END;
+
+             CREATE TRIGGER telnet_profiles_legacy_script_update
+             AFTER UPDATE OF login_script ON telnet_profiles
+             WHEN NEW.echo_write_version = OLD.echo_write_version
+             BEGIN
+               UPDATE telnet_profiles
+               SET login_script = CASE
+                     WHEN NEW.login_script = '' THEN OLD.login_script
+                     ELSE NEW.login_script
+                   END,
+                   login_script_legacy_pending = CASE
+                     WHEN NEW.login_script != '' OR OLD.login_script != '' THEN 1
+                     ELSE 0
+                   END,
+                   echo_write_version = echo_write_version + 1
+               WHERE id = NEW.id;
+             END;",
+        )?;
+        conn.execute(
+            "UPDATE telnet_profiles
+             SET echo_mode = CASE WHEN local_echo != 0 THEN 'on' ELSE 'off' END
+             WHERE echo_mode IS NULL OR echo_write_version = 0",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE telnet_profiles SET login_script_legacy_pending = 1 WHERE login_script != ''",
+            [],
+        )?;
     }
 
     if version < SCHEMA_VERSION {
@@ -631,5 +727,180 @@ mod tests {
         assert!(algorithms
             .cipher
             .contains(&"chacha20-poly1305@openssh.com".into()));
+    }
+
+    #[test]
+    fn migration_24_preserves_legacy_telnet_echo_choice() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE telnet_profiles (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                host TEXT NOT NULL,
+                local_echo INTEGER NOT NULL DEFAULT 0,
+                login_script TEXT NOT NULL DEFAULT ''
+            );
+            INSERT INTO telnet_profiles (id, name, host, local_echo)
+              VALUES ('auto', 'Auto', 'a', 0), ('on', 'On', 'b', 1);",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 23u32).unwrap();
+
+        migrate(&conn).unwrap();
+
+        let auto: String = conn
+            .query_row(
+                "SELECT echo_mode FROM telnet_profiles WHERE id = 'auto'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let on: String = conn
+            .query_row(
+                "SELECT echo_mode FROM telnet_profiles WHERE id = 'on'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(auto, "off");
+        assert_eq!(on, "on");
+
+        // A v0.2.11 client only knows local_echo. Its later edit must still be
+        // visible to the new enum reader instead of leaving the columns split.
+        conn.execute(
+            "UPDATE telnet_profiles SET local_echo = 1 WHERE id = 'auto'",
+            [],
+        )
+        .unwrap();
+        let updated: String = conn
+            .query_row(
+                "SELECT echo_mode FROM telnet_profiles WHERE id = 'auto'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(updated, "on");
+
+        conn.execute(
+            "INSERT INTO telnet_profiles \
+             (id, name, host, local_echo, echo_mode, echo_write_version) \
+             VALUES ('new', 'New', 'c', 0, 'auto', 1)",
+            [],
+        )
+        .unwrap();
+        // The old writer names local_echo in its UPDATE even when false stays
+        // false. Writer version is unchanged, so Auto becomes explicit Off.
+        conn.execute(
+            "UPDATE telnet_profiles SET local_echo = 0 WHERE id = 'new'",
+            [],
+        )
+        .unwrap();
+        let old_writer_mode: String = conn
+            .query_row(
+                "SELECT echo_mode FROM telnet_profiles WHERE id = 'new'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(old_writer_mode, "off");
+
+        // New writers advance the marker in the same statement, so saving Auto
+        // is not mistaken for a legacy false-checkbox write.
+        conn.execute(
+            "UPDATE telnet_profiles SET local_echo = 0, echo_mode = 'auto', \
+             echo_write_version = echo_write_version + 1 WHERE id = 'new'",
+            [],
+        )
+        .unwrap();
+        let new_writer_mode: String = conn
+            .query_row(
+                "SELECT echo_mode FROM telnet_profiles WHERE id = 'new'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(new_writer_mode, "auto");
+
+        conn.execute(
+            "UPDATE telnet_profiles
+             SET login_script_version = 'v1', login_script = '',
+                 login_script_legacy_pending = 0
+             WHERE id = 'new'",
+            [],
+        )
+        .unwrap();
+        // Empty is ambiguous after scrubbing, so an old metadata save must not
+        // delete the active immutable version.
+        conn.execute(
+            "UPDATE telnet_profiles SET login_script = '' WHERE id = 'new'",
+            [],
+        )
+        .unwrap();
+        let preserved: (Option<String>, bool) = conn
+            .query_row(
+                "SELECT login_script_version, login_script_legacy_pending
+                 FROM telnet_profiles WHERE id = 'new'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(preserved, (Some("v1".into()), false));
+
+        // Non-empty is the one legacy intent that remains unambiguous.
+        conn.execute(
+            "UPDATE telnet_profiles SET login_script = 'replacement' WHERE id = 'new'",
+            [],
+        )
+        .unwrap();
+        // A stale old client writing empty before reconciliation must preserve
+        // that pending replacement as well, not erase it.
+        conn.execute(
+            "UPDATE telnet_profiles SET login_script = '' WHERE id = 'new'",
+            [],
+        )
+        .unwrap();
+        let pending: (String, bool) = conn
+            .query_row(
+                "SELECT login_script, login_script_legacy_pending
+                 FROM telnet_profiles WHERE id = 'new'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(pending, ("replacement".into(), true));
+    }
+
+    #[test]
+    fn migration_24_backfill_covers_a_write_before_trigger_installation() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE telnet_profiles (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                host TEXT NOT NULL,
+                local_echo INTEGER NOT NULL DEFAULT 0,
+                echo_mode TEXT DEFAULT NULL,
+                echo_write_version INTEGER NOT NULL DEFAULT 0,
+                login_script TEXT NOT NULL DEFAULT '',
+                login_script_legacy_pending INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO telnet_profiles
+              (id, name, host, local_echo, echo_mode, login_script)
+              VALUES ('race', 'Race', 'h', 1, 'off', 'late write');",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 23u32).unwrap();
+
+        migrate(&conn).unwrap();
+
+        let state: (String, bool) = conn
+            .query_row(
+                "SELECT echo_mode, login_script_legacy_pending
+                 FROM telnet_profiles WHERE id = 'race'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, ("on".into(), true));
     }
 }

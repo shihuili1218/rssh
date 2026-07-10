@@ -28,6 +28,9 @@ use crate::error::{locked, AppError, AppResult};
 /// `telnet:data:<id>` / `telnet:close:<id>`.
 pub enum TelnetOut {
     Data(Vec<u8>),
+    /// Whether the peer now owns echoing. The frontend uses this to switch
+    /// automatic local echo without guessing from profile defaults.
+    RemoteEcho(bool),
     Close,
 }
 
@@ -87,8 +90,21 @@ enum NState {
     SbIac,
 }
 
-/// Pure telnet option state machine. Feed inbound bytes with [`push`]; get back
-/// (terminal data, protocol replies). Option state is remembered so repeated
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OptionState {
+    Disabled,
+    Enabled,
+    /// We already refused this request and are waiting for the peer to
+    /// acknowledge it. Remembering this state prevents WILL/DONT loops.
+    Refused,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NegotiationEvent {
+    RemoteEcho(bool),
+}
+
+/// Pure telnet option state machine. Option state is remembered so repeated
 /// WILL/DO from the server never re-triggers a reply — the classic negotiation
 /// loop is structurally impossible (we only answer state *changes*, and we
 /// never initiate).
@@ -97,9 +113,9 @@ pub struct Negotiator {
     sb_opt: u8,
     sb_buf: Vec<u8>,
     /// remote_on[opt]: server said WILL opt and we accepted (DO sent).
-    remote_on: [bool; 256],
+    remote_on: [OptionState; 256],
     /// local_on[opt]: server said DO opt and we agreed (WILL sent).
-    local_on: [bool; 256],
+    local_on: [OptionState; 256],
     cols: u16,
     rows: u16,
 }
@@ -110,19 +126,18 @@ impl Negotiator {
             state: NState::Data,
             sb_opt: 0,
             sb_buf: Vec::new(),
-            remote_on: [false; 256],
-            local_on: [false; 256],
+            remote_on: [OptionState::Disabled; 256],
+            local_on: [OptionState::Disabled; 256],
             // Standard NVT assumption until the frontend's first fit/resize.
             cols: 80,
             rows: 24,
         }
     }
 
-    /// Process inbound bytes. Returns `(data, reply)`: `data` goes to the
-    /// terminal, `reply` goes back down the socket verbatim.
-    pub fn push(&mut self, input: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    fn push_with_events(&mut self, input: &[u8]) -> (Vec<u8>, Vec<u8>, Vec<NegotiationEvent>) {
         let mut data = Vec::with_capacity(input.len());
         let mut reply = Vec::new();
+        let mut events = Vec::new();
         for &b in input {
             match self.state {
                 NState::Data => match b {
@@ -140,7 +155,7 @@ impl Negotiator {
                     _ => self.state = NState::Data,
                 },
                 NState::Verb(verb) => {
-                    self.on_verb(verb, b, &mut reply);
+                    self.on_verb(verb, b, &mut reply, &mut events);
                     self.state = NState::Data;
                 }
                 NState::SbOpt => {
@@ -174,19 +189,29 @@ impl Negotiator {
                 },
             }
         }
-        (data, reply)
+        (data, reply, events)
     }
 
-    fn on_verb(&mut self, verb: u8, opt: u8, reply: &mut Vec<u8>) {
+    fn on_verb(
+        &mut self,
+        verb: u8,
+        opt: u8,
+        reply: &mut Vec<u8>,
+        events: &mut Vec<NegotiationEvent>,
+    ) {
         let i = opt as usize;
         match verb {
             WILL => {
                 if remote_ok(opt) {
-                    if !self.remote_on[i] {
-                        self.remote_on[i] = true;
+                    if self.remote_on[i] != OptionState::Enabled {
+                        self.remote_on[i] = OptionState::Enabled;
                         reply.extend([IAC, DO, opt]);
+                        if opt == OPT_ECHO {
+                            events.push(NegotiationEvent::RemoteEcho(true));
+                        }
                     }
-                } else {
+                } else if self.remote_on[i] != OptionState::Refused {
+                    self.remote_on[i] = OptionState::Refused;
                     reply.extend([IAC, DONT, opt]);
                 }
             }
@@ -194,15 +219,18 @@ impl Negotiator {
                 // Ack the disable only on an actual on→off transition; WONT for
                 // an option that was never on needs no answer (RFC 854 forbids
                 // acknowledging a non-change — that's the loop trap).
-                if self.remote_on[i] {
-                    self.remote_on[i] = false;
+                if self.remote_on[i] == OptionState::Enabled {
                     reply.extend([IAC, DONT, opt]);
+                    if opt == OPT_ECHO {
+                        events.push(NegotiationEvent::RemoteEcho(false));
+                    }
                 }
+                self.remote_on[i] = OptionState::Disabled;
             }
             DO => {
                 if local_ok(opt) {
-                    if !self.local_on[i] {
-                        self.local_on[i] = true;
+                    if self.local_on[i] != OptionState::Enabled {
+                        self.local_on[i] = OptionState::Enabled;
                         reply.extend([IAC, WILL, opt]);
                         // NAWS: the WILL is immediately followed by the current
                         // size (RFC 1073 — the client reports on activation).
@@ -210,15 +238,16 @@ impl Negotiator {
                             reply.extend(naws_subneg(self.cols, self.rows));
                         }
                     }
-                } else {
+                } else if self.local_on[i] != OptionState::Refused {
+                    self.local_on[i] = OptionState::Refused;
                     reply.extend([IAC, WONT, opt]);
                 }
             }
             DONT => {
-                if self.local_on[i] {
-                    self.local_on[i] = false;
+                if self.local_on[i] == OptionState::Enabled {
                     reply.extend([IAC, WONT, opt]);
                 }
+                self.local_on[i] = OptionState::Disabled;
             }
             _ => unreachable!("state machine only enters Verb for the 4 verbs"),
         }
@@ -227,7 +256,10 @@ impl Negotiator {
     fn on_subneg(&mut self, reply: &mut Vec<u8>) {
         // TTYPE SEND → IS "xterm-256color". The only subnegotiation a server
         // sends that we answer; everything else (incl. stray NAWS) is ignored.
-        if self.sb_opt == OPT_TTYPE && self.sb_buf.as_slice() == [TTYPE_SEND] {
+        if self.local_on[OPT_TTYPE as usize] == OptionState::Enabled
+            && self.sb_opt == OPT_TTYPE
+            && self.sb_buf.as_slice() == [TTYPE_SEND]
+        {
             reply.extend([IAC, SB, OPT_TTYPE, TTYPE_IS]);
             reply.extend_from_slice(TERM_TYPE);
             reply.extend([IAC, SE]);
@@ -239,7 +271,7 @@ impl Negotiator {
     pub fn set_size(&mut self, cols: u16, rows: u16) -> Option<Vec<u8>> {
         self.cols = cols;
         self.rows = rows;
-        self.local_on[OPT_NAWS as usize].then(|| naws_subneg(cols, rows))
+        (self.local_on[OPT_NAWS as usize] == OptionState::Enabled).then(|| naws_subneg(cols, rows))
     }
 }
 
@@ -298,6 +330,9 @@ pub struct TelnetHandle {
     _guard: Arc<CloseGuard>,
     /// "host:port" as the user typed it — AI session scope + labels.
     peer: Arc<str>,
+    /// Profile-owned line ending used by command-oriented writers such as AI.
+    /// Raw terminal writes still pass bytes through unchanged.
+    input_newline: Arc<[u8]>,
 }
 
 fn telnet_op_err(e: impl std::fmt::Display) -> AppError {
@@ -334,6 +369,13 @@ impl TelnetHandle {
     /// "host:port" this session was opened against.
     pub fn peer(&self) -> &str {
         &self.peer
+    }
+
+    pub fn write_line(&self, text: &str) -> AppResult<()> {
+        let mut data = Vec::with_capacity(text.len() + self.input_newline.len());
+        data.extend_from_slice(text.as_bytes());
+        data.extend_from_slice(&self.input_newline);
+        self.write(&data)
     }
 }
 
@@ -375,13 +417,27 @@ fn connect(host: &str, port: u16) -> AppResult<TcpStream> {
 /// carries the caller's real terminal size (same contract as `ssh_connect`) —
 /// the server's DO NAWS usually arrives before the frontend's first fit/resize
 /// round-trip, and without the seed that reply would report the 80x24 default.
+/// `input_newline` is retained by the handle for command-oriented `write_line`.
 pub fn open(
+    session_id: String,
     host: &str,
     port: u16,
     cols: u16,
     rows: u16,
+    input_newline: &str,
     sink: TelnetSink,
 ) -> AppResult<(String, TelnetHandle)> {
+    let input_newline: Arc<[u8]> = match input_newline {
+        "cr" => Arc::from(&b"\r"[..]),
+        "lf" => Arc::from(&b"\n"[..]),
+        "crlf" => Arc::from(&b"\r\n"[..]),
+        _ => {
+            return Err(AppError::config(
+                "telnet_profile_invalid",
+                serde_json::json!({ "field": "input_newline" }),
+            ));
+        }
+    };
     let peer = format!("{host}:{port}");
     let stream = connect(host, port)?;
     // Interactive session: a keystroke per packet beats Nagle batching.
@@ -411,12 +467,13 @@ pub fn open(
     // the size is simply remembered for the activation reply.
     let _ = negotiator.set_size(cols, rows);
 
-    let id = uuid::Uuid::new_v4().to_string();
+    let id = session_id;
     let handle = TelnetHandle {
         writer: Arc::new(Mutex::new(stream)),
         neg: Arc::new(Mutex::new(negotiator)),
         _guard: Arc::new(CloseGuard { closed }),
         peer: Arc::from(peer.as_str()),
+        input_newline,
     };
 
     // Reader thread: socket RX → negotiator → (replies back down the socket,
@@ -440,12 +497,12 @@ pub fn open(
                     // order as resize): a concurrent resize() can't interleave
                     // its NAWS report ahead of the activation reply it belongs
                     // after. Same order both sides = no deadlock.
-                    let data = {
+                    let (data, events) = {
                         let mut neg = match neg.lock() {
                             Ok(g) => g,
                             Err(_) => break, // poisoned — a peer panicked; give up
                         };
-                        let (data, reply) = neg.push(&buf[..n]);
+                        let (data, reply, events) = neg.push_with_events(&buf[..n]);
                         if !reply.is_empty() {
                             // Protocol replies are pre-formed bytes — no IAC escaping.
                             let sent = writer.lock().map(|mut w| w.write_all(&reply));
@@ -453,8 +510,15 @@ pub fn open(
                                 break;
                             }
                         }
-                        data
+                        (data, events)
                     };
+                    for event in events {
+                        match event {
+                            NegotiationEvent::RemoteEcho(enabled) => {
+                                sink(&sid, TelnetOut::RemoteEcho(enabled));
+                            }
+                        }
+                    }
                     if !data.is_empty() {
                         sink(&sid, TelnetOut::Data(data));
                     }
@@ -480,7 +544,26 @@ mod tests {
 
     /// Feed one inbound byte-string, expect (data, reply).
     fn push(neg: &mut Negotiator, input: &[u8]) -> (Vec<u8>, Vec<u8>) {
-        neg.push(input)
+        let (data, reply, _) = neg.push_with_events(input);
+        (data, reply)
+    }
+
+    fn open(
+        host: &str,
+        port: u16,
+        cols: u16,
+        rows: u16,
+        sink: TelnetSink,
+    ) -> AppResult<(String, TelnetHandle)> {
+        super::open(
+            uuid::Uuid::new_v4().to_string(),
+            host,
+            port,
+            cols,
+            rows,
+            "crlf",
+            sink,
+        )
     }
 
     #[test]
@@ -502,11 +585,17 @@ mod tests {
     #[test]
     fn will_echo_answered_do_once() {
         let mut n = Negotiator::new();
-        let (_, reply) = push(&mut n, &[IAC, WILL, OPT_ECHO]);
+        let (_, reply, events) = n.push_with_events(&[IAC, WILL, OPT_ECHO]);
         assert_eq!(reply, [IAC, DO, OPT_ECHO]);
+        assert_eq!(events, [NegotiationEvent::RemoteEcho(true)]);
         // Repeated WILL for an already-on option: no answer (loop prevention).
-        let (_, reply) = push(&mut n, &[IAC, WILL, OPT_ECHO]);
+        let (_, reply, events) = n.push_with_events(&[IAC, WILL, OPT_ECHO]);
         assert!(reply.is_empty());
+        assert!(events.is_empty());
+
+        let (_, reply, events) = n.push_with_events(&[IAC, WONT, OPT_ECHO]);
+        assert_eq!(reply, [IAC, DONT, OPT_ECHO]);
+        assert_eq!(events, [NegotiationEvent::RemoteEcho(false)]);
     }
 
     #[test]
@@ -522,6 +611,20 @@ mod tests {
         let mut n = Negotiator::new();
         let (_, reply) = push(&mut n, &[IAC, DO, 32]);
         assert_eq!(reply, [IAC, WONT, 32]);
+    }
+
+    #[test]
+    fn repeated_unknown_option_request_is_refused_once() {
+        let mut n = Negotiator::new();
+        let (_, first) = push(&mut n, &[IAC, WILL, 32]);
+        let (_, repeated) = push(&mut n, &[IAC, WILL, 32]);
+        assert_eq!(first, [IAC, DONT, 32]);
+        assert!(repeated.is_empty());
+
+        let (_, first) = push(&mut n, &[IAC, DO, 33]);
+        let (_, repeated) = push(&mut n, &[IAC, DO, 33]);
+        assert_eq!(first, [IAC, WONT, 33]);
+        assert!(repeated.is_empty());
     }
 
     #[test]
@@ -564,6 +667,14 @@ mod tests {
         want.extend_from_slice(b"xterm-256color");
         want.extend([IAC, SE]);
         assert_eq!(reply, want);
+    }
+
+    #[test]
+    fn ttype_send_before_activation_is_ignored() {
+        let mut n = Negotiator::new();
+        let (data, reply) = push(&mut n, &[IAC, SB, OPT_TTYPE, TTYPE_SEND, IAC, SE]);
+        assert!(data.is_empty());
+        assert!(reply.is_empty());
     }
 
     #[test]
@@ -684,13 +795,16 @@ mod tests {
 
         // Banner comes through with IAC negotiation stripped.
         let mut banner = Vec::new();
+        let mut saw_remote_echo = false;
         while banner.len() < 7 {
             match rx.recv_timeout(Duration::from_secs(5)).unwrap() {
                 TelnetOut::Data(b) => banner.extend(b),
+                TelnetOut::RemoteEcho(enabled) => saw_remote_echo = enabled,
                 TelnetOut::Close => panic!("closed before banner complete"),
             }
         }
         assert_eq!(banner, b"login: ");
+        assert!(saw_remote_echo);
 
         // Write with an embedded 0xFF — must be escaped on the wire.
         handle
@@ -706,6 +820,7 @@ mod tests {
             match rx.recv_timeout(Duration::from_secs(5)).unwrap() {
                 TelnetOut::Close => break,
                 TelnetOut::Data(_) => continue,
+                TelnetOut::RemoteEcho(_) => continue,
             }
         }
         drop(server_sock);
@@ -735,6 +850,7 @@ mod tests {
                     saw_data = true;
                 }
                 TelnetOut::Close => break,
+                TelnetOut::RemoteEcho(_) => continue,
             }
         }
         assert!(saw_data);
@@ -753,6 +869,49 @@ mod tests {
             Ok(_) => panic!("connect to a closed port unexpectedly succeeded"),
         };
         assert_eq!(err.code(), "telnet_open_failed");
+    }
+
+    #[test]
+    fn write_line_uses_profile_input_newline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_exact_timeout(&mut stream, 5)
+        });
+        let sink: TelnetSink = Arc::new(|_id, _out| {});
+        let (_id, handle) = super::open(
+            uuid::Uuid::new_v4().to_string(),
+            "127.0.0.1",
+            port,
+            80,
+            24,
+            "lf",
+            sink,
+        )
+        .unwrap();
+
+        handle.write_line("show").unwrap();
+
+        assert_eq!(server.join().unwrap(), b"show\n");
+    }
+
+    #[test]
+    fn invalid_input_newline_fails_before_connect() {
+        let sink: TelnetSink = Arc::new(|_id, _out| {});
+        let err = match super::open(
+            uuid::Uuid::new_v4().to_string(),
+            "not-resolved.invalid",
+            23,
+            80,
+            24,
+            "wat",
+            sink,
+        ) {
+            Ok(_) => panic!("invalid newline unexpectedly opened a connection"),
+            Err(err) => err,
+        };
+        assert_eq!(err.code(), "telnet_profile_invalid");
     }
 
     #[test]
@@ -794,6 +953,7 @@ mod tests {
             match rx.recv_timeout(Duration::from_secs(5)).unwrap() {
                 TelnetOut::Data(b) if b == b"k" => break,
                 TelnetOut::Data(_) => continue,
+                TelnetOut::RemoteEcho(_) => continue,
                 TelnetOut::Close => panic!("closed before negotiation marker"),
             }
         }
@@ -805,6 +965,7 @@ mod tests {
             match rx.recv_timeout(Duration::from_secs(5)).unwrap() {
                 TelnetOut::Close => break,
                 TelnetOut::Data(_) => continue,
+                TelnetOut::RemoteEcho(_) => continue,
             }
         }
     }

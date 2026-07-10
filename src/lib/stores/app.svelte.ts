@@ -107,7 +107,10 @@ export interface TelnetProfile {
   id: string; name: string; host: string; port: number;
   // Line-discipline knobs shared with serial (no UART-isms: no baud/hex/slow_send)
   input_newline: string; output_newline: string;
+  /** Explicit Telnet echo policy. Missing on legacy sync payloads. */
+  echo_mode?: "auto" | "on" | "off";
   local_echo: boolean; backspace: string; login_script: string;
+  save_script_to_remote?: boolean;
   group_id: string | null;
 }
 export type DynamicPlatform = "docker" | "k8s";
@@ -560,22 +563,23 @@ export function connectSerialProfile(sp: SerialProfile) {
   });
 }
 
-/** Open a terminal tab from a saved telnet profile (Home cards + the manager
- *  use this). Same contract as connectSerialProfile: meta carries the config
- *  in snake_case, TerminalPane consumes it verbatim. */
+/** Open a terminal tab from a saved telnet profile. Non-secret connection
+ *  settings live in tab meta; the login script is fetched by profileId only
+ *  after TerminalPane mounts, so window-clone persistence never sees it. */
 export function connectTelnetProfile(tp: TelnetProfile) {
   addTab({
     id: `telnet:${crypto.randomUUID()}`,
     type: "telnet",
     label: tp.name,
     meta: {
+      profileId: tp.id,
       host: tp.host,
       port: String(tp.port),
       input_newline: tp.input_newline,
       output_newline: tp.output_newline,
       local_echo: String(tp.local_echo),
+      echo_mode: tp.echo_mode ?? (tp.local_echo ? "on" : "off"),
       backspace: tp.backspace,
-      login_script: tp.login_script,
     },
   });
 }

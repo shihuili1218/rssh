@@ -87,10 +87,16 @@ pub async fn ssh_connect(
         }
     }
 
-    locked(&state.sessions)?.insert(result.session_id.clone(), result.handle);
-    crate::commands::lifecycle::register_window_session(&state, window.label(), &result.session_id);
+    let session_id = result.session_id;
+    crate::commands::lifecycle::insert_ready_session(
+        &state,
+        &state.sessions,
+        session_id.clone(),
+        result.handle,
+    )?;
+    crate::commands::lifecycle::register_window_session(&state, window.label(), &session_id);
 
-    Ok(result.session_id)
+    Ok(session_id)
 }
 
 #[tauri::command]

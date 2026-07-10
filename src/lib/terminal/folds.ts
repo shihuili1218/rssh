@@ -13,11 +13,11 @@
  *
  * unfold 流程：splice 塞回 → 删除本 fold 当初补在 buffer 里的空行。
  *   补偿空行可能已被后续 fold 推到 buffer 中间；因此不能只看末尾，
- *   更不能用全局 pushedBlanks 去 pop 其他 fold 的空行。按对象引用找到
+ *   更不能用全局集合去 pop 其他 fold 的空行。按对象引用找到
  *   本 fold 自己的空行，确认仍为空后删除，才能让非 LIFO 展开恢复不变量。
  *
  * Auto-unfold 触发：
- *   - 终端 resize（saved 是按旧列宽抓的，新列宽展开会错位）
+ *   - 终端 resize 前由调用方执行 unfoldAll（saved 是按旧列宽抓的）
  *   - block.start 死亡（scrollback 修剪到该 block 之前）— 通过监听
  *     tracker.onChange 检测 block 从 tracker 消失来代理
  *
@@ -37,17 +37,17 @@ export interface Fold {
   blockId: number;
   /** body 行数 */
   count: number;
-  /** fold 时实际 push 到末尾的空行数 = count - ybaseDrain。
-   *  当 ybase 有足够 scrollback 可以让出空间时，pushCount < count。
-   *  unfold 时最多删除这些补偿空行（不是 count）才能精确还原长度。 */
-  pushCount: number;
   /** splice 抽出的 BufferLine 实例（对我们透明） */
   savedLines: unknown[];
   /** 这次 fold push 进 buffer 末尾的空行 refs。
-   *  fold 记录被丢弃时（unfold-bail / tracker GC），这些 refs 要从全局
-   *  pushedBlanks 里删掉，否则 Set 会无限增长——即便 xterm 已经 trim
-   *  了那些 BufferLine，我们的 Set 还持有引用，构成内存泄漏。 */
+   *  refs 只由对应 Fold 持有；删除 fold 记录即可释放。 */
   pushedBlankRefs: unknown[];
+}
+
+interface FoldState extends Fold {
+  /** Number of leading compensation lines the output cursor has reached.
+   *  Monotonic: cursor-up must not make already-consumed blank lines removable. */
+  consumedBlankCount: number;
 }
 
 export interface FoldStore extends IDisposable {
@@ -58,6 +58,8 @@ export interface FoldStore extends IDisposable {
   /** O(1) 取 fold 记录。derive blockRects 等高频路径必走这条，
    *  避免每帧都对 folds 数组做线性 find。 */
   getFold(blockId: number): Fold | undefined;
+  /** Expand every fold before xterm changes row/column geometry. */
+  unfoldAll(): void;
   /** 折叠状态变化时通知（fold/unfold/scrollback 失效）。 */
   onChange(fn: () => void): IDisposable;
 }
@@ -71,7 +73,6 @@ interface PrivateBuffer {
     get(i: number): unknown;
     splice(start: number, deleteCount: number, ...items: unknown[]): void;
     push(item: unknown): void;
-    pop(): unknown;
   };
   ybase: number;
   ydisp: number;
@@ -85,7 +86,12 @@ interface PrivateViewport {
 }
 
 function getBuf(term: Terminal): PrivateBuffer {
-  return (term as unknown as { _core: { buffer: PrivateBuffer } })._core.buffer;
+  const core = (term as unknown as {
+    _core: { buffer: PrivateBuffer; buffers?: { normal: PrivateBuffer } };
+  })._core;
+  // Folds belong to command history in the normal buffer. The active buffer
+  // may be the alternate screen when a resize is requested.
+  return core.buffers?.normal ?? core.buffer;
 }
 
 /** The viewport derives its scroll height from buffer.lines.length and only
@@ -128,14 +134,13 @@ function isStillBlankLine(line: unknown): boolean {
 
 export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): FoldStore {
   // 以 blockId 为键便于 O(1) 判断"该 block 是否折叠"。Fold 的 id 仅用于调试。
-  const folds = new Map<number, Fold>();
+  const folds = new Map<number, FoldState>();
+  // Compensation-line identity -> owning fold/index. Cursor events can update
+  // consumption in O(1) instead of scanning the entire scrollback per LF.
+  const blankOwners = new Map<unknown, { blockId: number; index: number }>();
   const listeners = new Set<() => void>();
   const disposables: IDisposable[] = [];
   let nextId = 1;
-  // 所有 fold 期间 push 进 buffer 的 blank BufferLine 引用集合。
-  // 每个 Fold 也保存自己的 pushedBlankRefs；unfold 只能删除当前 Fold
-  // 自己的仍为空的引用，避免非 LIFO 展开误删其他 Fold 的补偿行。
-  const pushedBlanks = new Set<unknown>();
 
   const emit = () => listeners.forEach((fn) => fn());
 
@@ -176,7 +181,6 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     for (let i = 0; i < pushCount; i++) {
       const blank = buf.getBlankLine(BLANK_ATTR);
       buf.lines.push(blank);
-      pushedBlanks.add(blank);
       pushedRefs.push(blank);
     }
 
@@ -193,20 +197,35 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     // wasLive 钉在底部：上面的位移逻辑会把活线模式打破，这里把它拉回来
     if (wasLive) buf.ydisp = buf.ybase;
 
-    folds.set(blockId, {
-      id: nextId++, blockId, count, pushCount,
-      savedLines: saved, pushedBlankRefs: pushedRefs,
-    });
+    const foldState: FoldState = {
+      id: nextId++, blockId, count,
+      savedLines: saved, pushedBlankRefs: pushedRefs, consumedBlankCount: 0,
+    };
+    folds.set(blockId, foldState);
+    pushedRefs.forEach((line, index) => blankOwners.set(line, { blockId, index }));
     syncViewport(term);
     term.refresh(0, term.rows - 1);
     emit();
     return true;
   }
 
-  /** 清理 fold 记录的 pushed blank refs。fold 记录被丢弃前必走这条
-   *  （unfold-bail / 完成 unfold / tracker GC），否则全局 Set 会泄漏。 */
-  function discardFold(f: Fold): void {
-    for (const b of f.pushedBlankRefs) pushedBlanks.delete(b);
+  function discardFold(f: FoldState): void {
+    for (const line of f.pushedBlankRefs) {
+      const owner = blankOwners.get(line);
+      if (owner?.blockId === f.blockId) blankOwners.delete(line);
+    }
+  }
+
+  function recordCursorConsumption(): void {
+    if (folds.size === 0) return;
+    const buf = getBuf(term);
+    const cursorAbs = buf.ybase + buf.y;
+    const owner = blankOwners.get(buf.lines.get(cursorAbs));
+    if (!owner) return;
+    const fold = folds.get(owner.blockId);
+    if (fold && owner.index >= fold.consumedBlankCount) {
+      fold.consumedBlankCount = owner.index + 1;
+    }
   }
 
   function unfold(blockId: number): boolean {
@@ -227,12 +246,17 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     let nextYdisp = buf.ydisp;
     const wasLive = buf.ydisp === buf.ybase;
 
-    // Compensation refs below the active cursor are still untouched screen
-    // padding. Refs at/above the cursor may have been consumed by real output,
-    // even if they still render as blank lines, so unfold must preserve them.
+    // Cursor position is not history: output can move down through blank lines
+    // and then cursor-up. Keep the event high-water mark, and also treat every
+    // blank before the last modified compensation line as consumed. The latter
+    // covers one parser batch that moves down, writes, then returns to its start.
+    recordCursorConsumption();
+    for (let i = f.consumedBlankCount; i < f.pushedBlankRefs.length; i++) {
+      if (!isStillBlankLine(f.pushedBlankRefs[i])) f.consumedBlankCount = i + 1;
+    }
     const blankRefIndicesBeforeInsert = indexLineRefs(buf.lines, f.pushedBlankRefs);
     const untouchedBlankRefs = new Set(
-      f.pushedBlankRefs.filter((line) => {
+      f.pushedBlankRefs.slice(f.consumedBlankCount).filter((line) => {
         const index = blankRefIndicesBeforeInsert.get(line);
         return index !== undefined && index > cursorAbsBefore && isStillBlankLine(line);
       }),
@@ -256,28 +280,43 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
       nextCursorAbs = Math.max(0, nextCursorAbs - trimmedDuringInsert);
       nextYdisp = Math.max(0, nextYdisp - trimmedDuringInsert);
     }
-    if (block.start.isDisposed || block.start.line < 0) {
-      discardFold(f);
-      folds.delete(blockId);
-      syncViewport(term);
-      term.refresh(0, term.rows - 1);
-      emit();
-      return false;
-    }
 
-    // 删除本 fold 自己补的空行。后续 fold 可能把这些行从末尾推到中间，
-    // 所以按当前 index 从下往上 splice，避免 index 级联偏移。
+    // Delete this fold's untouched compensation rows before either return
+    // path. Head trimming may dispose block.start, but it does not make those
+    // artificial rows real terminal history.
     const removableIndices = indexLineRefs(buf.lines, untouchedBlankRefs);
     const removable = Array.from(untouchedBlankRefs)
       .map((line) => ({ line, index: removableIndices.get(line) }))
       .filter((item): item is { line: unknown; index: number } => item.index !== undefined && isStillBlankLine(item.line))
       .sort((a, b) => b.index - a.index);
 
-    for (const { line, index } of removable) {
+    for (const { index } of removable) {
       buf.lines.splice(index, 1);
-      pushedBlanks.delete(line);
       if (index < nextCursorAbs) nextCursorAbs--;
       if (index < nextYdisp) nextYdisp--;
+    }
+
+    // Head trimming can consume part of the restored history before we remove
+    // this fold's compensation rows. In that case deletion may leave fewer
+    // lines than the visible viewport. Refill only the missing screen padding;
+    // appending at the tail does not change cursor or viewport coordinates.
+    while (buf.lines.length < term.rows) {
+      buf.lines.push(buf.getBlankLine(BLANK_ATTR));
+    }
+
+    if (block.start.isDisposed || block.start.line < 0) {
+      // The insertion already mutated the CircularList. Even though the block
+      // can no longer be reconstructed, ybase/ydisp/y must describe the new
+      // buffer before we drop the fold record.
+      buf.ybase = Math.max(0, buf.lines.length - term.rows);
+      buf.y = clamp(nextCursorAbs - buf.ybase, 0, term.rows - 1);
+      buf.ydisp = wasLive ? buf.ybase : clamp(nextYdisp, 0, buf.ybase);
+      discardFold(f);
+      folds.delete(blockId);
+      syncViewport(term);
+      term.refresh(0, term.rows - 1);
+      emit();
+      return false;
     }
 
     buf.ybase = Math.max(0, buf.lines.length - term.rows);
@@ -294,8 +333,6 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
       // addMarker 异常则保持 end=disposed，block-bar 会回退到 cursor 位置 — 可接受
     }
 
-    // 清剩余 refs：已删除的上面删过；未删除（被写入/被 trim）也要从
-    // 全局集合里释放。discardFold 是幂等的，统一收口更清楚。
     discardFold(f);
     folds.delete(blockId);
     syncViewport(term);
@@ -308,10 +345,13 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     for (const blockId of Array.from(folds.keys())) unfold(blockId);
   }
 
-  // resize 自动展开：saved BufferLine 是旧列宽，新列宽下展开会错位
-  disposables.push(term.onResize(() => {
-    if (folds.size > 0) unfoldAll();
-  }));
+  // onCursorMove only reports the final position of a parse batch. onLineFeed
+  // also fires for intermediate downward movement, so together they retain the
+  // high-water mark when output later moves the cursor back up.
+  disposables.push(
+    term.onCursorMove(recordCursorConsumption),
+    term.onLineFeed(recordCursorConsumption),
+  );
 
   // scrollback 修剪：tracker 监听 block.start.onDispose 后从 blocks 数组移除。
   // 这里通过 onChange 比对 tracker 现存 block — 折叠记录里若 block 不在了，丢弃。
@@ -320,8 +360,8 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     let dropped = false;
     for (const blockId of Array.from(folds.keys())) {
       if (!trackedIds.has(blockId)) {
-        const f = folds.get(blockId);
-        if (f) discardFold(f);
+        const fold = folds.get(blockId);
+        if (fold) discardFold(fold);
         folds.delete(blockId);
         dropped = true;
       }
@@ -341,6 +381,7 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     getFold(blockId) {
       return folds.get(blockId);
     },
+    unfoldAll,
     onChange(fn) {
       listeners.add(fn);
       return { dispose: () => listeners.delete(fn) };
@@ -348,7 +389,7 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     dispose() {
       disposables.forEach((d) => d.dispose());
       folds.clear();
-      pushedBlanks.clear();
+      blankOwners.clear();
       listeners.clear();
     },
   };

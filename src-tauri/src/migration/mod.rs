@@ -1,7 +1,7 @@
-//! 一次性数据迁移编排。
+//! 数据迁移编排。
 //!
-//! 每个 migration 是不可变文件，永远保留。启动时按顺序检查 `settings` 表里的
-//! marker，已跑过则函数体直接跳过；没跑过则跑一次，跑完写 marker。
+//! 每个 migration 是不可变文件，永远保留。大多数迁移用 `settings` marker
+//! 一次执行；需要兼容旧客户端回写的迁移可以保留一个廉价的启动扫描。
 //!
 //! 这跟"hot path 兼容代码"不同：
 //!   - hot path 兼容：每次 get/set 都判断旧/新格式 → 性能负担、维护负担
@@ -19,8 +19,10 @@ use crate::error::AppResult;
 use crate::secret::SecretStore;
 
 mod v1_unified_secret_storage;
+pub(crate) mod v2_telnet_login_script;
 
-/// 跑所有未完成的迁移，按顺序串行。每条独立 marker，跑过的下次直接跳过。
+/// 跑所有迁移，按顺序串行。大多数迁移用 marker 跳过；v2 还会扫描旧客户端
+/// 可能重新写入的 legacy Telnet 列。
 ///
 /// `raw_keyring`：老 keychain 入口（可能为 None — 当前平台没 keychain），
 /// 给迁移函数读旧数据用。
@@ -31,6 +33,6 @@ pub fn run_migrations(
     new_store: &dyn SecretStore,
 ) -> AppResult<()> {
     v1_unified_secret_storage::run(db, raw_keyring, new_store)?;
-    // 未来新 migration 在此追加：v2_*::run(...)?; ...
+    v2_telnet_login_script::run(db, new_store)?;
     Ok(())
 }

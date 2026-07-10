@@ -9,7 +9,7 @@ use serde_json::json;
 
 use crate::error::{locked, AppError, AppResult};
 use crate::secret::setting_key;
-use crate::state::AppState;
+use crate::state::{AppState, SessionSlot};
 
 use super::command_blacklist::{self, CategoryGroup};
 use super::llm;
@@ -430,6 +430,7 @@ pub async fn ai_session_start_impl(
             let g = locked(&state.pty_sessions)?;
             let pty = g
                 .get(target_id)
+                .and_then(SessionSlot::ready)
                 .ok_or_else(|| AppError::not_found("local_pty_not_found", json!({})))?;
             initial_shell = super::shell::ShellKind::from_local_path(pty.shell_path());
             None
@@ -454,7 +455,11 @@ pub async fn ai_session_start_impl(
         AiTarget::Telnet(target_id) => {
             // Same raw-device path as Serial: validate it exists, run with
             // ShellKind::Telnet, no ssh_handle (front-end does telnet_write/read).
-            if !locked(&state.telnet_sessions)?.contains_key(target_id) {
+            if locked(&state.telnet_sessions)?
+                .get(target_id)
+                .and_then(SessionSlot::ready)
+                .is_none()
+            {
                 return Err(AppError::not_found("telnet_session_not_found", json!({})));
             }
             initial_shell = super::shell::ShellKind::Telnet;
@@ -740,7 +745,11 @@ pub async fn ai_session_rebind_target(
         }
         #[cfg(not(target_os = "android"))]
         AiTarget::Local(target_id) => {
-            if !locked(&state.pty_sessions)?.contains_key(target_id) {
+            if locked(&state.pty_sessions)?
+                .get(target_id)
+                .and_then(SessionSlot::ready)
+                .is_none()
+            {
                 return Err(AppError::not_found("local_pty_not_found", json!({})));
             }
             None
@@ -759,7 +768,11 @@ pub async fn ai_session_rebind_target(
             return Err(AppError::not_found("serial_session_not_found", json!({})))
         }
         AiTarget::Telnet(target_id) => {
-            if !locked(&state.telnet_sessions)?.contains_key(target_id) {
+            if locked(&state.telnet_sessions)?
+                .get(target_id)
+                .and_then(SessionSlot::ready)
+                .is_none()
+            {
                 return Err(AppError::not_found("telnet_session_not_found", json!({})));
             }
             None
@@ -898,6 +911,7 @@ pub(crate) fn conversation_target_key(state: &AppState, target: &AiTarget) -> Ap
             let g = locked(&state.telnet_sessions)?;
             let h = g
                 .get(id)
+                .and_then(SessionSlot::ready)
                 .ok_or_else(|| AppError::not_found("telnet_session_not_found", json!({})))?;
             format!("telnet:{}", h.peer())
         }

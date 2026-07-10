@@ -30,7 +30,12 @@ pub fn serial_open(
             }
         });
     let (id, handle) = serial::open(&port, config, sink)?;
-    locked(&state.serial_sessions)?.insert(id.clone(), handle);
+    crate::commands::lifecycle::insert_ready_session(
+        &state,
+        &state.serial_sessions,
+        id.clone(),
+        handle,
+    )?;
     crate::commands::lifecycle::register_window_session(&state, window.label(), &id);
     Ok(id)
 }

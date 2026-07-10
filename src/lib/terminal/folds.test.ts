@@ -141,6 +141,8 @@ function fakeTerm(opts: { rows: number; initialLines: number; cursorY: number; y
   };
 
   const resizeListeners = new Set<() => void>();
+  const cursorMoveListeners = new Set<() => void>();
+  const lineFeedListeners = new Set<() => void>();
 
   const term = {
     rows,
@@ -148,6 +150,14 @@ function fakeTerm(opts: { rows: number; initialLines: number; cursorY: number; y
     onResize(fn: () => void) {
       resizeListeners.add(fn);
       return { dispose: () => resizeListeners.delete(fn) };
+    },
+    onCursorMove(fn: () => void) {
+      cursorMoveListeners.add(fn);
+      return { dispose: () => cursorMoveListeners.delete(fn) };
+    },
+    onLineFeed(fn: () => void) {
+      lineFeedListeners.add(fn);
+      return { dispose: () => lineFeedListeners.delete(fn) };
     },
     _core: { buffer },
   };
@@ -159,6 +169,14 @@ function fakeTerm(opts: { rows: number; initialLines: number; cursorY: number; y
     lineRefs: () => [...lineArray],
     markers,
     makeMarker,
+    lineFeed: () => {
+      y = Math.min(rows - 1, y + 1);
+      lineFeedListeners.forEach((fn) => fn());
+    },
+    moveCursorTo: (nextY: number) => {
+      y = nextY;
+      cursorMoveListeners.forEach((fn) => fn());
+    },
     triggerResize: () => resizeListeners.forEach((fn) => fn()),
     snapshot: () => ({
       length: lineArray.length,
@@ -392,6 +410,52 @@ describe("FoldStore — unfold() effects", () => {
     expect(f.lineRefs()).toContain(consumed);
   });
 
+  it("unfold keeps consumed blank lines after the cursor moves back", () => {
+    const f = fakeTerm({ rows: 10, initialLines: 10, cursorY: 9 });
+    const s = f.makeMarker(0);
+    const e = f.makeMarker(8);
+    const tracker = fakeTracker([makeBlock(1, s, e)]);
+    const store = createFoldStore(f.term, tracker);
+    store.fold(1);
+    const consumedBlank = store.getFold(1)!.pushedBlankRefs[0] as FakeLine;
+    const outputLine = store.getFold(1)!.pushedBlankRefs[1] as FakeLine;
+
+    // A legal output sequence can cross an empty line, write below it, then
+    // move the cursor back up. The empty line is real output history now.
+    f.lineFeed();
+    f.lineFeed();
+    outputLine.content = "<user-output>";
+    f.moveCursorTo(1);
+
+    const afterFold = f.snapshot();
+    store.unfold(1);
+    const refs = f.lineRefs();
+    expect(f.snapshot().length).toBe(afterFold.length + 2);
+    expect(refs.indexOf(outputLine)).toBe(refs.indexOf(consumedBlank) + 1);
+  });
+
+  it("unfold preserves the blank prefix before output written in one cursor batch", () => {
+    const f = fakeTerm({ rows: 10, initialLines: 10, cursorY: 9 });
+    const s = f.makeMarker(0);
+    const e = f.makeMarker(8);
+    const tracker = fakeTracker([makeBlock(1, s, e)]);
+    const store = createFoldStore(f.term, tracker);
+    store.fold(1);
+    const first = store.getFold(1)!.pushedBlankRefs[0] as FakeLine;
+    const second = store.getFold(1)!.pushedBlankRefs[1] as FakeLine;
+
+    // xterm can parse "cursor down; write; cursor up" as one batch and emit no
+    // intermediate cursor event. The modified second ref proves the first ref
+    // was crossed and must remain even though it is still visually blank.
+    second.content = "<batched-output>";
+    f.moveCursorTo(1);
+
+    store.unfold(1);
+
+    const refs = f.lineRefs();
+    expect(refs.indexOf(second)).toBe(refs.indexOf(first) + 1);
+  });
+
   it("unfold keeps a compensation line that was replaced by user output", () => {
     const f = fakeTerm({ rows: 24, initialLines: 24, cursorY: 14 });
     const s = f.makeMarker(0);
@@ -409,7 +473,7 @@ describe("FoldStore — unfold() effects", () => {
     expect(f.lineContents()).toContain("<user-output>");
   });
 
-  it("unfold keeps a compensation line that was reused for user output", () => {
+  it("unfold keeps the compensation prefix before reused user output", () => {
     const f = fakeTerm({ rows: 24, initialLines: 24, cursorY: 14 });
     const s = f.makeMarker(0);
     const e = f.makeMarker(4);
@@ -421,7 +485,9 @@ describe("FoldStore — unfold() effects", () => {
     const afterFold = f.snapshot();
     store.unfold(1);
     const afterUnfold = f.snapshot();
-    expect(afterUnfold.length).toBe(afterFold.length + 1);
+    // Reaching the fourth compensation row makes the three rows above it part
+    // of the output layout too. Removing them would move the output upward.
+    expect(afterUnfold.length).toBe(afterFold.length + 4);
     expect(f.lineContents()).toContain("<user-output>");
   });
 
@@ -475,8 +541,8 @@ describe("FoldStore — unfold() effects", () => {
     expect(store.isFolded(1)).toBe(false);
   });
 
-  it("unfold drops fold record if insert trimming disposes block.start", () => {
-    const f = fakeTerm({ rows: 5, initialLines: 5, cursorY: 4, maxLength: 5 });
+  it("unfold commits buffer coordinates if insert trimming disposes block.start", () => {
+    const f = fakeTerm({ rows: 5, initialLines: 6, cursorY: 4, ybase: 1, maxLength: 6 });
     const s = f.makeMarker(0);
     const e = f.makeMarker(2);
     const block = makeBlock(1, s, e);
@@ -484,6 +550,7 @@ describe("FoldStore — unfold() effects", () => {
     const store = createFoldStore(f.term, tracker);
 
     store.fold(1);
+    const compensation = [...store.getFold(1)!.pushedBlankRefs];
     const markerCountAfterFold = f.markers.length;
 
     expect(store.unfold(1)).toBe(false);
@@ -491,6 +558,38 @@ describe("FoldStore — unfold() effects", () => {
     expect(store.isFolded(1)).toBe(false);
     expect(f.markers.length).toBe(markerCountAfterFold);
     expect(block.end?.isDisposed).toBe(true);
+    expect(compensation.some((line) => f.lineRefs().includes(line as FakeLine))).toBe(false);
+    expect(f.snapshot()).toEqual({
+      length: 5,
+      ybase: 0,
+      ydisp: 0,
+      y: 4,
+      cursorAbs: 4,
+    });
+  });
+
+  it("unfold pads the viewport after head trim removes more history than padding", () => {
+    const f = fakeTerm({ rows: 5, initialLines: 6, cursorY: 4, ybase: 1, maxLength: 6 });
+    const s = f.makeMarker(0);
+    const e = f.makeMarker(4);
+    const block = makeBlock(1, s, e);
+    const tracker = fakeTracker([block]);
+    const store = createFoldStore(f.term, tracker);
+
+    store.fold(1); // count=4, ybaseDrain=1, pushCount=3
+    const compensation = [...store.getFold(1)!.pushedBlankRefs];
+
+    expect(store.unfold(1)).toBe(false);
+    expect(s.isDisposed).toBe(true);
+    expect(compensation.some((line) => f.lineRefs().includes(line as FakeLine))).toBe(false);
+    expect(f.lineContents()).toEqual(["L3", "L4", "L5", "<blank>", "<blank>"]);
+    expect(f.snapshot()).toEqual({
+      length: 5,
+      ybase: 0,
+      ydisp: 0,
+      y: 2,
+      cursorAbs: 2,
+    });
   });
 });
 
@@ -552,7 +651,7 @@ describe("FoldStore — multiple folds", () => {
 });
 
 describe("FoldStore — auto-cleanup", () => {
-  it("onResize unfolds all active folds", () => {
+  it("unfoldAll expands active folds before resize", () => {
     const f = fakeTerm({ rows: 24, initialLines: 24, cursorY: 14 });
     const s = f.makeMarker(0);
     const e = f.makeMarker(12);
@@ -560,8 +659,28 @@ describe("FoldStore — auto-cleanup", () => {
     const store = createFoldStore(f.term, tracker);
     store.fold(1);
     expect(store.isFolded(1)).toBe(true);
-    f.triggerResize();
+    store.unfoldAll();
     expect(store.isFolded(1)).toBe(false);
+  });
+
+  it("binds folds to normal history while alternate buffer is active", () => {
+    const normal = fakeTerm({ rows: 24, initialLines: 24, cursorY: 14 });
+    const alternate = fakeTerm({ rows: 24, initialLines: 24, cursorY: 14 });
+    const s = normal.makeMarker(0);
+    const e = normal.makeMarker(4);
+    const bodyRef = normal.lineRefs()[1];
+    const alternateBefore = alternate.lineRefs();
+    const core = (normal.term as unknown as {
+      _core: { buffer: typeof normal.buffer; buffers?: { normal: typeof normal.buffer } };
+    })._core;
+    core.buffer = alternate.buffer;
+    core.buffers = { normal: normal.buffer };
+
+    const store = createFoldStore(normal.term, fakeTracker([makeBlock(1, s, e)]));
+    expect(store.fold(1)).toBe(true);
+
+    expect(normal.lineRefs()).not.toContain(bodyRef);
+    expect(alternate.lineRefs()).toEqual(alternateBefore);
   });
 
   it("tracker drops a folded block → fold record auto-dropped", () => {

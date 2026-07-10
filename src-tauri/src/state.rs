@@ -15,16 +15,47 @@ use crate::terminal::pty::PtyHandle;
 use crate::terminal::serial::SerialHandle;
 use crate::terminal::telnet::TelnetHandle;
 
+pub enum SessionSlot<T> {
+    /// Reserved but not yet published. Reconcile marks a pending slot when it
+    /// has deliberately retained it, so activation knows whether the startup
+    /// race has already been handled.
+    Pending { reconciled: bool },
+    /// A handle that became ready before its reservation was ever observed by
+    /// reconcile gets one keep-alive pass. This closes the Pending -> Ready
+    /// race without making every Ready session permanently exempt from reap.
+    Ready {
+        handle: T,
+        protect_next_reconcile: bool,
+    },
+}
+
+impl<T> SessionSlot<T> {
+    pub fn pending() -> Self {
+        Self::Pending { reconciled: false }
+    }
+
+    pub fn ready(&self) -> Option<&T> {
+        match self {
+            Self::Pending { .. } => None,
+            Self::Ready { handle, .. } => Some(handle),
+        }
+    }
+}
+
 pub struct AppState {
     pub db: Arc<Db>,
     pub secret_store: Arc<dyn SecretStore>,
+    /// Serializes cross-transport UUID publication. Individual transport maps
+    /// cannot enforce uniqueness because window ownership/reconcile use a bare
+    /// session id without a transport discriminator.
+    pub session_id_reservation_lock: Mutex<()>,
     pub sessions: Mutex<HashMap<String, SessionHandle>>,
     #[cfg(not(target_os = "android"))]
-    pub pty_sessions: Mutex<HashMap<String, PtyHandle>>,
+    pub pty_sessions: Mutex<HashMap<String, SessionSlot<PtyHandle>>>,
     #[cfg(not(target_os = "android"))]
     pub serial_sessions: Mutex<HashMap<String, SerialHandle>>,
     /// Telnet is plain TCP — available on every platform, no android gate.
-    pub telnet_sessions: Mutex<HashMap<String, TelnetHandle>>,
+    pub telnet_sessions: Mutex<HashMap<String, SessionSlot<TelnetHandle>>>,
     pub sftp_sessions: Mutex<HashMap<String, Arc<SftpHandle>>>,
     /// 进行中的 SFTP 传输 cancel flag：transfer_id → AtomicBool。
     /// 用户在传输页点"取消"会把对应位置 1，streaming 循环每个 chunk 查一次，

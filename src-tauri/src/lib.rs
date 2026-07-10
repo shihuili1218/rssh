@@ -124,9 +124,8 @@ pub fn run() {
             // fallback file 会用新主密钥让旧密文全部解不开，比启动失败更危险。
             let secret_system = secret::open(db.clone(), &data_dir)?;
 
-            // 启动一次性迁移。失败不阻塞启动（log warn，下次启动重试），跟原
-            // passphrase 清理逻辑的"软失败"风格一致。所有 marker 走 settings 表，
-            // 已完成的用户启动等价于零成本跳过。
+            // 启动迁移。失败不阻塞启动（log warn，下次启动重试），跟原
+            // passphrase 清理逻辑的"软失败"风格一致。
             if let Err(e) = migration::run_migrations(
                 &db,
                 secret_system.raw_keyring.as_deref(),
@@ -138,6 +137,7 @@ pub fn run() {
             app.manage(AppState {
                 db,
                 secret_store: secret_system.store,
+                session_id_reservation_lock: Mutex::new(()),
                 sessions: Mutex::new(HashMap::new()),
                 #[cfg(not(target_os = "android"))]
                 pty_sessions: Mutex::new(HashMap::new()),
@@ -268,6 +268,7 @@ pub fn run() {
             // Telnet (all platforms — plain TCP)
             commands::telnet::telnet_open,
             commands::telnet::telnet_write,
+            commands::telnet::telnet_write_line,
             commands::telnet::telnet_resize,
             commands::telnet::telnet_close,
             commands::telnet::list_telnet_profiles,

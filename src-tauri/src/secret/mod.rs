@@ -31,6 +31,7 @@
 //!
 //! Service 名固定 `rssh`，account 命名规则全平台、CLI/GUI 共用：
 //! - `cred:<credential_id>:secret`     凭证主 secret（密码或私钥 PEM）
+//! - `telnet:<profile_id>:login_script:<version>`  Telnet 登录脚本不可变版本
 //! - `setting:github_token`            GitHub PAT
 //! - `setting:ai_<provider>_key`       BYOK API key
 //!
@@ -218,6 +219,10 @@ pub fn cred_passphrase_key(credential_id: &str) -> String {
     format!("cred:{credential_id}:passphrase")
 }
 
+pub fn telnet_login_script_key(profile_id: &str, version: &str) -> String {
+    format!("telnet:{profile_id}:login_script:{version}")
+}
+
 pub fn setting_key(name: &str) -> String {
     format!("setting:{name}")
 }
@@ -283,6 +288,14 @@ mod tests {
         let k = cred_passphrase_key("any-id");
         assert!(k.starts_with("cred:"));
         assert!(k.ends_with(":passphrase"));
+    }
+
+    #[test]
+    fn telnet_login_script_key_is_stable() {
+        assert_eq!(
+            telnet_login_script_key("550e8400-e29b-41d4-a716-446655440000", "v1"),
+            "telnet:550e8400-e29b-41d4-a716-446655440000:login_script:v1"
+        );
     }
 
     // ── setting_key 形状 ──────────────────────────────────────────
