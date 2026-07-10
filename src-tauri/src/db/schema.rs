@@ -415,7 +415,6 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
                 backspace      TEXT NOT NULL DEFAULT 'del',
                 login_script   TEXT NOT NULL DEFAULT '',
                 login_script_version TEXT DEFAULT NULL,
-                login_script_legacy_pending INTEGER NOT NULL DEFAULT 0,
                 save_script_to_remote INTEGER NOT NULL DEFAULT 0,
                 group_id       TEXT DEFAULT NULL
             );
@@ -462,26 +461,21 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
                 "ALTER TABLE telnet_profiles ADD COLUMN login_script_version TEXT DEFAULT NULL;",
             )?;
         }
-        if !column_exists(conn, "telnet_profiles", "login_script_legacy_pending")? {
-            conn.execute_batch(
-                "ALTER TABLE telnet_profiles ADD COLUMN login_script_legacy_pending INTEGER NOT NULL DEFAULT 0;",
-            )?;
-        }
         if !column_exists(conn, "telnet_profiles", "save_script_to_remote")? {
             conn.execute_batch(
                 "ALTER TABLE telnet_profiles ADD COLUMN save_script_to_remote INTEGER NOT NULL DEFAULT 0;",
             )?;
         }
         // Older binaries name local_echo/login_script in every profile write.
-        // New writes advance echo_write_version atomically; triggers use that
-        // writer marker to recognize legacy writes even when a bool is
-        // unchanged. Install the triggers before the final backfill: a legacy
-        // process writing concurrently is then covered either by the trigger
-        // or by the scan, with no unobserved gap.
+        // New writes advance echo_write_version atomically; the echo trigger
+        // uses that marker to recognize legacy writes even when a bool is
+        // unchanged. Install it before the echo backfill so no legacy write can
+        // fall between trigger coverage and the scan.
         //
-        // The scrubbed legacy column cannot distinguish "left untouched" from
-        // "clear". Therefore an empty legacy write means Preserve; only a
-        // non-empty value replaces the active versioned secret.
+        // The legacy login_script column is itself the migration inbox:
+        // non-empty means Replace, empty means Preserve. The script trigger has
+        // one job only: an old metadata save must not erase an already-pending
+        // non-empty replacement before reconciliation consumes it.
         conn.execute_batch(
             "DROP TRIGGER IF EXISTS telnet_profiles_legacy_echo_update;
              DROP TRIGGER IF EXISTS telnet_profiles_legacy_script_insert;
@@ -496,29 +490,13 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
                WHERE id = NEW.id;
              END;
 
-             CREATE TRIGGER telnet_profiles_legacy_script_insert
-             AFTER INSERT ON telnet_profiles
-             WHEN NEW.echo_write_version = 0 AND NEW.login_script != ''
-             BEGIN
-               UPDATE telnet_profiles
-               SET login_script_legacy_pending = 1,
-                   echo_write_version = echo_write_version + 1
-               WHERE id = NEW.id;
-             END;
-
              CREATE TRIGGER telnet_profiles_legacy_script_update
              AFTER UPDATE OF login_script ON telnet_profiles
              WHEN NEW.echo_write_version = OLD.echo_write_version
+               AND NEW.login_script = '' AND OLD.login_script != ''
              BEGIN
                UPDATE telnet_profiles
-               SET login_script = CASE
-                     WHEN NEW.login_script = '' THEN OLD.login_script
-                     ELSE NEW.login_script
-                   END,
-                   login_script_legacy_pending = CASE
-                     WHEN NEW.login_script != '' OR OLD.login_script != '' THEN 1
-                     ELSE 0
-                   END,
+               SET login_script = OLD.login_script,
                    echo_write_version = echo_write_version + 1
                WHERE id = NEW.id;
              END;",
@@ -527,10 +505,6 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
             "UPDATE telnet_profiles
              SET echo_mode = CASE WHEN local_echo != 0 THEN 'on' ELSE 'off' END
              WHERE echo_mode IS NULL OR echo_write_version = 0",
-            [],
-        )?;
-        conn.execute(
-            "UPDATE telnet_profiles SET login_script_legacy_pending = 1 WHERE login_script != ''",
             [],
         )?;
     }
@@ -823,8 +797,7 @@ mod tests {
 
         conn.execute(
             "UPDATE telnet_profiles
-             SET login_script_version = 'v1', login_script = '',
-                 login_script_legacy_pending = 0
+             SET login_script_version = 'v1', login_script = ''
              WHERE id = 'new'",
             [],
         )
@@ -836,15 +809,14 @@ mod tests {
             [],
         )
         .unwrap();
-        let preserved: (Option<String>, bool) = conn
+        let preserved: Option<String> = conn
             .query_row(
-                "SELECT login_script_version, login_script_legacy_pending
-                 FROM telnet_profiles WHERE id = 'new'",
+                "SELECT login_script_version FROM telnet_profiles WHERE id = 'new'",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(preserved, (Some("v1".into()), false));
+        assert_eq!(preserved, Some("v1".into()));
 
         // Non-empty is the one legacy intent that remains unambiguous.
         conn.execute(
@@ -859,15 +831,14 @@ mod tests {
             [],
         )
         .unwrap();
-        let pending: (String, bool) = conn
+        let pending: String = conn
             .query_row(
-                "SELECT login_script, login_script_legacy_pending
-                 FROM telnet_profiles WHERE id = 'new'",
+                "SELECT login_script FROM telnet_profiles WHERE id = 'new'",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(pending, ("replacement".into(), true));
+        assert_eq!(pending, "replacement");
     }
 
     #[test]
@@ -881,8 +852,7 @@ mod tests {
                 local_echo INTEGER NOT NULL DEFAULT 0,
                 echo_mode TEXT DEFAULT NULL,
                 echo_write_version INTEGER NOT NULL DEFAULT 0,
-                login_script TEXT NOT NULL DEFAULT '',
-                login_script_legacy_pending INTEGER NOT NULL DEFAULT 0
+                login_script TEXT NOT NULL DEFAULT ''
             );
             INSERT INTO telnet_profiles
               (id, name, host, local_echo, echo_mode, login_script)
@@ -893,14 +863,22 @@ mod tests {
 
         migrate(&conn).unwrap();
 
-        let state: (String, bool) = conn
+        let state: (String, String) = conn
             .query_row(
-                "SELECT echo_mode, login_script_legacy_pending
-                 FROM telnet_profiles WHERE id = 'race'",
+                "SELECT echo_mode, login_script FROM telnet_profiles WHERE id = 'race'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!(state, ("on".into(), true));
+        assert_eq!(state, ("on".into(), "late write".into()));
+    }
+
+    #[test]
+    fn migration_24_does_not_add_a_legacy_pending_column() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        migrate(&conn).unwrap();
+
+        assert!(!column_exists(&conn, "telnet_profiles", "login_script_legacy_pending").unwrap());
     }
 }

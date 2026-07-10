@@ -20,7 +20,6 @@ pub(crate) enum LoginScriptVersionUpdate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LoginScriptState {
     pub legacy_script: String,
-    pub legacy_pending: bool,
     pub version: Option<String>,
 }
 
@@ -134,8 +133,8 @@ fn insert_tx_with_script_version(
         LoginScriptVersionUpdate::Preserve => {
             conn.execute(
                 "INSERT INTO telnet_profiles \
-                 (id, name, host, port, input_newline, output_newline, local_echo, echo_mode, echo_write_version, backspace, login_script, login_script_version, login_script_legacy_pending, save_script_to_remote, group_id) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, '', NULL, 0, ?10, ?11) \
+                 (id, name, host, port, input_newline, output_newline, local_echo, echo_mode, echo_write_version, backspace, login_script, login_script_version, save_script_to_remote, group_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, '', NULL, ?10, ?11) \
                  ON CONFLICT(id) DO UPDATE SET name=excluded.name, host=excluded.host, port=excluded.port, \
                   input_newline=excluded.input_newline, output_newline=excluded.output_newline, \
                   local_echo=excluded.local_echo, echo_mode=excluded.echo_mode, \
@@ -161,14 +160,14 @@ fn insert_tx_with_script_version(
     };
     conn.execute(
         "INSERT INTO telnet_profiles \
-         (id, name, host, port, input_newline, output_newline, local_echo, echo_mode, echo_write_version, backspace, login_script, login_script_version, login_script_legacy_pending, save_script_to_remote, group_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, '', ?10, 0, ?11, ?12) \
+         (id, name, host, port, input_newline, output_newline, local_echo, echo_mode, echo_write_version, backspace, login_script, login_script_version, save_script_to_remote, group_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, '', ?10, ?11, ?12) \
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, host=excluded.host, port=excluded.port, \
           input_newline=excluded.input_newline, output_newline=excluded.output_newline, \
           local_echo=excluded.local_echo, echo_mode=excluded.echo_mode, \
           echo_write_version=telnet_profiles.echo_write_version + 1, \
           backspace=excluded.backspace, login_script='', \
-          login_script_version=excluded.login_script_version, login_script_legacy_pending=0, \
+          login_script_version=excluded.login_script_version, \
           save_script_to_remote=excluded.save_script_to_remote, group_id=excluded.group_id",
         params![
             t.id,
@@ -227,7 +226,7 @@ fn update_tx_with_script_version(
         LoginScriptVersionUpdate::Set(version) => conn.execute(
             "UPDATE telnet_profiles SET name=?1, host=?2, port=?3, input_newline=?4, output_newline=?5, \
              local_echo=?6, echo_mode=?7, echo_write_version=echo_write_version + 1, \
-             backspace=?8, login_script='', login_script_version=?12, login_script_legacy_pending=0, \
+             backspace=?8, login_script='', login_script_version=?12, \
              save_script_to_remote=?9, group_id=?10 WHERE id=?11",
             params![
                 t.name,
@@ -247,7 +246,7 @@ fn update_tx_with_script_version(
         LoginScriptVersionUpdate::Delete => conn.execute(
             "UPDATE telnet_profiles SET name=?1, host=?2, port=?3, input_newline=?4, output_newline=?5, \
              local_echo=?6, echo_mode=?7, echo_write_version=echo_write_version + 1, \
-             backspace=?8, login_script='', login_script_version=NULL, login_script_legacy_pending=0, \
+             backspace=?8, login_script='', login_script_version=NULL, \
              save_script_to_remote=?9, group_id=?10 WHERE id=?11",
             params![
                 t.name,
@@ -284,14 +283,13 @@ fn current_script_state(
 ) -> AppResult<Option<LoginScriptState>> {
     Ok(conn
         .query_row(
-            "SELECT login_script, login_script_legacy_pending, login_script_version \
+            "SELECT login_script, login_script_version \
              FROM telnet_profiles WHERE id = ?1",
             params![id],
             |row| {
                 Ok(LoginScriptState {
                     legacy_script: row.get(0)?,
-                    legacy_pending: row.get(1)?,
-                    version: row.get(2)?,
+                    version: row.get(1)?,
                 })
             },
         )
@@ -388,14 +386,13 @@ pub fn clear_all_tx(conn: &rusqlite::Connection) -> AppResult<()> {
 pub(crate) fn login_script_state(db: &Db, id: &str) -> AppResult<LoginScriptState> {
     let conn = db.lock()?;
     conn.query_row(
-        "SELECT login_script, login_script_legacy_pending, login_script_version \
+        "SELECT login_script, login_script_version \
          FROM telnet_profiles WHERE id = ?1",
         params![id],
         |row| {
             Ok(LoginScriptState {
                 legacy_script: row.get(0)?,
-                legacy_pending: row.get(1)?,
-                version: row.get(2)?,
+                version: row.get(1)?,
             })
         },
     )
@@ -412,16 +409,15 @@ pub(crate) fn list_pending_legacy_login_scripts(
 ) -> AppResult<Vec<(String, LoginScriptState)>> {
     let conn = db.lock()?;
     let mut stmt = conn.prepare(
-        "SELECT id, login_script, login_script_legacy_pending, login_script_version \
-         FROM telnet_profiles WHERE login_script_legacy_pending != 0 ORDER BY id",
+        "SELECT id, login_script, login_script_version \
+         FROM telnet_profiles WHERE login_script != '' ORDER BY id",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok((
             row.get(0)?,
             LoginScriptState {
                 legacy_script: row.get(1)?,
-                legacy_pending: row.get(2)?,
-                version: row.get(3)?,
+                version: row.get(2)?,
             },
         ))
     })?;
@@ -432,16 +428,16 @@ pub(crate) fn commit_legacy_login_script(
     db: &Db,
     id: &str,
     expected: &LoginScriptState,
-    new_version: Option<&str>,
+    new_version: &str,
 ) -> AppResult<bool> {
     let mut conn = db.lock()?;
     conn.pragma_update(None, "secure_delete", "ON")?;
     let tx = conn.transaction()?;
     let changed = tx.execute(
         "UPDATE telnet_profiles SET login_script = '', login_script_version = ?1, \
-         login_script_legacy_pending = 0, echo_write_version = echo_write_version + 1 \
-         WHERE id = ?2 AND login_script_legacy_pending != 0 \
-         AND login_script = ?3 AND login_script_version IS ?4",
+         echo_write_version = echo_write_version + 1 \
+         WHERE id = ?2 AND login_script != '' AND login_script = ?3 \
+         AND login_script_version IS ?4",
         params![
             new_version,
             id,

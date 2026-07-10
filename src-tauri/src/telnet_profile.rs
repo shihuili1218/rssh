@@ -328,7 +328,6 @@ mod tests {
 
         let state = crate::db::telnet_profile::login_script_state(&db, "t1").unwrap();
         assert!(state.legacy_script.is_empty());
-        assert!(!state.legacy_pending);
         assert_eq!(
             stored_script(&db, &store, "t1").as_deref(),
             Some("legacy secret")

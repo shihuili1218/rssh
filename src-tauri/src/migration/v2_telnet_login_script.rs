@@ -54,40 +54,25 @@ fn reconcile_profile_with_hook(
 ) -> AppResult<()> {
     loop {
         let state = telnet_profile::login_script_state(db, profile_id)?;
-        if !state.legacy_pending {
+        if state.legacy_script.is_empty() {
             return Ok(());
         }
 
-        let created_version = if state.legacy_script.is_empty() {
-            // Defense in depth for rows marked pending by an older trigger:
-            // clear the marker while retaining the immutable active pointer.
-            None
-        } else {
-            let version = uuid::Uuid::new_v4().to_string();
-            store.set(
-                &telnet_login_script_key(profile_id, &version),
-                &state.legacy_script,
-            )?;
-            Some(version)
-        };
-        let target_version = if state.legacy_script.is_empty() {
-            state.version.as_deref()
-        } else {
-            created_version.as_deref()
-        };
+        let created_version = uuid::Uuid::new_v4().to_string();
+        store.set(
+            &telnet_login_script_key(profile_id, &created_version),
+            &state.legacy_script,
+        )?;
 
         before_commit(&state)?;
         let committed =
-            telnet_profile::commit_legacy_login_script(db, profile_id, &state, target_version)?;
+            telnet_profile::commit_legacy_login_script(db, profile_id, &state, &created_version)?;
         if !committed {
-            // Only a UUID allocated and stored by this iteration is garbage on
-            // CAS miss. In the empty-Preserve branch target_version is the
-            // active pointer; deleting it would destroy the live secret.
-            delete_version_best_effort(store, profile_id, created_version.as_deref());
+            delete_version_best_effort(store, profile_id, Some(&created_version));
             continue;
         }
 
-        if state.version.as_deref() != target_version {
+        if state.version.as_deref() != Some(created_version.as_str()) {
             delete_version_best_effort(store, profile_id, state.version.as_deref());
         }
         return Ok(());
@@ -144,7 +129,6 @@ pub fn run(db: &Db, store: &dyn SecretStore) -> AppResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
     use super::*;
@@ -172,7 +156,6 @@ mod tests {
         run(&db, &store).unwrap();
 
         let state = telnet_profile::login_script_state(&db, "t1").unwrap();
-        assert!(!state.legacy_pending);
         assert!(state.legacy_script.is_empty());
         let version = state.version.unwrap();
         assert_eq!(
@@ -239,7 +222,6 @@ mod tests {
         run(&db, &store).unwrap();
 
         let state = telnet_profile::login_script_state(&db, "t1").unwrap();
-        assert!(!state.legacy_pending);
         assert_eq!(state.version.as_deref(), Some(original_version.as_str()));
         assert_eq!(
             store
@@ -247,52 +229,6 @@ mod tests {
                 .unwrap()
                 .as_deref(),
             Some("old")
-        );
-    }
-
-    #[test]
-    fn empty_preserve_cas_miss_never_deletes_the_active_version() {
-        let db = Arc::new(Db::open_in_memory().unwrap());
-        raw_write(
-            &db,
-            "INSERT INTO telnet_profiles
-             (id, name, host, login_script, login_script_version,
-              login_script_legacy_pending, echo_write_version)
-             VALUES ('t1', 'switch', 'h', '', 'active-v1', 1, 1);",
-        );
-        let store = DbStore::new(db.clone());
-        store
-            .set(&telnet_login_script_key("t1", "active-v1"), "keep me")
-            .unwrap();
-        let raced = AtomicBool::new(false);
-
-        reconcile_profile_with_hook(&db, &store, "t1", |_| {
-            if !raced.swap(true, Ordering::SeqCst) {
-                // Simulate a concurrent canonical writer resolving the pending
-                // marker before this iteration's compare-and-swap.
-                raw_write(
-                    &db,
-                    "UPDATE telnet_profiles
-                     SET login_script_legacy_pending = 0 WHERE id = 't1';",
-                );
-            }
-            Ok(())
-        })
-        .unwrap();
-
-        assert_eq!(
-            store
-                .get(&telnet_login_script_key("t1", "active-v1"))
-                .unwrap()
-                .as_deref(),
-            Some("keep me")
-        );
-        assert_eq!(
-            telnet_profile::login_script_state(&db, "t1")
-                .unwrap()
-                .version
-                .as_deref(),
-            Some("active-v1")
         );
     }
 
@@ -311,15 +247,118 @@ mod tests {
             "UPDATE telnet_profiles SET login_script = 'new' WHERE id = 't1';",
         );
 
-        assert!(!telnet_profile::commit_legacy_login_script(
-            &db,
-            "t1",
-            &stale,
-            Some("stale-version"),
-        )
-        .unwrap());
+        assert!(
+            !telnet_profile::commit_legacy_login_script(&db, "t1", &stale, "stale-version",)
+                .unwrap()
+        );
         let current = telnet_profile::login_script_state(&db, "t1").unwrap();
         assert_eq!(current.legacy_script, "new");
-        assert!(current.legacy_pending);
+    }
+
+    #[test]
+    fn residual_pending_column_is_ignored_as_legacy_inbox_state() {
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        db.with_transaction(|tx| {
+            let has_residual: bool = tx
+                .prepare("SELECT 1 FROM pragma_table_info('telnet_profiles') WHERE name = 'login_script_legacy_pending'")?
+                .exists([])?;
+            if !has_residual {
+                tx.execute_batch(
+                    "ALTER TABLE telnet_profiles ADD COLUMN login_script_legacy_pending INTEGER NOT NULL DEFAULT 0;",
+                )?;
+            }
+            // Simulate a database already opened by the unreleased intermediate
+            // v24 build: the obsolete column and its old triggers may both remain
+            // because user_version is already 24 and schema migration will not
+            // run again. Current reconciliation must depend only on the inbox.
+            tx.execute_batch(
+                "DROP TRIGGER IF EXISTS telnet_profiles_legacy_script_insert;
+                 DROP TRIGGER IF EXISTS telnet_profiles_legacy_script_update;
+                 CREATE TRIGGER telnet_profiles_legacy_script_insert
+                 AFTER INSERT ON telnet_profiles
+                 WHEN NEW.echo_write_version = 0 AND NEW.login_script != ''
+                 BEGIN
+                   UPDATE telnet_profiles
+                   SET login_script_legacy_pending = 1,
+                       echo_write_version = echo_write_version + 1
+                   WHERE id = NEW.id;
+                 END;
+                 CREATE TRIGGER telnet_profiles_legacy_script_update
+                 AFTER UPDATE OF login_script ON telnet_profiles
+                 WHEN NEW.echo_write_version = OLD.echo_write_version
+                 BEGIN
+                   UPDATE telnet_profiles
+                   SET login_script = CASE
+                         WHEN NEW.login_script = '' THEN OLD.login_script
+                         ELSE NEW.login_script
+                       END,
+                       login_script_legacy_pending = CASE
+                         WHEN NEW.login_script != '' OR OLD.login_script != '' THEN 1
+                         ELSE 0
+                       END,
+                       echo_write_version = echo_write_version + 1
+                   WHERE id = NEW.id;
+                 END;",
+            )?;
+            tx.execute(
+                "INSERT INTO telnet_profiles
+                 (id, name, host, login_script, login_script_version,
+                  login_script_legacy_pending, echo_write_version)
+                 VALUES ('t1', 'switch', 'h', '', 'active-v1', 1, 1)",
+                [],
+            )?;
+            tx.execute(
+                "INSERT INTO telnet_profiles
+                 (id, name, host, login_script, login_script_version,
+                  login_script_legacy_pending, echo_write_version)
+                 VALUES ('t2', 'router', 'h2', 'replacement', NULL, 0, 1)",
+                [],
+            )?;
+            tx.execute(
+                "UPDATE telnet_profiles SET login_script = '' WHERE id = 't2'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let store = DbStore::new(db.clone());
+        store
+            .set(&telnet_login_script_key("t1", "active-v1"), "keep me")
+            .unwrap();
+
+        run(&db, &store).unwrap();
+
+        let residual: i64 = db
+            .with_transaction(|tx| {
+                Ok(tx.query_row(
+                    "SELECT login_script_legacy_pending FROM telnet_profiles WHERE id = 't1'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(residual, 1, "an obsolete extra column must be ignored");
+        let state = telnet_profile::login_script_state(&db, "t1").unwrap();
+        assert!(state.legacy_script.is_empty());
+        assert_eq!(state.version.as_deref(), Some("active-v1"));
+        assert_eq!(
+            store
+                .get(&telnet_login_script_key("t1", "active-v1"))
+                .unwrap()
+                .as_deref(),
+            Some("keep me")
+        );
+
+        let replaced = telnet_profile::login_script_state(&db, "t2").unwrap();
+        assert!(replaced.legacy_script.is_empty());
+        let replacement_version = replaced.version.unwrap();
+        assert_eq!(
+            store
+                .get(&telnet_login_script_key("t2", &replacement_version))
+                .unwrap()
+                .as_deref(),
+            Some("replacement"),
+            "a stale zero in the obsolete column must not hide a non-empty inbox",
+        );
     }
 }
