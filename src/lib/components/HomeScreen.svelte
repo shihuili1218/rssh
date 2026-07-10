@@ -10,6 +10,8 @@
     DynamicDiscoveredTarget,
     ConnectorSpec,
   } from "../stores/app.svelte.ts";
+  import { errMsg } from "../i18n/index.svelte.ts";
+  import { toast } from "../stores/toast.svelte.ts";
   import { createHomeRefresh } from "./home-refresh.ts";
 
   let profiles = $state<Profile[]>([]);
@@ -59,6 +61,7 @@
     applyDynamic: (snapshot) => {
       dynamicTargets = snapshot.targets;
     },
+    onError: (error) => toast.error(errMsg(error)),
   });
 
   // One global nav index into the flat (display-order) item list.

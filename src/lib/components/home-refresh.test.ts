@@ -4,10 +4,12 @@ import { createHomeRefresh } from "./home-refresh.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 describe("createHomeRefresh", () => {
@@ -87,5 +89,49 @@ describe("createHomeRefresh", () => {
     await pending;
 
     expect(applied).toEqual([]);
+  });
+
+  it("reports a failure from the current refresh", async () => {
+    const failure = new Error("profiles unavailable");
+    const errors: unknown[] = [];
+    const refresher = createHomeRefresh({
+      loadStatic: async () => { throw failure; },
+      loadDynamic: async () => "dynamic",
+      applyStatic: () => {},
+      applyDynamic: () => {},
+      onError: (error) => errors.push(error),
+    });
+
+    await expect(refresher.refresh()).resolves.toBeUndefined();
+    expect(errors).toEqual([failure]);
+  });
+
+  it("does not report a stale or cancelled failure", async () => {
+    const first = deferred<string>();
+    const second = deferred<string>();
+    const cancelledLoad = deferred<string>();
+    const loads = [first, second, cancelledLoad];
+    const errors: unknown[] = [];
+    let loadIndex = 0;
+    const refresher = createHomeRefresh({
+      loadStatic: () => loads[loadIndex++].promise,
+      loadDynamic: async () => "dynamic",
+      applyStatic: () => {},
+      applyDynamic: () => {},
+      onError: (error) => errors.push(error),
+    });
+
+    const stale = refresher.refresh();
+    const current = refresher.refresh();
+    first.reject(new Error("stale"));
+    second.resolve("current");
+    await Promise.all([stale, current]);
+
+    const cancelled = refresher.refresh();
+    refresher.cancel();
+    cancelledLoad.reject(new Error("cancelled"));
+    await cancelled;
+
+    expect(errors).toEqual([]);
   });
 });

@@ -143,9 +143,15 @@ function fakeTerm(opts: { rows: number; initialLines: number; cursorY: number; y
   const resizeListeners = new Set<() => void>();
   const cursorMoveListeners = new Set<() => void>();
   const lineFeedListeners = new Set<() => void>();
+  let activeBufferType: "normal" | "alternate" = "normal";
 
   const term = {
     rows,
+    buffer: {
+      get active() {
+        return { type: activeBufferType };
+      },
+    },
     refresh: (_a: number, _b: number) => {},
     onResize(fn: () => void) {
       resizeListeners.add(fn);
@@ -176,6 +182,10 @@ function fakeTerm(opts: { rows: number; initialLines: number; cursorY: number; y
     moveCursorTo: (nextY: number) => {
       y = nextY;
       cursorMoveListeners.forEach((fn) => fn());
+    },
+    fireCursorMove: () => cursorMoveListeners.forEach((fn) => fn()),
+    setActiveBuffer: (type: "normal" | "alternate") => {
+      activeBufferType = type;
     },
     triggerResize: () => resizeListeners.forEach((fn) => fn()),
     snapshot: () => ({
@@ -591,6 +601,27 @@ describe("FoldStore — unfold() effects", () => {
       cursorAbs: 2,
     });
   });
+
+  it("keeps multi-chunk insertion ordered when CircularList trims after each chunk", () => {
+    const f = fakeTerm({
+      rows: 40_010,
+      initialLines: 40_010,
+      cursorY: 40_009,
+      maxLength: 40_010,
+    });
+    const s = f.makeMarker(0);
+    const e = f.makeMarker(33_000);
+    const tracker = fakeTracker([makeBlock(1, s, e)]);
+    const store = createFoldStore(f.term, tracker);
+
+    expect(store.fold(1)).toBe(true);
+    store.unfold(1);
+
+    const survivingLineNumbers = f.lineContents()
+      .filter((line) => /^L\d+$/.test(line))
+      .map((line) => Number(line.slice(1)));
+    expect(survivingLineNumbers).toEqual([...survivingLineNumbers].sort((a, b) => a - b));
+  });
 });
 
 describe("FoldStore — multiple folds", () => {
@@ -681,6 +712,28 @@ describe("FoldStore — auto-cleanup", () => {
 
     expect(normal.lineRefs()).not.toContain(bodyRef);
     expect(alternate.lineRefs()).toEqual(alternateBefore);
+  });
+
+  it("ignores alternate-buffer cursor events when tracking normal compensation rows", () => {
+    const f = fakeTerm({ rows: 10, initialLines: 10, cursorY: 9 });
+    const s = f.makeMarker(0);
+    const e = f.makeMarker(8);
+    const store = createFoldStore(f.term, fakeTracker([makeBlock(1, s, e)]));
+    const before = f.snapshot();
+
+    expect(store.fold(1)).toBe(true);
+    // Leave the normal cursor over a compensation blank, then switch to an
+    // alternate-screen application. Its cursor events must not consume normal
+    // history that the application never touched.
+    f.buffer.y = 2;
+    f.setActiveBuffer("alternate");
+    f.fireCursorMove();
+    // The normal cursor is still dormant at its original content line when
+    // we restore; only the alternate event above could have consumed a blank.
+    f.buffer.y = 1;
+    store.unfold(1);
+
+    expect(f.snapshot().length).toBe(before.length);
   });
 
   it("tracker drops a folded block → fold record auto-dropped", () => {

@@ -218,6 +218,11 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
 
   function recordCursorConsumption(): void {
     if (folds.size === 0) return;
+    // Cursor/line-feed events belong to the active buffer. Folds own normal
+    // history, so an alternate-screen application must not consume normal
+    // compensation rows merely because the dormant normal cursor happens to
+    // point at one.
+    if (term.buffer.active.type !== "normal") return;
     const buf = getBuf(term);
     const cursorAbs = buf.ybase + buf.y;
     const owner = blankOwners.get(buf.lines.get(cursorAbs));
@@ -265,17 +270,31 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     // splice 塞回 → marker 反向迁移
     // 分块插：Array spread 在 V8 上有 ~65k 参数硬上限（large build log /
     // find / 输出轻易就超过）。一次性 splice(...savedLines) 会抛 RangeError。
-    const lengthBeforeInsert = buf.lines.length;
     const SPLICE_CHUNK = 32768;
+    let inserted = 0;
+    let trimmedDuringInsert = 0;
     for (let i = 0; i < f.savedLines.length; i += SPLICE_CHUNK) {
       const chunk = f.savedLines.slice(i, i + SPLICE_CHUNK);
-      buf.lines.splice(insertAt + i, 0, ...chunk);
+      // CircularList enforces maxLength after every splice, not after the
+      // whole logical insertion. Each head trim shifts the next insertion
+      // point left; using insertAt+i would append later chunks out of order.
+      const chunkInsertAt = clamp(
+        insertAt + inserted - trimmedDuringInsert,
+        0,
+        buf.lines.length,
+      );
+      const lengthBeforeChunk = buf.lines.length;
+      buf.lines.splice(chunkInsertAt, 0, ...chunk);
+      trimmedDuringInsert += Math.max(
+        0,
+        lengthBeforeChunk + chunk.length - buf.lines.length,
+      );
+      inserted += chunk.length;
     }
     if (insertAt <= nextYdisp) nextYdisp += f.count;
 
     // CircularList.splice 会在 maxLength 满时从头 trim；我们直接碰私有
     // lines，必须自己把 cursor/viewport 的绝对行同步扣回来。
-    const trimmedDuringInsert = Math.max(0, lengthBeforeInsert + f.count - buf.lines.length);
     if (trimmedDuringInsert > 0) {
       nextCursorAbs = Math.max(0, nextCursorAbs - trimmedDuringInsert);
       nextYdisp = Math.max(0, nextYdisp - trimmedDuringInsert);
