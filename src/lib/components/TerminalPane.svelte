@@ -1204,7 +1204,7 @@
         ime229WorkaroundCleanup = setupXtermIme229Workaround({
             terminal,
             host: containerEl,
-            enabled: keymap.isMac,
+            enabled: keymap.isMac && !app.isMobile,
         });
         terminal.unicode.activeVersion = "11";
         writeBatcher = createTerminalWriteBatcher({

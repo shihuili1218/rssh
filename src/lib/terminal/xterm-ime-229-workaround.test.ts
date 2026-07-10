@@ -5,6 +5,7 @@ type Listener = (event: Event) => void;
 
 class FakeHost {
   readonly listeners = new Map<string, Set<Listener>>();
+  readonly targetListeners = new Map<string, Set<Listener>>();
 
   addEventListener(type: string, listener: EventListenerOrEventListenerObject): void {
     if (typeof listener !== "function") throw new Error("test host only supports function listeners");
@@ -18,9 +19,21 @@ class FakeHost {
     this.listeners.get(type)?.delete(listener as Listener);
   }
 
+  addTargetEventListener(type: string, listener: Listener): void {
+    const listeners = this.targetListeners.get(type) ?? new Set<Listener>();
+    listeners.add(listener);
+    this.targetListeners.set(type, listeners);
+  }
+
   fire(type: string, event: FakeEvent): void {
     for (const listener of this.listeners.get(type) ?? []) {
       listener(event as unknown as Event);
+      if (event.immediatePropagationStopped) break;
+    }
+    if (event.propagationStopped) return;
+    for (const listener of this.targetListeners.get(type) ?? []) {
+      listener(event as unknown as Event);
+      if (event.immediatePropagationStopped) break;
     }
   }
 }
@@ -31,6 +44,7 @@ type FakeEvent = {
   data?: string | null;
   inputType?: string;
   isComposing?: boolean;
+  composed?: boolean;
   cancelable?: boolean;
   defaultPrevented: boolean;
   propagationStopped: boolean;
@@ -61,30 +75,47 @@ function fakeEvent(target: unknown, overrides: Partial<FakeEvent> = {}): FakeEve
   return event;
 }
 
-function setup(enabled = true) {
+function textInputEvent(target: unknown, data: string, overrides: Partial<FakeEvent> = {}): FakeEvent {
+  return fakeEvent(target, {
+    data,
+    inputType: "insertText",
+    isComposing: false,
+    composed: true,
+    ...overrides,
+  });
+}
+
+function setup(enabled = true, screenReaderMode = false) {
   const host = new FakeHost();
   const calls: Array<[string, boolean | undefined]> = [];
   const textarea = { value: "stale" } as HTMLTextAreaElement;
+  const options = { screenReaderMode };
   const terminal = {
     textarea,
-    options: { screenReaderMode: false },
+    options,
     input(data: string, wasUserInput?: boolean) {
       calls.push([data, wasUserInput]);
     },
   };
   const cleanup = setupXtermIme229Workaround({ terminal, host, enabled });
-  return { host, calls, textarea, cleanup };
+  return { host, calls, textarea, options, cleanup };
 }
 
 describe("setupXtermIme229Workaround", () => {
-  it("replays insertText after a non-composing 229 keydown and blocks xterm's fallback input listener", () => {
+  it("replays the second insertText in the affected input-keydown-input sequence", () => {
     const { host, calls, textarea } = setup();
+    let fallbackCalls = 0;
+    host.addTargetEventListener("input", () => fallbackCalls++);
 
+    const firstInput = textInputEvent(textarea, "m");
+    host.fire("input", firstInput);
     host.fire("keydown", fakeEvent(textarea, { keyCode: 229, isComposing: false }));
-    const input = fakeEvent(textarea, { data: "o", inputType: "insertText", isComposing: false });
+    const input = textInputEvent(textarea, "o");
     host.fire("input", input);
 
     expect(calls).toEqual([["o", true]]);
+    expect(fallbackCalls).toBe(1);
+    expect(firstInput.propagationStopped).toBe(false);
     expect(textarea.value).toBe("");
     expect(input.propagationStopped).toBe(true);
     expect(input.immediatePropagationStopped).toBe(true);
@@ -93,7 +124,7 @@ describe("setupXtermIme229Workaround", () => {
 
   it("does not intercept normal input before a 229 keydown", () => {
     const { host, calls, textarea } = setup();
-    const input = fakeEvent(textarea, { data: "m", inputType: "insertText", isComposing: false });
+    const input = textInputEvent(textarea, "m");
 
     host.fire("input", input);
 
@@ -106,7 +137,7 @@ describe("setupXtermIme229Workaround", () => {
 
     host.fire("keydown", fakeEvent(textarea, { keyCode: 229, isComposing: false }));
     host.fire("keyup", fakeEvent(textarea, { keyCode: 229, isComposing: false }));
-    host.fire("input", fakeEvent(textarea, { data: "x", inputType: "insertText", isComposing: false }));
+    host.fire("input", textInputEvent(textarea, "x"));
 
     expect(calls).toEqual([]);
   });
@@ -116,7 +147,12 @@ describe("setupXtermIme229Workaround", () => {
 
     host.fire("keydown", fakeEvent(textarea, { keyCode: 229, isComposing: false }));
     host.fire("compositionstart", fakeEvent(textarea));
-    host.fire("input", fakeEvent(textarea, { data: "拼", inputType: "insertCompositionText", isComposing: true }));
+    host.fire("input", fakeEvent(textarea, {
+      data: "拼",
+      inputType: "insertCompositionText",
+      isComposing: true,
+      composed: true,
+    }));
 
     expect(calls).toEqual([]);
   });
@@ -126,7 +162,7 @@ describe("setupXtermIme229Workaround", () => {
     const otherTarget = {};
 
     host.fire("keydown", fakeEvent(otherTarget, { keyCode: 229, isComposing: false }));
-    host.fire("input", fakeEvent(textarea, { data: "o", inputType: "insertText", isComposing: false }));
+    host.fire("input", textInputEvent(textarea, "o"));
 
     expect(calls).toEqual([]);
   });
@@ -135,9 +171,55 @@ describe("setupXtermIme229Workaround", () => {
     const { host, calls, textarea } = setup(false);
 
     host.fire("keydown", fakeEvent(textarea, { keyCode: 229, isComposing: false }));
-    host.fire("input", fakeEvent(textarea, { data: "o", inputType: "insertText", isComposing: false }));
+    host.fire("input", textInputEvent(textarea, "o"));
 
     expect(calls).toEqual([]);
+  });
+
+  it("consumes pending state when screen reader mode bypasses the workaround", () => {
+    const { host, calls, textarea, options } = setup(true, true);
+
+    host.fire("keydown", fakeEvent(textarea, { keyCode: 229, isComposing: false }));
+    const bypassedInput = textInputEvent(textarea, "o");
+    host.fire("input", bypassedInput);
+
+    options.screenReaderMode = false;
+    const laterInput = textInputEvent(textarea, "x");
+    host.fire("input", laterInput);
+
+    expect(calls).toEqual([]);
+    expect(bypassedInput.propagationStopped).toBe(false);
+    expect(laterInput.propagationStopped).toBe(false);
+  });
+
+  it("leaves non-composed insertText to xterm and consumes pending state", () => {
+    const { host, calls, textarea } = setup();
+
+    host.fire("keydown", fakeEvent(textarea, { keyCode: 229, isComposing: false }));
+    const nonComposedInput = textInputEvent(textarea, "o", { composed: false });
+    host.fire("input", nonComposedInput);
+    const laterInput = textInputEvent(textarea, "x");
+    host.fire("input", laterInput);
+
+    expect(calls).toEqual([]);
+    expect(nonComposedInput.propagationStopped).toBe(false);
+    expect(laterInput.propagationStopped).toBe(false);
+  });
+
+  it("does nothing when xterm's helper textarea is unavailable", () => {
+    const host = new FakeHost();
+    const terminal = {
+      textarea: undefined,
+      options: { screenReaderMode: false },
+      input() {
+        throw new Error("input must not be called");
+      },
+    };
+
+    const cleanup = setupXtermIme229Workaround({ terminal, host, enabled: true });
+
+    expect(host.listeners.size).toBe(0);
+    cleanup();
   });
 
   it("removes listeners on cleanup", () => {
@@ -145,7 +227,7 @@ describe("setupXtermIme229Workaround", () => {
 
     cleanup();
     host.fire("keydown", fakeEvent(textarea, { keyCode: 229, isComposing: false }));
-    host.fire("input", fakeEvent(textarea, { data: "o", inputType: "insertText", isComposing: false }));
+    host.fire("input", textInputEvent(textarea, "o"));
 
     expect(calls).toEqual([]);
   });
