@@ -15,7 +15,7 @@
 - 豆包输入法
 - 接入cloudflare https://linux.do/t/topic/2487408/74
 - https://linux.do/t/topic/2487408/70
-
+- cat profile.html ls折叠/展开，会出现很多clear不掉的行，调整size后clear会清理 ???
 
 ![Stars](https://img.shields.io/github/stars/shihuili1218/rssh)
 ![Forks](https://img.shields.io/github/forks/shihuili1218/rssh)

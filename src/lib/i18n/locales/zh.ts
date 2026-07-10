@@ -329,7 +329,7 @@ const zh: Messages = {
   "profile.select_credential": "-- 选择凭证 --",
   "profile.placeholder.name": "My Server",
   "profile.placeholder.host": "192.168.1.1",
-  "profile.placeholder.init": "ssh user@hostname",
+  "profile.placeholder.init": "ssh user@hostname / docker exec -it name bin/sh",
 
   // ── 凭证编辑器 ──
   "credential.name": "名称",

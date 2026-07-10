@@ -327,7 +327,7 @@ const en = {
   "profile.select_credential": "-- Select Credential --",
   "profile.placeholder.name": "My Server",
   "profile.placeholder.host": "192.168.1.1",
-  "profile.placeholder.init": "ssh user@hostname",
+  "profile.placeholder.init": "ssh user@hostname / docker exec -it name bin/sh",
 
   // ── Credential editor ──
   "credential.name": "Name",
