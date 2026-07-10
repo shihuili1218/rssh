@@ -1,4 +1,6 @@
+use std::ffi::OsString;
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -350,17 +352,20 @@ pub fn spawn_command(
     cols: u16,
     rows: u16,
     sink: PtySink,
-    program: String,
+    program: PathBuf,
+    search_path: OsString,
     args: Vec<String>,
 ) -> AppResult<(String, PtyHandle)> {
     let mut cmd = CommandBuilder::new(&program);
+    cmd.env("PATH", search_path);
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("RSSH_APP", "1");
     for arg in args {
         cmd.arg(arg);
     }
-    spawn_builder(session_id, cols, rows, sink, cmd, program)
+    let program_label = program.to_string_lossy().into_owned();
+    spawn_builder(session_id, cols, rows, sink, cmd, program_label)
 }
 
 fn spawn_builder(

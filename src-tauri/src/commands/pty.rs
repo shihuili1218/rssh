@@ -1,7 +1,7 @@
 use tauri::{AppHandle, Emitter, State};
 
 use crate::error::{locked, AppError, AppResult};
-use crate::models::ConnectorSpec;
+use crate::models::{ConnectorSpec, DynamicDiscoveryPlatform};
 use crate::state::{AppState, SessionKind, SessionOwner};
 use crate::terminal::pty;
 
@@ -37,7 +37,7 @@ pub fn pty_spawn(
     Ok(id)
 }
 
-fn connector_command(spec: ConnectorSpec) -> AppResult<(String, Vec<String>)> {
+fn connector_command(spec: ConnectorSpec) -> AppResult<(DynamicDiscoveryPlatform, Vec<String>)> {
     match spec {
         ConnectorSpec::DockerExec {
             context,
@@ -55,7 +55,7 @@ fn connector_command(spec: ConnectorSpec) -> AppResult<(String, Vec<String>)> {
                 ));
             }
             Ok((
-                "docker".into(),
+                DynamicDiscoveryPlatform::Docker,
                 vec![
                     "--context".into(),
                     context,
@@ -98,7 +98,7 @@ fn connector_command(spec: ConnectorSpec) -> AppResult<(String, Vec<String>)> {
             }
             args.push("--".into());
             args.push(shell);
-            Ok(("kubectl".into(), args))
+            Ok((DynamicDiscoveryPlatform::K8s, args))
         }
     }
 }
@@ -114,7 +114,8 @@ pub fn pty_spawn_connector(
     session_id: Option<String>,
 ) -> AppResult<String> {
     let session_id = crate::commands::lifecycle::resolve_session_id(session_id)?;
-    let (program, args) = connector_command(spec)?;
+    let (platform, args) = connector_command(spec)?;
+    let program = crate::commands::discovery::resolve_dynamic_discovery_program(platform)?;
     let reservation = crate::commands::lifecycle::reserve_resource(
         &state,
         &session_id,
@@ -129,7 +130,15 @@ pub fn pty_spawn_connector(
             let _ = app.emit(&format!("pty:close:{id}"), ());
         }
     });
-    let (id, handle) = pty::spawn_command(session_id, cols, rows, sink, program, args)?;
+    let (id, handle) = pty::spawn_command(
+        session_id,
+        cols,
+        rows,
+        sink,
+        program.executable,
+        program.search_path,
+        args,
+    )?;
     reservation.activate_returned(&id, crate::commands::lifecycle::ReadySession::Pty(handle))?;
     Ok(id)
 }

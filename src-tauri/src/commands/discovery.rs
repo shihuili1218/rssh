@@ -1,3 +1,5 @@
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use futures_util::{stream, StreamExt};
@@ -27,16 +29,154 @@ fn platform_program(platform: DynamicDiscoveryPlatform) -> &'static str {
     }
 }
 
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.is_file()
+}
+
+#[cfg(not(windows))]
+fn executable_names(program: &str) -> Vec<String> {
+    vec![program.to_string()]
+}
+
+pub(crate) struct ResolvedDiscoveryProgram {
+    pub executable: PathBuf,
+    pub search_path: OsString,
+}
+
+#[cfg(windows)]
+fn executable_names(program: &str) -> Vec<String> {
+    if Path::new(program).extension().is_some() {
+        vec![program.to_string()]
+    } else {
+        vec![format!("{program}.exe"), program.to_string()]
+    }
+}
+
+/// Resolve an allowlisted discovery CLI without assuming that a desktop app
+/// inherited the user's login-shell PATH. Finder/LaunchServices normally does
+/// not include Homebrew or `/usr/local/bin`, while `tauri dev` does.
+fn resolve_executable_in(
+    program: &str,
+    inherited_path: Option<&OsStr>,
+    fallback_dirs: &[PathBuf],
+) -> Option<ResolvedDiscoveryProgram> {
+    let mut dirs = inherited_path
+        .map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    dirs.extend(fallback_dirs.iter().cloned());
+    let search_path = std::env::join_paths(&dirs).ok()?;
+
+    let names = executable_names(program);
+    for dir in dirs {
+        for name in &names {
+            let candidate = dir.join(name);
+            if is_executable(&candidate) {
+                return Some(ResolvedDiscoveryProgram {
+                    executable: candidate,
+                    search_path,
+                });
+            }
+        }
+    }
+    None
+}
+
+fn discovery_cli_fallback_dirs() -> Vec<PathBuf> {
+    let mut fallback_dirs = Vec::new();
+
+    #[cfg(unix)]
+    {
+        if let Some(home) = dirs::home_dir() {
+            fallback_dirs.push(home.join(".docker").join("bin"));
+            fallback_dirs.push(home.join(".local").join("bin"));
+            #[cfg(target_os = "macos")]
+            fallback_dirs.push(
+                home.join("Applications")
+                    .join("Docker.app")
+                    .join("Contents")
+                    .join("Resources")
+                    .join("bin"),
+            );
+        }
+        fallback_dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        fallback_dirs.push(PathBuf::from("/usr/local/bin"));
+        fallback_dirs.push(PathBuf::from("/usr/bin"));
+        fallback_dirs.push(PathBuf::from("/bin"));
+        #[cfg(target_os = "linux")]
+        fallback_dirs.push(PathBuf::from("/snap/bin"));
+        #[cfg(target_os = "macos")]
+        fallback_dirs.push(PathBuf::from(
+            "/Applications/Docker.app/Contents/Resources/bin",
+        ));
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(program_files) = std::env::var_os("ProgramFiles") {
+            fallback_dirs.push(
+                PathBuf::from(program_files)
+                    .join("Docker")
+                    .join("Docker")
+                    .join("resources")
+                    .join("bin"),
+            );
+        }
+        if let Some(program_data) = std::env::var_os("ProgramData") {
+            fallback_dirs.push(PathBuf::from(program_data).join("chocolatey").join("bin"));
+        }
+        if let Some(home) = dirs::home_dir() {
+            fallback_dirs.push(home.join("scoop").join("shims"));
+        }
+    }
+
+    fallback_dirs
+}
+
+pub(crate) fn resolve_dynamic_discovery_program(
+    platform: DynamicDiscoveryPlatform,
+) -> AppResult<ResolvedDiscoveryProgram> {
+    let program = platform_program(platform);
+    let inherited_path = std::env::var_os("PATH");
+    resolve_executable_in(
+        program,
+        inherited_path.as_deref(),
+        &discovery_cli_fallback_dirs(),
+    )
+    .ok_or_else(|| {
+        AppError::other(
+            "dynamic_discovery_cli_unavailable",
+            json!({ "program": program }),
+        )
+    })
+}
+
 fn trim_output(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).trim().to_string()
 }
 
 async fn run_success(
-    program: &str,
+    platform: DynamicDiscoveryPlatform,
     args: Vec<String>,
     timeout_secs: u64,
 ) -> AppResult<CapturedOutput> {
-    let mut cmd = tokio::process::Command::new(program);
+    let program = platform_program(platform);
+    let resolved = resolve_dynamic_discovery_program(platform)?;
+    let mut cmd = tokio::process::Command::new(resolved.executable);
+    // kubectl exec-auth plugins and Docker SSH/credential helpers inherit this
+    // environment, so resolving only the top-level binary is insufficient.
+    cmd.env("PATH", resolved.search_path);
     cmd.args(&args).kill_on_drop(true);
     let output = tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output())
         .await
@@ -201,14 +341,13 @@ pub fn save_dynamic_discovery_sources(
 pub async fn dynamic_discovery_tool_status(
     platform: DynamicDiscoveryPlatform,
 ) -> AppResult<DynamicDiscoveryToolStatus> {
-    let program = platform_program(platform);
     let args = match platform {
         DynamicDiscoveryPlatform::Docker => vec!["--version".to_string()],
         DynamicDiscoveryPlatform::K8s => {
             vec!["version".to_string(), "--client=true".to_string()]
         }
     };
-    match run_success(program, args, 3).await {
+    match run_success(platform, args, 3).await {
         Ok(out) => Ok(DynamicDiscoveryToolStatus {
             platform,
             available: true,
@@ -240,7 +379,7 @@ pub async fn list_dynamic_discovery_contexts(
 
 async fn list_docker_contexts() -> AppResult<Vec<DynamicDiscoveryContext>> {
     let out = run_success(
-        "docker",
+        DynamicDiscoveryPlatform::Docker,
         vec![
             "context".into(),
             "ls".into(),
@@ -255,7 +394,7 @@ async fn list_docker_contexts() -> AppResult<Vec<DynamicDiscoveryContext>> {
 
 async fn list_k8s_contexts() -> AppResult<Vec<DynamicDiscoveryContext>> {
     let out = run_success(
-        "kubectl",
+        DynamicDiscoveryPlatform::K8s,
         vec![
             "config".into(),
             "get-contexts".into(),
@@ -266,7 +405,7 @@ async fn list_k8s_contexts() -> AppResult<Vec<DynamicDiscoveryContext>> {
     )
     .await?;
     let current = run_success(
-        "kubectl",
+        DynamicDiscoveryPlatform::K8s,
         vec!["config".into(), "current-context".into()],
         3,
     )
@@ -445,7 +584,7 @@ async fn discover_docker(
     shell: &str,
 ) -> AppResult<Vec<DynamicDiscoveredTarget>> {
     let out = run_success(
-        "docker",
+        DynamicDiscoveryPlatform::Docker,
         vec![
             "--context".into(),
             context.to_string(),
@@ -553,7 +692,7 @@ async fn discover_k8s(
         args.push("-A".into());
     }
 
-    let out = run_success("kubectl", args, 10).await?;
+    let out = run_success(DynamicDiscoveryPlatform::K8s, args, 10).await?;
     parse_k8s_pods(source, context, namespace, shell, &out.stdout)
 }
 
@@ -630,6 +769,99 @@ fn parse_k8s_pods(
 mod tests {
     use super::*;
     use crate::models::DynamicDiscoveryConfig;
+
+    #[cfg(unix)]
+    fn make_executable(path: &std::path::Path, script: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::write(path, script).unwrap();
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_resolver_uses_fallback_when_gui_path_omits_the_program() {
+        let fallback = tempfile::tempdir().unwrap();
+        let docker = fallback.path().join("docker");
+        make_executable(&docker, "#!/bin/sh\nexit 0\n");
+
+        let resolved = resolve_executable_in(
+            "docker",
+            Some(std::ffi::OsStr::new("/usr/bin:/bin")),
+            &[fallback.path().to_owned()],
+        );
+
+        let resolved = resolved.unwrap();
+        assert_eq!(resolved.executable, docker);
+        assert!(std::env::split_paths(&resolved.search_path).any(|dir| dir == fallback.path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_resolver_prefers_inherited_path_over_fallbacks() {
+        let inherited = tempfile::tempdir().unwrap();
+        let fallback = tempfile::tempdir().unwrap();
+        let inherited_docker = inherited.path().join("docker");
+        let fallback_docker = fallback.path().join("docker");
+        make_executable(&inherited_docker, "#!/bin/sh\nexit 0\n");
+        make_executable(&fallback_docker, "#!/bin/sh\nexit 0\n");
+        let path = std::env::join_paths([inherited.path()]).unwrap();
+
+        let resolved = resolve_executable_in(
+            "docker",
+            Some(path.as_os_str()),
+            &[fallback.path().to_owned()],
+        );
+
+        let resolved = resolved.unwrap();
+        assert_eq!(resolved.executable, inherited_docker);
+        assert!(std::env::split_paths(&resolved.search_path).any(|dir| dir == fallback.path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolved_search_path_is_inherited_by_cli_helpers() {
+        let fallback = tempfile::tempdir().unwrap();
+        let docker = fallback.path().join("docker");
+        let helper = fallback.path().join("docker-helper");
+        make_executable(&docker, "#!/bin/sh\nexec docker-helper\n");
+        make_executable(&helper, "#!/bin/sh\nexit 0\n");
+        let resolved = resolve_executable_in(
+            "docker",
+            Some(std::ffi::OsStr::new("/usr/bin:/bin")),
+            &[fallback.path().to_owned()],
+        )
+        .unwrap();
+
+        let status = std::process::Command::new(resolved.executable)
+            .env("PATH", resolved.search_path)
+            .status()
+            .unwrap();
+
+        assert!(status.success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_resolver_rejects_non_executable_files_and_directories() {
+        let non_executable = tempfile::tempdir().unwrap();
+        std::fs::write(non_executable.path().join("docker"), "not executable").unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join("docker")).unwrap();
+
+        let resolved = resolve_executable_in(
+            "docker",
+            None,
+            &[
+                non_executable.path().to_owned(),
+                directory.path().to_owned(),
+            ],
+        );
+
+        assert!(resolved.is_none());
+    }
 
     fn docker_source() -> DynamicDiscoverySource {
         DynamicDiscoverySource {
