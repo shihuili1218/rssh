@@ -604,7 +604,10 @@ fn dispatch(
         }
         "update_telnet_profile" => {
             let profile: TelnetProfile = arg(&args, "profile")?;
-            let intent = crate::telnet_profile::LoginScriptIntent::from_profile(&profile);
+            let update: Option<crate::telnet_profile::LoginScriptUpdate> =
+                arg(&args, "loginScriptUpdate")?;
+            let intent =
+                crate::telnet_profile::LoginScriptIntent::from_update_profile(&profile, update);
             crate::telnet_profile::update(&state.db, state.secret_store.as_ref(), &profile, intent)
                 .map_err(err_value)?;
             Ok(Value::Null)

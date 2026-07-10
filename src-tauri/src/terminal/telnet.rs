@@ -137,7 +137,16 @@ impl Negotiator {
         for &b in input {
             match self.state {
                 NState::Data => match b {
-                    IAC => self.state = NState::Iac,
+                    IAC => {
+                        // A Telnet command is a processing boundary. In
+                        // particular, a WILL BINARY here changes how the next
+                        // data byte is interpreted, so it cannot remain the
+                        // partner of an earlier NVT CR.
+                        if std::mem::take(&mut self.remote_pending_cr) {
+                            data.push(b'\r');
+                        }
+                        self.state = NState::Iac;
+                    }
                     _ => self.push_data_byte(b, &mut data),
                 },
                 NState::Iac => match b {
@@ -708,6 +717,15 @@ mod tests {
         assert_eq!(data, b"\rb");
         let (data, _) = push(&mut n, b"\nc");
         assert_eq!(data, b"\r\nc");
+    }
+
+    #[test]
+    fn inbound_iac_command_ends_pending_cr_before_binary_mode() {
+        let mut n = Negotiator::new();
+        let (data, reply) = push(&mut n, &[b'\r', IAC, WILL, OPT_BINARY, b'\0']);
+
+        assert_eq!(reply, [IAC, DO, OPT_BINARY]);
+        assert_eq!(data, b"\r\0");
     }
 
     #[test]

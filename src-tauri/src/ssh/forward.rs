@@ -67,7 +67,7 @@ impl ForwardHandle {
         // at all so a wedged disconnect await (e.g. dead remote) can't
         // strand the forward task forever.
         if let Some(abort) = self.abort.take() {
-            tokio::spawn(async move {
+            tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 abort.abort();
             });
@@ -549,6 +549,24 @@ mod tests {
             .await
             .expect("dropping ForwardHandle must abort its detached task")
             .unwrap();
+    }
+
+    #[test]
+    fn stopping_handle_outside_tokio_runtime_does_not_panic() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let task = runtime.spawn(std::future::pending::<()>());
+        let handle = ForwardHandle::from_task(
+            task,
+            Arc::new(Notify::new()),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU32::new(0)),
+        );
+
+        handle.stop();
     }
 
     #[tokio::test]

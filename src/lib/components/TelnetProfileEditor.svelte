@@ -99,8 +99,16 @@
         save_script_to_remote: saveScriptToRemote,
         group_id: groupId || null,
       };
-      if (id) await invoke("update_telnet_profile", { profile });
-      else await invoke("create_telnet_profile", { profile });
+      if (id) {
+        await invoke("update_telnet_profile", {
+          profile,
+          // The editor owns a hydrated, complete value. Metadata-only callers
+          // omit this flag so a scrubbed empty field preserves the secret.
+          loginScriptUpdate: "replace",
+        });
+      } else {
+        await invoke("create_telnet_profile", { profile });
+      }
       app.navigate("telnet-profiles");
     } catch (e: any) { toast.error(`${t("toast.error.save")}: ${errMsg(e)}`); }
     finally { saving = false; }

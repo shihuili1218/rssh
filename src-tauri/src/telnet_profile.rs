@@ -18,6 +18,17 @@ pub enum LoginScriptIntent {
     Delete,
 }
 
+/// Whether an update payload carries a complete login-script replacement or
+/// only scrubbed profile metadata. Keeping this separate from the script value
+/// makes an empty replacement (delete) distinct from an omitted secret
+/// (preserve).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoginScriptUpdate {
+    Preserve,
+    Replace,
+}
+
 impl LoginScriptIntent {
     /// A direct profile edit replaces the complete script value; unlike a
     /// scrubbed sync payload, an empty value is an intentional deletion.
@@ -26,6 +37,15 @@ impl LoginScriptIntent {
             Self::Delete
         } else {
             Self::Set(profile.login_script.clone())
+        }
+    }
+
+    pub fn from_update_profile(profile: &TelnetProfile, update: Option<LoginScriptUpdate>) -> Self {
+        match update {
+            Some(LoginScriptUpdate::Preserve) => Self::Preserve,
+            Some(LoginScriptUpdate::Replace) => Self::from_profile(profile),
+            None if profile.login_script.is_empty() => Self::Preserve,
+            None => Self::from_profile(profile),
         }
     }
 }
@@ -294,6 +314,65 @@ mod tests {
         state
             .version
             .and_then(|version| store.get(&telnet_login_script_key(id, &version)).unwrap())
+    }
+
+    #[test]
+    fn scrubbed_update_without_explicit_script_update_preserves_secret() {
+        let db = Db::open_in_memory().unwrap();
+        let store = TestStore::default();
+        let original = profile("t1", "Original", "old script");
+        upsert(
+            &db,
+            &store,
+            &original,
+            LoginScriptIntent::from_profile(&original),
+        )
+        .unwrap();
+
+        let mut scrubbed = list_metadata(&db).unwrap().remove(0);
+        scrubbed.name = "Renamed".into();
+        let intent = LoginScriptIntent::from_update_profile(&scrubbed, None);
+        update(&db, &store, &scrubbed, intent).unwrap();
+
+        assert_eq!(
+            stored_script(&db, &store, "t1").as_deref(),
+            Some("old script")
+        );
+        assert_eq!(
+            crate::db::telnet_profile::get(&db, "t1").unwrap().name,
+            "Renamed"
+        );
+    }
+
+    #[test]
+    fn explicit_replace_can_delete_login_script() {
+        let db = Db::open_in_memory().unwrap();
+        let store = TestStore::default();
+        let original = profile("t1", "Original", "old script");
+        upsert(
+            &db,
+            &store,
+            &original,
+            LoginScriptIntent::from_profile(&original),
+        )
+        .unwrap();
+
+        let cleared = profile("t1", "Original", "");
+        let intent =
+            LoginScriptIntent::from_update_profile(&cleared, Some(LoginScriptUpdate::Replace));
+        update(&db, &store, &cleared, intent).unwrap();
+
+        assert_eq!(stored_script(&db, &store, "t1"), None);
+    }
+
+    #[test]
+    fn legacy_nonempty_update_still_replaces_login_script() {
+        let changed = profile("t1", "Changed", "new script");
+
+        assert_eq!(
+            LoginScriptIntent::from_update_profile(&changed, None),
+            LoginScriptIntent::Set("new script".into())
+        );
     }
 
     fn assert_plaintext_purge_finished(db: &Db) {

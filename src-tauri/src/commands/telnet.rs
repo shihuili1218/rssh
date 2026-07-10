@@ -144,8 +144,15 @@ pub fn create_telnet_profile(state: State<'_, AppState>, profile: TelnetProfile)
 }
 
 #[tauri::command]
-pub fn update_telnet_profile(state: State<'_, AppState>, profile: TelnetProfile) -> AppResult<()> {
-    let intent = crate::telnet_profile::LoginScriptIntent::from_profile(&profile);
+pub fn update_telnet_profile(
+    state: State<'_, AppState>,
+    profile: TelnetProfile,
+    login_script_update: Option<crate::telnet_profile::LoginScriptUpdate>,
+) -> AppResult<()> {
+    let intent = crate::telnet_profile::LoginScriptIntent::from_update_profile(
+        &profile,
+        login_script_update,
+    );
     crate::telnet_profile::update(&state.db, state.secret_store.as_ref(), &profile, intent)
 }
 
