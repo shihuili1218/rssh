@@ -34,16 +34,10 @@ export interface Tab {
 /** Settings sub-pages (rendered inside the settings tab) */
 export type SettingsPage =
   | "menu"
-  | "profiles"
-  | "profile-edit"
+  | "connections"
+  | "connection-edit"
   | "credentials"
   | "credential-edit"
-  | "forwards"
-  | "forward-edit"
-  | "serial-profiles"
-  | "serial-profile-edit"
-  | "telnet-profiles"
-  | "telnet-profile-edit"
   | "dynamic-discovery"
   | "snippets"
   | "highlights"
@@ -65,6 +59,10 @@ export type SettingsPage =
 export interface Group {
   id: string; name: string; color: string; sort_order: number;
 }
+export type ConnectionKind = "ssh" | "forward" | "serial" | "telnet";
+export type ConnectionEditorIntent =
+  | { mode: "create"; kind: ConnectionKind; sourceId: null }
+  | { mode: "edit" | "copy"; kind: ConnectionKind; sourceId: string };
 export interface SshAlgorithms {
   kex: string[];
   key: string[];
@@ -169,12 +167,7 @@ let _activeTabId = $state("home");
 let _settingsActive = $state(false);
 let _settingsPage = $state<SettingsPage>("menu");
 let _editingId = $state<string | null>(null);
-/** Set by the Copy action: ProfileEditor opens in "new" mode (_editingId stays
- *  null, so Save creates a new row) but pre-fills its fields from this source
- *  profile. Consumed (cleared) by ProfileEditor on mount so a later "+ New"
- *  starts blank. Kept separate from _editingId on purpose — overloading it
- *  would make Save update the source instead of creating a copy. */
-let _copyFromProfileId = $state<string | null>(null);
+let _connectionEditorIntent = $state<ConnectionEditorIntent>({ mode: "create", kind: "ssh", sourceId: null });
 
 /* SFTP per-tab：每个 ssh tab 独立 open/close（local PTY 没远端 fs，openSftp gate 掉）。
    SFTP 共用对应 tab 的 SSH 连接；切 tab 不影响其他 tab 已打开的 SFTP；
@@ -235,7 +228,11 @@ export function activeTab() { return _tabs.find(t => t.id === _activeTabId); }
 export function settingsActive() { return _settingsActive; }
 export function settingsPage() { return _settingsPage; }
 export function editingId() { return _editingId; }
-export function copyFromProfileId() { return _copyFromProfileId; }
+export function connectionEditorIntent(): ConnectionEditorIntent { return _connectionEditorIntent; }
+export function connectionTypeLocked() { return _connectionEditorIntent.mode !== "create"; }
+export function connectionUpdateId(): string | null {
+  return _connectionEditorIntent.mode === "edit" ? _connectionEditorIntent.sourceId : null;
+}
 /** 当前活跃 tab 的 SFTP 是否打开（toolbar / Esc / × 按钮等用这个）。 */
 export function sftpOpen() { return !!_sftpOpenByTab[_activeTabId]; }
 /** 任意 tab 是否查询；用 tab id 显式问。 */
@@ -328,12 +325,24 @@ export function settingsNavigate(page: SettingsPage, editId?: string) {
   _editingId = editId ?? null;
 }
 
+export function openConnectionCreate(kind: ConnectionKind = "ssh") {
+  _connectionEditorIntent = { mode: "create", kind, sourceId: null };
+  navigate("connection-edit");
+}
+
+export function openConnectionEdit(kind: ConnectionKind, sourceId: string) {
+  _connectionEditorIntent = { mode: "edit", kind, sourceId };
+  navigate("connection-edit");
+}
+
+export function openConnectionCopy(kind: ConnectionKind, sourceId: string) {
+  _connectionEditorIntent = { mode: "copy", kind, sourceId };
+  navigate("connection-edit");
+}
+
 export function settingsBack() {
-  if (_settingsPage === "profile-edit") _settingsPage = "profiles";
+  if (_settingsPage === "connection-edit") _settingsPage = "connections";
   else if (_settingsPage === "credential-edit") _settingsPage = "credentials";
-  else if (_settingsPage === "forward-edit") _settingsPage = "forwards";
-  else if (_settingsPage === "serial-profile-edit") _settingsPage = "serial-profiles";
-  else if (_settingsPage === "telnet-profile-edit") _settingsPage = "telnet-profiles";
   else if (_settingsPage === "import-ssh-config") _settingsPage = "import-export";
   else _settingsPage = "menu";
 }
@@ -791,15 +800,6 @@ export function navigate(s: string, editId?: string) {
   settingsNavigate(s as SettingsPage, editId);
 }
 export function goBack() { settingsBack(); }
-
-/** Open the new-profile page pre-filled from an existing profile. _editingId
- *  stays null (Save creates a new row); _copyFromProfileId carries the clone
- *  source for ProfileEditor to read on mount. */
-export function copyProfile(sourceId: string) {
-  _copyFromProfileId = sourceId;
-  navigate("profile-edit");
-}
-export function clearCopyFromProfile() { _copyFromProfileId = null; }
 
 /* ═══════════════════════════════════════════════════════
    Data fetching helpers

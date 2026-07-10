@@ -149,6 +149,49 @@ describe("MRU toggle disables reordering", () => {
   });
 });
 
+describe("connection editor navigation", () => {
+  it("opens a new connection with a selectable SSH type by default", async () => {
+    const app = await loadAppModule();
+
+    app.openConnectionCreate();
+
+    expect(app.settingsPage()).toBe("connection-edit");
+    expect(app.connectionEditorIntent()).toEqual({ mode: "create", kind: "ssh", sourceId: null });
+    expect(app.connectionTypeLocked()).toBe(false);
+  });
+
+  it("locks the source type while editing an existing connection", async () => {
+    const app = await loadAppModule();
+
+    app.openConnectionEdit("serial", "serial-1");
+
+    expect(app.settingsPage()).toBe("connection-edit");
+    expect(app.connectionEditorIntent()).toEqual({ mode: "edit", kind: "serial", sourceId: "serial-1" });
+    expect(app.connectionTypeLocked()).toBe(true);
+    expect(app.connectionUpdateId()).toBe("serial-1");
+  });
+
+  it("locks the source type while copying without turning the source into an edit target", async () => {
+    const app = await loadAppModule();
+
+    app.openConnectionCopy("telnet", "telnet-1");
+
+    expect(app.settingsPage()).toBe("connection-edit");
+    expect(app.connectionEditorIntent()).toEqual({ mode: "copy", kind: "telnet", sourceId: "telnet-1" });
+    expect(app.connectionTypeLocked()).toBe(true);
+    expect(app.connectionUpdateId()).toBeNull();
+  });
+
+  it("returns from the connection editor to the unified list", async () => {
+    const app = await loadAppModule();
+    app.openConnectionCreate("forward");
+
+    app.settingsBack();
+
+    expect(app.settingsPage()).toBe("connections");
+  });
+});
+
 describe("connectTelnetProfile", () => {
   it("carries the explicit echo mode into the terminal tab", async () => {
     const app = await loadAppModule();

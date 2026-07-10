@@ -6,8 +6,9 @@
   import { toast } from "../stores/toast.svelte.ts";
   import { t, errMsg } from "../i18n/index.svelte.ts";
   import Select from "./Select.svelte";
+  import { connectionCopyName } from "./connection-editor.ts";
 
-  let { id = null }: { id: string | null } = $props();
+  let { id = null, copyFromId = null }: { id?: string | null; copyFromId?: string | null } = $props();
 
   let name = $state(""); let forwardType = $state("local");
   let localPort = $state(8080); let remoteHost = $state("127.0.0.1");
@@ -15,6 +16,8 @@
   let profiles = $state<Profile[]>([]);
   let groups = $state<Group[]>([]);
   let groupId = $state<string | null>(null);
+  let loading = $state(true);
+  let loadError = $state<string | null>(null);
   let saving = $state(false);
 
   let profileOptions = $derived(profiles.map((p) => ({ value: p.id, label: p.name })));
@@ -29,19 +32,25 @@
   ]);
 
   onMount(async () => {
-    [profiles, groups] = await Promise.all([app.loadProfiles(), app.loadGroups()]);
-    if (id) {
-      const f = await invoke<any>("get_forward", { id }).catch(() => null);
-      if (f) {
-        name = f.name; forwardType = f.type;
+    try {
+      [profiles, groups] = await Promise.all([app.loadProfiles(), app.loadGroups()]);
+      const sourceId = id ?? copyFromId;
+      if (sourceId) {
+        const f = await invoke<any>("get_forward", { id: sourceId });
+        name = copyFromId ? connectionCopyName(f.name) : f.name; forwardType = f.type;
         localPort = f.local_port; remoteHost = f.remote_host;
         remotePort = f.remote_port; profileId = f.profile_id;
         groupId = f.group_id ?? null;
       }
+    } catch (error) {
+      loadError = errMsg(error);
+    } finally {
+      loading = false;
     }
   });
 
   async function save() {
+    if (loading || loadError || saving) return;
     saving = true;
     try {
       const forward = {
@@ -56,40 +65,52 @@
       };
       if (id) await invoke("update_forward", { forward });
       else await invoke("create_forward", { forward });
-      app.navigate("forwards");
+      app.navigate("connections");
     } catch (e: any) { toast.error(`${t("toast.error.save")}: ${errMsg(e)}`); }
     finally { saving = false; }
   }
 </script>
 
-<div class="page">
-  <div class="form">
-    <label>{t("common.name")}</label>
-    <input type="text" bind:value={name} placeholder={t("forward.name_placeholder")} />
-    <label>{t("forward.profile")}</label>
-    <Select bind:value={profileId} options={profileOptions} placeholder={t("forward.select")} />
-    <label>{t("forward.type")}</label>
-    <Select bind:value={forwardType} options={forwardTypeOptions} />
+<div class="form" aria-busy={loading}>
+    {#if loadError}
+      <div class="form-error" role="alert">{loadError}</div>
+    {/if}
+    <label for="forward-name">{t("common.name")}</label>
+    <input id="forward-name" type="text" bind:value={name} placeholder={t("forward.name_placeholder")} />
+    <label for="forward-profile">{t("forward.profile")}</label>
+    <Select id="forward-profile" bind:value={profileId} options={profileOptions} placeholder={t("forward.select")} />
+    <label for="forward-type">{t("forward.type")}</label>
+    <Select id="forward-type" bind:value={forwardType} options={forwardTypeOptions} />
     {#if forwardType === "dynamic"}
-      <div class="field"><label>{t("forward.local_port_socks5")}</label><input type="number" bind:value={localPort} /></div>
+      <div class="field"><label for="forward-local-port">{t("forward.local_port_socks5")}</label><input id="forward-local-port" type="number" bind:value={localPort} /></div>
     {:else}
       <div class="row3">
-        <div class="field"><label>{t("forward.local_port")}</label><input type="number" bind:value={localPort} /></div>
-        <div class="field"><label>{t("forward.remote_host")}</label><input type="text" bind:value={remoteHost} /></div>
-        <div class="field"><label>{t("forward.remote_port")}</label><input type="number" bind:value={remotePort} /></div>
+        <div class="field"><label for="forward-local-port">{t("forward.local_port")}</label><input id="forward-local-port" type="number" bind:value={localPort} /></div>
+        <div class="field"><label for="forward-remote-host">{t("forward.remote_host")}</label><input id="forward-remote-host" type="text" bind:value={remoteHost} /></div>
+        <div class="field"><label for="forward-remote-port">{t("forward.remote_port")}</label><input id="forward-remote-port" type="number" bind:value={remotePort} /></div>
       </div>
     {/if}
-    <label>{t("profile.group")} {t("common.optional")}</label>
-    <Select bind:value={groupId} options={groupOptions} />
-    <button class="btn btn-accent" onclick={save} disabled={saving || !name || !profileId}>
-      {saving ? t("common.saving") : t("common.save")}
-    </button>
+    <label for="forward-group">{t("profile.group")} {t("common.optional")}</label>
+    <Select id="forward-group" bind:value={groupId} options={groupOptions} />
+    <div class="form-actions">
+      <button type="button" class="btn btn-accent btn-sm" onclick={save} disabled={loading || !!loadError || saving || !name || !profileId}>
+        {loading ? t("common.loading") : saving ? t("common.saving") : t("common.save")}
+      </button>
+      <button type="button" class="btn btn-sm" onclick={() => app.navigate("connections")}>{t("common.cancel")}</button>
+    </div>
   </div>
-</div>
 
 <style>
-  .page { padding: 24px; }
   .form { display: flex; flex-direction: column; gap: 10px; }
   .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
   .field { display: flex; flex-direction: column; gap: 4px; }
+  .form-error {
+    padding: 6px 10px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--error) 8%, transparent);
+    color: var(--error);
+    font-size: 12px;
+  }
+  .form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+  @media (max-width: 640px) { .row3 { grid-template-columns: 1fr; } }
 </style>

@@ -7,8 +7,9 @@
   import { t, errMsg } from "../i18n/index.svelte.ts";
   import type { MessageKey } from "../i18n/locales/en.ts";
   import Select from "./Select.svelte";
+  import { connectionCopyName } from "./connection-editor.ts";
 
-  let { id = null }: { id: string | null } = $props();
+  let { id = null, copyFromId = null }: { id?: string | null; copyFromId?: string | null } = $props();
   type AlgorithmCategory = keyof SshAlgorithms;
 
   const emptyAlgorithms = (): SshAlgorithms => ({
@@ -38,6 +39,8 @@
   let groupId = $state<string | null>(null);
   let algorithmCatalog = $state<SshAlgorithmCatalog | null>(null);
   let algorithms = $state<SshAlgorithms>(emptyAlgorithms());
+  let loading = $state(true);
+  let loadError = $state<string | null>(null);
   let saving = $state(false);
 
   let bastionProfiles = $derived(profiles.filter(p => p.id !== id));
@@ -62,29 +65,31 @@
   );
 
   onMount(async () => {
-    [credentials, profiles, groups, algorithmCatalog] = await Promise.all([
-      app.loadCredentials(),
-      app.loadProfiles(),
-      app.loadGroups(),
-      invoke<SshAlgorithmCatalog>("ssh_algorithm_catalog"),
-    ]);
-    algorithms = cloneAlgorithms(algorithmCatalog.defaults);
-    // Edit loads by `id` (Save updates that row). Copy loads from the store's
-    // copy source while `id` stays null (Save creates a new row) and appends
-    // "_copy" to the name. Same fill path, one branch — the only differences
-    // are the source id and the name suffix.
-    const sourceId = id ?? app.copyFromProfileId();
-    if (sourceId) {
-      const p = await invoke<any>("get_profile", { id: sourceId });
-      name = id ? p.name : `${p.name}_copy`;
-      host = p.host; port = p.port;
-      credentialId = p.credential_id ?? ""; bastionId = p.bastion_profile_id;
-      shellCommand = p.init_command ?? "";
-      groupId = p.group_id ?? null;
-      algorithms = cloneAlgorithms(p.algorithms ?? algorithmCatalog.defaults);
+    try {
+      [credentials, profiles, groups, algorithmCatalog] = await Promise.all([
+        app.loadCredentials(),
+        app.loadProfiles(),
+        app.loadGroups(),
+        invoke<SshAlgorithmCatalog>("ssh_algorithm_catalog"),
+      ]);
+      algorithms = cloneAlgorithms(algorithmCatalog.defaults);
+      // `id` is the update target. `copyFromId` is only a hydrate source, so a
+      // copied profile always reaches create_profile with a fresh UUID.
+      const sourceId = id ?? copyFromId;
+      if (sourceId) {
+        const p = await invoke<any>("get_profile", { id: sourceId });
+        name = copyFromId ? connectionCopyName(p.name) : p.name;
+        host = p.host; port = p.port;
+        credentialId = p.credential_id ?? ""; bastionId = p.bastion_profile_id;
+        shellCommand = p.init_command ?? "";
+        groupId = p.group_id ?? null;
+        algorithms = cloneAlgorithms(p.algorithms ?? algorithmCatalog.defaults);
+      }
+    } catch (error) {
+      loadError = errMsg(error);
+    } finally {
+      loading = false;
     }
-    // Consume once: a later "+ New" must start blank.
-    app.clearCopyFromProfile();
   });
 
   function cloneAlgorithms(value: SshAlgorithms): SshAlgorithms {
@@ -115,6 +120,7 @@
   }
 
   async function save() {
+    if (loading || loadError || saving) return;
     saving = true;
     try {
       const profile = {
@@ -128,14 +134,16 @@
       };
       if (id) await invoke("update_profile", { profile });
       else await invoke("create_profile", { profile });
-      app.navigate("profiles");
+      app.navigate("connections");
     } catch (e: any) { toast.error(`${t("toast.error.save")}: ${errMsg(e)}`); }
     finally { saving = false; }
   }
 </script>
 
-<div class="page">
-  <div class="form">
+<div class="form" aria-busy={loading}>
+    {#if loadError}
+      <div class="form-error load-error" role="alert">{loadError}</div>
+    {/if}
     <label for="profile-name">{t("profile.name")}</label>
     <input id="profile-name" type="text" bind:value={name} placeholder={t("profile.placeholder.name")} />
     <label for="profile-host">{t("profile.host")}</label>
@@ -180,16 +188,17 @@
         {/if}
       {/if}
     </details>
-    <button class="btn btn-accent" onclick={save} disabled={saving || !name || !host || !credentialId || !algorithmSelectionComplete}>
-      {saving ? t("common.saving") : t("common.save")}
+  <div class="form-actions">
+    <button type="button" class="btn btn-accent btn-sm" onclick={save} disabled={loading || !!loadError || saving || !name || !host || !credentialId || !algorithmSelectionComplete}>
+      {loading ? t("common.loading") : saving ? t("common.saving") : t("common.save")}
     </button>
+    <button type="button" class="btn btn-sm" onclick={() => app.navigate("connections")}>{t("common.cancel")}</button>
   </div>
 </div>
 
 <style>
-  .page { padding: 24px; }
   .form { display: flex; flex-direction: column; gap: 10px; }
-  .form .btn-accent { margin-top: 8px; }
+  .form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
   .algorithm-panel {
     border: 1px solid var(--divider);
     border-radius: 8px;
@@ -240,5 +249,10 @@
     color: var(--error);
     font-size: 12px;
     margin: 0;
+  }
+  .load-error {
+    padding: 6px 10px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--error) 8%, transparent);
   }
 </style>

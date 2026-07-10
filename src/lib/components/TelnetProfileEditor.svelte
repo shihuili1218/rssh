@@ -6,8 +6,9 @@
   import { toast } from "../stores/toast.svelte.ts";
   import { t, errMsg } from "../i18n/index.svelte.ts";
   import Select from "./Select.svelte";
+  import { connectionCopyName } from "./connection-editor.ts";
 
-  let { id = null }: { id: string | null } = $props();
+  let { id = null, copyFromId = null }: { id?: string | null; copyFromId?: string | null } = $props();
 
   // Endpoint
   let name = $state("");
@@ -62,13 +63,15 @@
       // list fails; the bound group id still round-trips unchanged below.
       console.warn("[telnet] failed to load profile groups:", error);
     }
-    if (!id) {
+    const sourceId = id ?? copyFromId;
+    if (!sourceId) {
       loading = false;
       return;
     }
     try {
-      const s = await invoke<TelnetProfile>("get_telnet_profile", { id });
-      name = s.name; host = s.host; port = s.port;
+      const s = await invoke<TelnetProfile>("get_telnet_profile", { id: sourceId });
+      name = copyFromId ? connectionCopyName(s.name) : s.name;
+      host = s.host; port = s.port;
       inputNewline = s.input_newline; outputNewline = s.output_newline;
       echoMode = s.echo_mode ?? (s.local_echo ? "on" : "off");
       backspace = s.backspace;
@@ -109,51 +112,51 @@
       } else {
         await invoke("create_telnet_profile", { profile });
       }
-      app.navigate("telnet-profiles");
+      app.navigate("connections");
     } catch (e: any) { toast.error(`${t("toast.error.save")}: ${errMsg(e)}`); }
     finally { saving = false; }
   }
 </script>
 
-<div class="page">
-  <div class="form">
+<div class="form" aria-busy={loading}>
     {#if loadError}
       <div class="form-error" role="alert">{loadError}</div>
     {/if}
-    <label>{t("common.name")}</label>
-    <input type="text" bind:value={name} placeholder={t("telnet.name_placeholder")} />
-    <label>{t("profile.group")} {t("common.optional")}</label>
-    <Select bind:value={groupId} options={groupOptions} />
+    <label for="telnet-name">{t("common.name")}</label>
+    <input id="telnet-name" type="text" bind:value={name} placeholder={t("telnet.name_placeholder")} />
+    <label for="telnet-group">{t("profile.group")} {t("common.optional")}</label>
+    <Select id="telnet-group" bind:value={groupId} options={groupOptions} />
 
     <div class="section-label">{t("telnet.sec.endpoint")}</div>
     <div class="row-hostport">
-      <div class="field"><label>{t("telnet.host")}</label><input type="text" bind:value={host} placeholder="192.168.1.1" /></div>
-      <div class="field"><label>{t("telnet.port")}</label><input type="number" bind:value={port} min="1" max="65535" /></div>
+      <div class="field"><label for="telnet-host">{t("telnet.host")}</label><input id="telnet-host" type="text" bind:value={host} placeholder="192.168.1.1" /></div>
+      <div class="field"><label for="telnet-port">{t("telnet.port")}</label><input id="telnet-port" type="number" bind:value={port} min="1" max="65535" /></div>
     </div>
 
     <div class="section-label">{t("serial.sec.term")}</div>
     <div class="row2">
-      <div class="field"><label>{t("serial.nl.in")}</label><Select bind:value={inputNewline} options={newlineInOptions} /></div>
-      <div class="field"><label>{t("serial.nl.out")}</label><Select bind:value={outputNewline} options={newlineOutOptions} /></div>
+      <div class="field"><label for="telnet-newline-in">{t("serial.nl.in")}</label><Select id="telnet-newline-in" bind:value={inputNewline} options={newlineInOptions} /></div>
+      <div class="field"><label for="telnet-newline-out">{t("serial.nl.out")}</label><Select id="telnet-newline-out" bind:value={outputNewline} options={newlineOutOptions} /></div>
     </div>
-    <label>{t("serial.backspace")}</label>
-    <Select bind:value={backspace} options={backspaceOptions} />
-    <label>{t("telnet.echo_mode")}</label>
-    <Select bind:value={echoMode} options={echoModeOptions} />
+    <label for="telnet-backspace">{t("serial.backspace")}</label>
+    <Select id="telnet-backspace" bind:value={backspace} options={backspaceOptions} />
+    <label for="telnet-echo-mode">{t("telnet.echo_mode")}</label>
+    <Select id="telnet-echo-mode" bind:value={echoMode} options={echoModeOptions} />
 
     <div class="section-label">{t("serial.sec.script")}</div>
-    <label>{t("serial.login_script")}</label>
-    <textarea bind:value={loginScript} rows="4" placeholder={t("serial.login_script.ph")}></textarea>
+    <label for="telnet-login-script">{t("serial.login_script")}</label>
+    <textarea id="telnet-login-script" bind:value={loginScript} rows="4" placeholder={t("serial.login_script.ph")}></textarea>
     <label class="check"><input type="checkbox" bind:checked={saveScriptToRemote} /> {t("telnet.save_script_to_remote")}</label>
 
-    <button class="btn btn-accent" onclick={save} disabled={loading || !!loadError || saving || !name || !host}>
-      {loading ? t("common.loading") : saving ? t("common.saving") : t("common.save")}
-    </button>
-  </div>
+    <div class="form-actions">
+      <button type="button" class="btn btn-accent btn-sm" onclick={save} disabled={loading || !!loadError || saving || !name || !host}>
+        {loading ? t("common.loading") : saving ? t("common.saving") : t("common.save")}
+      </button>
+      <button type="button" class="btn btn-sm" onclick={() => app.navigate("connections")}>{t("common.cancel")}</button>
+    </div>
 </div>
 
 <style>
-  .page { padding: 24px; }
   .form { display: flex; flex-direction: column; gap: 10px; }
   .row-hostport { display: grid; grid-template-columns: 2fr 1fr; gap: 8px; }
   .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -162,4 +165,8 @@
   .check { display: flex; align-items: center; gap: 8px; }
   .form-error { color: var(--error); font-size: 12px; }
   .form :global(.section-label) { margin-top: 10px; }
+  .form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+  @media (max-width: 640px) {
+    .row-hostport, .row2 { grid-template-columns: 1fr; }
+  }
 </style>

@@ -4,16 +4,8 @@
   import * as updates from "../stores/updates.svelte.ts";
   import { t, locale, setLocale, AVAILABLE_LOCALES, type Locale } from "../i18n/index.svelte.ts";
   import type { MessageKey } from "../i18n/locales/en";
-  import ProfileManager from "./ProfileManager.svelte";
-  import ProfileEditor from "./ProfileEditor.svelte";
   import CredentialManager from "./CredentialManager.svelte";
   import CredentialEditor from "./CredentialEditor.svelte";
-  import ForwardManager from "./ForwardManager.svelte";
-  import ForwardEditor from "./ForwardEditor.svelte";
-  import SerialProfileManager from "./SerialProfileManager.svelte";
-  import SerialProfileEditor from "./SerialProfileEditor.svelte";
-  import TelnetProfileManager from "./TelnetProfileManager.svelte";
-  import TelnetProfileEditor from "./TelnetProfileEditor.svelte";
   import DynamicDiscoverySettings from "./DynamicDiscoverySettings.svelte";
   import GroupManager from "./GroupManager.svelte";
   import SnippetManager from "./SnippetManager.svelte";
@@ -31,6 +23,8 @@
   import AppearanceSettings from "./AppearanceSettings.svelte";
   import AiSettings from "./AiSettings.svelte";
   import Select from "./Select.svelte";
+  import ConnectionList from "./ConnectionList.svelte";
+  import ConnectionEditor from "./ConnectionEditor.svelte";
 
   /** locale 下拉选项 —— AVAILABLE_LOCALES 是常量，不需要 $derived。 */
   const localeOptions = AVAILABLE_LOCALES.map((l) => ({ value: l.code, label: l.label }));
@@ -39,16 +33,10 @@
 
   type PageRoute = { component: Component<any>; needsId?: boolean };
   const routes: Partial<Record<app.SettingsPage, PageRoute>> = {
-    "profiles":           { component: ProfileManager },
-    "profile-edit":       { component: ProfileEditor, needsId: true },
+    "connections":        { component: ConnectionList },
+    "connection-edit":    { component: ConnectionEditor },
     "credentials":        { component: CredentialManager },
     "credential-edit":    { component: CredentialEditor, needsId: true },
-    "forwards":           { component: ForwardManager },
-    "forward-edit":       { component: ForwardEditor, needsId: true },
-    "serial-profiles":    { component: SerialProfileManager },
-    "serial-profile-edit":{ component: SerialProfileEditor, needsId: true },
-    "telnet-profiles":    { component: TelnetProfileManager },
-    "telnet-profile-edit":{ component: TelnetProfileEditor, needsId: true },
     "dynamic-discovery":  { component: DynamicDiscoverySettings },
     "groups":             { component: GroupManager },
     "snippets":           { component: SnippetManager },
@@ -79,12 +67,9 @@
 
   // 注：菜单数据用 t() 直接调用，配合 $derived 触发响应式更新
   let allMenu = $derived<MenuItem[]>([
-    { id: "profiles", label: t("settings.section.profiles"), section: "settings.group.connections" },
-    { id: "credentials", label: t("settings.section.credentials"), section: "settings.group.connections" },
-    { id: "forwards", label: t("settings.section.forwards"), section: "settings.group.connections" },
-    { id: "serial-profiles", label: t("settings.section.serial"), section: "settings.group.connections" },
-    { id: "telnet-profiles", label: t("settings.section.telnet"), section: "settings.group.connections" },
+    { id: "connections", label: t("settings.section.connection_list"), section: "settings.group.connections" },
     { id: "dynamic-discovery", label: t("settings.section.dynamic_discovery"), section: "settings.group.connections" },
+    { id: "credentials", label: t("settings.section.credentials"), section: "settings.group.connections" },
     { id: "groups", label: t("settings.section.groups"), section: "settings.group.connections" },
     { id: "import-export", label: t("settings.section.import_export"), section: "settings.group.connections" },
     { id: "shell-settings", label: t("settings.section.shell"), section: "settings.group.sessions" },
@@ -102,11 +87,10 @@
   ]);
 
   const hiddenOnCompact = new Set<string>(["cli", "shortcuts"]);
-  // Serial is desktop-only; hide its settings entry on mobile (the runtime
-  // commands aren't registered there). hiddenOnCompact still applies on narrow widths.
+  // ConnectionEditor removes the desktop-only Serial type on mobile;
+  // the unified connection-list entry itself remains available.
   let menu = $derived(
     allMenu
-      .filter(m => !(app.isMobile && m.id === "serial-profiles"))
       .filter(m => !(compact && hiddenOnCompact.has(m.id)))
   );
 
@@ -125,11 +109,8 @@
   function isActive(id: string): boolean {
     const p = app.settingsPage();
     if (p === id) return true;
-    if (id === "profiles" && p === "profile-edit") return true;
+    if (id === "connections" && p === "connection-edit") return true;
     if (id === "credentials" && p === "credential-edit") return true;
-    if (id === "forwards" && p === "forward-edit") return true;
-    if (id === "serial-profiles" && p === "serial-profile-edit") return true;
-    if (id === "telnet-profiles" && p === "telnet-profile-edit") return true;
     if (id === "groups" && p === "group-edit") return true;
     if (id === "import-export" && p === "import-ssh-config") return true;
     return false;
@@ -146,6 +127,7 @@
         <button
           class="menu-item surface-raised-sm"
           class:active={isActive(item.id)}
+          aria-current={isActive(item.id) ? "page" : undefined}
           onclick={() => app.settingsNavigate(item.id)}
         >
           {item.label}
