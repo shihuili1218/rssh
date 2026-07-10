@@ -37,28 +37,64 @@ pub fn list_metadata(db: &Db) -> AppResult<Vec<TelnetProfile>> {
 
 /// Load one profile and resolve its active immutable login-script version.
 pub fn get_full(db: &Db, store: &dyn SecretStore, id: &str) -> AppResult<TelnetProfile> {
-    let mut profile = crate::db::telnet_profile::get(db, id)?;
-    hydrate(db, store, &mut profile)?;
-    Ok(profile)
+    reconcile_legacy_plaintext(db, store, id)?;
+    load_full_snapshot(db, store, id)
 }
 
 /// Resolve a metadata-only profile's active login script in place.
 pub fn hydrate(db: &Db, store: &dyn SecretStore, profile: &mut TelnetProfile) -> AppResult<()> {
-    crate::migration::v2_telnet_login_script::reconcile_profile(db, store, &profile.id)?;
-    crate::migration::v2_telnet_login_script::retry_pending_purge(db);
-    let state = crate::db::telnet_profile::login_script_state(db, &profile.id)?;
-    profile.login_script = match state.version {
-        Some(version) => store
-            .get(&telnet_login_script_key(&profile.id, &version))?
-            .ok_or_else(|| {
-                AppError::other(
-                    "telnet_login_script_missing",
-                    serde_json::json!({ "id": profile.id, "version": version }),
-                )
-            })?,
-        None => String::new(),
-    };
+    let id = profile.id.clone();
+    reconcile_legacy_plaintext(db, store, &id)?;
+    *profile = load_full_snapshot(db, store, &id)?;
     Ok(())
+}
+
+/// Consume any old-client plaintext write without decrypting the resulting
+/// secret. Remote sync uses this before emitting a scrubbed local-only field.
+pub(crate) fn reconcile_legacy_plaintext(
+    db: &Db,
+    store: &dyn SecretStore,
+    id: &str,
+) -> AppResult<()> {
+    crate::migration::v2_telnet_login_script::reconcile_profile(db, store, id)?;
+    crate::migration::v2_telnet_login_script::retry_pending_purge(db);
+    Ok(())
+}
+
+fn load_full_snapshot(db: &Db, store: &dyn SecretStore, id: &str) -> AppResult<TelnetProfile> {
+    loop {
+        let snapshot = crate::db::telnet_profile::snapshot(db, id)?;
+        if !snapshot.login_script.legacy_script.is_empty() {
+            reconcile_legacy_plaintext(db, store, id)?;
+            continue;
+        }
+        let Some(version) = snapshot.login_script.version.as_deref() else {
+            return Ok(snapshot.metadata);
+        };
+        let key = telnet_login_script_key(id, version);
+        if let Some(script) = store.get(&key)? {
+            // The metadata and pointer came from one SQLite snapshot, and the
+            // pointed-to immutable value still existed. That complete older
+            // generation is a valid linearized read even if a newer pointer
+            // was published concurrently; no second snapshot comparison is
+            // needed on this successful path.
+            let mut profile = snapshot.metadata;
+            profile.login_script = script;
+            return Ok(profile);
+        }
+
+        // A writer publishes the new immutable version before swinging the DB
+        // pointer, then may immediately delete the old version. Missing data is
+        // therefore retried only when a fresh *complete* snapshot shows that
+        // the pointer moved; a stable missing pointer is real corruption.
+        let current = crate::db::telnet_profile::snapshot(db, id)?;
+        if current.login_script == snapshot.login_script {
+            return Err(AppError::other(
+                "telnet_login_script_missing",
+                serde_json::json!({ "id": id, "version": version }),
+            ));
+        }
+    }
 }
 
 fn optional_profile(db: &Db, id: &str) -> AppResult<Option<TelnetProfile>> {
@@ -113,6 +149,7 @@ fn replace_script(
             return Err(e);
         }
     };
+    crate::migration::v2_telnet_login_script::retry_pending_purge(db);
     if old_version.as_deref() != new_version.as_deref() {
         delete_version_best_effort(store, &profile.id, old_version.as_deref());
     }
@@ -189,6 +226,7 @@ pub fn update(
 
 pub fn delete(db: &Db, store: &dyn SecretStore, id: &str) -> AppResult<()> {
     let old_version = crate::db::telnet_profile::delete_with_script_version(db, id)?;
+    crate::migration::v2_telnet_login_script::retry_pending_purge(db);
     delete_version_best_effort(store, id, old_version.as_deref());
     Ok(())
 }
@@ -197,7 +235,7 @@ pub fn delete(db: &Db, store: &dyn SecretStore, id: &str) -> AppResult<()> {
 mod tests {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use super::*;
     use crate::models::TelnetEchoMode;
@@ -256,6 +294,13 @@ mod tests {
         state
             .version
             .and_then(|version| store.get(&telnet_login_script_key(id, &version)).unwrap())
+    }
+
+    fn assert_plaintext_purge_finished(db: &Db) {
+        assert_eq!(
+            crate::db::settings::get(db, crate::db::telnet_profile::PURGED_EPOCH_SETTING).unwrap(),
+            crate::db::settings::get(db, crate::db::telnet_profile::PURGE_EPOCH_SETTING).unwrap(),
+        );
     }
 
     #[test]
@@ -338,5 +383,136 @@ mod tests {
             crate::db::settings::get(&db, crate::db::telnet_profile::PURGE_EPOCH_SETTING,).unwrap(),
             "runtime reconciliation should attempt the WAL purge immediately",
         );
+    }
+
+    #[test]
+    fn set_attempts_plaintext_purge_immediately() {
+        let db = Db::open_in_memory().unwrap();
+        let store = TestStore::default();
+        db.with_transaction(|tx| {
+            tx.execute(
+                "INSERT INTO telnet_profiles (id, name, host, login_script) VALUES ('t1', 'Old', 'h', 'legacy secret')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let changed = profile("t1", "Changed", "new secret");
+
+        upsert(
+            &db,
+            &store,
+            &changed,
+            LoginScriptIntent::Set("new secret".into()),
+        )
+        .unwrap();
+
+        assert_plaintext_purge_finished(&db);
+    }
+
+    #[test]
+    fn delete_intent_attempts_plaintext_purge_immediately() {
+        let db = Db::open_in_memory().unwrap();
+        let store = TestStore::default();
+        db.with_transaction(|tx| {
+            tx.execute(
+                "INSERT INTO telnet_profiles (id, name, host, login_script) VALUES ('t1', 'Old', 'h', 'legacy secret')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let changed = profile("t1", "Changed", "");
+
+        upsert(&db, &store, &changed, LoginScriptIntent::Delete).unwrap();
+
+        assert_plaintext_purge_finished(&db);
+    }
+
+    #[test]
+    fn profile_delete_attempts_plaintext_purge_immediately() {
+        let db = Db::open_in_memory().unwrap();
+        let store = TestStore::default();
+        db.with_transaction(|tx| {
+            tx.execute(
+                "INSERT INTO telnet_profiles (id, name, host, login_script) VALUES ('t1', 'Old', 'h', 'legacy secret')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        delete(&db, &store, "t1").unwrap();
+
+        assert_plaintext_purge_finished(&db);
+    }
+
+    struct SwingOnReadStore {
+        db: Arc<Db>,
+        values: Mutex<HashMap<String, String>>,
+        swung: AtomicBool,
+    }
+
+    impl SecretStore for SwingOnReadStore {
+        fn get(&self, key: &str) -> AppResult<Option<String>> {
+            if key == telnet_login_script_key("t1", "old-version")
+                && !self.swung.swap(true, Ordering::SeqCst)
+            {
+                let new_key = telnet_login_script_key("t1", "new-version");
+                self.values
+                    .lock()
+                    .unwrap()
+                    .insert(new_key, "new script".into());
+                let changed = profile("t1", "New metadata", "");
+                crate::db::telnet_profile::update_with_script_version(
+                    &self.db,
+                    &changed,
+                    crate::db::telnet_profile::LoginScriptVersionUpdate::Set("new-version".into()),
+                )?;
+                self.values.lock().unwrap().remove(key);
+            }
+            Ok(self.values.lock().unwrap().get(key).cloned())
+        }
+
+        fn set(&self, key: &str, value: &str) -> AppResult<()> {
+            self.values
+                .lock()
+                .unwrap()
+                .insert(key.to_string(), value.to_string());
+            Ok(())
+        }
+
+        fn delete(&self, key: &str) -> AppResult<()> {
+            self.values.lock().unwrap().remove(key);
+            Ok(())
+        }
+
+        fn backend_name(&self) -> &'static str {
+            "swing-on-read"
+        }
+    }
+
+    #[test]
+    fn full_read_retries_after_pointer_swing_deletes_old_secret() {
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        crate::db::telnet_profile::insert_with_script_version(
+            &db,
+            &profile("t1", "Old metadata", ""),
+            crate::db::telnet_profile::LoginScriptVersionUpdate::Set("old-version".into()),
+        )
+        .unwrap();
+        let store = SwingOnReadStore {
+            db: db.clone(),
+            values: Mutex::new(HashMap::from([(
+                telnet_login_script_key("t1", "old-version"),
+                "old script".into(),
+            )])),
+            swung: AtomicBool::new(false),
+        };
+
+        let loaded = get_full(&db, &store, "t1").unwrap();
+
+        assert_eq!(loaded.name, "New metadata");
+        assert_eq!(loaded.login_script, "new script");
     }
 }

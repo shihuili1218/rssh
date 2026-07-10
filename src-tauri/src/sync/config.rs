@@ -586,6 +586,7 @@ pub fn build_payload(
     retain_by_groups(&mut telnets, prefs, |t| t.group_id.as_deref());
     for telnet in &mut telnets {
         if prefs.is_some() && !telnet.save_script_to_remote {
+            telnet_profiles::reconcile_legacy_plaintext(db, ss, &telnet.id)?;
             telnet.login_script.clear();
         } else {
             telnet_profiles::hydrate(db, ss, telnet)?;
@@ -1007,6 +1008,37 @@ mod tests {
 
         assert_eq!(by_id("local")["login_script"], "");
         assert_eq!(by_id("shared")["login_script"], "shared secret");
+    }
+
+    #[test]
+    fn remote_push_reconciles_legacy_plaintext_before_scrubbing_payload() {
+        let (db, ss, dir) = fixture();
+        db.with_transaction(|tx| {
+            tx.execute(
+                "INSERT INTO telnet_profiles (id, name, host, login_script) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params!["legacy", "Legacy", "10.0.0.2", "send old-secret"],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let prefs = read_sync_prefs(&db).unwrap();
+        let out = build_payload(&db, &ss, dir.path(), &ExportMode::RemotePush(prefs)).unwrap();
+
+        assert_eq!(out["telnet_profiles"][0]["login_script"], "");
+        let state = telnet_profile::login_script_state(&db, "legacy").unwrap();
+        assert!(state.legacy_script.is_empty());
+        let version = state.version.unwrap();
+        assert_eq!(
+            ss.get(&crate::secret::telnet_login_script_key("legacy", &version))
+                .unwrap()
+                .as_deref(),
+            Some("send old-secret")
+        );
+        assert_eq!(
+            crate::db::settings::get(&db, telnet_profile::PURGED_EPOCH_SETTING).unwrap(),
+            crate::db::settings::get(&db, telnet_profile::PURGE_EPOCH_SETTING).unwrap(),
+        );
     }
 
     #[test]

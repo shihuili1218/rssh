@@ -23,6 +23,15 @@ pub(crate) struct LoginScriptState {
     pub version: Option<String>,
 }
 
+/// Metadata and its immutable-secret pointer as observed by one SQLite query.
+/// Keeping them together prevents callers from accidentally combining profile
+/// generation A with the login-script pointer from generation B.
+#[derive(Debug, Clone)]
+pub(crate) struct ProfileSnapshot {
+    pub metadata: TelnetProfile,
+    pub login_script: LoginScriptState,
+}
+
 fn invalid_field(field: &'static str) -> AppError {
     AppError::config(
         "telnet_profile_invalid",
@@ -105,6 +114,29 @@ pub fn get(db: &Db, id: &str) -> AppResult<TelnetProfile> {
     .map_err(|e| match e {
         rusqlite::Error::QueryReturnedNoRows => {
             crate::error::AppError::not_found("telnet_profile_not_found", serde_json::json!({}))
+        }
+        other => other.into(),
+    })
+}
+
+pub(crate) fn snapshot(db: &Db, id: &str) -> AppResult<ProfileSnapshot> {
+    let conn = db.lock()?;
+    conn.query_row(
+        &format!("SELECT {COLS}, login_script_version FROM telnet_profiles WHERE id = ?1"),
+        params![id],
+        |row| {
+            Ok(ProfileSnapshot {
+                metadata: from_row(row)?,
+                login_script: LoginScriptState {
+                    legacy_script: row.get(9)?,
+                    version: row.get(12)?,
+                },
+            })
+        },
+    )
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::not_found("telnet_profile_not_found", serde_json::json!({}))
         }
         other => other.into(),
     })
@@ -315,7 +347,7 @@ pub(crate) fn insert_with_script_version(
     if !matches!(&script, LoginScriptVersionUpdate::Preserve) {
         conn.pragma_update(None, "secure_delete", "ON")?;
     }
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let old_state = current_script_state(&tx, &t.id)?;
     insert_tx_with_script_version(&tx, t, &script)?;
     if !matches!(&script, LoginScriptVersionUpdate::Preserve)
@@ -339,7 +371,7 @@ pub(crate) fn update_with_script_version(
     if !matches!(&script, LoginScriptVersionUpdate::Preserve) {
         conn.pragma_update(None, "secure_delete", "ON")?;
     }
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let old_state = current_script_state(&tx, &t.id)?
         .ok_or_else(|| AppError::not_found("telnet_profile_not_found", serde_json::json!({})))?;
     update_tx_with_script_version(&tx, t, &script)?;
@@ -366,7 +398,7 @@ pub fn delete(db: &Db, id: &str) -> AppResult<()> {
 pub(crate) fn delete_with_script_version(db: &Db, id: &str) -> AppResult<Option<String>> {
     let mut conn = db.lock()?;
     conn.pragma_update(None, "secure_delete", "ON")?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let old_state = current_script_state(&tx, id)?
         .ok_or_else(|| AppError::not_found("telnet_profile_not_found", serde_json::json!({})))?;
     let changed = tx.execute("DELETE FROM telnet_profiles WHERE id = ?1", params![id])?;
@@ -432,7 +464,7 @@ pub(crate) fn commit_legacy_login_script(
 ) -> AppResult<bool> {
     let mut conn = db.lock()?;
     conn.pragma_update(None, "secure_delete", "ON")?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let changed = tx.execute(
         "UPDATE telnet_profiles SET login_script = '', login_script_version = ?1, \
          echo_write_version = echo_write_version + 1 \

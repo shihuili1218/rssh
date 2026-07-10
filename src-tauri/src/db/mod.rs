@@ -27,20 +27,54 @@ pub struct Db {
     conn: Mutex<Connection>,
 }
 
+const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn configure_connection(conn: &Connection) -> AppResult<()> {
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+
+    // SQLite does not invoke the busy handler for every journal-mode locking
+    // conflict (notably SQLITE_LOCKED during two first-time openers), so the
+    // timeout must also cover a small explicit retry loop around WAL setup.
+    let deadline = std::time::Instant::now() + BUSY_TIMEOUT;
+    loop {
+        match conn.execute_batch("PRAGMA journal_mode=WAL;") {
+            Ok(()) => break,
+            Err(e)
+                if matches!(
+                    e.sqlite_error_code(),
+                    Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+                ) && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+    Ok(())
+}
+
 impl Db {
     pub fn open(data_dir: &Path) -> AppResult<Self> {
         std::fs::create_dir_all(data_dir)?;
         let path = data_dir.join("rssh.db");
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
         // WAL: readers never block the writer. busy_timeout: three processes write
         // this same ~/.rssh/rssh.db (GUI, headless server, `rssh` CLI). Without it,
         // a write that meets a peer's lock fails *instantly* with SQLITE_BUSY
         // instead of waiting — e.g. GUI autosaving AI history while the CLI runs
         // `config pull`. 5s covers any real contention window.
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
-        )?;
-        schema::migrate(&conn)?;
+        // Install the busy handler before journal_mode itself takes locks. On
+        // the first concurrent open, setting WAL can otherwise fail instantly
+        // before the later timeout pragma ever runs.
+        configure_connection(&conn)?;
+        // Schema inspection and mutation are one serialized operation across
+        // GUI, server and CLI processes. Taking the write reservation before
+        // migrate() reads user_version prevents two starters from planning the
+        // same ALTER sequence, and makes a failed sequence roll back as a unit.
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        schema::migrate(&tx)?;
+        tx.commit()?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -142,8 +176,71 @@ pub fn data_dir() -> AppResult<PathBuf> {
 
 #[cfg(test)]
 mod with_exclusive_lock_tests {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
     use super::*;
     use crate::error::AppError;
+
+    #[test]
+    fn open_waits_for_a_concurrent_first_writer_before_enabling_wal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rssh.db");
+        let blocker = Connection::open(path).unwrap();
+        blocker
+            .execute_batch(
+                "CREATE TABLE open_lock (value INTEGER);\n\
+                 BEGIN IMMEDIATE;\n\
+                 INSERT INTO open_lock VALUES (1);",
+            )
+            .unwrap();
+
+        let data_dir = dir.path().to_owned();
+        let (started_tx, started_rx) = mpsc::channel();
+        let opener = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            Db::open(&data_dir)
+        });
+        started_rx.recv().unwrap();
+        // Give Db::open enough time to reach the WAL pragma while the other
+        // connection still owns the write reservation.
+        std::thread::sleep(Duration::from_millis(100));
+        blocker.execute_batch("COMMIT").unwrap();
+
+        opener.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn failed_schema_migration_rolls_back_every_schema_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rssh.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE telnet_profiles (id TEXT PRIMARY KEY);\n\
+             PRAGMA user_version = 23;",
+        )
+        .unwrap();
+        drop(conn);
+
+        // Migration 24 adds columns before it creates a trigger that requires
+        // local_echo. This deliberately malformed pre-v24 table makes the
+        // trigger creation fail after those ALTER TABLE statements.
+        assert!(Db::open(dir.path()).is_err());
+
+        let conn = Connection::open(path).unwrap();
+        let version: u32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        let columns: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('telnet_profiles')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(version, 23);
+        assert_eq!(columns, vec!["id"]);
+    }
 
     #[test]
     fn ok_branch_returns_value() {
