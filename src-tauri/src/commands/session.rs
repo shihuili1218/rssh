@@ -5,7 +5,7 @@ use crate::error::{locked, AppError, AppResult};
 use crate::models::{Credential, Profile};
 use crate::secret::cred_secret_key;
 use crate::ssh::client;
-use crate::state::AppState;
+use crate::state::{AppState, SessionKind, SessionOwner};
 
 /// 把 SecretStore 里的 secret 灌到 Credential 上。
 fn load_secrets(state: &State<'_, AppState>, c: &mut Credential) -> AppResult<()> {
@@ -15,6 +15,7 @@ fn load_secrets(state: &State<'_, AppState>, c: &mut Credential) -> AppResult<()
 
 /// 经 profile_id 建立 SSH 连接（自动带堡垒机链）。
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Flat fields preserve the existing invoke wire contract.
 pub async fn ssh_connect(
     app: AppHandle,
     window: tauri::Window,
@@ -24,7 +25,17 @@ pub async fn ssh_connect(
     log_session_id: Option<String>,
     cols: u32,
     rows: u32,
+    session_id: Option<String>,
 ) -> AppResult<String> {
+    let requested_session_id = session_id.clone();
+    let session_id = crate::commands::lifecycle::resolve_session_id(session_id)?;
+    let owner = SessionOwner::Window(window.label().to_owned());
+    let reservation = crate::commands::lifecycle::reserve_resource(
+        &state,
+        &session_id,
+        SessionKind::Ssh,
+        owner.clone(),
+    )?;
     let profile = crate::db::profile::get(&state.db, &profile_id)?;
     let mut credential =
         crate::db::credential::get(&state.db, &profile.credential_id).map_err(|e| match e {
@@ -59,23 +70,33 @@ pub async fn ssh_connect(
     let recording_path = crate::commands::settings::recording_path_for(&state, &profile.name)?;
 
     // Only pass log_session_id if verbose logging is enabled
-    let effective_log_id = if verbose_log { log_session_id } else { None };
+    let prompt_session_id = requested_session_id
+        .map(|_| session_id.clone())
+        .or_else(|| log_session_id.clone());
+    let effective_log_id = if verbose_log {
+        prompt_session_id.clone()
+    } else {
+        None
+    };
 
     let known_hosts_path = crate::ssh::known_hosts::path_for(&state.data_dir);
     let init_command = profile.init_command.clone();
     let result = client::run_blocking_ssh(move || async move {
-        client::connect(
+        client::connect(client::ConnectParams {
+            session_id,
             profile,
             credential,
-            chain,
+            bastion_chain: chain,
             cols,
             rows,
-            crate::emitter::Host::Tauri(app),
+            app: crate::emitter::Host::Tauri(app),
+            owner,
             recording_path,
-            effective_log_id,
+            log_session_id: effective_log_id,
+            prompt_session_id,
             known_hosts_path,
             timeout_secs,
-        )
+        })
         .await
     })
     .await?;
@@ -88,12 +109,9 @@ pub async fn ssh_connect(
     }
 
     let session_id = result.session_id;
-    crate::commands::lifecycle::publish_window_session(
-        &state,
-        &state.sessions,
-        window.label(),
-        session_id.clone(),
-        result.handle,
+    reservation.activate_returned(
+        &session_id,
+        crate::commands::lifecycle::ReadySession::Ssh(result.handle),
     )?;
 
     Ok(session_id)
@@ -118,32 +136,27 @@ pub async fn ssh_resize(
     get_session(&state, &session_id)?.resize(cols, rows)
 }
 
-/// `tab_id`（== log_session_id）选传。已建连后三张 waiters 理应空，传 tab_id
-/// 只作防御性 belt-and-suspenders 清理；漏传不致命。
+/// `tab_id` 只为未预留 session id 的旧客户端保留；新客户端的 prompt waiter
+/// 直接以 `session_id` 为 key。
 #[tauri::command]
 pub async fn ssh_disconnect(
+    window: tauri::Window,
     state: State<'_, AppState>,
     session_id: String,
     tab_id: Option<String>,
 ) -> AppResult<()> {
-    // 0) 防御性清理三张 waiters，避免任何遗留 sender 永挂。
+    let owner = SessionOwner::Window(window.label().to_owned());
+    crate::commands::lifecycle::close_resource(&state, &session_id, SessionKind::Ssh, &owner)?;
+
+    // New callers were cleaned with the resource above. `tab_id` is only a
+    // compatibility fallback for clients that connected without pre-reserving.
     if let Some(tid) = tab_id.as_deref() {
-        let _ = locked(&state.auth_waiters).map(|mut m| m.remove(tid));
-        let _ = locked(&state.passphrase_waiters).map(|mut m| m.remove(tid));
-        let _ = locked(&state.host_key_waiters).map(|mut m| m.remove(tid));
+        if tid != session_id {
+            let _ = remove_owned_waiter(&state.auth_waiters, tid, &owner);
+            let _ = remove_owned_waiter(&state.passphrase_waiters, tid, &owner);
+            let _ = remove_owned_waiter(&state.host_key_waiters, tid, &owner);
+        }
     }
-
-    // 1) 先把挂在这条 SSH 上的 SFTP children 清掉。Drop Arc 让传输任务下次
-    //    访问 channel 时立刻 IO error 退出 —— 不依赖 frontend 的 finally。
-    crate::commands::lifecycle::retain_sessions(&state, &state.sftp_sessions, |_, h| {
-        h.parent_ssh_id() != Some(&session_id)
-    })?;
-
-    // 2) 拿走 SessionHandle 并强切 TCP（不只是 shell channel）。
-    let session =
-        crate::commands::lifecycle::take_window_session(&state, &state.sessions, &session_id)?
-            .ok_or_else(|| AppError::not_found("session_not_found", json!({})))?;
-    session.force_disconnect();
     Ok(())
 }
 
@@ -151,20 +164,32 @@ pub async fn ssh_disconnect(
 /// authenticate_interactive 立即报错退出。与 ssh_passphrase_cancel /
 /// ssh_host_key_cancel 对称。
 #[tauri::command]
-pub async fn ssh_auth_cancel(state: State<'_, AppState>, tab_id: String) -> AppResult<()> {
-    locked(&state.auth_waiters)?.remove(&tab_id);
+pub async fn ssh_auth_cancel(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    tab_id: String,
+) -> AppResult<()> {
+    remove_owned_waiter(
+        &state.auth_waiters,
+        &tab_id,
+        &SessionOwner::Window(window.label().to_owned()),
+    )?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn ssh_auth_respond(
+    window: tauri::Window,
     state: State<'_, AppState>,
     tab_id: String,
     responses: Vec<String>,
 ) -> AppResult<()> {
-    let tx = locked(&state.auth_waiters)?
-        .remove(&tab_id)
-        .ok_or_else(|| AppError::other("no_pending_auth", json!({})))?;
+    let tx = take_owned_waiter(
+        &state.auth_waiters,
+        &tab_id,
+        &SessionOwner::Window(window.label().to_owned()),
+        "no_pending_auth",
+    )?;
     tx.send(responses)
         .map_err(|_| AppError::other("auth_channel_closed", json!({})))?;
     Ok(())
@@ -173,13 +198,17 @@ pub async fn ssh_auth_respond(
 /// 终端内输完私钥 passphrase 后调用，把结果回传给等待中的 decode_key_with_prompt。
 #[tauri::command]
 pub async fn ssh_passphrase_respond(
+    window: tauri::Window,
     state: State<'_, AppState>,
     tab_id: String,
     passphrase: String,
 ) -> AppResult<()> {
-    let tx = locked(&state.passphrase_waiters)?
-        .remove(&tab_id)
-        .ok_or_else(|| AppError::other("no_pending_passphrase", json!({})))?;
+    let tx = take_owned_waiter(
+        &state.passphrase_waiters,
+        &tab_id,
+        &SessionOwner::Window(window.label().to_owned()),
+        "no_pending_passphrase",
+    )?;
     tx.send(passphrase)
         .map_err(|_| AppError::other("passphrase_channel_closed", json!({})))?;
     Ok(())
@@ -187,22 +216,34 @@ pub async fn ssh_passphrase_respond(
 
 /// 用户在终端弹窗里点取消时调用，让 decode_key_with_prompt 立即报错退出。
 #[tauri::command]
-pub async fn ssh_passphrase_cancel(state: State<'_, AppState>, tab_id: String) -> AppResult<()> {
+pub async fn ssh_passphrase_cancel(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    tab_id: String,
+) -> AppResult<()> {
     // 直接 drop sender 即可触发等待端的 RecvError
-    locked(&state.passphrase_waiters)?.remove(&tab_id);
+    remove_owned_waiter(
+        &state.passphrase_waiters,
+        &tab_id,
+        &SessionOwner::Window(window.label().to_owned()),
+    )?;
     Ok(())
 }
 
 /// 终端中输完 host key 确认（yes / no / 指纹）后调用，把字符串送回 check_server_key。
 #[tauri::command]
 pub async fn ssh_host_key_respond(
+    window: tauri::Window,
     state: State<'_, AppState>,
     tab_id: String,
     answer: String,
 ) -> AppResult<()> {
-    let tx = locked(&state.host_key_waiters)?
-        .remove(&tab_id)
-        .ok_or_else(|| AppError::other("no_pending_hostkey", json!({})))?;
+    let tx = take_owned_waiter(
+        &state.host_key_waiters,
+        &tab_id,
+        &SessionOwner::Window(window.label().to_owned()),
+        "no_pending_hostkey",
+    )?;
     tx.send(answer)
         .map_err(|_| AppError::other("hostkey_channel_closed", json!({})))?;
     Ok(())
@@ -210,8 +251,50 @@ pub async fn ssh_host_key_respond(
 
 /// 用户在终端取消（Ctrl-C / 关 tab）host key 确认时调用，让 check_server_key 立即拒绝。
 #[tauri::command]
-pub async fn ssh_host_key_cancel(state: State<'_, AppState>, tab_id: String) -> AppResult<()> {
-    locked(&state.host_key_waiters)?.remove(&tab_id);
+pub async fn ssh_host_key_cancel(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    tab_id: String,
+) -> AppResult<()> {
+    remove_owned_waiter(
+        &state.host_key_waiters,
+        &tab_id,
+        &SessionOwner::Window(window.label().to_owned()),
+    )?;
+    Ok(())
+}
+
+fn take_owned_waiter<T>(
+    map: &std::sync::Mutex<std::collections::HashMap<String, crate::state::OwnedWaiter<T>>>,
+    prompt_id: &str,
+    owner: &SessionOwner,
+    missing_code: &'static str,
+) -> AppResult<tokio::sync::oneshot::Sender<T>> {
+    let mut waiters = locked(map)?;
+    if !waiters
+        .get(prompt_id)
+        .is_some_and(|waiter| &waiter.owner == owner)
+    {
+        return Err(AppError::other(missing_code, json!({})));
+    }
+    Ok(waiters
+        .remove(prompt_id)
+        .expect("waiter was validated")
+        .sender)
+}
+
+fn remove_owned_waiter<T>(
+    map: &std::sync::Mutex<std::collections::HashMap<String, crate::state::OwnedWaiter<T>>>,
+    prompt_id: &str,
+    owner: &SessionOwner,
+) -> AppResult<()> {
+    let mut waiters = locked(map)?;
+    if waiters
+        .get(prompt_id)
+        .is_some_and(|waiter| &waiter.owner == owner)
+    {
+        waiters.remove(prompt_id);
+    }
     Ok(())
 }
 

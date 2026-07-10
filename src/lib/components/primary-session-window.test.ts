@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { initializePrimarySessionWindow } from "./primary-session-window.ts";
 
@@ -57,5 +57,44 @@ describe("initializePrimarySessionWindow", () => {
     })).resolves.toBeUndefined();
 
     expect(events).toEqual(["reconcile", "release", "load auto-open"]);
+  });
+
+  it("does nothing after its owner is cancelled", async () => {
+    const reconcile = deferred<void>();
+    const controller = new AbortController();
+    const events: string[] = [];
+    const initializing = initializePrimarySessionWindow({
+      signal: controller.signal,
+      reconcile: () => reconcile.promise,
+      allowResourcePanes: () => events.push("release"),
+      loadAutoOpenLocal: async () => true,
+      openLocal: () => events.push("open local"),
+    });
+
+    controller.abort();
+    reconcile.resolve();
+    await initializing;
+
+    expect(events).toEqual([]);
+  });
+
+  it("does not auto-open after cancellation during the settings read", async () => {
+    const autoOpen = deferred<boolean>();
+    const controller = new AbortController();
+    const events: string[] = [];
+    const initializing = initializePrimarySessionWindow({
+      signal: controller.signal,
+      reconcile: async () => {},
+      allowResourcePanes: () => events.push("release"),
+      loadAutoOpenLocal: () => autoOpen.promise,
+      openLocal: () => events.push("open local"),
+    });
+
+    await vi.waitFor(() => expect(events).toEqual(["release"]));
+    controller.abort();
+    autoOpen.resolve(true);
+    await initializing;
+
+    expect(events).toEqual(["release"]);
   });
 });

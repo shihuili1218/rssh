@@ -83,12 +83,14 @@
     type AuthPromptData = { name: string; instructions: string; prompts: { prompt: string; echo: boolean }[] };
     let authPrompt = $state<AuthPromptData | null>(null);
     let authValues = $state<string[]>([]);
+    let authPromptSessionId: string | null = null;
 
     function submitAuth() {
-        if (!authPrompt) return;
-        invoke("ssh_auth_respond", { tabId, responses: authValues });
+        if (!authPrompt || !authPromptSessionId) return;
+        invoke("ssh_auth_respond", { tabId: authPromptSessionId, responses: authValues });
         authPrompt = null;
         authValues = [];
+        authPromptSessionId = null;
     }
 
     /** 通用终端 prompt：临时接管 xterm onData，回车提交、Ctrl-C 取消、退格删字。
@@ -142,32 +144,59 @@
 
     /** 终端内 passphrase 输入。监听后端 ssh:passphrase_prompt 事件触发。 */
     let passphraseInputDisposable: IDisposable | undefined;
-    function beginPassphrasePrompt(promptText: string) {
+    let passphrasePromptSessionId: string | null = null;
+    function beginPassphrasePrompt(promptText: string, promptSessionId: string) {
         passphraseInputDisposable?.dispose();
+        passphrasePromptSessionId = promptSessionId;
         passphraseInputDisposable = beginTerminalPrompt(promptText, {
             echo: false,
-            onSubmit: (v) => { invoke("ssh_passphrase_respond", { tabId, passphrase: v }); },
-            onCancel: () => { invoke("ssh_passphrase_cancel", { tabId }); },
+            onSubmit: (v) => {
+                invoke("ssh_passphrase_respond", { tabId: promptSessionId, passphrase: v });
+                passphrasePromptSessionId = null;
+            },
+            onCancel: () => {
+                invoke("ssh_passphrase_cancel", { tabId: promptSessionId });
+                passphrasePromptSessionId = null;
+            },
         });
     }
 
     /** 终端内 host key TOFU 确认（OpenSSH 风格）。监听 ssh:host_key_prompt 触发。
      *  yes/no/指纹 均不是秘密，需要回显让用户确认自己的输入。 */
     let hostKeyInputDisposable: IDisposable | undefined;
-    function beginHostKeyPrompt(banner: string) {
+    let hostKeyPromptSessionId: string | null = null;
+    function beginHostKeyPrompt(banner: string, promptSessionId: string) {
         hostKeyInputDisposable?.dispose();
+        hostKeyPromptSessionId = promptSessionId;
         hostKeyInputDisposable = beginTerminalPrompt(banner, {
             echo: true,
-            onSubmit: (v) => { invoke("ssh_host_key_respond", { tabId, answer: v }); },
-            onCancel: () => { invoke("ssh_host_key_cancel", { tabId }); },
+            onSubmit: (v) => {
+                invoke("ssh_host_key_respond", { tabId: promptSessionId, answer: v });
+                hostKeyPromptSessionId = null;
+            },
+            onCancel: () => {
+                invoke("ssh_host_key_cancel", { tabId: promptSessionId });
+                hostKeyPromptSessionId = null;
+            },
         });
+    }
+
+    function clearSshPromptUi() {
+        authPrompt = null;
+        authValues = [];
+        authPromptSessionId = null;
+        passphraseInputDisposable?.dispose();
+        passphraseInputDisposable = undefined;
+        passphrasePromptSessionId = null;
+        hostKeyInputDisposable?.dispose();
+        hostKeyInputDisposable = undefined;
+        hostKeyPromptSessionId = null;
     }
 
     let terminal: Terminal;
     let fitAddon: FitAddon;
     let searchAddon: SearchAddon;
     let sessionId = $state<string | null>(null);
-    let eventSessionId = $state<string | null>(null);
     // `connectAndWire` crosses several awaits. The generation guards the whole
     // component flow; ReservedSessionAttempt owns the finer Pending/Ready state.
     let connectGeneration = 0;
@@ -196,6 +225,7 @@
     }
 
     function fitTerminal() {
+        if (destroyed || !terminal) return;
         // saved fold lines have the current column geometry. Expand them before
         // FitAddon calls terminal.resize(), including while the alt buffer is
         // active; FoldStore itself is bound to the normal history buffer.
@@ -492,11 +522,6 @@
     }
 
     // Listener tracking — disposed on cleanup/reconnect
-    let unlisteners: UnlistenFn[] = [];
-    function clearSessionEventListeners() {
-        unlisteners.forEach((unlisten) => unlisten());
-        unlisteners = [];
-    }
     let dataDisposable: IDisposable | undefined;
     let resizeDisposable: IDisposable | undefined;
     let reconnectDisposable: IDisposable | undefined;
@@ -508,7 +533,6 @@
     const isLocal = $derived(tabType === "local");
     const isPtyConnector = $derived(tabType === "docker_exec" || tabType === "kubectl_exec");
     const isSsh = $derived(tabType === "ssh");
-    const isReservedTransport = $derived(tabType === "telnet" || isLocal || isPtyConnector);
     // Transport table — the per-tab byte-stream IPC contract lives in DATA, not in
     // branches. Adding a transport is one more row, zero code change.
     // resize:null means the transport has no rows/cols (serial) → callers skip it.
@@ -562,7 +586,7 @@
         return !telnetRemoteEcho;
     }
     function announceDisconnected(reason?: string) {
-        if (disconnected) return;
+        if (destroyed || disconnected) return;
         writeBatcher?.flush();
         disconnected = true;
         if (reason) terminal.write(`\r\n\x1b[31m${reason}\x1b[0m\r\n`);
@@ -576,11 +600,10 @@
     function handleStreamWriteFailure(sid: string, error: unknown) {
         // A delayed rejection from an old session must not tear down a fresh
         // reconnect. The session identity is the boundary, not timing.
-        if (sessionId !== sid || disconnected) return;
+        if (destroyed || sessionId !== sid || disconnected) return;
         console.warn(`[${tabType}] write failed:`, error);
-        invoke(closeCmd, { sessionId: sid }).catch((closeError) =>
-            console.warn(`[${tabType}] close after write failure failed:`, closeError),
-        );
+        sessionId = null;
+        reservedSessionAttempt.cancel();
         announceDisconnected(`Write failed: ${errMsg(error)}`);
     }
     function streamSendBytes(bytes: number[]) {
@@ -597,7 +620,7 @@
         const tick = () => {
             // Stop when finished, disconnected, OR the session was swapped out by a
             // fast reconnect — otherwise queued ticks keep writing to the stale sid.
-            if (i >= bytes.length || disconnected || sessionId !== sid) return;
+            if (destroyed || i >= bytes.length || disconnected || sessionId !== sid) return;
             invoke(writeCmd, { sessionId: sid, data: [bytes[i]] }).catch((error) =>
                 handleStreamWriteFailure(sid, error),
             );
@@ -814,8 +837,11 @@
     }
 
     function openSearch() {
+        if (destroyed) return;
         showSearch = true;
-        requestAnimationFrame(() => searchInputEl?.focus());
+        requestAnimationFrame(() => {
+            if (!destroyed) searchInputEl?.focus();
+        });
     }
 
     let _lastSearchN = 0;
@@ -837,9 +863,7 @@
     let decoder = new TextDecoder("utf-8");
 
     function acceptsSessionEvent(sid: string): boolean {
-        return isReservedTransport
-            ? reservedSessionAttempt.accepts(sid)
-            : eventSessionId === sid;
+        return reservedSessionAttempt.accepts(sid);
     }
 
     /** Wire Tauri event listeners for session data + close.
@@ -862,6 +886,25 @@
                 // layer over the parsed grid (HighlightDecorator), not a byte rewrite.
                 writeRawOutput(raw);
             }));
+            if (isSsh) {
+                // Every connection-scoped event uses the reserved session id.
+                // A stable tab id cannot distinguish a queued event from the
+                // previous attempt after reconnect (classic ABA).
+                listeners.push(await listen<AuthPromptData>(`ssh:auth_prompt:${sid}`, (ev) => {
+                    if (!acceptsSessionEvent(sid)) return;
+                    authPrompt = ev.payload;
+                    authValues = ev.payload.prompts.map(() => "");
+                    authPromptSessionId = sid;
+                }));
+                listeners.push(await listen<{ prompt: string }>(`ssh:passphrase_prompt:${sid}`, (ev) => {
+                    if (!acceptsSessionEvent(sid)) return;
+                    beginPassphrasePrompt(ev.payload.prompt, sid);
+                }));
+                listeners.push(await listen<{ banner: string }>(`ssh:host_key_prompt:${sid}`, (ev) => {
+                    if (!acceptsSessionEvent(sid)) return;
+                    beginHostKeyPrompt(ev.payload.banner, sid);
+                }));
+            }
             if (tabType === "telnet") {
                 listeners.push(await listen<boolean>(`telnet:echo:${sid}`, (ev) => {
                     if (!acceptsSessionEvent(sid)) return;
@@ -873,15 +916,11 @@
                 // A queued close from the previous connection must not tear down a
                 // freshly reconnected session.
                 if (sessionId !== null && sessionId !== sid) return;
-                // Serial: the port just died; free its backend handle NOW so the
-                // exclusive OS port is released. Otherwise the reconnect below
-                // re-opens the same path while the stale handle still owns it and
-                // fails. Telnet: same eager cleanup — the handle is dead after
-                // Close, dropping it stops the reader thread immediately.
-                if ((tabType === "serial" || tabType === "telnet")
-                    && (sessionId === sid || reservedSessionAttempt.isPending())) {
-                    invoke(closeCmd, { sessionId: sid }).catch(() => {});
-                }
+                // Close the registry entry immediately. This releases an
+                // exclusive serial port and invalidates a Pending/Ready attempt
+                // before reconnect can reserve its replacement.
+                if (sessionId === sid) sessionId = null;
+                reservedSessionAttempt.cancel();
                 announceDisconnected();
             }));
         } catch (error) {
@@ -891,14 +930,13 @@
         return () => listeners.splice(0).forEach((unlisten) => unlisten());
     }
 
-    async function wireSessionEvents(sid: string): Promise<void> {
-        unlisteners.push(await createSessionEventSubscription(sid));
-    }
-
     const reservedSessionAttempt = createReservedSessionAttempt({
         makeId: () => crypto.randomUUID(),
         wireEvents: createSessionEventSubscription,
-        close: async (sid) => { await invoke(closeCmd, { sessionId: sid }); },
+        close: async (sid) => {
+            const args = isSsh ? { sessionId: sid, tabId } : { sessionId: sid };
+            await invoke(closeCmd, args);
+        },
     });
 
     /** Register terminal input + resize handlers (disposes old ones first). */
@@ -907,12 +945,14 @@
         resizeDisposable?.dispose();
 
         dataDisposable = terminal.onData((data: string) => {
-            if (disconnected) return;
+            if (destroyed || disconnected || sessionId !== sid) return;
             if (streamOpts) { streamOnData(data); return; }
             invoke(writeCmd, { sessionId: sid, data: Array.from(new TextEncoder().encode(processInput(data))) });
         });
         resizeDisposable = terminal.onResize(({ cols, rows }) => {
-            if (!disconnected && resizeCmd) invoke(resizeCmd, { sessionId: sid, cols, rows });
+            if (!destroyed && !disconnected && sessionId === sid && resizeCmd) {
+                invoke(resizeCmd, { sessionId: sid, cols, rows });
+            }
         });
     }
 
@@ -921,20 +961,16 @@
         if (destroyed) return false;
         const generation = ++connectGeneration;
         const isCurrent = () => !destroyed && connectGeneration === generation;
-        // Cleanup previous
-        clearSessionEventListeners();
-        const supersededReady = sessionId;
-        if (isReservedTransport) {
-            reservedSessionAttempt.cancel();
-        } else if (supersededReady) {
-            const args = isSsh
-                ? { sessionId: supersededReady, tabId }
-                : { sessionId: supersededReady };
-            invoke(closeCmd, args).catch(() => {});
-        }
+        // Input belongs to one Ready session. Release it before the next async
+        // connect cycle so keystrokes cannot leak into the superseded handle.
+        dataDisposable?.dispose();
+        dataDisposable = undefined;
+        resizeDisposable?.dispose();
+        resizeDisposable = undefined;
+        reservedSessionAttempt.cancel();
+        clearSshPromptUi();
         disconnected = false;
         sessionId = null;
-        eventSessionId = null;
         serialHexBuf = "";
         serialLineBuf = "";
         telnetRemoteEcho = false;
@@ -945,25 +981,38 @@
 
         if (tabType === "serial") {
             try {
-                sessionId = await invoke<string>("serial_open", {
-                    port: meta.port,
-                    config: {
-                        baud_rate: Number(meta.baud_rate) || 115200,
-                        data_bits: Number(meta.data_bits) || 8,
-                        parity: meta.parity || "none",
-                        stop_bits: Number(meta.stop_bits) || 1,
-                        flow_control: meta.flow_control || "none",
-                        xany: meta.xany === "true",
-                    },
-                });
+                const opened = await reservedSessionAttempt.open((reservedId) =>
+                    invoke<string>("serial_open", {
+                        sessionId: reservedId,
+                        port: meta.port,
+                        config: {
+                            baud_rate: Number(meta.baud_rate) || 115200,
+                            data_bits: Number(meta.data_bits) || 8,
+                            parity: meta.parity || "none",
+                            stop_bits: Number(meta.stop_bits) || 1,
+                            flow_control: meta.flow_control || "none",
+                            xany: meta.xany === "true",
+                        },
+                    }),
+                );
+                if (opened.kind === "cancelled") return false;
+                sessionId = opened.sessionId;
+                if (!isCurrent()) {
+                    reservedSessionAttempt.cancel();
+                    sessionId = null;
+                    return false;
+                }
             } catch (e: any) {
+                if (!isCurrent()) return false;
                 terminal.write(`\x1b[31mSerial open failed: ${e}\x1b[0m\r\n`);
                 terminal.write("\x1b[90mPress any key to retry.\x1b[0m\r\n");
                 disconnected = true;
                 return false;
             }
-            eventSessionId = sessionId;
-            await wireSessionEvents(sessionId);
+            if (disconnected) {
+                reservedSessionAttempt.cancel();
+                return false;
+            }
             initLoginScript();
         } else if (tabType === "telnet") {
             // One resolved port for both the banner and the connect — two
@@ -1060,64 +1109,62 @@
                 return false;
             }
         } else {
-            // SSH: listen on tabId FIRST for connection logs + auth prompts
-            const logUn = await listen<number[]>(`ssh:data:${tabId}`, (ev) => {
-                writeRawOutput(new Uint8Array(ev.payload));
-            });
-            const authUn = await listen<AuthPromptData>(`ssh:auth_prompt:${tabId}`, (ev) => {
-                authPrompt = ev.payload;
-                authValues = ev.payload.prompts.map(() => "");
-            });
-            const passUn = await listen<{ prompt: string }>(`ssh:passphrase_prompt:${tabId}`, (ev) => {
-                beginPassphrasePrompt(ev.payload.prompt);
-            });
-            const hkUn = await listen<{ banner: string }>(`ssh:host_key_prompt:${tabId}`, (ev) => {
-                beginHostKeyPrompt(ev.payload.banner);
-            });
-
             try {
                 // GUI 路径下 meta.profileId 永远非空（所有 ssh tab 入口——HomeScreen /
                 // osc handler / AppShell.connectPinned 都从 profile 出发）。直连参数
                 // （host/username/auth_type/secret）的后端 stub 早已是 dead code，
                 // 跟前端 invoke 一起收紧。
-                sessionId = await invoke<string>("ssh_connect", {
-                    profileId: meta.profileId,
-                    logSessionId: tabId,
-                    cols: terminal.cols, rows: terminal.rows,
-                });
+                const opened = await reservedSessionAttempt.open((reservedId) =>
+                    invoke<string>("ssh_connect", {
+                        profileId: meta.profileId,
+                        logSessionId: tabId,
+                        sessionId: reservedId,
+                        cols: terminal.cols,
+                        rows: terminal.rows,
+                    }),
+                );
+                if (opened.kind === "cancelled") return false;
+                sessionId = opened.sessionId;
+                if (!isCurrent()) {
+                    reservedSessionAttempt.cancel();
+                    sessionId = null;
+                    return false;
+                }
             } catch (e: any) {
-                logUn(); authUn(); passUn(); hkUn();
-                passphraseInputDisposable?.dispose(); passphraseInputDisposable = undefined;
-                hostKeyInputDisposable?.dispose(); hostKeyInputDisposable = undefined;
+                clearSshPromptUi();
+                if (!isCurrent()) return false;
                 writeBatcher?.flush();
                 terminal.write(`\x1b[31mConnection failed: ${e}\x1b[0m\r\n`);
                 terminal.write("\x1b[90mPress any key to reconnect.\x1b[0m\r\n");
                 disconnected = true;
                 return false;
             }
-            logUn(); authUn(); passUn(); hkUn();
-            passphraseInputDisposable?.dispose(); passphraseInputDisposable = undefined;
-            hostKeyInputDisposable?.dispose(); hostKeyInputDisposable = undefined;
-            eventSessionId = sessionId;
-            await wireSessionEvents(sessionId);
+            clearSshPromptUi();
+            if (disconnected) {
+                reservedSessionAttempt.cancel();
+                return false;
+            }
         }
 
         if (!isCurrent()) {
-            const staleSessionId = sessionId;
             sessionId = null;
-            if (staleSessionId) {
-                await invoke(closeCmd, { sessionId: staleSessionId }).catch(() => {});
-            }
+            reservedSessionAttempt.cancel();
             return false;
         }
 
-        wireSessionInput(sessionId!);
+        const readySessionId = sessionId!;
+        wireSessionInput(readySessionId);
 
         // Sync initial size
         requestAnimationFrame(() => {
+            if (!isCurrent() || disconnected || sessionId !== readySessionId) return;
             fitTerminal();
-            if (sessionId && !disconnected && resizeCmd) {
-                invoke(resizeCmd, { sessionId, cols: terminal.cols, rows: terminal.rows });
+            if (resizeCmd) {
+                invoke(resizeCmd, {
+                    sessionId: readySessionId,
+                    cols: terminal.cols,
+                    rows: terminal.rows,
+                });
             }
         });
 
@@ -1668,8 +1715,13 @@
     });
 
     onDestroy(() => {
+        const pendingAuthId = authPromptSessionId;
+        const pendingPassphraseId = passphrasePromptSessionId;
+        const pendingHostKeyId = hostKeyPromptSessionId;
         destroyed = true;
         connectGeneration += 1;
+        disconnected = true;
+        sessionId = null;
         reservedSessionAttempt.destroy();
         unsubscribeTheme?.();
         unsubscribeFont?.();
@@ -1677,23 +1729,26 @@
         window.removeEventListener("keydown", onWindowKeyDown);
         containerEl?.removeEventListener("mouseup", onSelectMouseUp);
         containerEl?.removeEventListener("contextmenu", onTerminalContextMenu, { capture: true });
-        clearSessionEventListeners();
         dataDisposable?.dispose();
+        dataDisposable = undefined;
         resizeDisposable?.dispose();
+        resizeDisposable = undefined;
         reconnectDisposable?.dispose();
         // 关 tab 时若停在 prompt 阶段，主动取消让后端 connect 流程跳出，
         // 否则 ssh_connect 会在 worker 线程上挂着等用户输入。
-        // 三类 prompt（auth / passphrase / host_key）都无脑发 cancel；后端 remove
-        // 不存在的 key 是 no-op，幂等。
-        if (passphraseInputDisposable) {
-            invoke("ssh_passphrase_cancel", { tabId }).catch(() => {});
+        // The canonical attempt id, not the reusable tab id, identifies the
+        // waiter. ssh_disconnect also clears it; these calls are a defensive
+        // fast path while the close invoke is still in flight.
+        if (pendingPassphraseId) {
+            invoke("ssh_passphrase_cancel", { tabId: pendingPassphraseId }).catch(() => {});
         }
-        if (hostKeyInputDisposable) {
-            invoke("ssh_host_key_cancel", { tabId }).catch(() => {});
+        if (pendingHostKeyId) {
+            invoke("ssh_host_key_cancel", { tabId: pendingHostKeyId }).catch(() => {});
         }
-        invoke("ssh_auth_cancel", { tabId }).catch(() => {});
-        passphraseInputDisposable?.dispose();
-        hostKeyInputDisposable?.dispose();
+        if (pendingAuthId) {
+            invoke("ssh_auth_cancel", { tabId: pendingAuthId }).catch(() => {});
+        }
+        clearSshPromptUi();
         resizeObs?.disconnect();
         ime229WorkaroundCleanup?.();
         ime229WorkaroundCleanup = undefined;
@@ -1707,18 +1762,6 @@
         app.unregisterTerminalArrowSender();
         app.unregisterTerminalControls(tabId);
         app.unregisterSession(tabId);
-        // Reserved transports were closed above by reservedSessionAttempt.destroy().
-        // Serial remains exempt from the disconnected guard because its close
-        // command idempotently drops the exclusive port handle.
-        if (sessionId && !isReservedTransport && (!disconnected || tabType === "serial")) {
-            if (isSsh) {
-                // 把 tabId 一并传给后端做防御性 waiters 清理；漏传不致命。
-                invoke("ssh_disconnect", { sessionId, tabId }).catch(() => {});
-            } else {
-                // local PTY / serial / telnet：按 transport 选 close 命令。
-                invoke(closeCmd, { sessionId }).catch(() => {});
-            }
-        }
         highlightDecorator?.dispose();
         terminal?.dispose();
     });

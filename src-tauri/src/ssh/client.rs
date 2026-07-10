@@ -9,10 +9,9 @@ use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 
 use crate::error::{locked, AppError, AppResult};
-use crate::models::{Credential, CredentialType, Profile};
+use crate::models::{Credential, Profile};
 use crate::terminal::recorder::Recorder;
 
-use super::auth::authenticate_interactive;
 use super::prompt::prompt_host_key;
 
 /// Re-export 旧 path：实现已迁移到 `ssh::auth` / `ssh::prompt`，调用点
@@ -567,7 +566,7 @@ pub async fn establish_via_chain(
             target_port,
         )
         .await?;
-        log(format!("TCP connected. SSH handshake OK."));
+        log("TCP connected. SSH handshake OK.".to_owned());
         return Ok((h, fwd));
     }
 
@@ -645,7 +644,7 @@ pub async fn establish_via_chain(
         format!("{} → target", prev_name),
     )
     .await?;
-    log(format!("Tunnel established. SSH handshake with target ..."));
+    log("Tunnel established. SSH handshake with target ...".to_owned());
     ssh_connect_stream(
         dial_ctx_for_profile(&target_profile, &known_hosts_path, timeout_secs, &log, ctx),
         tunnel.into_stream(),
@@ -777,12 +776,12 @@ impl SessionHandle {
         let _ = self.tx.send(SessionCmd::Close);
 
         let ssh_handle = self.ssh_handle.clone();
-        let _ = spawn_ssh::<_, _, ()>(move || async move {
+        drop(spawn_ssh::<_, _, ()>(move || async move {
             let h = ssh_handle.lock().await;
             // ByApplication = 用户主动断；空 message + 空 lang 是合规的最小 payload
             let _ = h.disconnect(russh::Disconnect::ByApplication, "", "").await;
             Ok(())
-        });
+        }));
     }
 }
 
@@ -795,22 +794,43 @@ pub struct ConnectResult {
     pub handle: SessionHandle,
 }
 
-/// All inputs by value: profile / credential / chain / log_session_id all
-/// owned. The future returned by this fn carries no external borrows, so
-/// `#[tauri::command]` can prove it Send for any caller-supplied state
-/// lifetime without HRTB elaboration.
-pub async fn connect(
-    profile: Profile,
-    credential: Credential,
-    bastion_chain: Vec<(Profile, Credential)>,
-    cols: u32,
-    rows: u32,
-    app: crate::emitter::Host,
-    recording_path: Option<std::path::PathBuf>,
-    log_session_id: Option<String>,
-    known_hosts_path: PathBuf,
-    timeout_secs: u64,
-) -> AppResult<ConnectResult> {
+/// Complete policy and ownership context for one interactive SSH connection.
+/// Keeping it as one value prevents the GUI and headless adapters from
+/// accidentally swapping one of the several identities or path arguments.
+pub struct ConnectParams {
+    pub session_id: String,
+    pub profile: Profile,
+    pub credential: Credential,
+    pub bastion_chain: Vec<(Profile, Credential)>,
+    pub cols: u32,
+    pub rows: u32,
+    pub app: crate::emitter::Host,
+    pub owner: crate::state::SessionOwner,
+    pub recording_path: Option<std::path::PathBuf>,
+    pub log_session_id: Option<String>,
+    pub prompt_session_id: Option<String>,
+    pub known_hosts_path: PathBuf,
+    pub timeout_secs: u64,
+}
+
+/// All inputs are owned, so the returned future carries no caller borrows and
+/// remains Send across both the Tauri and headless adapters.
+pub async fn connect(params: ConnectParams) -> AppResult<ConnectResult> {
+    let ConnectParams {
+        session_id,
+        profile,
+        credential,
+        bastion_chain,
+        cols,
+        rows,
+        app,
+        owner,
+        recording_path,
+        log_session_id,
+        prompt_session_id,
+        known_hosts_path,
+        timeout_secs,
+    } = params;
     let log: LogFn = match log_session_id.clone() {
         Some(sid) => {
             let app2 = app.clone();
@@ -822,11 +842,13 @@ pub async fn connect(
         None => null_logger(),
     };
 
-    // 终端可达性上下文：只要有 tab_id 就能给用户弹 passphrase 提示。
+    // 终端可达性上下文：只要有本次连接 attempt 的 prompt_id 就能弹提示。
     // 即使 verbose log 关闭、`log` 是 null_logger，passphrase 提示仍然能发。
-    let ctx = log_session_id.clone().map(|tab_id| AuthCtx {
+    let ctx = prompt_session_id.clone().map(|prompt_id| AuthCtx {
         app: app.clone(),
-        tab_id,
+        resource_id: session_id.clone(),
+        prompt_id,
+        owner: owner.clone(),
     });
 
     let (mut handle, _fwd) = establish_via_chain(
@@ -844,23 +866,15 @@ pub async fn connect(
         credential.username,
         credential.credential_type.as_str()
     ));
-    if credential.credential_type == CredentialType::Interactive {
-        let tab_id = log_session_id
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
-        let username = credential.username.clone();
-        authenticate_interactive(&mut handle, username, app.clone(), tab_id).await?;
-    } else {
-        authenticate(&mut handle, credential, ctx.as_ref()).await?;
-    }
-    log(format!("Authenticated."));
+    authenticate(&mut handle, credential, ctx.as_ref()).await?;
+    log("Authenticated.".to_owned());
 
     // Open the shell channel BEFORE wrapping the handle in Arc<Mutex>.
     // Holding a MutexGuard across `.await` would force the resulting future
     // to hold `&Mutex<Handle>` for the inner await — fine for runtime, but
     // the compiler can't always prove that's `for<'a> Send`. Doing the
     // shell setup directly on the owned handle sidesteps the whole issue.
-    log(format!("Requesting PTY + shell ..."));
+    log("Requesting PTY + shell ...".to_owned());
     let channel = handle
         .channel_open_session()
         .await
@@ -876,12 +890,11 @@ pub async fn connect(
         .await
         .map_err(|e| AppError::ssh("ssh_shell_request_failed", json!({ "err": e.to_string() })))?;
 
-    log(format!("Shell ready.\r\n"));
+    log("Shell ready.\r\n".to_owned());
 
     // Now wrap for downstream multiplexing (SFTP / forwarding share the conn).
     let ssh_handle: SshHandle = Arc::new(tokio::sync::Mutex::new(handle));
 
-    let session_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = mpsc::unbounded_channel();
 
     let recorder = recording_path.and_then(|p| Recorder::new(p, cols, rows).ok());

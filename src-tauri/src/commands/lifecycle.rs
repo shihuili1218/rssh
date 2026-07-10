@@ -7,15 +7,23 @@ use tauri::State;
 
 use crate::error::{locked, AppError, AppResult};
 use crate::state::AppState;
-use crate::state::SessionSlot;
+use crate::state::{AiSessionRecord, SessionKind, SessionOwner, SessionPhase, SessionRecord};
 
 /// 前端启动 / 重连后调用：把不在 `active_ids` 列表里的所有 session 全部清掉。
 ///
 /// `active_ids` 是前端当前持有的所有 ID（不区分 ssh / sftp / forward —
 /// UUID 不会撞）。返回被清理的总数。
 #[tauri::command]
-pub fn reconcile_sessions(state: State<'_, AppState>, active_ids: Vec<String>) -> AppResult<usize> {
-    reconcile_sessions_impl(&state, active_ids)
+pub fn reconcile_sessions(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    active_ids: Vec<String>,
+) -> AppResult<usize> {
+    reconcile_sessions_impl(
+        &state,
+        &SessionOwner::Window(window.label().to_owned()),
+        active_ids,
+    )
 }
 
 /// Resolve a frontend-reserved session identity. Pre-reservation lets the UI
@@ -34,427 +42,850 @@ pub fn resolve_session_id(requested: Option<String>) -> AppResult<String> {
     }
 }
 
-fn ensure_session_id_available(state: &AppState, session_id: &str) -> AppResult<()> {
-    let mut occupied = locked(&state.sessions)?.contains_key(session_id);
-    #[cfg(not(target_os = "android"))]
-    {
-        occupied |= locked(&state.pty_sessions)?.contains_key(session_id);
-        occupied |= locked(&state.serial_sessions)?.contains_key(session_id);
-    }
-    occupied |= locked(&state.telnet_sessions)?.contains_key(session_id);
-    occupied |= locked(&state.sftp_sessions)?.contains_key(session_id);
-    occupied |= locked(&state.active_forwards)?.contains_key(session_id);
-    if occupied {
-        return Err(AppError::config(
-            "session_id_conflict",
-            serde_json::json!({ "id": session_id }),
-        ));
-    }
-    Ok(())
-}
-
-pub struct SessionReservation<'a, T> {
-    publication_lock: &'a Mutex<()>,
-    sessions: &'a Mutex<HashMap<String, SessionSlot<T>>>,
+pub struct ResourceReservation<'a> {
+    state: &'a AppState,
     session_id: String,
     nonce: uuid::Uuid,
-    /// Desktop commands also register the pending id under a window. Keep the
-    /// ownership entry under the same RAII boundary so cancellation cannot
-    /// leave either half behind.
-    window_sessions: Option<&'a Mutex<HashMap<String, HashSet<String>>>>,
+    kind: SessionKind,
     armed: bool,
 }
 
-impl<T> SessionReservation<'_, T> {
-    pub fn activate(mut self, handle: T) -> AppResult<()> {
-        let _publication = locked(self.publication_lock)?;
-        let mut sessions = locked(self.sessions)?;
-        let Some(slot) = sessions.get_mut(&self.session_id) else {
+pub struct AiOwnerReservation<'a> {
+    state: &'a AppState,
+    tab_id: String,
+    owner: SessionOwner,
+    nonce: uuid::Uuid,
+    armed: bool,
+}
+
+impl Drop for AiOwnerReservation<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Ok(mut owners) = self.state.ai_session_owners.lock() {
+            if owners.get(&self.tab_id).is_some_and(|record| {
+                record.owner == self.owner
+                    && record.nonce == self.nonce
+                    && record.phase == SessionPhase::Pending
+            }) {
+                owners.remove(&self.tab_id);
+            }
+        }
+    }
+}
+
+impl AiOwnerReservation<'_> {
+    pub fn activate(mut self, session: crate::ai::session::DiagnoseSession) -> AppResult<()> {
+        let mut owners = locked(&self.state.ai_session_owners)?;
+        if !owners.get(&self.tab_id).is_some_and(|record| {
+            record.owner == self.owner
+                && record.nonce == self.nonce
+                && record.phase == SessionPhase::Pending
+        }) {
+            let _ = session.action_tx.send(crate::ai::session::UserAction::Stop);
             return Err(AppError::not_found(
                 "session_reservation_lost",
-                serde_json::json!({ "id": self.session_id }),
-            ));
-        };
-        if !matches!(slot, SessionSlot::Pending { nonce } if *nonce == self.nonce) {
-            return Err(AppError::not_found(
-                "session_reservation_lost",
-                serde_json::json!({ "id": self.session_id }),
+                serde_json::json!({ "id": self.tab_id }),
             ));
         }
-        *slot = SessionSlot::Ready(handle);
+        let mut sessions = locked(&self.state.ai_sessions)?;
+        if sessions.contains_key(&self.tab_id) {
+            let _ = session.action_tx.send(crate::ai::session::UserAction::Stop);
+            return Err(AppError::other(
+                "session_already_exists",
+                serde_json::json!({ "tab_id": self.tab_id }),
+            ));
+        }
+        if sessions
+            .values()
+            .any(|existing| existing.conversation_id == session.conversation_id)
+        {
+            let _ = session.action_tx.send(crate::ai::session::UserAction::Stop);
+            return Err(AppError::other(
+                "conversation_in_use",
+                serde_json::json!({}),
+            ));
+        }
+        sessions.insert(self.tab_id.clone(), session);
+        drop(sessions);
+        let record = owners
+            .get_mut(&self.tab_id)
+            .expect("AI owner was validated");
+        record.phase = SessionPhase::Ready;
+        drop(owners);
         self.armed = false;
         Ok(())
     }
 }
 
-impl<T> Drop for SessionReservation<'_, T> {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
+pub fn reserve_ai_owner(
+    state: &AppState,
+    tab_id: String,
+    owner: SessionOwner,
+) -> AppResult<AiOwnerReservation<'_>> {
+    let mut owners = locked(&state.ai_session_owners)?;
+    if owners.contains_key(&tab_id) || locked(&state.ai_sessions)?.contains_key(&tab_id) {
+        return Err(AppError::other(
+            "session_already_exists",
+            serde_json::json!({ "tab_id": tab_id }),
+        ));
+    }
+    let nonce = uuid::Uuid::new_v4();
+    owners.insert(
+        tab_id.clone(),
+        AiSessionRecord {
+            nonce,
+            owner: owner.clone(),
+            phase: SessionPhase::Pending,
+        },
+    );
+    drop(owners);
+    Ok(AiOwnerReservation {
+        state,
+        tab_id,
+        owner,
+        nonce,
+        armed: true,
+    })
+}
+
+pub fn close_ai_session(
+    state: &AppState,
+    tab_id: &str,
+    expected_owner: &SessionOwner,
+) -> AppResult<()> {
+    let mut owners = locked(&state.ai_session_owners)?;
+    let record = owners
+        .get(tab_id)
+        .ok_or_else(|| AppError::not_found("ai_session_not_found", serde_json::json!({})))?;
+    if &record.owner != expected_owner {
+        return Err(AppError::not_found(
+            "ai_session_not_found",
+            serde_json::json!({}),
+        ));
+    }
+    let session = if record.phase == SessionPhase::Ready {
+        Some(locked(&state.ai_sessions)?.remove(tab_id).ok_or_else(|| {
+            AppError::other(
+                "session_registry_inconsistent",
+                serde_json::json!({ "id": tab_id }),
+            )
+        })?)
+    } else {
+        None
+    };
+    owners.remove(tab_id);
+    drop(owners);
+    if let Some(session) = session {
+        let _ = session.action_tx.send(crate::ai::session::UserAction::Stop);
+    }
+    Ok(())
+}
+
+fn close_owned_ai(
+    state: &AppState,
+    owner: &SessionOwner,
+    active: Option<&HashSet<String>>,
+) -> AppResult<usize> {
+    let mut owners = locked(&state.ai_session_owners)?;
+    let ids: Vec<String> = owners
+        .iter()
+        .filter(|(id, record)| {
+            &record.owner == owner && active.is_none_or(|active| !active.contains(*id))
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    let mut sessions = locked(&state.ai_sessions)?;
+    for id in &ids {
+        let is_ready = owners
+            .get(id)
+            .is_some_and(|record| record.phase == SessionPhase::Ready);
+        if sessions.contains_key(id) != is_ready {
+            return Err(AppError::other(
+                "session_registry_inconsistent",
+                serde_json::json!({ "id": id }),
+            ));
         }
-        let Ok(_publication) = self.publication_lock.lock() else {
-            return;
-        };
-        let Ok(mut sessions) = self.sessions.lock() else {
-            return;
-        };
-        let mut owners = match self.window_sessions {
-            Some(window_sessions) => match window_sessions.lock() {
-                Ok(owners) => Some(owners),
-                Err(_) => return,
-            },
-            None => None,
-        };
-        let owns_slot = matches!(
-            sessions.get(&self.session_id),
-            Some(SessionSlot::Pending { nonce }) if *nonce == self.nonce
-        );
-        if !owns_slot {
-            return;
+    }
+    let mut removed = Vec::new();
+    for id in &ids {
+        if owners
+            .get(id)
+            .is_some_and(|record| record.phase == SessionPhase::Ready)
+        {
+            removed.push(sessions.remove(id).expect("ready AI session was validated"));
         }
-        sessions.remove(&self.session_id);
-        if let Some(owners) = owners.as_mut() {
-            for ids in owners.values_mut() {
-                ids.remove(&self.session_id);
+        owners.remove(id);
+    }
+    drop(sessions);
+    drop(owners);
+    for session in removed {
+        let _ = session.action_tx.send(crate::ai::session::UserAction::Stop);
+    }
+    Ok(ids.len())
+}
+
+fn remove_owned_waiters<T>(
+    waiters: &Mutex<HashMap<String, crate::state::OwnedWaiter<T>>>,
+    owner: &SessionOwner,
+    active: Option<&HashSet<String>>,
+) -> AppResult<usize> {
+    let mut waiters = locked(waiters)?;
+    let before = waiters.len();
+    waiters.retain(|id, waiter| {
+        &waiter.owner != owner || active.is_some_and(|active| active.contains(id))
+    });
+    Ok(before - waiters.len())
+}
+
+fn close_owned_waiters(
+    state: &AppState,
+    owner: &SessionOwner,
+    active: Option<&HashSet<String>>,
+) -> AppResult<usize> {
+    Ok(remove_owned_waiters(&state.auth_waiters, owner, active)?
+        + remove_owned_waiters(&state.passphrase_waiters, owner, active)?
+        + remove_owned_waiters(&state.host_key_waiters, owner, active)?)
+}
+
+fn remove_owned_waiter_id<T>(
+    waiters: &Mutex<HashMap<String, crate::state::OwnedWaiter<T>>>,
+    session_id: &str,
+    owner: &SessionOwner,
+) -> AppResult<()> {
+    let mut waiters = locked(waiters)?;
+    if waiters
+        .get(session_id)
+        .is_some_and(|waiter| &waiter.owner == owner)
+    {
+        waiters.remove(session_id);
+    }
+    Ok(())
+}
+
+fn close_waiters_for_resource(
+    state: &AppState,
+    session_id: &str,
+    owner: &SessionOwner,
+) -> AppResult<()> {
+    remove_owned_waiter_id(&state.auth_waiters, session_id, owner)?;
+    remove_owned_waiter_id(&state.passphrase_waiters, session_id, owner)?;
+    remove_owned_waiter_id(&state.host_key_waiters, session_id, owner)
+}
+
+/// Atomically verify that an SSH connection attempt is still Pending and
+/// publish one of its prompt waiters. The registry lock is deliberately held
+/// until after insertion: close paths take the same lock first and then remove
+/// waiters, so a prompt can neither appear after cancellation nor be missed by
+/// concurrent cleanup.
+pub(crate) fn register_prompt_waiter<T>(
+    state: &AppState,
+    waiters: &Mutex<HashMap<String, crate::state::OwnedWaiter<T>>>,
+    resource_id: &str,
+    prompt_id: &str,
+    owner: &SessionOwner,
+    event_prefix: &str,
+    nonce: uuid::Uuid,
+    sender: tokio::sync::oneshot::Sender<T>,
+) -> AppResult<()> {
+    let registry = locked(&state.lifecycle_sessions)?;
+    let pending = registry.get(resource_id).is_some_and(|record| {
+        record.kind == SessionKind::Ssh
+            && &record.owner == owner
+            && record.phase == SessionPhase::Pending
+    });
+    if !pending {
+        return Err(AppError::not_found(
+            "session_reservation_lost",
+            serde_json::json!({ "id": resource_id }),
+        ));
+    }
+
+    let mut waiters = locked(waiters)?;
+    if waiters.contains_key(prompt_id) {
+        return Err(AppError::other(
+            "ssh_prompt_already_pending",
+            serde_json::json!({ "prompt_id": prompt_id, "channel": event_prefix }),
+        ));
+    }
+    waiters.insert(
+        prompt_id.to_owned(),
+        crate::state::OwnedWaiter {
+            nonce,
+            owner: owner.clone(),
+            sender,
+        },
+    );
+    drop(waiters);
+    drop(registry);
+    Ok(())
+}
+
+pub enum ReadySession {
+    Ssh(crate::ssh::client::SessionHandle),
+    #[cfg(not(target_os = "android"))]
+    Pty(crate::terminal::pty::PtyHandle),
+    #[cfg(not(target_os = "android"))]
+    Serial(crate::terminal::serial::SerialHandle),
+    Telnet(crate::terminal::telnet::TelnetHandle),
+    Sftp(std::sync::Arc<crate::ssh::sftp::SftpHandle>),
+    Forward(crate::ssh::forward::ForwardHandle),
+    #[cfg(test)]
+    CleanupProbe {
+        kind: SessionKind,
+        cleaned: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    },
+}
+
+impl ReadySession {
+    fn kind(&self) -> SessionKind {
+        match self {
+            Self::Ssh(_) => SessionKind::Ssh,
+            #[cfg(not(target_os = "android"))]
+            Self::Pty(_) => SessionKind::Pty,
+            #[cfg(not(target_os = "android"))]
+            Self::Serial(_) => SessionKind::Serial,
+            Self::Telnet(_) => SessionKind::Telnet,
+            Self::Sftp(_) => SessionKind::Sftp,
+            Self::Forward(_) => SessionKind::Forward,
+            #[cfg(test)]
+            Self::CleanupProbe { kind, .. } => *kind,
+        }
+    }
+
+    fn close(self) {
+        match self {
+            Self::Ssh(handle) => handle.force_disconnect(),
+            Self::Forward(handle) => handle.stop(),
+            #[cfg(test)]
+            Self::CleanupProbe { cleaned, .. } => {
+                cleaned.store(true, std::sync::atomic::Ordering::SeqCst);
             }
-            owners.retain(|_, ids| !ids.is_empty());
+            #[cfg(not(target_os = "android"))]
+            Self::Pty(_) | Self::Serial(_) => {}
+            Self::Telnet(_) | Self::Sftp(_) => {}
         }
     }
 }
 
-fn reserve_slot<'a, T>(
-    publication_lock: &'a Mutex<()>,
-    sessions: &'a Mutex<HashMap<String, SessionSlot<T>>>,
+impl ResourceReservation<'_> {
+    pub fn id(&self) -> &str {
+        &self.session_id
+    }
+
+    #[cfg(test)]
+    pub fn ensure_pending(&self) -> AppResult<()> {
+        let registry = locked(&self.state.lifecycle_sessions)?;
+        match registry.get(&self.session_id) {
+            Some(record)
+                if record.nonce == self.nonce
+                    && record.kind == self.kind
+                    && record.phase == SessionPhase::Pending =>
+            {
+                Ok(())
+            }
+            _ => Err(AppError::not_found(
+                "session_reservation_lost",
+                serde_json::json!({ "id": self.session_id }),
+            )),
+        }
+    }
+
+    pub fn activate(mut self, handle: ReadySession) -> AppResult<()> {
+        if handle.kind() != self.kind {
+            handle.close();
+            return Err(AppError::config(
+                "session_kind_mismatch",
+                serde_json::json!({ "id": self.session_id }),
+            ));
+        }
+        let mut registry = match locked(&self.state.lifecycle_sessions) {
+            Ok(registry) => registry,
+            Err(error) => {
+                handle.close();
+                return Err(error);
+            }
+        };
+        let Some(record) = registry.get_mut(&self.session_id) else {
+            drop(registry);
+            handle.close();
+            return Err(AppError::not_found(
+                "session_reservation_lost",
+                serde_json::json!({ "id": self.session_id }),
+            ));
+        };
+        if record.nonce != self.nonce
+            || record.kind != self.kind
+            || record.phase != SessionPhase::Pending
+        {
+            drop(registry);
+            handle.close();
+            return Err(AppError::not_found(
+                "session_reservation_lost",
+                serde_json::json!({ "id": self.session_id }),
+            ));
+        }
+        insert_ready_handle(self.state, &self.session_id, handle)?;
+        record.phase = SessionPhase::Ready;
+        self.armed = false;
+        Ok(())
+    }
+
+    pub fn activate_returned(self, returned_id: &str, handle: ReadySession) -> AppResult<()> {
+        if returned_id != self.session_id {
+            handle.close();
+            return Err(AppError::other(
+                "session_id_mismatch",
+                serde_json::json!({
+                    "reserved": &self.session_id,
+                    "returned": returned_id,
+                }),
+            ));
+        }
+        self.activate(handle)
+    }
+}
+
+fn insert_unique<T>(
+    sessions: &Mutex<HashMap<String, T>>,
     session_id: &str,
-) -> AppResult<SessionReservation<'a, T>> {
-    let mut slots = locked(sessions)?;
-    if slots.contains_key(session_id) {
+    handle: T,
+) -> AppResult<()> {
+    let mut sessions = locked(sessions)?;
+    if sessions.contains_key(session_id) {
         return Err(AppError::config(
             "session_id_conflict",
             serde_json::json!({ "id": session_id }),
         ));
     }
+    sessions.insert(session_id.to_owned(), handle);
+    Ok(())
+}
+
+fn insert_ready_handle(state: &AppState, session_id: &str, handle: ReadySession) -> AppResult<()> {
+    match handle {
+        ReadySession::Ssh(handle) => {
+            let mut sessions = match locked(&state.sessions) {
+                Ok(sessions) => sessions,
+                Err(error) => {
+                    handle.force_disconnect();
+                    return Err(error);
+                }
+            };
+            if sessions.contains_key(session_id) {
+                handle.force_disconnect();
+                return Err(AppError::config(
+                    "session_id_conflict",
+                    serde_json::json!({ "id": session_id }),
+                ));
+            }
+            sessions.insert(session_id.to_owned(), handle);
+            Ok(())
+        }
+        #[cfg(not(target_os = "android"))]
+        ReadySession::Pty(handle) => insert_unique(&state.pty_sessions, session_id, handle),
+        #[cfg(not(target_os = "android"))]
+        ReadySession::Serial(handle) => insert_unique(&state.serial_sessions, session_id, handle),
+        ReadySession::Telnet(handle) => insert_unique(&state.telnet_sessions, session_id, handle),
+        ReadySession::Sftp(handle) => insert_unique(&state.sftp_sessions, session_id, handle),
+        ReadySession::Forward(handle) => insert_unique(&state.active_forwards, session_id, handle),
+        #[cfg(test)]
+        ReadySession::CleanupProbe { cleaned, .. } => {
+            cleaned.store(true, std::sync::atomic::Ordering::SeqCst);
+            Err(AppError::other(
+                "test_cleanup_probe_cannot_activate",
+                serde_json::json!({}),
+            ))
+        }
+    }
+}
+
+impl Drop for ResourceReservation<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let Ok(mut registry) = self.state.lifecycle_sessions.lock() else {
+            return;
+        };
+        if let Some(record) = registry.get_mut(&self.session_id) {
+            if record.nonce == self.nonce && record.phase == SessionPhase::Pending {
+                record.phase = SessionPhase::Closed;
+            }
+        }
+    }
+}
+
+pub fn reserve_resource<'a>(
+    state: &'a AppState,
+    session_id: &str,
+    kind: SessionKind,
+    owner: SessionOwner,
+) -> AppResult<ResourceReservation<'a>> {
     let nonce = uuid::Uuid::new_v4();
-    slots.insert(session_id.to_owned(), SessionSlot::Pending { nonce });
-    drop(slots);
-    Ok(SessionReservation {
-        publication_lock,
-        sessions,
+    let mut registry = locked(&state.lifecycle_sessions)?;
+    if registry.contains_key(session_id) {
+        return Err(AppError::config(
+            "session_id_conflict",
+            serde_json::json!({ "id": session_id }),
+        ));
+    }
+    registry.insert(
+        session_id.to_owned(),
+        SessionRecord {
+            nonce,
+            kind,
+            owner,
+            phase: SessionPhase::Pending,
+            parent: None,
+        },
+    );
+    drop(registry);
+    Ok(ResourceReservation {
+        state,
         session_id: session_id.to_owned(),
         nonce,
-        window_sessions: None,
+        kind,
         armed: true,
     })
 }
 
-pub fn reserve_session<'a, T>(
-    state: &'a AppState,
-    sessions: &'a Mutex<HashMap<String, SessionSlot<T>>>,
-    session_id: &str,
-) -> AppResult<SessionReservation<'a, T>> {
-    let _global = locked(&state.session_id_reservation_lock)?;
-    ensure_session_id_available(state, session_id)?;
-    reserve_slot(&state.session_id_reservation_lock, sessions, session_id)
+pub fn reserve_generated_resource(
+    state: &AppState,
+    kind: SessionKind,
+    owner: SessionOwner,
+) -> AppResult<ResourceReservation<'_>> {
+    loop {
+        let candidate = uuid::Uuid::new_v4().to_string();
+        match reserve_resource(state, &candidate, kind, owner.clone()) {
+            Ok(reservation) => return Ok(reservation),
+            Err(error) if error.code() == "session_id_conflict" => continue,
+            Err(error) => return Err(error),
+        }
+    }
 }
 
-pub fn reserve_window_session<'a, T>(
+pub fn reserve_sftp_child<'a>(
     state: &'a AppState,
-    sessions: &'a Mutex<HashMap<String, SessionSlot<T>>>,
-    window_label: &str,
-    session_id: &str,
-) -> AppResult<SessionReservation<'a, T>> {
-    let _global = locked(&state.session_id_reservation_lock)?;
-    ensure_session_id_available(state, session_id)?;
-    let mut reservation = reserve_slot(&state.session_id_reservation_lock, sessions, session_id)?;
-    let mut owners = match locked(&state.window_sessions) {
-        Ok(owners) => owners,
-        Err(error) => {
-            // Reservation cleanup takes the publication lock too. Release the
-            // lock held by this constructor before dropping the armed guard.
-            drop(_global);
-            drop(reservation);
-            return Err(error);
+    parent_id: &str,
+    requester: &SessionOwner,
+) -> AppResult<(ResourceReservation<'a>, crate::ssh::client::SshHandle)> {
+    let mut registry = locked(&state.lifecycle_sessions)?;
+    let parent = registry
+        .get(parent_id)
+        .ok_or_else(|| AppError::not_found("ssh_session_not_found_msg", serde_json::json!({})))?;
+    if parent.kind != SessionKind::Ssh || parent.phase != SessionPhase::Ready {
+        return Err(AppError::not_found(
+            "ssh_session_not_found_msg",
+            serde_json::json!({}),
+        ));
+    }
+    if &parent.owner != requester {
+        return Err(AppError::config(
+            "session_owner_mismatch",
+            serde_json::json!({ "id": parent_id }),
+        ));
+    }
+    let owner = parent.owner.clone();
+    let ssh_handle = locked(&state.sessions)?
+        .get(parent_id)
+        .ok_or_else(|| {
+            AppError::other(
+                "session_registry_inconsistent",
+                serde_json::json!({ "id": parent_id }),
+            )
+        })?
+        .ssh_handle()
+        .clone();
+    let session_id = loop {
+        let candidate = uuid::Uuid::new_v4().to_string();
+        if !registry.contains_key(&candidate) {
+            break candidate;
         }
     };
-    owners
-        .entry(window_label.to_owned())
-        .or_default()
-        .insert(session_id.to_owned());
-    drop(owners);
-    reservation.window_sessions = Some(&state.window_sessions);
-    Ok(reservation)
+    let nonce = uuid::Uuid::new_v4();
+    registry.insert(
+        session_id.clone(),
+        SessionRecord {
+            nonce,
+            kind: SessionKind::Sftp,
+            owner,
+            phase: SessionPhase::Pending,
+            parent: Some(parent_id.to_owned()),
+        },
+    );
+    drop(registry);
+    Ok((
+        ResourceReservation {
+            state,
+            session_id,
+            nonce,
+            kind: SessionKind::Sftp,
+            armed: true,
+        },
+        ssh_handle,
+    ))
 }
 
-/// Publish a fully-open resource that generates its own UUID. Holding the same
-/// global lock as Pending reservation makes the bare id a process-wide key
-/// across every UUID-keyed connection map consumed by `reconcile_sessions`.
-pub fn publish_session<T>(
+fn take_ready_handle(
     state: &AppState,
-    sessions: &Mutex<HashMap<String, T>>,
-    session_id: String,
-    handle: T,
-) -> AppResult<()> {
-    let _global = locked(&state.session_id_reservation_lock)?;
-    ensure_session_id_available(state, &session_id)?;
-    let old = locked(sessions)?.insert(session_id, handle);
-    debug_assert!(old.is_none());
-    Ok(())
-}
-
-/// Atomically publish a ready handle and register its owning window.
-pub fn publish_window_session<T>(
-    state: &AppState,
-    sessions: &Mutex<HashMap<String, T>>,
-    window_label: &str,
-    session_id: String,
-    handle: T,
-) -> AppResult<()> {
-    let _global = locked(&state.session_id_reservation_lock)?;
-    ensure_session_id_available(state, &session_id)?;
-    let mut sessions = locked(sessions)?;
-    let mut owners = locked(&state.window_sessions)?;
-    let old = sessions.insert(session_id.clone(), handle);
-    debug_assert!(old.is_none());
-    owners
-        .entry(window_label.to_owned())
-        .or_default()
-        .insert(session_id);
-    Ok(())
-}
-
-/// Atomically remove a window-owned slot and its secondary owner entry.
-pub fn take_window_session<T>(
-    state: &AppState,
-    sessions: &Mutex<HashMap<String, T>>,
     session_id: &str,
-) -> AppResult<Option<T>> {
-    let _global = locked(&state.session_id_reservation_lock)?;
-    let mut sessions = locked(sessions)?;
-    let mut owners = locked(&state.window_sessions)?;
-    let removed = sessions.remove(session_id);
-    for ids in owners.values_mut() {
-        ids.remove(session_id);
+    kind: SessionKind,
+) -> AppResult<Option<ReadySession>> {
+    Ok(match kind {
+        SessionKind::Ssh => locked(&state.sessions)?
+            .remove(session_id)
+            .map(ReadySession::Ssh),
+        #[cfg(not(target_os = "android"))]
+        SessionKind::Pty => locked(&state.pty_sessions)?
+            .remove(session_id)
+            .map(ReadySession::Pty),
+        #[cfg(not(target_os = "android"))]
+        SessionKind::Serial => locked(&state.serial_sessions)?
+            .remove(session_id)
+            .map(ReadySession::Serial),
+        SessionKind::Telnet => locked(&state.telnet_sessions)?
+            .remove(session_id)
+            .map(ReadySession::Telnet),
+        SessionKind::Sftp => locked(&state.sftp_sessions)?
+            .remove(session_id)
+            .map(ReadySession::Sftp),
+        SessionKind::Forward => locked(&state.active_forwards)?
+            .remove(session_id)
+            .map(ReadySession::Forward),
+    })
+}
+
+fn close_removed(mut removed: Vec<ReadySession>) {
+    removed.sort_by_key(|handle| match handle.kind() {
+        SessionKind::Sftp => 0,
+        SessionKind::Ssh => 2,
+        _ => 1,
+    });
+    for handle in removed {
+        handle.close();
     }
-    owners.retain(|_, ids| !ids.is_empty());
-    Ok(removed)
 }
 
-/// Remove a non-window-owned slot under the publication lock.
-pub fn take_session<T>(
+pub fn close_resource(
     state: &AppState,
-    sessions: &Mutex<HashMap<String, T>>,
     session_id: &str,
-) -> AppResult<Option<T>> {
-    let _global = locked(&state.session_id_reservation_lock)?;
-    Ok(locked(sessions)?.remove(session_id))
-}
-
-/// Retain a subset of a session map under the same publication lock used by
-/// insert/take. This is used for dependent-resource cleanup such as SFTP
-/// children when their parent SSH session closes.
-pub fn retain_sessions<T>(
-    state: &AppState,
-    sessions: &Mutex<HashMap<String, T>>,
-    mut keep: impl FnMut(&String, &mut T) -> bool,
+    expected_kind: SessionKind,
+    expected_owner: &SessionOwner,
 ) -> AppResult<()> {
-    let _global = locked(&state.session_id_reservation_lock)?;
-    locked(sessions)?.retain(|id, handle| keep(id, handle));
+    if expected_kind == SessionKind::Ssh {
+        return close_ssh_tree(state, session_id, expected_owner);
+    }
+    let mut registry = locked(&state.lifecycle_sessions)?;
+    let record = registry.get_mut(session_id).ok_or_else(|| {
+        AppError::not_found("session_not_found", serde_json::json!({ "id": session_id }))
+    })?;
+    if record.kind != expected_kind {
+        return Err(AppError::config(
+            "session_kind_mismatch",
+            serde_json::json!({ "id": session_id }),
+        ));
+    }
+    if &record.owner != expected_owner {
+        return Err(AppError::config(
+            "session_owner_mismatch",
+            serde_json::json!({ "id": session_id }),
+        ));
+    }
+    if record.phase == SessionPhase::Closed {
+        return Err(AppError::not_found(
+            "session_not_found",
+            serde_json::json!({ "id": session_id }),
+        ));
+    }
+    let removed = if record.phase == SessionPhase::Ready {
+        Some(
+            take_ready_handle(state, session_id, record.kind)?.ok_or_else(|| {
+                AppError::other(
+                    "session_registry_inconsistent",
+                    serde_json::json!({ "id": session_id }),
+                )
+            })?,
+        )
+    } else {
+        None
+    };
+    record.phase = SessionPhase::Closed;
+    drop(registry);
+    if let Some(handle) = removed {
+        handle.close();
+    }
+    close_waiters_for_resource(state, session_id, expected_owner)?;
     Ok(())
 }
 
-/// Transport-agnostic body shared by the Tauri command and the headless server.
-/// Headless needs this too: the server process outlives a browser/JCEF reload, so
-/// the reloaded page's mount calls this to reap orphan sessions from before the
-/// reload (events from those would otherwise fire into a dead socket).
-pub fn reconcile_sessions_impl(state: &AppState, active_ids: Vec<String>) -> AppResult<usize> {
-    // Session publication, Pending -> Ready activation, reconciliation, and
-    // window destruction are one lifecycle transaction. Keeping a single lock
-    // order (publication -> primary maps -> window index) prevents an id from
-    // changing meaning while this pass walks the transport maps.
-    let _publication = locked(&state.session_id_reservation_lock)?;
-    let alive: HashSet<String> = active_ids.into_iter().collect();
-    let mut closed = 0;
+pub fn close_ssh_tree(
+    state: &AppState,
+    session_id: &str,
+    expected_owner: &SessionOwner,
+) -> AppResult<()> {
+    let mut registry = locked(&state.lifecycle_sessions)?;
+    let parent = registry.get(session_id).ok_or_else(|| {
+        AppError::not_found("session_not_found", serde_json::json!({ "id": session_id }))
+    })?;
+    if parent.kind != SessionKind::Ssh {
+        return Err(AppError::config(
+            "session_kind_mismatch",
+            serde_json::json!({ "id": session_id }),
+        ));
+    }
+    if &parent.owner != expected_owner {
+        return Err(AppError::config(
+            "session_owner_mismatch",
+            serde_json::json!({ "id": session_id }),
+        ));
+    }
+    if parent.phase == SessionPhase::Closed {
+        return Err(AppError::not_found(
+            "session_not_found",
+            serde_json::json!({ "id": session_id }),
+        ));
+    }
 
-    // SSH sessions —— 收集所有要被关掉的 ssh id，先做 SFTP children 联动清理，
-    // 再切断 TCP。
-    let mut stale_ssh: Vec<String> = Vec::new();
-    {
-        let sessions = locked(&state.sessions)?;
-        for k in sessions.keys() {
-            if !alive.contains(k) {
-                stale_ssh.push(k.clone());
-            }
+    let child_ids: Vec<String> = registry
+        .iter()
+        .filter(|(_, record)| {
+            record.parent.as_deref() == Some(session_id) && record.phase != SessionPhase::Closed
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    let mut removed = Vec::new();
+    for child_id in child_ids {
+        let child = registry
+            .get_mut(&child_id)
+            .expect("child came from registry");
+        if child.kind != SessionKind::Sftp {
+            return Err(AppError::other(
+                "session_registry_inconsistent",
+                serde_json::json!({ "id": child_id }),
+            ));
         }
-    }
-
-    // SFTP sessions：本身不在 alive 里的清掉；父 SSH 也要被清的 children 也清掉。
-    {
-        let mut sftp = locked(&state.sftp_sessions)?;
-        let before = sftp.len();
-        sftp.retain(|k, h| {
-            alive.contains(k)
-                && match h.parent_ssh_id() {
-                    Some(parent) => !stale_ssh.iter().any(|s| s == parent),
-                    None => true,
-                }
-        });
-        closed += before - sftp.len();
-    }
-
-    // 现在再切 SSH 的 TCP（避免 children 还在的时候 disconnect 得到无意义的传输报错）
-    {
-        let mut sessions = locked(&state.sessions)?;
-        for k in &stale_ssh {
-            if let Some(h) = sessions.remove(k) {
-                h.force_disconnect();
-                closed += 1;
-            }
+        if child.phase == SessionPhase::Ready {
+            removed.push(
+                take_ready_handle(state, &child_id, SessionKind::Sftp)?.ok_or_else(|| {
+                    AppError::other(
+                        "session_registry_inconsistent",
+                        serde_json::json!({ "id": child_id }),
+                    )
+                })?,
+            );
         }
+        child.phase = SessionPhase::Closed;
     }
 
-    // Active forwards
-    {
-        let mut fwds = locked(&state.active_forwards)?;
-        let stale: Vec<String> = fwds
-            .keys()
-            .filter(|k| !alive.contains(*k))
-            .cloned()
-            .collect();
-        for k in stale {
-            if let Some(h) = fwds.remove(&k) {
-                h.stop();
-                closed += 1;
-            }
-        }
+    let parent = registry.get_mut(session_id).expect("parent was validated");
+    if parent.phase == SessionPhase::Ready {
+        removed.push(
+            take_ready_handle(state, session_id, SessionKind::Ssh)?.ok_or_else(|| {
+                AppError::other(
+                    "session_registry_inconsistent",
+                    serde_json::json!({ "id": session_id }),
+                )
+            })?,
+        );
     }
-
-    // PTY（桌面平台）
-    #[cfg(not(target_os = "android"))]
-    {
-        let mut pty = locked(&state.pty_sessions)?;
-        let before = pty.len();
-        pty.retain(|k, _| alive.contains(k));
-        closed += before - pty.len();
-    }
-
-    // Serial（桌面平台）—— 同 PTY：不在 alive 里的移除；drop 最后一份 handle
-    // 触发 reader 线程退出（CloseGuard 置位 close flag）。
-    #[cfg(not(target_os = "android"))]
-    {
-        let mut serial = locked(&state.serial_sessions)?;
-        let before = serial.len();
-        serial.retain(|k, _| alive.contains(k));
-        closed += before - serial.len();
-    }
-
-    // Telnet —— 同 serial：drop 最后一份 handle 触发 reader 线程退出。
-    {
-        let mut telnet = locked(&state.telnet_sessions)?;
-        let before = telnet.len();
-        telnet.retain(|k, _| alive.contains(k));
-        closed += before - telnet.len();
-    }
-
-    // AI 排障会话：key 也是 tab_id（与其他 session 同处 alive 集合）。不在 alive 里的
-    // 先发 Stop 让 actor 退出（同 ai_session_stop），再移除——否则重载后 actor 带着
-    // 死事件 sink 残留到进程退出。
-    {
-        let mut ai = locked(&state.ai_sessions)?;
-        let stale: Vec<String> = ai.keys().filter(|k| !alive.contains(*k)).cloned().collect();
-        for k in stale {
-            if let Some(s) = ai.remove(&k) {
-                let _ = s.action_tx.send(crate::ai::session::UserAction::Stop);
-                closed += 1;
-            }
-        }
-    }
-
-    // window_sessions is a secondary ownership index over the four primary
-    // transport maps. Reconcile used to remove a transport but leave its old
-    // owner entry behind; if that UUID was later reused, closing the old window
-    // would kill the new session. Rebuild the valid key set after all removals
-    // and prune the secondary index in the same reconciliation pass. Hold the
-    // publication lock across the snapshot and prune so a concurrent Pending
-    // reservation cannot publish between those two operations and lose its
-    // freshly-created owner entry.
-    let mut live_transport_ids = HashSet::new();
-    live_transport_ids.extend(locked(&state.sessions)?.keys().cloned());
-    #[cfg(not(target_os = "android"))]
-    {
-        live_transport_ids.extend(locked(&state.pty_sessions)?.keys().cloned());
-        live_transport_ids.extend(locked(&state.serial_sessions)?.keys().cloned());
-    }
-    live_transport_ids.extend(locked(&state.telnet_sessions)?.keys().cloned());
-    let mut owners = locked(&state.window_sessions)?;
-    for ids in owners.values_mut() {
-        ids.retain(|id| live_transport_ids.contains(id));
-    }
-    owners.retain(|_, ids| !ids.is_empty());
-
-    Ok(closed)
+    parent.phase = SessionPhase::Closed;
+    drop(registry);
+    close_removed(removed);
+    close_waiters_for_resource(state, session_id, expected_owner)?;
+    Ok(())
 }
 
-/// 关闭指定窗口拥有的所有 session —— 窗口销毁时调用。
+fn remove_owned_resources(
+    state: &AppState,
+    owner: &SessionOwner,
+    active_ids: Option<&HashSet<String>>,
+) -> AppResult<(usize, Vec<ReadySession>)> {
+    let mut registry = locked(&state.lifecycle_sessions)?;
+    let mut ids: Vec<String> = registry
+        .iter()
+        .filter(|(id, record)| {
+            record.owner == *owner
+                && record.phase != SessionPhase::Closed
+                && active_ids.is_none_or(|active| !active.contains(*id))
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    let closing_parents: HashSet<String> = ids
+        .iter()
+        .filter(|id| {
+            registry
+                .get(*id)
+                .is_some_and(|record| record.kind == SessionKind::Ssh)
+        })
+        .cloned()
+        .collect();
+    let child_ids: Vec<String> = registry
+        .iter()
+        .filter(|(id, record)| {
+            !ids.contains(id)
+                && record.phase != SessionPhase::Closed
+                && record
+                    .parent
+                    .as_ref()
+                    .is_some_and(|parent| closing_parents.contains(parent))
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    ids.extend(child_ids);
+    let mut removed = Vec::new();
+    for id in &ids {
+        let record = registry.get_mut(id).expect("id came from registry");
+        if record.phase == SessionPhase::Ready {
+            removed.push(take_ready_handle(state, id, record.kind)?.ok_or_else(|| {
+                AppError::other(
+                    "session_registry_inconsistent",
+                    serde_json::json!({ "id": id }),
+                )
+            })?);
+        }
+        record.phase = SessionPhase::Closed;
+    }
+    Ok((ids.len(), removed))
+}
+
+pub fn reconcile_owner(
+    state: &AppState,
+    owner: &SessionOwner,
+    active_ids: Vec<String>,
+) -> AppResult<usize> {
+    let active: HashSet<String> = active_ids.into_iter().collect();
+    let (closed, removed) = remove_owned_resources(state, owner, Some(&active))?;
+    close_removed(removed);
+    Ok(closed
+        + close_owned_ai(state, owner, Some(&active))?
+        + close_owned_waiters(state, owner, Some(&active))?)
+}
+
+pub fn close_owner(state: &AppState, owner: &SessionOwner) {
+    match remove_owned_resources(state, owner, None) {
+        Ok((_, removed)) => close_removed(removed),
+        Err(error) => log::warn!("close owner sessions failed: {error}"),
+    }
+    if let Err(error) = close_owned_ai(state, owner, None) {
+        log::warn!("close owner AI sessions failed: {error}");
+    }
+    if let Err(error) = close_owned_waiters(state, owner, None) {
+        log::warn!("close owner prompt waiters failed: {error}");
+    }
+}
+
+pub fn reconcile_sessions_impl(
+    state: &AppState,
+    owner: &SessionOwner,
+    active_ids: Vec<String>,
+) -> AppResult<usize> {
+    reconcile_owner(state, owner, active_ids)
+}
+
 pub fn close_window_sessions(state: &AppState, window_label: &str) {
-    // Serialize the whole multi-map delete with publication and activation.
-    // Otherwise an id removed from an early map could be reused in a later map
-    // and then accidentally deleted by this old window's cleanup pass.
-    let _publication = match state.session_id_reservation_lock.lock() {
-        Ok(lock) => lock,
-        Err(_) => return,
-    };
-    let ids = match state.window_sessions.lock() {
-        Ok(mut ws) => ws.remove(window_label).unwrap_or_default(),
-        Err(_) => return,
-    };
-    if ids.is_empty() {
-        return;
-    }
-
-    // 先把所有挂在这些 SSH 上的 SFTP children 清掉（基于 parent_ssh_id 反查），
-    // 再切 TCP。这样传输的 channel I/O 会被底层 socket 关掉自然 error 退出。
-    if let Ok(mut sftp) = state.sftp_sessions.lock() {
-        sftp.retain(|sftp_id, h| {
-            // ids 里的 SFTP（本身被记录在窗口下的）和 parent_ssh_id 在 ids 里的 children 都清
-            !ids.contains(sftp_id)
-                && match h.parent_ssh_id() {
-                    Some(parent) => !ids.contains(parent),
-                    None => true,
-                }
-        });
-    }
-
-    if let Ok(mut sessions) = state.sessions.lock() {
-        for id in &ids {
-            if let Some(h) = sessions.remove(id) {
-                h.force_disconnect();
-            }
-        }
-    }
-    #[cfg(not(target_os = "android"))]
-    if let Ok(mut pty) = state.pty_sessions.lock() {
-        for id in &ids {
-            pty.remove(id);
-        }
-    }
-    #[cfg(not(target_os = "android"))]
-    if let Ok(mut serial) = state.serial_sessions.lock() {
-        for id in &ids {
-            serial.remove(id);
-        }
-    }
-    if let Ok(mut telnet) = state.telnet_sessions.lock() {
-        for id in &ids {
-            telnet.remove(id);
-        }
-    }
-    if let Ok(mut fwds) = state.active_forwards.lock() {
-        for id in &ids {
-            if let Some(h) = fwds.remove(id) {
-                h.stop();
-            }
-        }
-    }
+    close_owner(state, &SessionOwner::Window(window_label.to_owned()));
 }
 
 #[cfg(test)]
@@ -471,7 +902,7 @@ mod tests {
         AppState {
             db,
             secret_store,
-            session_id_reservation_lock: Mutex::new(()),
+            lifecycle_sessions: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
             #[cfg(not(target_os = "android"))]
             pty_sessions: Mutex::new(HashMap::new()),
@@ -485,10 +916,10 @@ mod tests {
             passphrase_waiters: Mutex::new(HashMap::new()),
             host_key_waiters: Mutex::new(HashMap::new()),
             passphrase_cache: Mutex::new(HashMap::new()),
-            window_sessions: Mutex::new(HashMap::new()),
             #[cfg(desktop)]
             window_groups: Mutex::new(crate::commands::window::WindowGroups::default()),
             ai_sessions: Mutex::new(HashMap::new()),
+            ai_session_owners: Mutex::new(HashMap::new()),
             ai_remote_shell_cache: Mutex::new(HashMap::new()),
             data_dir: PathBuf::new(),
         }
@@ -518,160 +949,312 @@ mod tests {
     }
 
     #[test]
-    fn reservation_is_atomic_and_only_pending_slot_can_activate() {
-        let publication_lock = Mutex::new(());
-        let sessions = Mutex::new(HashMap::<String, SessionSlot<u8>>::new());
-        let reservation = reserve_slot(&publication_lock, &sessions, "id").unwrap();
-        let duplicate = match reserve_slot(&publication_lock, &sessions, "id") {
-            Ok(_) => panic!("duplicate reservation unexpectedly succeeded"),
-            Err(e) => e,
+    fn cancelled_session_id_cannot_be_reused() {
+        let state = empty_state();
+        let owner = crate::state::SessionOwner::Window("main".into());
+        let reservation = reserve_resource(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440000",
+            crate::state::SessionKind::Pty,
+            owner.clone(),
+        )
+        .unwrap();
+
+        drop(reservation);
+
+        let error = match reserve_resource(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440000",
+            crate::state::SessionKind::Pty,
+            owner,
+        ) {
+            Ok(_) => panic!("cancelled id was reused"),
+            Err(error) => error,
         };
-        assert_eq!(duplicate.code(), "session_id_conflict");
-
-        reservation.activate(7).unwrap();
-        assert_eq!(
-            sessions
-                .lock()
-                .unwrap()
-                .get("id")
-                .and_then(SessionSlot::ready),
-            Some(&7)
-        );
-        assert!(sessions.lock().unwrap().contains_key("id"));
+        assert_eq!(error.code(), "session_id_conflict");
     }
 
     #[test]
-    fn removed_reservation_cannot_publish_a_late_handle() {
-        let publication_lock = Mutex::new(());
-        let sessions = Mutex::new(HashMap::<String, SessionSlot<u8>>::new());
-        let reservation = reserve_slot(&publication_lock, &sessions, "id").unwrap();
-        sessions.lock().unwrap().remove("id");
-        let err = reservation.activate(7).unwrap_err();
-        assert_eq!(err.code(), "session_reservation_lost");
-    }
-
-    #[test]
-    fn dropping_reservation_cleans_pending_slot_and_window_owner() {
-        let publication_lock = Mutex::new(());
-        let sessions = Mutex::new(HashMap::<String, SessionSlot<u8>>::new());
-        let owners = Mutex::new(HashMap::from([(
-            "main".to_string(),
-            HashSet::from(["id".to_string()]),
-        )]));
-        {
-            let mut reservation = reserve_slot(&publication_lock, &sessions, "id").unwrap();
-            reservation.window_sessions = Some(&owners);
-        }
-
-        assert!(!sessions.lock().unwrap().contains_key("id"));
-        assert!(!owners.lock().unwrap().contains_key("main"));
-    }
-
-    #[cfg(not(target_os = "android"))]
-    #[test]
-    fn same_id_cannot_be_reserved_in_two_transport_maps() {
+    fn wrong_owner_or_kind_cannot_cancel_pending_session() {
         let state = empty_state();
-        let _pty = reserve_session(&state, &state.pty_sessions, "id").unwrap();
+        let owner = crate::state::SessionOwner::Window("main".into());
+        let other = crate::state::SessionOwner::Window("other".into());
+        let reservation = reserve_resource(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440001",
+            crate::state::SessionKind::Pty,
+            owner.clone(),
+        )
+        .unwrap();
 
-        let err = match reserve_session(&state, &state.telnet_sessions, "id") {
-            Ok(_) => panic!("cross-transport duplicate unexpectedly reserved"),
-            Err(e) => e,
-        };
-        assert_eq!(err.code(), "session_id_conflict");
+        assert!(close_resource(
+            &state,
+            reservation.id(),
+            crate::state::SessionKind::Pty,
+            &other,
+        )
+        .is_err());
+        reservation.ensure_pending().unwrap();
 
-        let unrelated_ready_map = Mutex::new(HashMap::<String, u8>::new());
+        assert!(close_resource(
+            &state,
+            reservation.id(),
+            crate::state::SessionKind::Serial,
+            &owner,
+        )
+        .is_err());
+        reservation.ensure_pending().unwrap();
+
+        close_resource(
+            &state,
+            reservation.id(),
+            crate::state::SessionKind::Pty,
+            &owner,
+        )
+        .unwrap();
         assert_eq!(
-            publish_session(&state, &unrelated_ready_map, "id".into(), 7)
-                .unwrap_err()
-                .code(),
-            "session_id_conflict"
-        );
-    }
-
-    #[test]
-    fn reconcile_prunes_stale_window_owners_before_id_reuse() {
-        let state = empty_state();
-        let _live = reserve_window_session(&state, &state.telnet_sessions, "main", "live").unwrap();
-        state.window_sessions.lock().unwrap().extend([
-            (
-                "main".into(),
-                HashSet::from(["live".into(), "stale".into()]),
-            ),
-            ("old".into(), HashSet::from(["stale".into()])),
-        ]);
-
-        reconcile_sessions_impl(&state, vec!["live".into()]).unwrap();
-
-        let owners = state.window_sessions.lock().unwrap();
-        assert_eq!(owners["main"], HashSet::from(["live".into()]));
-        assert!(!owners.contains_key("old"));
-    }
-
-    #[test]
-    fn publish_and_take_window_session_update_handle_and_owner_atomically() {
-        let state = empty_state();
-        let sessions = Mutex::new(HashMap::<String, u8>::new());
-
-        publish_window_session(&state, &sessions, "main", "id".into(), 7).unwrap();
-
-        assert_eq!(sessions.lock().unwrap().get("id"), Some(&7));
-        assert_eq!(
-            state.window_sessions.lock().unwrap()["main"],
-            HashSet::from(["id".into()])
-        );
-
-        assert_eq!(
-            take_window_session(&state, &sessions, "id").unwrap(),
-            Some(7)
-        );
-        assert!(!sessions.lock().unwrap().contains_key("id"));
-        assert!(!state.window_sessions.lock().unwrap().contains_key("main"));
-    }
-
-    #[test]
-    fn old_reservation_cannot_activate_or_drop_a_reused_id() {
-        let state = empty_state();
-        let sessions = Mutex::new(HashMap::<String, SessionSlot<u8>>::new());
-        let old = reserve_window_session(&state, &sessions, "old", "id").unwrap();
-
-        assert!(take_window_session(&state, &sessions, "id")
-            .unwrap()
-            .is_some());
-        let new = reserve_window_session(&state, &sessions, "new", "id").unwrap();
-
-        assert_eq!(
-            old.activate(7).unwrap_err().code(),
+            reservation.ensure_pending().unwrap_err().code(),
             "session_reservation_lost"
         );
-        assert!(sessions.lock().unwrap().contains_key("id"));
-        assert!(state.window_sessions.lock().unwrap()["new"].contains("id"));
+    }
 
-        new.activate(8).unwrap();
+    #[test]
+    fn reconcile_is_scoped_to_one_owner() {
+        let state = empty_state();
+        let owner_a = SessionOwner::Window("a".into());
+        let owner_b = SessionOwner::Window("b".into());
+        let a = reserve_resource(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440010",
+            SessionKind::Pty,
+            owner_a.clone(),
+        )
+        .unwrap();
+        let b = reserve_resource(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440011",
+            SessionKind::Pty,
+            owner_b,
+        )
+        .unwrap();
+
+        assert_eq!(reconcile_owner(&state, &owner_a, Vec::new()).unwrap(), 1);
+
         assert_eq!(
-            sessions
+            a.ensure_pending().unwrap_err().code(),
+            "session_reservation_lost"
+        );
+        b.ensure_pending().unwrap();
+    }
+
+    #[test]
+    fn late_activation_cleans_handle_after_pending_close() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let state = empty_state();
+        let owner = SessionOwner::Window("main".into());
+        let reservation = reserve_resource(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440020",
+            SessionKind::Pty,
+            owner.clone(),
+        )
+        .unwrap();
+        close_resource(&state, reservation.id(), SessionKind::Pty, &owner).unwrap();
+        let cleaned = Arc::new(AtomicBool::new(false));
+
+        let error = reservation
+            .activate(ReadySession::CleanupProbe {
+                kind: SessionKind::Pty,
+                cleaned: cleaned.clone(),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code(), "session_reservation_lost");
+        assert!(cleaned.load(Ordering::SeqCst));
+        assert!(state.pty_sessions.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn prompt_cannot_register_after_pending_connection_is_closed() {
+        let state = empty_state();
+        let owner = SessionOwner::Window("main".into());
+        let session_id = "550e8400-e29b-41d4-a716-446655440023";
+        let reservation =
+            reserve_resource(&state, session_id, SessionKind::Ssh, owner.clone()).unwrap();
+        close_resource(&state, session_id, SessionKind::Ssh, &owner).unwrap();
+        let (sender, _receiver) = tokio::sync::oneshot::channel::<String>();
+
+        let error = register_prompt_waiter(
+            &state,
+            &state.passphrase_waiters,
+            session_id,
+            session_id,
+            &owner,
+            "ssh:passphrase_prompt",
+            uuid::Uuid::new_v4(),
+            sender,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), "session_reservation_lost");
+        assert!(state.passphrase_waiters.lock().unwrap().is_empty());
+        drop(reservation);
+    }
+
+    #[test]
+    fn backend_cannot_replace_reserved_session_id() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let state = empty_state();
+        let reservation = reserve_resource(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440021",
+            SessionKind::Pty,
+            SessionOwner::Window("main".into()),
+        )
+        .unwrap();
+        let cleaned = Arc::new(AtomicBool::new(false));
+
+        let error = reservation
+            .activate_returned(
+                "550e8400-e29b-41d4-a716-446655440022",
+                ReadySession::CleanupProbe {
+                    kind: SessionKind::Pty,
+                    cleaned: cleaned.clone(),
+                },
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code(), "session_id_mismatch");
+        assert!(cleaned.load(Ordering::SeqCst));
+        assert_eq!(
+            state
+                .lifecycle_sessions
                 .lock()
                 .unwrap()
-                .get("id")
-                .and_then(SessionSlot::ready),
-            Some(&8)
+                .get("550e8400-e29b-41d4-a716-446655440021")
+                .unwrap()
+                .phase,
+            SessionPhase::Closed
+        );
+    }
+
+    fn fake_ai_session(
+        tab_id: &str,
+        conversation_id: &str,
+    ) -> (
+        crate::ai::session::DiagnoseSession,
+        tokio::sync::mpsc::UnboundedReceiver<crate::ai::session::UserAction>,
+    ) {
+        let (action_tx, action_rx) = tokio::sync::mpsc::unbounded_channel();
+        (
+            crate::ai::session::DiagnoseSession {
+                tab_id: tab_id.to_owned(),
+                target_id: "target".to_owned(),
+                skill: "general".to_owned(),
+                model: "model".to_owned(),
+                provider: "provider".to_owned(),
+                action_tx,
+                audit: Arc::new(Mutex::new(crate::ai::audit::AuditLog::default())),
+                cancel_slot: Arc::new(Mutex::new(None)),
+                conversation_id: conversation_id.to_owned(),
+                target_key: "local".to_owned(),
+            },
+            action_rx,
+        )
+    }
+
+    #[test]
+    fn late_ai_activation_after_close_stops_actor_and_does_not_publish_session() {
+        let state = empty_state();
+        let owner = SessionOwner::Window("main".into());
+        let reservation = reserve_ai_owner(&state, "tab".into(), owner.clone()).unwrap();
+
+        close_ai_session(&state, "tab", &owner).unwrap();
+        let replacement = reserve_ai_owner(&state, "tab".into(), owner).unwrap();
+        let (session, mut actions) = fake_ai_session("tab", "conversation");
+        let error = reservation.activate(session).unwrap_err();
+
+        assert_eq!(error.code(), "session_reservation_lost");
+        assert!(matches!(
+            actions.try_recv(),
+            Ok(crate::ai::session::UserAction::Stop)
+        ));
+        assert!(state.ai_sessions.lock().unwrap().is_empty());
+
+        let (replacement_session, _replacement_actions) =
+            fake_ai_session("tab", "replacement-conversation");
+        replacement.activate(replacement_session).unwrap();
+        assert!(state.ai_sessions.lock().unwrap().contains_key("tab"));
+        assert_eq!(
+            state
+                .ai_session_owners
+                .lock()
+                .unwrap()
+                .get("tab")
+                .unwrap()
+                .phase,
+            SessionPhase::Ready
         );
     }
 
     #[test]
-    fn reconcile_removes_unreported_pending_without_late_drop_touching_reuse() {
+    fn closed_ai_tab_id_can_be_reserved_again() {
         let state = empty_state();
-        let old = reserve_window_session(&state, &state.telnet_sessions, "old", "id").unwrap();
+        let owner = SessionOwner::Window("main".into());
+        let reservation = reserve_ai_owner(&state, "tab".into(), owner.clone()).unwrap();
+        let (session, mut actions) = fake_ai_session("tab", "conversation");
+        reservation.activate(session).unwrap();
 
-        reconcile_sessions_impl(&state, Vec::new()).unwrap();
+        close_ai_session(&state, "tab", &owner).unwrap();
+        assert!(matches!(
+            actions.try_recv(),
+            Ok(crate::ai::session::UserAction::Stop)
+        ));
 
-        assert!(!state.telnet_sessions.lock().unwrap().contains_key("id"));
-        assert!(!state.window_sessions.lock().unwrap().contains_key("old"));
+        let replacement = reserve_ai_owner(&state, "tab".into(), owner).unwrap();
+        drop(replacement);
+        assert!(state.ai_session_owners.lock().unwrap().is_empty());
+    }
 
-        let new = reserve_window_session(&state, &state.telnet_sessions, "new", "id").unwrap();
-        drop(old);
+    #[test]
+    fn closing_owner_does_not_cancel_another_owners_prompt() {
+        let state = empty_state();
+        let owner_a = SessionOwner::Headless(uuid::Uuid::new_v4());
+        let owner_b = SessionOwner::Headless(uuid::Uuid::new_v4());
+        let (sender_a, mut receiver_a) = tokio::sync::oneshot::channel();
+        let (sender_b, mut receiver_b) = tokio::sync::oneshot::channel();
+        {
+            let mut waiters = state.passphrase_waiters.lock().unwrap();
+            waiters.insert(
+                "a".into(),
+                crate::state::OwnedWaiter {
+                    nonce: uuid::Uuid::new_v4(),
+                    owner: owner_a.clone(),
+                    sender: sender_a,
+                },
+            );
+            waiters.insert(
+                "b".into(),
+                crate::state::OwnedWaiter {
+                    nonce: uuid::Uuid::new_v4(),
+                    owner: owner_b,
+                    sender: sender_b,
+                },
+            );
+        }
 
-        assert!(state.telnet_sessions.lock().unwrap().contains_key("id"));
-        assert!(state.window_sessions.lock().unwrap()["new"].contains("id"));
-        drop(new);
+        close_owner(&state, &owner_a);
+
+        assert!(matches!(
+            receiver_a.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        ));
+        assert!(state.passphrase_waiters.lock().unwrap().contains_key("b"));
+        assert!(matches!(
+            receiver_b.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
     }
 }

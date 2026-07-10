@@ -110,7 +110,7 @@ pub(crate) async fn decode_key_with_prompt(
                 };
                 let _ = ctx
                     .app
-                    .emit(&format!("ssh:data:{}", ctx.tab_id), msg.into_bytes());
+                    .emit(&format!("ssh:data:{}", ctx.prompt_id), msg.into_bytes());
             }
             Err(e) => {
                 return Err(AppError::ssh(
@@ -177,20 +177,11 @@ pub async fn authenticate(
             check_auth_result(result)
         }
         CredentialType::Interactive => {
-            // Connect 路径在调本函数前已分流到 authenticate_interactive；
-            // 没分流就走到这里的全是后台路径（forward / SFTP），它们传 ctx=None
-            // 也没法弹 prompt —— 必须报错，不能 silent Ok 让 caller 误以为登成功。
-            // 有 ctx 时仍然委派给 authenticate_interactive，让"统一通过 authenticate()
-            // 入口"成立。
+            // Background paths (forward / standalone SFTP) have no terminal
+            // context and must fail instead of parking on an unreachable prompt.
             let ctx =
                 ctx.ok_or_else(|| AppError::ssh("ssh_interactive_requires_terminal", json!({})))?;
-            authenticate_interactive(
-                handle,
-                credential.username,
-                ctx.app.clone(),
-                ctx.tab_id.clone(),
-            )
-            .await
+            authenticate_interactive(handle, credential.username, ctx).await
         }
     }
 }
@@ -462,8 +453,7 @@ fn default_identity_paths() -> Vec<PathBuf> {
 pub async fn authenticate_interactive(
     handle: &mut client::Handle<SshHandler>,
     username: String,
-    app: crate::emitter::Host,
-    tab_id: String,
+    ctx: &crate::ssh::prompt::AuthCtx,
 ) -> AppResult<()> {
     use russh::client::KeyboardInteractiveAuthResponse;
 
@@ -483,42 +473,27 @@ pub async fn authenticate_interactive(
                 instructions,
                 prompts,
             } => {
-                let (tx, rx) = tokio::sync::oneshot::channel::<Vec<String>>();
-
                 let prompt_data: Vec<serde_json::Value> = prompts
                     .iter()
                     .map(|p| serde_json::json!({ "prompt": p.prompt, "echo": p.echo }))
                     .collect();
 
-                // state 拿出来一次，让 &state.auth_waiters 的借用横跨 insert + guard。
-                let state = app.state();
-                // 必须先注册 sender 再 emit。否则前端响应快到能在 insert 之前
-                // 调 ssh_auth_respond，找不到 waiter → 响应被丢，rx 永远 hang。
-                locked(&state.auth_waiters)?.insert(tab_id.clone(), tx);
-                // RAII：emit 失败 / rx 异常 / 提前 return 时自动清 sender。
-                // 正常 await 到响应时 sender 已被 ssh_auth_respond 取走，guard 的
-                // remove 是 no-op。
-                let _guard = AuthWaiterGuard {
-                    waiters: &state.auth_waiters,
-                    tab_id: &tab_id,
-                };
-                if let Err(e) = app.emit(
-                    &format!("ssh:auth_prompt:{tab_id}"),
+                let state = ctx.app.state();
+                let responses = crate::ssh::prompt::prompt_oneshot(
+                    &state.auth_waiters,
+                    &ctx.app,
+                    &ctx.resource_id,
+                    &ctx.prompt_id,
+                    &ctx.owner,
+                    "ssh:auth_prompt",
                     serde_json::json!({
                         "name": name,
                         "instructions": instructions,
                         "prompts": prompt_data,
                     }),
-                ) {
-                    return Err(AppError::other(
-                        "emit_failed",
-                        json!({ "channel": "ssh:auth_prompt", "err": e.to_string() }),
-                    ));
-                }
-
-                let responses = rx
-                    .await
-                    .map_err(|_| AppError::ssh("ssh_user_cancelled_auth", json!({})))?;
+                    "ssh_user_cancelled_auth",
+                )
+                .await?;
 
                 reply = handle
                     .authenticate_keyboard_interactive_respond(responses)
@@ -527,23 +502,6 @@ pub async fn authenticate_interactive(
                         AppError::ssh("ssh_kbi_response_failed", json!({ "err": e.to_string() }))
                     })?;
             }
-        }
-    }
-}
-
-/// auth_waiters 的 RAII 清理器。同 `ssh::prompt::WaiterGuard` 模式，但目标
-/// map 元素类型是 `Vec<String>`（kbd-interactive 多 prompt 一次性回收）。
-struct AuthWaiterGuard<'a> {
-    waiters: &'a std::sync::Mutex<
-        std::collections::HashMap<String, tokio::sync::oneshot::Sender<Vec<String>>>,
-    >,
-    tab_id: &'a str,
-}
-
-impl Drop for AuthWaiterGuard<'_> {
-    fn drop(&mut self) {
-        if let Ok(mut m) = locked(self.waiters) {
-            m.remove(self.tab_id);
         }
     }
 }

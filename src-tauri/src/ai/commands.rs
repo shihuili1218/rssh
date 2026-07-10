@@ -9,7 +9,7 @@ use serde_json::json;
 
 use crate::error::{locked, AppError, AppResult};
 use crate::secret::setting_key;
-use crate::state::{AppState, SessionSlot};
+use crate::state::AppState;
 
 use super::command_blacklist::{self, CategoryGroup};
 use super::llm;
@@ -335,6 +335,7 @@ fn locale_label(locale: &str) -> &'static str {
 #[allow(clippy::too_many_arguments)]
 pub async fn ai_session_start(
     app: AppHandle,
+    window: tauri::Window,
     state: State<'_, AppState>,
     tab_id: String,
     target: AiTarget,
@@ -347,6 +348,7 @@ pub async fn ai_session_start(
     ai_session_start_impl(
         &state,
         crate::emitter::Host::Tauri(app),
+        crate::state::SessionOwner::Window(window.label().to_owned()),
         tab_id,
         target,
         skill,
@@ -363,6 +365,7 @@ pub async fn ai_session_start(
 pub async fn ai_session_start_impl(
     state: &AppState,
     host: crate::emitter::Host,
+    owner: crate::state::SessionOwner,
     tab_id: String,
     target: AiTarget,
     skill: String,
@@ -371,6 +374,8 @@ pub async fn ai_session_start_impl(
     locale: Option<String>,
     resume: Option<String>,
 ) -> AppResult<AiSessionInfo> {
+    let owner_reservation =
+        crate::commands::lifecycle::reserve_ai_owner(state, tab_id.clone(), owner)?;
     {
         let g = locked(&state.ai_sessions)?;
         // 一个 tab 至多一个 actor。前端 ensureSession 已经做了"有 session 就复用"的判断，
@@ -430,7 +435,6 @@ pub async fn ai_session_start_impl(
             let g = locked(&state.pty_sessions)?;
             let pty = g
                 .get(target_id)
-                .and_then(SessionSlot::ready)
                 .ok_or_else(|| AppError::not_found("local_pty_not_found", json!({})))?;
             initial_shell = super::shell::ShellKind::from_local_path(pty.shell_path());
             None
@@ -455,11 +459,7 @@ pub async fn ai_session_start_impl(
         AiTarget::Telnet(target_id) => {
             // Same raw-device path as Serial: validate it exists, run with
             // ShellKind::Telnet, no ssh_handle (front-end does telnet_write/read).
-            if locked(&state.telnet_sessions)?
-                .get(target_id)
-                .and_then(SessionSlot::ready)
-                .is_none()
-            {
+            if !locked(&state.telnet_sessions)?.contains_key(target_id) {
                 return Err(AppError::not_found("telnet_session_not_found", json!({})));
             }
             initial_shell = super::shell::ShellKind::Telnet;
@@ -553,24 +553,7 @@ pub async fn ai_session_start_impl(
     // 从未运行过、不会 emit `ai:session_ended:<tab_id>` 污染赢家的事件流。
     let pending = session::start(cfg, host)?;
     let info = AiSessionInfo::from(pending.info());
-    {
-        let mut g = locked(&state.ai_sessions)?;
-        if g.contains_key(&tab_id) {
-            return Err(AppError::other(
-                "session_already_exists",
-                json!({ "tab_id": tab_id }),
-            ));
-        }
-        // Same-lock-as-insert recheck closes the resume race the early check
-        // can't (two resumes of one conversation passing it concurrently).
-        // Fresh sessions carry a new uuid, so the scan is a no-op for them.
-        if g.values()
-            .any(|s| s.conversation_id == info.conversation_id)
-        {
-            return Err(AppError::other("conversation_in_use", json!({})));
-        }
-        g.insert(tab_id, pending.launch());
-    }
+    owner_reservation.activate(pending.launch())?;
     // Create the conversation row only for NEW conversations, and only after
     // winning the slot — a racing loser must not litter the picker with an
     // empty row. Resume must NOT create: its row already exists, and an
@@ -650,12 +633,16 @@ pub async fn ai_command_reject(
 
 /// 销毁 actor。前端在 tab close 时调（panel close 只隐藏 UI，不调这个）。
 #[tauri::command]
-pub async fn ai_session_stop(state: State<'_, AppState>, tab_id: String) -> AppResult<()> {
-    let session = locked(&state.ai_sessions)?
-        .remove(&tab_id)
-        .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
-    let _ = session.action_tx.send(UserAction::Stop);
-    Ok(())
+pub async fn ai_session_stop(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    tab_id: String,
+) -> AppResult<()> {
+    crate::commands::lifecycle::close_ai_session(
+        &state,
+        &tab_id,
+        &crate::state::SessionOwner::Window(window.label().to_owned()),
+    )
 }
 
 /// 清空 actor 的 history（保留 audit log）。
@@ -745,11 +732,7 @@ pub async fn ai_session_rebind_target(
         }
         #[cfg(not(target_os = "android"))]
         AiTarget::Local(target_id) => {
-            if locked(&state.pty_sessions)?
-                .get(target_id)
-                .and_then(SessionSlot::ready)
-                .is_none()
-            {
+            if !locked(&state.pty_sessions)?.contains_key(target_id) {
                 return Err(AppError::not_found("local_pty_not_found", json!({})));
             }
             None
@@ -768,11 +751,7 @@ pub async fn ai_session_rebind_target(
             return Err(AppError::not_found("serial_session_not_found", json!({})))
         }
         AiTarget::Telnet(target_id) => {
-            if locked(&state.telnet_sessions)?
-                .get(target_id)
-                .and_then(SessionSlot::ready)
-                .is_none()
-            {
+            if !locked(&state.telnet_sessions)?.contains_key(target_id) {
                 return Err(AppError::not_found("telnet_session_not_found", json!({})));
             }
             None
@@ -911,7 +890,6 @@ pub(crate) fn conversation_target_key(state: &AppState, target: &AiTarget) -> Ap
             let g = locked(&state.telnet_sessions)?;
             let h = g
                 .get(id)
-                .and_then(SessionSlot::ready)
                 .ok_or_else(|| AppError::not_found("telnet_session_not_found", json!({})))?;
             format!("telnet:{}", h.peer())
         }

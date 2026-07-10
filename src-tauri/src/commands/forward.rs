@@ -4,7 +4,7 @@ use tauri::State;
 use crate::error::{locked, AppError, AppResult};
 use crate::models::{Credential, Forward, ForwardType, Profile};
 use crate::ssh::forward as fwd;
-use crate::state::AppState;
+use crate::state::{AppState, SessionKind, SessionOwner};
 
 #[tauri::command]
 pub fn list_forwards(state: State<AppState>) -> Result<Vec<Forward>, AppError> {
@@ -36,13 +36,29 @@ pub fn delete_forward(state: State<AppState>, id: String) -> Result<(), AppError
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn forward_start(state: State<'_, AppState>, forward_id: String) -> AppResult<String> {
-    forward_start_impl(&state, forward_id).await
+pub async fn forward_start(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    forward_id: String,
+) -> AppResult<String> {
+    forward_start_impl(
+        &state,
+        SessionOwner::Window(window.label().to_owned()),
+        forward_id,
+    )
+    .await
 }
 
 /// Transport-agnostic body shared by the Tauri command and the headless server.
 /// Forwarding emits no events, so it needs no `Host` — only `AppState`.
-pub async fn forward_start_impl(state: &AppState, forward_id: String) -> AppResult<String> {
+pub async fn forward_start_impl(
+    state: &AppState,
+    owner: SessionOwner,
+    forward_id: String,
+) -> AppResult<String> {
+    let reservation =
+        crate::commands::lifecycle::reserve_generated_resource(state, SessionKind::Forward, owner)?;
+    let active_id = reservation.id().to_owned();
     let f = crate::db::forward::get(&state.db, &forward_id)?;
     let p = crate::db::profile::get(&state.db, &f.profile_id).map_err(|e| match e {
         AppError::NotFound(_) => AppError::not_found("fwd_profile_not_found", json!({})),
@@ -93,14 +109,7 @@ pub async fn forward_start_impl(state: &AppState, forward_id: String) -> AppResu
         }
     })
     .await?;
-    let active_id = uuid::Uuid::new_v4().to_string();
-
-    crate::commands::lifecycle::publish_session(
-        state,
-        &state.active_forwards,
-        active_id.clone(),
-        handle,
-    )?;
+    reservation.activate(crate::commands::lifecycle::ReadySession::Forward(handle))?;
 
     Ok(active_id)
 }
@@ -118,10 +127,15 @@ pub fn forward_stats(
 }
 
 #[tauri::command]
-pub fn forward_stop(state: State<'_, AppState>, active_id: String) -> AppResult<()> {
-    let handle =
-        crate::commands::lifecycle::take_session(&state, &state.active_forwards, &active_id)?
-            .ok_or_else(|| AppError::not_found("fwd_not_found", json!({})))?;
-    handle.stop();
-    Ok(())
+pub fn forward_stop(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    active_id: String,
+) -> AppResult<()> {
+    crate::commands::lifecycle::close_resource(
+        &state,
+        &active_id,
+        SessionKind::Forward,
+        &SessionOwner::Window(window.label().to_owned()),
+    )
 }

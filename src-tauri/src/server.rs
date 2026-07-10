@@ -29,7 +29,7 @@ use crate::error::{locked, AppError, AppResult};
 use crate::models::{
     Credential, Forward, Group, HighlightRule, Profile, SerialProfile, Snippet, TelnetProfile,
 };
-use crate::state::{AppState, SessionSlot};
+use crate::state::{AppState, SessionKind, SessionOwner};
 use crate::terminal::pty::{self, PtyOut, PtySink};
 use crate::terminal::serial::{self, SerialOut, SerialSink};
 use crate::terminal::telnet::{self, TelnetOut, TelnetSink};
@@ -59,7 +59,7 @@ fn build_state() -> AppResult<AppState> {
     Ok(AppState {
         db,
         secret_store: secret_system.store,
-        session_id_reservation_lock: Mutex::new(()),
+        lifecycle_sessions: Mutex::new(HashMap::new()),
         sessions: Mutex::new(HashMap::new()),
         pty_sessions: Mutex::new(HashMap::new()),
         serial_sessions: Mutex::new(HashMap::new()),
@@ -71,10 +71,10 @@ fn build_state() -> AppResult<AppState> {
         passphrase_waiters: Mutex::new(HashMap::new()),
         host_key_waiters: Mutex::new(HashMap::new()),
         passphrase_cache: Mutex::new(HashMap::new()),
-        window_sessions: Mutex::new(HashMap::new()),
         #[cfg(desktop)]
         window_groups: Mutex::new(crate::commands::window::WindowGroups::default()),
         ai_sessions: Mutex::new(HashMap::new()),
+        ai_session_owners: Mutex::new(HashMap::new()),
         ai_remote_shell_cache: Mutex::new(HashMap::new()),
         data_dir,
     })
@@ -83,9 +83,7 @@ fn build_state() -> AppResult<AppState> {
 /// Bind loopback on a random port, print `{"port":..,"token":..}` as a JSON line
 /// on stdout (the launcher reads it), then serve until the process is killed.
 pub async fn run() -> std::io::Result<()> {
-    let state = Arc::new(
-        build_state().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?,
-    );
+    let state = Arc::new(build_state().map_err(|e| std::io::Error::other(e.to_string()))?);
     let token = uuid::Uuid::new_v4().to_string();
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
@@ -156,6 +154,7 @@ async fn handle_conn(stream: TcpStream, expected: String, state: Arc<AppState>) 
 
     let (mut ws_tx, mut ws_rx) = ws.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+    let connection_owner = SessionOwner::Headless(uuid::Uuid::new_v4());
     // Broadcasts "connection gone" to in-flight invoke tasks. A task blocked on a
     // frontend response (SSH auth / passphrase / host-key prompt) would otherwise
     // wait forever after the socket drops — the headless emit is a sink no-op, so
@@ -205,58 +204,39 @@ async fn handle_conn(stream: TcpStream, expected: String, state: Arc<AppState>) 
         // ssh_auth_respond on the SAME connection that unblocks its auth prompt.
         let state = state.clone();
         let tx = tx.clone();
+        let owner = connection_owner.clone();
         let mut shutdown = shutdown_tx.subscribe();
         tokio::spawn(async move {
             tokio::select! {
                 // Connection closed mid-flight: drop the dispatch future so its
                 // RAII guards clean up. There's no reply to send — socket is gone.
                 _ = shutdown.changed() => {}
-                resp = dispatch_async(&state, &cmd, args, &tx) => {
+                resp = dispatch_async(&state, &owner, &cmd, args, &tx) => {
                     let resp = match resp {
                         Ok(result) => json!({ "type": "response", "id": id, "ok": true, "result": result }),
                         Err(error) => json!({ "type": "response", "id": id, "ok": false, "error": error }),
                     };
-                    let _ = tx.send(Message::Text(resp.to_string().into()));
+                    let _ = tx.send(Message::Text(resp.to_string()));
                 }
             }
         });
     }
 
-    // Connection closed: the frontend is gone, so nothing it was asked to answer
-    // will ever come back. Release every holder tied to it:
-    //   1. Inline-blocking dispatch futures (e.g. an SFTP transfer streaming to the
-    //      now-dead sink) live inside the spawned task → the shutdown signal drops
-    //      them so their CancelGuard RAII fires.
-    //   2. SSH auth / passphrase / host-key prompts block on `rx.await` inside the
-    //      DEDICATED SSH worker (client::spawn_ssh → spawn_local), unreachable by
-    //      dropping the dispatch future. Two sub-cases:
-    //      - worker reaches a prompt AFTER close: drop the writer (and its receiver)
-    //        FIRST so the sink's `tx.send` fails → Host::emit returns Err → the
-    //        prompt path bails before parking (its guard removes the sender).
-    //      - worker already parked before close: clear the waiter maps to drop the
-    //        sender → its `rx.await` errors, the worker unwinds and drops the partial
-    //        SSH handle (same mechanism as ssh_disconnect).
-    //   Order matters: the writer must be gone BEFORE we clear, else a worker could
-    //   emit-OK, register, and park in the gap right after the clear.
-    //   (One WS per headless server in practice, so clearing globally is correct.)
+    // Connection closed: stop its dispatch work, make its event sink fail, then
+    // close resources and prompt waiters owned by this websocket. Other websocket
+    // connections and native windows share AppState, so global waiter cleanup would
+    // incorrectly cancel their in-flight SSH handshakes.
     let _ = shutdown_tx.send(true);
     writer.abort();
     let _ = writer.await;
-    if let Ok(mut m) = state.auth_waiters.lock() {
-        m.clear();
-    }
-    if let Ok(mut m) = state.passphrase_waiters.lock() {
-        m.clear();
-    }
-    if let Ok(mut m) = state.host_key_waiters.lock() {
-        m.clear();
-    }
+    crate::commands::lifecycle::close_owner(&state, &connection_owner);
     Ok(())
 }
 
 /// Synchronous command dispatch. Each arm mirrors the matching `#[tauri::command]`.
 fn dispatch(
     state: &AppState,
+    owner: &SessionOwner,
     cmd: &str,
     args: Value,
     tx: &mpsc::UnboundedSender<Message>,
@@ -409,10 +389,11 @@ fn dispatch(
             let requested_id = optional_string_arg(&args, "sessionId")?;
             let session_id =
                 crate::commands::lifecycle::resolve_session_id(requested_id).map_err(err_value)?;
-            let reservation = crate::commands::lifecycle::reserve_session(
+            let reservation = crate::commands::lifecycle::reserve_resource(
                 state,
-                &state.pty_sessions,
                 &session_id,
+                SessionKind::Pty,
+                owner.clone(),
             )
             .map_err(err_value)?;
             let shell = crate::db::settings::get(&state.db, "local_shell")
@@ -429,11 +410,13 @@ fn dispatch(
                         json!({ "type": "event", "event": format!("pty:close:{id}"), "payload": Value::Null })
                     }
                 };
-                let _ = tx.send(Message::Text(msg.to_string().into()));
+                let _ = tx.send(Message::Text(msg.to_string()));
             });
             let (id, handle) =
                 pty::spawn(session_id, cols, rows, sink, shell).map_err(err_value)?;
-            reservation.activate(handle).map_err(err_value)?;
+            reservation
+                .activate_returned(&id, crate::commands::lifecycle::ReadySession::Pty(handle))
+                .map_err(err_value)?;
             Ok(json!(id))
         }
         "pty_write" => {
@@ -442,7 +425,6 @@ fn dispatch(
             let handle = locked(&state.pty_sessions)
                 .map_err(err_value)?
                 .get(&sid)
-                .and_then(SessionSlot::ready)
                 .cloned();
             match handle {
                 Some(h) => h.write(&data).map(|_| Value::Null).map_err(err_value),
@@ -456,7 +438,6 @@ fn dispatch(
             let handle = locked(&state.pty_sessions)
                 .map_err(err_value)?
                 .get(&sid)
-                .and_then(SessionSlot::ready)
                 .cloned();
             match handle {
                 Some(h) => h.resize(cols, rows).map(|_| Value::Null).map_err(err_value),
@@ -465,7 +446,7 @@ fn dispatch(
         }
         "pty_close" => {
             let sid: String = arg(&args, "sessionId")?;
-            crate::commands::lifecycle::take_session(state, &state.pty_sessions, &sid)
+            crate::commands::lifecycle::close_resource(state, &sid, SessionKind::Pty, owner)
                 .map_err(err_value)?;
             Ok(Value::Null)
         }
@@ -475,6 +456,16 @@ fn dispatch(
         "serial_open" => {
             let port: String = arg(&args, "port")?;
             let config: serial::SerialConfig = arg(&args, "config")?;
+            let requested_id = optional_string_arg(&args, "sessionId")?;
+            let session_id =
+                crate::commands::lifecycle::resolve_session_id(requested_id).map_err(err_value)?;
+            let reservation = crate::commands::lifecycle::reserve_resource(
+                state,
+                &session_id,
+                SessionKind::Serial,
+                owner.clone(),
+            )
+            .map_err(err_value)?;
             let tx = tx.clone();
             let sink: SerialSink = Arc::new(move |id: &str, out: SerialOut| {
                 let msg = match out {
@@ -485,16 +476,15 @@ fn dispatch(
                         json!({ "type": "event", "event": format!("serial:close:{id}"), "payload": Value::Null })
                     }
                 };
-                let _ = tx.send(Message::Text(msg.to_string().into()));
+                let _ = tx.send(Message::Text(msg.to_string()));
             });
-            let (id, handle) = serial::open(&port, config, sink).map_err(err_value)?;
-            crate::commands::lifecycle::publish_session(
-                state,
-                &state.serial_sessions,
-                id.clone(),
-                handle,
-            )
-            .map_err(err_value)?;
+            let (id, handle) = serial::open(session_id, &port, config, sink).map_err(err_value)?;
+            reservation
+                .activate_returned(
+                    &id,
+                    crate::commands::lifecycle::ReadySession::Serial(handle),
+                )
+                .map_err(err_value)?;
             Ok(json!(id))
         }
         "serial_write" => {
@@ -511,7 +501,7 @@ fn dispatch(
         }
         "serial_close" => {
             let sid: String = arg(&args, "sessionId")?;
-            crate::commands::lifecycle::take_session(state, &state.serial_sessions, &sid)
+            crate::commands::lifecycle::close_resource(state, &sid, SessionKind::Serial, owner)
                 .map_err(err_value)?;
             Ok(Value::Null)
         }
@@ -558,7 +548,6 @@ fn dispatch(
             let handle = locked(&state.telnet_sessions)
                 .map_err(err_value)?
                 .get(&sid)
-                .and_then(SessionSlot::ready)
                 .cloned();
             match handle {
                 Some(h) => h.write(&data).map(|_| Value::Null).map_err(err_value),
@@ -571,7 +560,6 @@ fn dispatch(
             let handle = locked(&state.telnet_sessions)
                 .map_err(err_value)?
                 .get(&sid)
-                .and_then(SessionSlot::ready)
                 .cloned();
             match handle {
                 Some(h) => h.write_line(&text).map(|_| Value::Null).map_err(err_value),
@@ -585,7 +573,6 @@ fn dispatch(
             let handle = locked(&state.telnet_sessions)
                 .map_err(err_value)?
                 .get(&sid)
-                .and_then(SessionSlot::ready)
                 .cloned();
             match handle {
                 Some(h) => h.resize(cols, rows).map(|_| Value::Null).map_err(err_value),
@@ -594,7 +581,7 @@ fn dispatch(
         }
         "telnet_close" => {
             let sid: String = arg(&args, "sessionId")?;
-            crate::commands::lifecycle::take_session(state, &state.telnet_sessions, &sid)
+            crate::commands::lifecycle::close_resource(state, &sid, SessionKind::Telnet, owner)
                 .map_err(err_value)?;
             Ok(Value::Null)
         }
@@ -677,18 +664,16 @@ fn dispatch(
         // ---- port forwarding: stop + live stats (start is async, see dispatch_async) ----
         "forward_stop" => {
             let active_id: String = arg(&args, "activeId")?;
-            match crate::commands::lifecycle::take_session(
+            match crate::commands::lifecycle::close_resource(
                 state,
-                &state.active_forwards,
                 &active_id,
+                SessionKind::Forward,
+                owner,
             )
-            .map_err(err_value)?
+            .map_err(err_value)
             {
-                Some(h) => {
-                    h.stop();
-                    Ok(Value::Null)
-                }
-                None => Err(json!("fwd_not_found")),
+                Ok(()) => Ok(Value::Null),
+                Err(_) => Err(json!("fwd_not_found")),
             }
         }
         "forward_stats" => {
@@ -743,7 +728,7 @@ fn dispatch(
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
             ok(crate::commands::lifecycle::reconcile_sessions_impl(
-                state, active_ids,
+                state, owner, active_ids,
             ))
         }
 
@@ -760,12 +745,13 @@ fn dispatch(
 /// else falls through to the sync `dispatch`. Mirrors the matching commands.
 async fn dispatch_async(
     state: &Arc<AppState>,
+    owner: &SessionOwner,
     cmd: &str,
     args: Value,
     tx: &mpsc::UnboundedSender<Message>,
 ) -> Result<Value, Value> {
     match cmd {
-        "ssh_connect" => ssh_connect(state, args, tx).await,
+        "ssh_connect" => ssh_connect(state, owner, args, tx).await,
         // Async like the Tauri command, for the same reason: DNS + TCP connect
         // can block up to 10s per address and must not stall the ws event loop.
         "telnet_open" => {
@@ -774,7 +760,7 @@ async fn dispatch_async(
             let cols = checked_u16_arg(&args, "cols", 80)?;
             let rows = checked_u16_arg(&args, "rows", 24)?;
             let input_newline = match args.get("inputNewline") {
-                None => "crlf".to_owned(),
+                None | Some(Value::Null) => "crlf".to_owned(),
                 Some(Value::String(value)) => value.clone(),
                 Some(_) => {
                     return Err(err_value(AppError::config(
@@ -786,10 +772,11 @@ async fn dispatch_async(
             let requested_id = optional_string_arg(&args, "sessionId")?;
             let session_id =
                 crate::commands::lifecycle::resolve_session_id(requested_id).map_err(err_value)?;
-            let reservation = crate::commands::lifecycle::reserve_session(
+            let reservation = crate::commands::lifecycle::reserve_resource(
                 state,
-                &state.telnet_sessions,
                 &session_id,
+                SessionKind::Telnet,
+                owner.clone(),
             )
             .map_err(err_value)?;
             let tx = tx.clone();
@@ -805,7 +792,7 @@ async fn dispatch_async(
                         json!({ "type": "event", "event": format!("telnet:close:{id}"), "payload": Value::Null })
                     }
                 };
-                let _ = tx.send(Message::Text(msg.to_string().into()));
+                let _ = tx.send(Message::Text(msg.to_string()));
             });
             let spawn_session_id = session_id.clone();
             let opened = tokio::task::spawn_blocking(move || {
@@ -832,7 +819,12 @@ async fn dispatch_async(
                 Ok(result) => result.map_err(err_value)?,
                 Err(e) => return Err(e),
             };
-            reservation.activate(handle).map_err(err_value)?;
+            reservation
+                .activate_returned(
+                    &id,
+                    crate::commands::lifecycle::ReadySession::Telnet(handle),
+                )
+                .map_err(err_value)?;
             Ok(json!(id))
         }
         "ssh_write" => {
@@ -854,66 +846,51 @@ async fn dispatch_async(
         }
         "ssh_disconnect" => {
             let sid: String = arg(&args, "sessionId")?;
+            crate::commands::lifecycle::close_resource(state, &sid, SessionKind::Ssh, owner)
+                .map_err(err_value)?;
             if let Some(tid) = args.get("tabId").and_then(Value::as_str) {
-                let _ = locked(&state.auth_waiters).map(|mut m| m.remove(tid));
-                let _ = locked(&state.passphrase_waiters).map(|mut m| m.remove(tid));
-                let _ = locked(&state.host_key_waiters).map(|mut m| m.remove(tid));
-            }
-            crate::commands::lifecycle::retain_sessions(state, &state.sftp_sessions, |_, h| {
-                h.parent_ssh_id() != Some(&sid)
-            })
-            .map_err(err_value)?;
-            match crate::commands::lifecycle::take_session(state, &state.sessions, &sid)
-                .map_err(err_value)?
-            {
-                Some(s) => {
-                    s.force_disconnect();
-                    Ok(Value::Null)
+                if tid != sid {
+                    let _ = waiter_cancel_owned(&state.auth_waiters, tid, owner);
+                    let _ = waiter_cancel_owned(&state.passphrase_waiters, tid, owner);
+                    let _ = waiter_cancel_owned(&state.host_key_waiters, tid, owner);
                 }
-                None => Err(json!("session_not_found")),
             }
+            Ok(Value::Null)
         }
         "ssh_auth_respond" => {
-            let tab_id: String = arg(&args, "tabId")?;
+            let prompt_id: String = arg(&args, "tabId")?;
             let responses: Vec<String> = arg(&args, "responses")?;
-            let w = locked(&state.auth_waiters)
-                .map_err(err_value)?
-                .remove(&tab_id);
-            w.ok_or_else(|| json!("no_pending_auth"))?
-                .send(responses)
+            let w = take_waiter_owned(&state.auth_waiters, &prompt_id, owner).map_err(err_value)?;
+            w.send(responses)
                 .map(|_| Value::Null)
                 .map_err(|_| json!("auth_channel_closed"))
         }
         "ssh_passphrase_respond" => {
-            let tab_id: String = arg(&args, "tabId")?;
+            let prompt_id: String = arg(&args, "tabId")?;
             let passphrase: String = arg(&args, "passphrase")?;
-            let w = locked(&state.passphrase_waiters)
-                .map_err(err_value)?
-                .remove(&tab_id);
-            w.ok_or_else(|| json!("no_pending_passphrase"))?
-                .send(passphrase)
+            let w = take_waiter_owned(&state.passphrase_waiters, &prompt_id, owner)
+                .map_err(err_value)?;
+            w.send(passphrase)
                 .map(|_| Value::Null)
                 .map_err(|_| json!("passphrase_channel_closed"))
         }
         "ssh_host_key_respond" => {
-            let tab_id: String = arg(&args, "tabId")?;
+            let prompt_id: String = arg(&args, "tabId")?;
             let answer: String = arg(&args, "answer")?;
-            let w = locked(&state.host_key_waiters)
-                .map_err(err_value)?
-                .remove(&tab_id);
-            w.ok_or_else(|| json!("no_pending_hostkey"))?
-                .send(answer)
+            let w =
+                take_waiter_owned(&state.host_key_waiters, &prompt_id, owner).map_err(err_value)?;
+            w.send(answer)
                 .map(|_| Value::Null)
                 .map_err(|_| json!("hostkey_channel_closed"))
         }
-        "ssh_auth_cancel" => waiter_cancel(&state.auth_waiters, &args),
-        "ssh_passphrase_cancel" => waiter_cancel(&state.passphrase_waiters, &args),
-        "ssh_host_key_cancel" => waiter_cancel(&state.host_key_waiters, &args),
+        "ssh_auth_cancel" => waiter_cancel(&state.auth_waiters, &args, owner),
+        "ssh_passphrase_cancel" => waiter_cancel(&state.passphrase_waiters, &args, owner),
+        "ssh_host_key_cancel" => waiter_cancel(&state.host_key_waiters, &args, owner),
 
         // ---- SFTP (core ops + streaming to/from a caller-supplied local path;
         //      the native pick dialogs that supply that path are host-provided) ----
-        "sftp_connect" => sftp_connect(state, args).await,
-        "sftp_connect_session" => sftp_connect_session(state, args).await,
+        "sftp_connect" => sftp_connect(state, owner, args).await,
+        "sftp_connect_session" => sftp_connect_session(state, owner, args).await,
         "sftp_home" => ok(sftp_handle(state, &arg::<String>(&args, "sftpId")?)?
             .home_dir()
             .await),
@@ -946,7 +923,7 @@ async fn dispatch_async(
         }
         "sftp_close" => {
             let sftp_id: String = arg(&args, "sftpId")?;
-            crate::commands::lifecycle::take_session(state, &state.sftp_sessions, &sftp_id)
+            crate::commands::lifecycle::close_resource(state, &sftp_id, SessionKind::Sftp, owner)
                 .map_err(err_value)?;
             Ok(Value::Null)
         }
@@ -1055,6 +1032,7 @@ async fn dispatch_async(
             ok(crate::ai::commands::ai_session_start_impl(
                 state,
                 host,
+                owner.clone(),
                 arg(&args, "tabId")?,
                 arg(&args, "target")?,
                 args.get("skill")
@@ -1109,16 +1087,9 @@ async fn dispatch_async(
         ),
         "ai_session_stop" => {
             let tab_id: String = arg(&args, "tabId")?;
-            match locked(&state.ai_sessions)
-                .map_err(err_value)?
-                .remove(&tab_id)
-            {
-                Some(s) => {
-                    let _ = s.action_tx.send(UserAction::Stop);
-                    Ok(Value::Null)
-                }
-                None => Err(json!("ai_session_not_found")),
-            }
+            crate::commands::lifecycle::close_ai_session(state, &tab_id, owner)
+                .map(|_| Value::Null)
+                .map_err(err_value)
         }
         "ai_cancel_stream" => {
             let tab_id: String = arg(&args, "tabId")?;
@@ -1220,9 +1191,12 @@ async fn dispatch_async(
         }
 
         // ---- port forwarding: start (stop is sync, in dispatch) ----
-        "forward_start" => {
-            ok(crate::commands::forward::forward_start_impl(state, arg(&args, "forwardId")?).await)
-        }
+        "forward_start" => ok(crate::commands::forward::forward_start_impl(
+            state,
+            owner.clone(),
+            arg(&args, "forwardId")?,
+        )
+        .await),
 
         // ---- update check ----
         "fetch_latest_release_tag" => {
@@ -1234,17 +1208,51 @@ async fn dispatch_async(
             crate::commands::settings::list_fonts().await,
         )),
 
-        _ => dispatch(state, cmd, args, tx),
+        _ => dispatch(state, owner, cmd, args, tx),
     }
 }
 
 fn waiter_cancel<T>(
-    map: &std::sync::Mutex<std::collections::HashMap<String, T>>,
+    map: &std::sync::Mutex<std::collections::HashMap<String, crate::state::OwnedWaiter<T>>>,
     args: &Value,
+    owner: &SessionOwner,
 ) -> Result<Value, Value> {
-    let tab_id: String = arg(args, "tabId")?;
-    locked(map).map_err(err_value)?.remove(&tab_id);
+    let prompt_id: String = arg(args, "tabId")?;
+    waiter_cancel_owned(map, &prompt_id, owner).map_err(err_value)?;
     Ok(Value::Null)
+}
+
+fn waiter_cancel_owned<T>(
+    map: &std::sync::Mutex<std::collections::HashMap<String, crate::state::OwnedWaiter<T>>>,
+    prompt_id: &str,
+    owner: &SessionOwner,
+) -> AppResult<()> {
+    let mut waiters = locked(map)?;
+    if waiters
+        .get(prompt_id)
+        .is_some_and(|waiter| &waiter.owner == owner)
+    {
+        waiters.remove(prompt_id);
+    }
+    Ok(())
+}
+
+fn take_waiter_owned<T>(
+    map: &std::sync::Mutex<std::collections::HashMap<String, crate::state::OwnedWaiter<T>>>,
+    prompt_id: &str,
+    owner: &SessionOwner,
+) -> AppResult<tokio::sync::oneshot::Sender<T>> {
+    let mut waiters = locked(map)?;
+    if !waiters
+        .get(prompt_id)
+        .is_some_and(|waiter| &waiter.owner == owner)
+    {
+        return Err(AppError::not_found("prompt_waiter_not_found", json!({})));
+    }
+    Ok(waiters
+        .remove(prompt_id)
+        .expect("waiter was validated")
+        .sender)
 }
 
 fn ssh_session(state: &AppState, sid: &str) -> Result<crate::ssh::client::SessionHandle, Value> {
@@ -1269,9 +1277,7 @@ fn headless_host(
             // `is_ok()` is false once the writer's receiver is dropped (connection
             // closed) → Host::emit returns Err so prompt paths stop waiting.
             tx.send(Message::Text(
-                json!({ "type": "event", "event": event, "payload": payload })
-                    .to_string()
-                    .into(),
+                json!({ "type": "event", "event": event, "payload": payload }).to_string(),
             ))
             .is_ok()
         }),
@@ -1284,9 +1290,21 @@ fn headless_host(
 /// per-window session bookkeeping (there are no windows).
 async fn ssh_connect(
     state: &Arc<AppState>,
+    owner: &SessionOwner,
     args: Value,
     tx: &mpsc::UnboundedSender<Message>,
 ) -> Result<Value, Value> {
+    let requested_id = optional_string_arg(&args, "sessionId")?;
+    let requested_session_id = requested_id.clone();
+    let session_id =
+        crate::commands::lifecycle::resolve_session_id(requested_id).map_err(err_value)?;
+    let reservation = crate::commands::lifecycle::reserve_resource(
+        state,
+        &session_id,
+        SessionKind::Ssh,
+        owner.clone(),
+    )
+    .map_err(err_value)?;
     use crate::ssh::client;
 
     let profile_id: String = arg(&args, "profileId")?;
@@ -1326,26 +1344,37 @@ async fn ssh_connect(
         .map_err(err_value)?
         .and_then(|v| v.parse().ok())
         .unwrap_or(client::DEFAULT_CONNECT_TIMEOUT);
-    let effective_log_id = if verbose_log { log_session_id } else { None };
+    let prompt_session_id = requested_session_id
+        .map(|_| session_id.clone())
+        .or_else(|| log_session_id.clone());
+    let effective_log_id = if verbose_log {
+        prompt_session_id.clone()
+    } else {
+        None
+    };
     let known_hosts_path = crate::ssh::known_hosts::path_for(&state.data_dir);
     let init_command = profile.init_command.clone();
     let recording_path =
         crate::commands::settings::recording_path_for(state, &profile.name).map_err(err_value)?;
     let emitter = headless_host(state, tx);
+    let connection_owner = owner.clone();
 
     let result = client::run_blocking_ssh(move || async move {
-        client::connect(
+        client::connect(client::ConnectParams {
+            session_id,
             profile,
             credential,
-            chain,
+            bastion_chain: chain,
             cols,
             rows,
-            emitter,
+            app: emitter,
+            owner: connection_owner,
             recording_path,
-            effective_log_id,
+            log_session_id: effective_log_id,
+            prompt_session_id,
             known_hosts_path,
             timeout_secs,
-        )
+        })
         .await
     })
     .await
@@ -1360,13 +1389,12 @@ async fn ssh_connect(
         }
     }
     let session_id = result.session_id;
-    crate::commands::lifecycle::publish_session(
-        state,
-        &state.sessions,
-        session_id.clone(),
-        result.handle,
-    )
-    .map_err(err_value)?;
+    reservation
+        .activate_returned(
+            &session_id,
+            crate::commands::lifecycle::ReadySession::Ssh(result.handle),
+        )
+        .map_err(err_value)?;
     Ok(json!(session_id))
 }
 
@@ -1471,11 +1499,9 @@ fn ai_rebind(state: &AppState, args: Value) -> Result<Value, Value> {
                 .clone(),
         ),
         AiTarget::Local(id) => {
-            if locked(&state.pty_sessions)
+            if !locked(&state.pty_sessions)
                 .map_err(err_value)?
-                .get(id)
-                .and_then(SessionSlot::ready)
-                .is_none()
+                .contains_key(id)
             {
                 return Err(json!("local_pty_not_found"));
             }
@@ -1491,11 +1517,9 @@ fn ai_rebind(state: &AppState, args: Value) -> Result<Value, Value> {
             None
         }
         AiTarget::Telnet(id) => {
-            if locked(&state.telnet_sessions)
+            if !locked(&state.telnet_sessions)
                 .map_err(err_value)?
-                .get(id)
-                .and_then(SessionSlot::ready)
-                .is_none()
+                .contains_key(id)
             {
                 return Err(json!("telnet_session_not_found"));
             }
@@ -1537,9 +1561,20 @@ fn sftp_handle(
         .ok_or_else(|| json!("sftp_session_not_found"))
 }
 
-async fn sftp_connect(state: &Arc<AppState>, args: Value) -> Result<Value, Value> {
+async fn sftp_connect(
+    state: &Arc<AppState>,
+    owner: &SessionOwner,
+    args: Value,
+) -> Result<Value, Value> {
     use crate::models::{Credential, CredentialType};
     use crate::ssh::sftp::SftpHandle;
+    let reservation = crate::commands::lifecycle::reserve_generated_resource(
+        state,
+        SessionKind::Sftp,
+        owner.clone(),
+    )
+    .map_err(err_value)?;
+    let id = reservation.id().to_owned();
     let host: String = arg(&args, "host")?;
     let port = args.get("port").and_then(Value::as_u64).unwrap_or(22) as u16;
     let username: String = arg(&args, "username")?;
@@ -1566,42 +1601,36 @@ async fn sftp_connect(state: &Arc<AppState>, args: Value) -> Result<Value, Value
     })
     .await
     .map_err(err_value)?;
-    let id = uuid::Uuid::new_v4().to_string();
-    crate::commands::lifecycle::publish_session(
-        state,
-        &state.sftp_sessions,
-        id.clone(),
-        std::sync::Arc::new(handle),
-    )
-    .map_err(err_value)?;
+    reservation
+        .activate(crate::commands::lifecycle::ReadySession::Sftp(
+            std::sync::Arc::new(handle),
+        ))
+        .map_err(err_value)?;
     Ok(json!(id))
 }
 
-async fn sftp_connect_session(state: &Arc<AppState>, args: Value) -> Result<Value, Value> {
+async fn sftp_connect_session(
+    state: &Arc<AppState>,
+    owner: &SessionOwner,
+    args: Value,
+) -> Result<Value, Value> {
     use crate::ssh::sftp::SftpHandle;
     let session_id: String = arg(&args, "sessionId")?;
-    let ssh_handle = {
-        let sessions = locked(&state.sessions).map_err(err_value)?;
-        sessions
-            .get(&session_id)
-            .ok_or_else(|| json!("ssh_session_not_found"))?
-            .ssh_handle()
-            .clone()
-    };
+    let (reservation, ssh_handle) =
+        crate::commands::lifecycle::reserve_sftp_child(state, &session_id, owner)
+            .map_err(err_value)?;
+    let id = reservation.id().to_owned();
     let parent = session_id.clone();
     let handle = crate::ssh::client::run_blocking_ssh(move || async move {
         SftpHandle::from_handle(&ssh_handle, parent).await
     })
     .await
     .map_err(err_value)?;
-    let id = uuid::Uuid::new_v4().to_string();
-    crate::commands::lifecycle::publish_session(
-        state,
-        &state.sftp_sessions,
-        id.clone(),
-        std::sync::Arc::new(handle),
-    )
-    .map_err(err_value)?;
+    reservation
+        .activate(crate::commands::lifecycle::ReadySession::Sftp(
+            std::sync::Arc::new(handle),
+        ))
+        .map_err(err_value)?;
     Ok(json!(id))
 }
 
@@ -1639,7 +1668,7 @@ fn checked_u16_arg(args: &Value, key: &'static str, default: u16) -> Result<u16,
 
 fn optional_string_arg(args: &Value, key: &'static str) -> Result<Option<String>, Value> {
     match args.get(key) {
-        None => Ok(None),
+        None | Some(Value::Null) => Ok(None),
         Some(Value::String(value)) => Ok(Some(value.clone())),
         Some(_) => Err(err_value(AppError::config("session_id_invalid", json!({})))),
     }

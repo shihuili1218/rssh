@@ -117,19 +117,37 @@ describe("ReservedSessionAttempt", () => {
     expect(disposeSecond).not.toHaveBeenCalled();
   });
 
-  it("keeps the reserved event identity when the backend returns a different handle id", async () => {
-    const close = vi.fn();
+  it("best-effort closes the reserved id when opening rejects", async () => {
+    const close = vi.fn(async () => {});
     const attempt = createReservedSessionAttempt({
       makeId: () => "reserved-1",
       wireEvents: async () => () => {},
       close,
     });
 
-    await attempt.open(async () => "opened-1");
-    expect(attempt.accepts("reserved-1")).toBe(true);
-    expect(attempt.accepts("opened-1")).toBe(false);
+    await expect(attempt.open(async () => {
+      throw new Error("response lost");
+    })).rejects.toThrow("response lost");
 
-    attempt.cancel();
+    expect(close).toHaveBeenCalledWith("reserved-1");
+  });
+
+  it("rejects a backend id that differs from the canonical reservation", async () => {
+    const close = vi.fn();
+    const disposeEvents = vi.fn();
+    const attempt = createReservedSessionAttempt({
+      makeId: () => "reserved-1",
+      wireEvents: async () => disposeEvents,
+      close,
+    });
+
+    await expect(attempt.open(async () => "opened-1")).rejects.toThrow(
+      "backend returned a different session id",
+    );
+    expect(disposeEvents).toHaveBeenCalledOnce();
+    expect(attempt.accepts("reserved-1")).toBe(false);
+    expect(attempt.accepts("opened-1")).toBe(false);
+    expect(close).toHaveBeenCalledWith("reserved-1");
     expect(close).toHaveBeenCalledWith("opened-1");
   });
 
@@ -146,16 +164,28 @@ describe("ReservedSessionAttempt", () => {
     const first = attempt.open(() => firstOpened.promise);
     await vi.waitFor(() => expect(attempt.accepts("reserved-1")).toBe(true));
 
-    await expect(attempt.open(async () => "opened-2")).resolves.toEqual({
+    await expect(attempt.open(async (id) => id)).resolves.toEqual({
       kind: "ready",
-      sessionId: "opened-2",
+      sessionId: "reserved-2",
     });
     expect(attempt.accepts("reserved-2")).toBe(true);
 
     firstOpened.resolve("opened-1");
     await expect(first).resolves.toEqual({ kind: "cancelled" });
     expect(close).toHaveBeenCalledWith("opened-1");
-    expect(close).not.toHaveBeenCalledWith("opened-2");
+    expect(close).not.toHaveBeenCalledWith("reserved-2");
     expect(attempt.accepts("reserved-2")).toBe(true);
+  });
+
+  it("does not hide an open error behind a close that never settles", async () => {
+    const attempt = createReservedSessionAttempt({
+      makeId: () => "reserved-1",
+      wireEvents: async () => () => {},
+      close: () => new Promise<void>(() => {}),
+    });
+
+    await expect(attempt.open(async () => {
+      throw new Error("open failed");
+    })).rejects.toThrow("open failed");
   });
 });

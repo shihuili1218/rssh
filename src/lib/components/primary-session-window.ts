@@ -1,4 +1,5 @@
 interface PrimarySessionWindowDependencies {
+  signal?: AbortSignal;
   reconcile: () => Promise<unknown>;
   allowResourcePanes: () => void;
   loadAutoOpenLocal: () => Promise<boolean>;
@@ -8,17 +9,19 @@ interface PrimarySessionWindowDependencies {
 export async function initializePrimarySessionWindow(
   dependencies: PrimarySessionWindowDependencies,
 ): Promise<void> {
+  if (dependencies.signal?.aborted) return;
   try {
     await dependencies.reconcile();
   } catch {
     // Startup reconciliation is best-effort. A backend error must not leave
     // every resource-owning pane permanently unmounted.
-  } finally {
-    dependencies.allowResourcePanes();
   }
+  if (dependencies.signal?.aborted) return;
+  dependencies.allowResourcePanes();
 
   try {
-    if (await dependencies.loadAutoOpenLocal()) {
+    const autoOpen = await dependencies.loadAutoOpenLocal();
+    if (!dependencies.signal?.aborted && autoOpen) {
       dependencies.openLocal();
     }
   } catch {

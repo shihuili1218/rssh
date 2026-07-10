@@ -138,7 +138,7 @@ pub fn run() {
             app.manage(AppState {
                 db,
                 secret_store: secret_system.store,
-                session_id_reservation_lock: Mutex::new(()),
+                lifecycle_sessions: Mutex::new(HashMap::new()),
                 sessions: Mutex::new(HashMap::new()),
                 #[cfg(not(target_os = "android"))]
                 pty_sessions: Mutex::new(HashMap::new()),
@@ -152,10 +152,10 @@ pub fn run() {
                 passphrase_waiters: Mutex::new(HashMap::new()),
                 host_key_waiters: Mutex::new(HashMap::new()),
                 passphrase_cache: Mutex::new(HashMap::new()),
-                window_sessions: Mutex::new(HashMap::new()),
                 #[cfg(desktop)]
                 window_groups: Mutex::new(commands::window::WindowGroups::default()),
                 ai_sessions: Mutex::new(HashMap::new()),
+                ai_session_owners: Mutex::new(HashMap::new()),
                 ai_remote_shell_cache: Mutex::new(HashMap::new()),
                 data_dir,
             });

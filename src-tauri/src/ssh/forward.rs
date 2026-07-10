@@ -28,7 +28,9 @@ pub struct ConnTarget {
 }
 
 pub struct ForwardHandle {
-    abort: tokio::task::AbortHandle,
+    /// Present while this value owns the detached task. `stop()` transfers
+    /// cancellation to the grace-period timer; an ordinary drop aborts now.
+    abort: Option<tokio::task::AbortHandle>,
     /// Notify-based disconnect signal. `stop()` fires this; the accept-loop
     /// task `select!`s on it and runs `handle.disconnect(...)` before
     /// breaking out. Without this, abort()ing the task drops the future
@@ -41,18 +43,43 @@ pub struct ForwardHandle {
 }
 
 impl ForwardHandle {
-    pub fn stop(&self) {
+    fn from_task(
+        task: tokio::task::JoinHandle<()>,
+        disconnect: Arc<Notify>,
+        bytes_tx: Arc<AtomicU64>,
+        bytes_rx: Arc<AtomicU64>,
+        connections: Arc<AtomicU32>,
+    ) -> Self {
+        Self {
+            abort: Some(task.abort_handle()),
+            disconnect,
+            bytes_tx,
+            bytes_rx,
+            connections,
+        }
+    }
+
+    pub fn stop(mut self) {
         self.disconnect.notify_one();
         // Give the task up to 2 s to send the disconnect message before
         // we force-abort. Picked over a hard sync-wait so `stop()` stays
         // non-blocking for the Tauri command thread; picked over no abort
         // at all so a wedged disconnect await (e.g. dead remote) can't
         // strand the forward task forever.
-        let abort = self.abort.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        if let Some(abort) = self.abort.take() {
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                abort.abort();
+            });
+        }
+    }
+}
+
+impl Drop for ForwardHandle {
+    fn drop(&mut self) {
+        if let Some(abort) = self.abort.take() {
             abort.abort();
-        });
+        }
     }
 }
 
@@ -217,13 +244,13 @@ pub async fn start_local(forward: Forward, target: ConnTarget) -> AppResult<Forw
             .await;
     });
 
-    Ok(ForwardHandle {
-        abort: task.abort_handle(),
+    Ok(ForwardHandle::from_task(
+        task,
         disconnect,
         bytes_tx,
         bytes_rx,
         connections,
-    })
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -304,13 +331,13 @@ pub async fn start_remote(forward: Forward, target: ConnTarget) -> AppResult<For
             .await;
     });
 
-    Ok(ForwardHandle {
-        abort: task.abort_handle(),
+    Ok(ForwardHandle::from_task(
+        task,
         disconnect,
         bytes_tx,
         bytes_rx,
         connections,
-    })
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -473,13 +500,13 @@ pub async fn start_dynamic(forward: Forward, target: ConnTarget) -> AppResult<Fo
             .await;
     });
 
-    Ok(ForwardHandle {
-        abort: task.abort_handle(),
+    Ok(ForwardHandle::from_task(
+        task,
         disconnect,
         bytes_tx,
         bytes_rx,
         connections,
-    })
+    ))
 }
 
 #[cfg(test)]
@@ -487,6 +514,73 @@ mod tests {
     use super::*;
     use tokio::io::AsyncReadExt;
     use tokio::net::{TcpListener, TcpStream};
+
+    struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            if let Some(signal) = self.0.take() {
+                let _ = signal.send(());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_handle_aborts_background_task() {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _drop_signal = DropSignal(Some(dropped_tx));
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        let handle = ForwardHandle::from_task(
+            task,
+            Arc::new(Notify::new()),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU32::new(0)),
+        );
+
+        started_rx.await.unwrap();
+        drop(handle);
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), dropped_rx)
+            .await
+            .expect("dropping ForwardHandle must abort its detached task")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn stopping_handle_allows_background_task_to_finish_gracefully() {
+        let disconnect = Arc::new(Notify::new());
+        let disconnect_task = disconnect.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _ = started_tx.send(());
+            let _ = release_rx.await;
+            disconnect_task.notified().await;
+            let _ = finished_tx.send(());
+        });
+        let handle = ForwardHandle::from_task(
+            task,
+            disconnect,
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU32::new(0)),
+        );
+
+        started_rx.await.unwrap();
+        handle.stop();
+        release_tx.send(()).unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), finished_rx)
+            .await
+            .expect("stop must allow the task to observe the disconnect signal")
+            .unwrap();
+    }
 
     /// 起一对 loopback TCP socket：返回 (server_side, client_side)。
     /// 端口 0 让内核分配，避免冲突。

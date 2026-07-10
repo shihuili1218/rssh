@@ -2,7 +2,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::error::{locked, AppError, AppResult};
 use crate::models::TelnetProfile;
-use crate::state::{AppState, SessionSlot};
+use crate::state::{AppState, SessionKind, SessionOwner};
 use crate::terminal::telnet;
 
 /// Async on purpose: DNS resolution + TCP connect can block for up to 10s per
@@ -12,6 +12,7 @@ use crate::terminal::telnet;
 /// `cols`/`rows` seed the NAWS activation reply with the real terminal size
 /// (same contract as `ssh_connect`).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Flat fields preserve the existing invoke wire contract.
 pub async fn telnet_open(
     app: AppHandle,
     window: tauri::Window,
@@ -27,11 +28,11 @@ pub async fn telnet_open(
     // server builds a different sink over the same `telnet::open`.
     let session_id = crate::commands::lifecycle::resolve_session_id(session_id)?;
     let input_newline = input_newline.unwrap_or_else(|| "crlf".into());
-    let reservation = crate::commands::lifecycle::reserve_window_session(
+    let reservation = crate::commands::lifecycle::reserve_resource(
         &state,
-        &state.telnet_sessions,
-        window.label(),
         &session_id,
+        SessionKind::Telnet,
+        SessionOwner::Window(window.label().to_owned()),
     )?;
     let sink: telnet::TelnetSink =
         std::sync::Arc::new(move |id: &str, out: telnet::TelnetOut| match out {
@@ -65,7 +66,10 @@ pub async fn telnet_open(
         )
     });
     let (id, handle) = opened??;
-    reservation.activate(handle)?;
+    reservation.activate_returned(
+        &id,
+        crate::commands::lifecycle::ReadySession::Telnet(handle),
+    )?;
     Ok(id)
 }
 
@@ -73,7 +77,6 @@ pub async fn telnet_open(
 fn telnet_handle(state: &State<'_, AppState>, session_id: &str) -> AppResult<telnet::TelnetHandle> {
     locked(&state.telnet_sessions)?
         .get(session_id)
-        .and_then(SessionSlot::ready)
         .cloned()
         .ok_or_else(|| AppError::not_found("telnet_not_found", serde_json::json!({})))
 }
@@ -109,9 +112,17 @@ pub fn telnet_resize(
 }
 
 #[tauri::command]
-pub fn telnet_close(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
-    crate::commands::lifecycle::take_window_session(&state, &state.telnet_sessions, &session_id)?;
-    Ok(())
+pub fn telnet_close(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<()> {
+    crate::commands::lifecycle::close_resource(
+        &state,
+        &session_id,
+        SessionKind::Telnet,
+        &SessionOwner::Window(window.label().to_owned()),
+    )
 }
 
 // ── Saved telnet profiles (peer of serial profiles; SQLite-persisted CRUD) ──

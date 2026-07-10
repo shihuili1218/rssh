@@ -170,6 +170,7 @@
     }
 
     onMount(() => {
+        const startup = new AbortController();
         keymap.init();
         app.loadProfiles().then(p => profiles = p);
         app.loadGroups().then(g => groups = g);
@@ -182,6 +183,7 @@
         // session in the shared AppState, including other windows' tabs.
         if (!bypassStartupReconcile) {
             void initializePrimarySessionWindow({
+                signal: startup.signal,
                 reconcile: () => invoke("reconcile_sessions", { activeIds: [] }),
                 allowResourcePanes: () => { resourcePanesAllowed = true; },
                 loadAutoOpenLocal: async () =>
@@ -201,7 +203,11 @@
                 else closeDrawer();
             }
         });
-        return () => { detachKeydown(); detachKeyup(); };
+        return () => {
+            startup.abort();
+            detachKeydown();
+            detachKeyup();
+        };
     });
 
     /* Consume window.__rssh_ai_handoff injected by analyze_locally tool.

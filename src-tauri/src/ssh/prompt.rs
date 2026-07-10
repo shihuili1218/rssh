@@ -4,8 +4,9 @@
 //! "注册 sender → emit → await rx" 模板；差异只在 waiters map / 事件名 /
 //! 取消错误码 / payload。
 //!
-//! `AuthCtx` 是终端可达性凭证：有 ctx 才能与具体的 tab 通信。SFTP / forward
-//! 等无前端的子流程用 `None`，遇加密私钥 / 未知主机时直接报错。
+//! `AuthCtx` 是连接尝试的终端可达性凭证：有 ctx 才能通过该 attempt 的
+//! `prompt_id` 通信。SFTP / forward 等无前端子流程用 `None`，遇加密私钥 /
+//! 未知主机时直接报错。
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -14,57 +15,71 @@ use serde_json::json;
 use tokio::sync::oneshot;
 
 use crate::error::{locked, AppError, AppResult};
+use crate::state::{OwnedWaiter, SessionOwner};
 
 #[derive(Clone)]
 pub struct AuthCtx {
     pub app: crate::emitter::Host,
-    pub tab_id: String,
+    pub resource_id: String,
+    pub prompt_id: String,
+    pub owner: SessionOwner,
 }
 
 /// RAII：rx await 走完前如果路径上失败（比如 emit 失败），guard drop 时
-/// 把 sender 从 map 清掉，避免该 tab_id 永远卡在 "已存在 sender" 状态。
+/// 按 nonce 把 sender 从 map 清掉，避免该 prompt_id 永远卡在 "已存在 sender"
+/// 状态，也避免旧 guard 删除同 ID 的新一代 waiter。
 /// rx 正常 await 到结果时，sender 已被 commands::session::*_respond / *_cancel
 /// 取走，map 里已无对应条目，guard 的 remove 是 no-op。
-struct WaiterGuard<'a> {
-    waiters: &'a Mutex<HashMap<String, oneshot::Sender<String>>>,
-    tab_id: &'a str,
+struct WaiterGuard<'a, T> {
+    waiters: &'a Mutex<HashMap<String, OwnedWaiter<T>>>,
+    prompt_id: &'a str,
+    nonce: uuid::Uuid,
 }
 
-impl Drop for WaiterGuard<'_> {
+impl<T> Drop for WaiterGuard<'_, T> {
     fn drop(&mut self) {
         if let Ok(mut m) = locked(self.waiters) {
-            m.remove(self.tab_id);
+            if m.get(self.prompt_id)
+                .is_some_and(|waiter| waiter.nonce == self.nonce)
+            {
+                m.remove(self.prompt_id);
+            }
         }
     }
 }
 
 /// 通用终端 prompt：注册 oneshot sender 到指定 waiters map，emit 事件，等用户回应。
 /// passphrase / host_key 等 xterm 内交互都走这条路；差异只在 waiters / 事件名 / payload。
-pub(crate) async fn prompt_oneshot(
-    waiters: &Mutex<HashMap<String, oneshot::Sender<String>>>,
+pub(crate) async fn prompt_oneshot<T>(
+    waiters: &Mutex<HashMap<String, OwnedWaiter<T>>>,
     app: &crate::emitter::Host,
-    tab_id: &str,
+    resource_id: &str,
+    prompt_id: &str,
+    owner: &SessionOwner,
     event_prefix: &str,
     payload: serde_json::Value,
     cancel_code: &'static str,
-) -> AppResult<String> {
-    let (tx, rx) = oneshot::channel::<String>();
-    {
-        let mut w = locked(waiters)?;
-        // dialogue 串行：上一个 prompt 不到 ok / cancel 不会发起下一个。
-        // 已存在 = 上层并发设计被破坏；refuse 比 silent overwrite 更安全（旧
-        // receiver 永远 hang，资源泄漏）。
-        if w.contains_key(tab_id) {
-            return Err(AppError::other(
-                "ssh_prompt_already_pending",
-                json!({ "tab_id": tab_id, "channel": event_prefix }),
-            ));
-        }
-        w.insert(tab_id.to_string(), tx);
-    }
+) -> AppResult<T> {
+    let (tx, rx) = oneshot::channel::<T>();
+    let nonce = uuid::Uuid::new_v4();
+    let state = app.state();
+    crate::commands::lifecycle::register_prompt_waiter(
+        &state,
+        waiters,
+        resource_id,
+        prompt_id,
+        owner,
+        event_prefix,
+        nonce,
+        tx,
+    )?;
     // guard 在 emit 失败 / rx 错误时自动从 map 清掉 sender；正常落地是 no-op。
-    let _guard = WaiterGuard { waiters, tab_id };
-    app.emit(&format!("{event_prefix}:{tab_id}"), payload)
+    let _guard = WaiterGuard {
+        waiters,
+        prompt_id,
+        nonce,
+    };
+    app.emit(&format!("{event_prefix}:{prompt_id}"), payload)
         .map_err(|e| {
             AppError::other(
                 "emit_failed",
@@ -80,7 +95,9 @@ pub(crate) async fn prompt_passphrase(ctx: &AuthCtx, prompt: &str) -> AppResult<
     prompt_oneshot(
         &state.passphrase_waiters,
         &ctx.app,
-        &ctx.tab_id,
+        &ctx.resource_id,
+        &ctx.prompt_id,
+        &ctx.owner,
         "ssh:passphrase_prompt",
         json!({ "prompt": prompt }),
         "ssh_user_cancelled_passphrase",
@@ -95,10 +112,55 @@ pub(crate) async fn prompt_host_key(ctx: &AuthCtx, banner: &str) -> AppResult<St
     prompt_oneshot(
         &state.host_key_waiters,
         &ctx.app,
-        &ctx.tab_id,
+        &ctx.resource_id,
+        &ctx.prompt_id,
+        &ctx.owner,
         "ssh:host_key_prompt",
         json!({ "banner": banner }),
         "ssh_user_cancelled_hostkey",
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_waiter_guard_does_not_remove_replacement() {
+        let waiters = Mutex::new(HashMap::new());
+        let owner = SessionOwner::Window("main".into());
+        let stale_nonce = uuid::Uuid::new_v4();
+        let (stale_tx, _stale_rx) = oneshot::channel::<String>();
+        waiters.lock().unwrap().insert(
+            "attempt".into(),
+            OwnedWaiter {
+                nonce: stale_nonce,
+                owner: owner.clone(),
+                sender: stale_tx,
+            },
+        );
+        let guard = WaiterGuard {
+            waiters: &waiters,
+            prompt_id: "attempt",
+            nonce: stale_nonce,
+        };
+
+        let replacement_nonce = uuid::Uuid::new_v4();
+        let (replacement_tx, _replacement_rx) = oneshot::channel::<String>();
+        waiters.lock().unwrap().insert(
+            "attempt".into(),
+            OwnedWaiter {
+                nonce: replacement_nonce,
+                owner,
+                sender: replacement_tx,
+            },
+        );
+        drop(guard);
+
+        assert_eq!(
+            waiters.lock().unwrap().get("attempt").unwrap().nonce,
+            replacement_nonce
+        );
+    }
 }

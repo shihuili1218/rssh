@@ -234,7 +234,12 @@ fn open_with_xany(
     builder.open().map_err(|e| open_err(port, e))
 }
 
-pub fn open(port: &str, cfg: SerialConfig, sink: SerialSink) -> AppResult<(String, SerialHandle)> {
+pub fn open(
+    session_id: String,
+    port: &str,
+    cfg: SerialConfig,
+    sink: SerialSink,
+) -> AppResult<(String, SerialHandle)> {
     let builder = serialport::new(port, cfg.baud_rate)
         .data_bits(map_data_bits(cfg.data_bits))
         .parity(map_parity(&cfg.parity))
@@ -257,7 +262,7 @@ pub fn open(port: &str, cfg: SerialConfig, sink: SerialSink) -> AppResult<(Strin
     let closed = Arc::new(AtomicBool::new(false));
     let reader_closed = closed.clone();
 
-    let id = uuid::Uuid::new_v4().to_string();
+    let id = session_id;
     let handle = SerialHandle {
         writer: Arc::new(Mutex::new(opened)),
         _guard: Arc::new(CloseGuard { closed }),

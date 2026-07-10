@@ -15,8 +15,7 @@ export function createReservedSessionAttempt(
   dependencies: ReservedSessionAttemptDependencies,
 ) {
   type CurrentAttempt = {
-    eventId: string;
-    closeId: string;
+    sessionId: string;
     pending: boolean;
     disposeEvents?: () => void;
   };
@@ -43,7 +42,7 @@ export function createReservedSessionAttempt(
     current = null;
     if (!cancelled) return;
     cancelled.disposeEvents?.();
-    requestClose(cancelled.closeId);
+    requestClose(cancelled.sessionId);
   }
 
   return {
@@ -55,8 +54,7 @@ export function createReservedSessionAttempt(
       const attemptGeneration = ++generation;
       const reservedId = dependencies.makeId();
       const attempt: CurrentAttempt = {
-        eventId: reservedId,
-        closeId: reservedId,
+        sessionId: reservedId,
         pending: true,
       };
       current = attempt;
@@ -86,13 +84,23 @@ export function createReservedSessionAttempt(
         }
         current = null;
         disposeEvents();
+        // The backend may have activated the reserved id and lost only the IPC
+        // response. Closing on every rejection is idempotent for an ordinary
+        // open failure and prevents an unreachable ready handle in that case.
+        requestClose(reservedId);
         throw error;
       }
       if (current !== attempt || generation !== attemptGeneration) {
-        await closeAndIgnore(sessionId);
+        requestClose(sessionId);
         return { kind: "cancelled" };
       }
-      attempt.closeId = sessionId;
+      if (sessionId !== reservedId) {
+        current = null;
+        disposeEvents();
+        requestClose(reservedId);
+        requestClose(sessionId);
+        throw new Error("backend returned a different session id");
+      }
       attempt.pending = false;
       return { kind: "ready", sessionId };
     },
@@ -105,7 +113,7 @@ export function createReservedSessionAttempt(
       return current?.pending === true;
     },
     accepts(sessionId: string): boolean {
-      return current?.eventId === sessionId;
+      return current?.sessionId === sessionId;
     },
   };
 }

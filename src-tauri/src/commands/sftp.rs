@@ -10,6 +10,7 @@ use crate::error::{locked, AppError, AppResult};
 use crate::models::{Credential, CredentialType};
 use crate::ssh::sftp::{FileStat, RemoteEntry, SftpHandle, WalkEntry};
 use crate::state::AppState;
+use crate::state::{SessionKind, SessionOwner};
 
 #[cfg(not(target_os = "android"))]
 use tauri_plugin_dialog::{DialogExt, FilePath};
@@ -48,6 +49,7 @@ impl Drop for CancelGuard<'_> {
 
 #[tauri::command]
 pub async fn sftp_connect(
+    window: tauri::Window,
     state: State<'_, AppState>,
     host: String,
     port: u16,
@@ -55,6 +57,12 @@ pub async fn sftp_connect(
     auth_type: String,
     secret: Option<String>,
 ) -> AppResult<String> {
+    let reservation = crate::commands::lifecycle::reserve_generated_resource(
+        &state,
+        SessionKind::Sftp,
+        SessionOwner::Window(window.label().to_owned()),
+    )?;
+    let id = reservation.id().to_owned();
     let cred = Credential {
         id: String::new(),
         name: String::new(),
@@ -73,14 +81,9 @@ pub async fn sftp_connect(
         SftpHandle::connect(host, port, cred, known_hosts_path, timeout_secs).await
     })
     .await?;
-    let id = uuid::Uuid::new_v4().to_string();
-
-    crate::commands::lifecycle::publish_session(
-        &state,
-        &state.sftp_sessions,
-        id.clone(),
-        Arc::new(handle),
-    )?;
+    reservation.activate(crate::commands::lifecycle::ReadySession::Sftp(Arc::new(
+        handle,
+    )))?;
 
     Ok(id)
 }
@@ -88,31 +91,25 @@ pub async fn sftp_connect(
 /// Connect SFTP by reusing an active SSH session (no re-authentication).
 #[tauri::command]
 pub async fn sftp_connect_session(
+    window: tauri::Window,
     state: State<'_, AppState>,
     session_id: String,
 ) -> AppResult<String> {
-    let ssh_handle = {
-        let sessions = locked(&state.sessions)?;
-        sessions
-            .get(&session_id)
-            .ok_or_else(|| AppError::not_found("ssh_session_not_found_msg", json!({})))?
-            .ssh_handle()
-            .clone()
-    };
+    let (reservation, ssh_handle) = crate::commands::lifecycle::reserve_sftp_child(
+        &state,
+        &session_id,
+        &SessionOwner::Window(window.label().to_owned()),
+    )?;
+    let id = reservation.id().to_owned();
 
     let parent = session_id.clone();
     let handle = crate::ssh::client::run_blocking_ssh(move || async move {
         SftpHandle::from_handle(&ssh_handle, parent).await
     })
     .await?;
-    let id = uuid::Uuid::new_v4().to_string();
-
-    crate::commands::lifecycle::publish_session(
-        &state,
-        &state.sftp_sessions,
-        id.clone(),
-        Arc::new(handle),
-    )?;
+    reservation.activate(crate::commands::lifecycle::ReadySession::Sftp(Arc::new(
+        handle,
+    )))?;
 
     Ok(id)
 }
@@ -252,9 +249,17 @@ pub async fn sftp_mkdir(
 }
 
 #[tauri::command]
-pub async fn sftp_close(state: State<'_, AppState>, sftp_id: String) -> AppResult<()> {
-    crate::commands::lifecycle::take_session(&state, &state.sftp_sessions, &sftp_id)?;
-    Ok(())
+pub async fn sftp_close(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    sftp_id: String,
+) -> AppResult<()> {
+    crate::commands::lifecycle::close_resource(
+        &state,
+        &sftp_id,
+        SessionKind::Sftp,
+        &SessionOwner::Window(window.label().to_owned()),
+    )
 }
 
 /// dialog plugin 的 FilePath → 本地 PathBuf。SFTP 命令全是 `cfg(not(android))`，
