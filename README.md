@@ -43,14 +43,18 @@ Every command and its output become a block with a color-coded left edge. In a t
 
 ## Features
 
-- **SSH** -- password, private key, keyboard-interactive, jump host (ProxyJump)
-- **Terminal** -- xterm emulation, 10 000-line scrollback, keyword highlighting, search
-- **SFTP** -- remote file browser, upload/download
-- **Port Forwarding** -- local and remote, named configs, real-time stats
-- **Local Terminal** -- auto-detect zsh/bash/PowerShell
+- **SSH** -- password, private key, SSH agent/Pageant, keyboard-interactive, jump host (ProxyJump)
+- **Telnet** -- saved profiles, echo negotiation, line controls, expect/send login scripts
+- **Serial Console (desktop)** -- saved UART profiles, text/hex modes, flow control, login scripts, DTR/RTS/break
+- **Dynamic Discovery (Docker/K8S)** -- discover Docker containers and running Kubernetes pods through local CLI contexts, then open ephemeral exec terminals
+- **Terminal** -- xterm emulation, 10 000-line scrollback, foldable color-coded command blocks, regex highlighting, search
+- **Multi-session Workbench (desktop)** -- live terminal previews and selection-aware broadcast across connected sessions
+- **SFTP** -- remote file browser and upload/download
+- **Port Forwarding** -- local, remote and dynamic (SOCKS5), named configs, real-time stats
+- **Local Terminal (desktop)** -- auto-detect zsh/bash/PowerShell
 - **Session Recording** -- asciicast v2 format, variable-speed playback
-- **Profiles & Credentials** -- SQLite storage, import from `~/.ssh/config`
-- **Security & Sync** -- secrets in platform keychain, per-credential sync filter, encrypted backup to your own GitHub repo
+- **Connections & Credentials** -- SQLite storage, import from `~/.ssh/config`
+- **Security & Sync** -- secrets encrypted locally with ChaCha20-Poly1305, master key in the platform keychain when available, selective remote sync, encrypted backup to your own GitHub repo or WebDAV server
 - **Snippets** -- reusable command shortcuts (Cmd+E)
 - **Mobile** -- virtual keybar (Ctrl/Alt/arrows/Tab/Esc), safe area, stack navigation
 - **IDE Plugin** -- run RSSH inside JetBrains IDEs in a tool window (shared data dir)
@@ -68,8 +72,9 @@ Download from [Releases](https://github.com/shihuili1218/rssh/releases):
 | Linux (AppImage)    | `rssh-{ver}-linux-x86_64.AppImage`    | Any distro                   |
 | Windows             | `rssh-{ver}-windows-x86_64.msi`       | Silent install: `msiexec /i` |
 | Windows             | `rssh-{ver}-windows-x86_64-setup.exe` | GUI installer                |
+| Windows             | `rssh-{ver}-windows-x86_64-portable.zip` | Portable GUI + CLI        |
 | Android             | `rssh-{ver}-android-universal.apk`    |                              |
-| iOS                 |                                       | No ID, build you self        |
+| iOS                 |                                       | No official build; build it yourself |
 
 ### IntelliJ / JetBrains plugin
 

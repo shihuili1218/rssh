@@ -43,14 +43,18 @@
 
 ## 功能
 
-- **SSH** —— 密码、私钥、键盘交互、跳板机（ProxyJump）
-- **终端** —— xterm 仿真、10 000 行回滚、关键词高亮、搜索
-- **SFTP** —— 远程文件浏览、上传/下载
-- **端口转发** —— 本地和远程，命名配置，实时流量统计
-- **本地终端** —— 自动识别 zsh/bash/PowerShell
+- **SSH** —— 密码、私钥、SSH Agent/Pageant、键盘交互、跳板机（ProxyJump）
+- **Telnet** —— 保存连接配置、回显协商、行规程设置、expect/send 登录脚本
+- **串口控制台（桌面端）** —— 保存 UART 配置、文本/Hex 模式、流控、登录脚本、DTR/RTS/Break 控制
+- **动态发现（Docker/K8S）** —— 通过本机 CLI context 发现 Docker 容器和运行中的 Kubernetes Pod，直接打开临时 exec 终端
+- **终端** —— xterm 仿真、10 000 行回滚、可折叠彩色命令块、正则高亮、搜索
+- **多会话工作台（桌面端）** —— 实时预览已连接终端，并向选中的会话广播内容
+- **SFTP** —— 远程文件浏览和上传/下载
+- **端口转发** —— 本地、远程和动态（SOCKS5），命名配置，实时流量统计
+- **本地终端（桌面端）** —— 自动识别 zsh/bash/PowerShell
 - **会话录制** —— asciicast v2 格式，变速回放
-- **Profile 与凭据** —— SQLite 存储，可从 `~/.ssh/config` 导入
-- **安全与同步** —— 密钥进系统钥匙串，按凭据控制同步范围，加密备份到你自己的 GitHub 仓库
+- **连接与凭据** —— SQLite 存储，可从 `~/.ssh/config` 导入
+- **安全与同步** —— Secret 使用 ChaCha20-Poly1305 本地加密，系统可用时由钥匙串保管主密钥；可选择远程同步范围，并加密备份到你自己的 GitHub 仓库或 WebDAV 服务器
 - **片段** —— 可复用命令快捷键（Cmd+E）
 - **移动端** —— 虚拟键盘栏（Ctrl/Alt/方向键/Tab/Esc）、安全区、栈式导航
 - **IDE 插件** —— 在 JetBrains IDE 的工具窗口里运行 RSSH（共享数据目录）
@@ -68,8 +72,9 @@
 | Linux (AppImage)    | `rssh-{ver}-linux-x86_64.AppImage`   | 任意发行版           |
 | Windows             | `rssh-{ver}-windows-x86_64.msi`      | 静默安装：`msiexec /i` |
 | Windows             | `rssh-{ver}-windows-x86_64-setup.exe` | 图形安装器           |
+| Windows             | `rssh-{ver}-windows-x86_64-portable.zip` | 免安装 GUI + CLI  |
 | Android             | `rssh-{ver}-android-universal.apk`   |                 |
-| iOS                 |                                      | 没有开发者账号，自行打包    |
+| iOS                 |                                      | 无官方构建；需自行打包      |
 
 ### IntelliJ / JetBrains 插件
 
