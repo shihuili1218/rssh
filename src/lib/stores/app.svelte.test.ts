@@ -30,6 +30,107 @@ async function loadAppModule() {
 
 const local = (id: string) => ({ id, type: "local" as const, label: id });
 
+describe("recent Home connections", () => {
+  it("records every saved or discovered GUI connection through addTab", async () => {
+    const app = await loadAppModule();
+
+    app.addTab({ id: "ssh-tab", type: "ssh", label: "SSH", meta: { profileId: "p1" } });
+    app.addTab({ id: "fwd-tab", type: "forward", label: "Forward", meta: { forwardId: "f1" } });
+    app.addTab({ id: "serial-tab", type: "serial", label: "Serial", meta: { serialProfileId: "s1" } });
+    app.addTab({ id: "telnet-tab", type: "telnet", label: "Telnet", meta: { profileId: "t1" } });
+    app.addTab({
+      id: "docker-tab",
+      type: "docker_exec",
+      label: "Docker",
+      meta: { sourceId: "src", dynamicTargetId: "docker_exec:ctx:container" },
+    });
+    app.addTab({
+      id: "k8s-tab",
+      type: "kubectl_exec",
+      label: "Kubernetes",
+      meta: { sourceId: "src", dynamicTargetId: "kubectl_exec:ctx:ns:pod:container" },
+    });
+
+    expect(app.recentHomeItemIds()).toEqual([
+      "dynamic:src:kubectl_exec:ctx:ns:pod:container",
+      "dynamic:src:docker_exec:ctx:container",
+      "telnet:t1",
+      "serial:s1",
+      "forward:f1",
+      "ssh:p1",
+    ]);
+  });
+
+  it("moves repeated connections to the front and ignores non-Home tabs", async () => {
+    const app = await loadAppModule();
+
+    app.addTab({ id: "ssh-a", type: "ssh", label: "A", meta: { profileId: "a" } });
+    app.addTab({ id: "ssh-b", type: "ssh", label: "B", meta: { profileId: "b" } });
+    app.addTab(local("local"));
+    app.addTab({ id: "edit", type: "edit", label: "Edit" });
+    app.addTab({ id: "ssh-a-2", type: "ssh", label: "A", meta: { profileId: "a" } });
+
+    expect(app.recentHomeItemIds()).toEqual(["ssh:a", "ssh:b"]);
+    expect(JSON.parse(localStorage.getItem("home.recent_items.v1") ?? "[]")).toEqual([
+      "ssh:a",
+      "ssh:b",
+    ]);
+  });
+
+  it("loads valid persisted ids and falls back safely from corrupt storage", async () => {
+    localStorage.setItem("home.recent_items.v1", JSON.stringify(["ssh:p2", "ssh:p1", "ssh:p2"]));
+    let app = await loadAppModule();
+    expect(app.recentHomeItemIds()).toEqual(["ssh:p2", "ssh:p1"]);
+
+    localStorage.setItem("home.recent_items.v1", "not-json");
+    app = await loadAppModule();
+    expect(app.recentHomeItemIds()).toEqual([]);
+  });
+
+  it("merges a newer record written by another window before persisting", async () => {
+    const app = await loadAppModule();
+    app.addTab({ id: "ssh-a", type: "ssh", label: "A", meta: { profileId: "a" } });
+
+    localStorage.setItem("home.recent_items.v1", JSON.stringify(["ssh:b", "ssh:a"]));
+    app.addTab({ id: "ssh-c", type: "ssh", label: "C", meta: { profileId: "c" } });
+
+    expect(app.recentHomeItemIds()).toEqual(["ssh:c", "ssh:b", "ssh:a"]);
+  });
+
+  it("reacts to recent records written by another window", async () => {
+    let onStorage: ((event: StorageEvent) => void) | undefined;
+    vi.stubGlobal("window", {
+      addEventListener: (type: string, listener: (event: StorageEvent) => void) => {
+        if (type === "storage") onStorage = listener;
+      },
+    });
+    const app = await loadAppModule();
+
+    onStorage?.({
+      key: "home.recent_items.v1",
+      newValue: JSON.stringify(["ssh:remote", "forward:f1"]),
+    } as StorageEvent);
+
+    expect(app.recentHomeItemIds()).toEqual(["ssh:remote", "forward:f1"]);
+  });
+
+  it("bounds transient discovery history instead of growing forever", async () => {
+    const app = await loadAppModule();
+    for (let index = 0; index < 260; index += 1) {
+      app.addTab({
+        id: `docker-tab-${index}`,
+        type: "docker_exec",
+        label: `Container ${index}`,
+        meta: { sourceId: "src", dynamicTargetId: `docker_exec:ctx:${index}` },
+      });
+    }
+
+    expect(app.recentHomeItemIds()).toHaveLength(256);
+    expect(app.recentHomeItemIds()[0]).toBe("dynamic:src:docker_exec:ctx:259");
+    expect(app.recentHomeItemIds()[255]).toBe("dynamic:src:docker_exec:ctx:4");
+  });
+});
+
 describe("tab MRU ordering", () => {
   it("seeds with the fixed home tab at the front", async () => {
     const app = await loadAppModule();

@@ -316,6 +316,14 @@ const zh: Messages = {
   "home.empty.title": "还没有 Profile",
   "home.empty.cta": "去 设置 → Profile 新建一个吧。",
   "home.connect": "连接",
+  "home.display.aria": "首页展示方式",
+  "home.display.group": "按分组",
+  "home.display.type": "按类型",
+  "home.sort.aria": "首页项目排序",
+  "home.sort.az": "A–Z",
+  "home.sort.recent": "最近使用",
+  "home.type.docker": "Docker",
+  "home.type.kubernetes": "Kubernetes",
 
   // ── Profile 编辑器 ──
   "profile.name": "名称",

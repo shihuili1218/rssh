@@ -314,6 +314,14 @@ const en = {
   "home.empty.title": "No profiles yet",
   "home.empty.cta": "Create one in Settings → Profiles to get started.",
   "home.connect": "Connect",
+  "home.display.aria": "Home display mode",
+  "home.display.group": "Groups",
+  "home.display.type": "Types",
+  "home.sort.aria": "Home item order",
+  "home.sort.az": "A–Z",
+  "home.sort.recent": "Recent",
+  "home.type.docker": "Docker",
+  "home.type.kubernetes": "Kubernetes",
 
   // ── Profile editor ──
   "profile.name": "Name",

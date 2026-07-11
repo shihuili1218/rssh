@@ -188,8 +188,15 @@ let _downloadsActive = $state(false);
  */
 function loadStringArray(key: string): string[] {
     try {
-        const raw = localStorage.getItem(key);
-        if (raw === null) return [];
+        return parseStringArray(localStorage.getItem(key));
+    } catch {
+        return [];
+    }
+}
+
+function parseStringArray(raw: string | null): string[] {
+    if (raw === null) return [];
+    try {
         const parsed = JSON.parse(raw);
         return Array.isArray(parsed) ? parsed.filter((v) => typeof v === "string") : [];
     } catch {
@@ -216,7 +223,31 @@ function safeSetItem(key: string, value: string) {
     }
 }
 
+const RECENT_HOME_ITEMS_KEY = "home.recent_items.v1";
+const MAX_RECENT_HOME_ITEMS = 256;
+
+function normalizeRecentHomeItemIds(ids: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const id of ids) {
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    normalized.push(id);
+    if (normalized.length === MAX_RECENT_HOME_ITEMS) break;
+  }
+  return normalized;
+}
+
 let _pinnedProfileIds = $state<string[]>(loadStringArray("pinned_profiles"));
+let _recentHomeItemIds = $state<string[]>(
+  normalizeRecentHomeItemIds(loadStringArray(RECENT_HOME_ITEMS_KEY)),
+);
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== RECENT_HOME_ITEMS_KEY) return;
+    _recentHomeItemIds = normalizeRecentHomeItemIds(parseStringArray(event.newValue));
+  });
+}
 
 /* Terminal title (from remote shell OSC sequence), separate from tab label */
 let _terminalTitles = $state<Record<string, string>>({});
@@ -241,6 +272,7 @@ export function sftpOpenForTab(tabId: string) { return !!_sftpOpenByTab[tabId]; 
 export function tabsWithSftp(): Tab[] { return _tabs.filter(t => _sftpOpenByTab[t.id]); }
 export function downloadsActive() { return _downloadsActive; }
 export function pinnedProfileIds() { return _pinnedProfileIds; }
+export function recentHomeItemIds() { return _recentHomeItemIds; }
 export function terminalTitle(tabId: string) { return _terminalTitles[tabId]; }
 
 /* ─── Tab Operations ─── */
@@ -264,6 +296,41 @@ export function addTab(tab: Tab) {
   _tabs.splice(_tabMru ? 1 : _tabs.length, 0, tab);
   _activeTabId = tab.id;
   _settingsActive = false;
+  recordRecentHomeItem(tab);
+}
+
+function recordRecentHomeItem(tab: Tab): void {
+  const itemId = homeItemIdForTab(tab);
+  if (!itemId) return;
+  _recentHomeItemIds = normalizeRecentHomeItemIds([
+    itemId,
+    ...loadStringArray(RECENT_HOME_ITEMS_KEY),
+    ..._recentHomeItemIds.filter((id) => id !== itemId),
+  ]);
+  safeSetItem(RECENT_HOME_ITEMS_KEY, JSON.stringify(_recentHomeItemIds));
+}
+
+function homeItemIdForTab(tab: Tab): string | null {
+  const meta = tab.meta;
+  switch (tab.type) {
+    case "ssh":
+      return meta?.profileId ? `ssh:${meta.profileId}` : null;
+    case "forward":
+      return meta?.forwardId ? `forward:${meta.forwardId}` : null;
+    case "serial":
+      return meta?.serialProfileId ? `serial:${meta.serialProfileId}` : null;
+    case "telnet":
+      return meta?.profileId ? `telnet:${meta.profileId}` : null;
+    case "docker_exec":
+    case "kubectl_exec":
+      return meta?.sourceId && meta.dynamicTargetId
+        ? `dynamic:${meta.sourceId}:${meta.dynamicTargetId}`
+        : null;
+    case "home":
+    case "local":
+    case "edit":
+      return null;
+  }
 }
 
 export function moveTab(fromIdx: number, toIdx: number) {
@@ -553,6 +620,7 @@ export function connectSerialProfile(sp: SerialProfile) {
     type: "serial",
     label: sp.name,
     meta: {
+      serialProfileId: sp.id,
       port: sp.port,
       baud_rate: String(sp.baud_rate),
       data_bits: String(sp.data_bits),

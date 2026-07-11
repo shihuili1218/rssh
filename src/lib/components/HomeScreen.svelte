@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import * as app from "../stores/app.svelte.ts";
   import type {
     Profile,
@@ -8,11 +9,22 @@
     SerialProfile,
     TelnetProfile,
     DynamicDiscoveredTarget,
-    ConnectorSpec,
   } from "../stores/app.svelte.ts";
-  import { errMsg } from "../i18n/index.svelte.ts";
+  import { errMsg, locale, t } from "../i18n/index.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
   import { createHomeRefresh } from "./home-refresh.ts";
+  import {
+    buildHomeSections,
+    HOME_VIEW_STORAGE_KEY,
+    loadHomeViewPreferences,
+    parseHomeViewPreferences,
+    updateHomeViewPreferences,
+    type HomeGrouping,
+    type HomeItemKind,
+    type HomeLayoutItem,
+    type HomeSorting,
+    type HomeViewPreferences,
+  } from "./home-layout.ts";
 
   let profiles = $state<Profile[]>([]);
   let credentials = $state<Credential[]>([]);
@@ -22,6 +34,16 @@
   let telnetProfiles = $state<TelnetProfile[]>([]);
   let dynamicTargets = $state<DynamicDiscoveredTarget[]>([]);
   let query = $state("");
+  let viewPreferences = $state<HomeViewPreferences>(loadHomeViewPreferences());
+
+  onMount(() => {
+    const syncPreferences = (event: StorageEvent) => {
+      if (event.key !== HOME_VIEW_STORAGE_KEY) return;
+      viewPreferences = parseHomeViewPreferences(event.newValue);
+    };
+    window.addEventListener("storage", syncPreferences);
+    return () => window.removeEventListener("storage", syncPreferences);
+  });
 
   const homeRefresh = createHomeRefresh({
     loadStatic: async () => {
@@ -74,16 +96,10 @@
   // Static profiles and dynamic connector results share the same HomeItem path.
   // Opening behavior lives on the item itself, so Home does not assume that every
   // discovered target is a container/pod connector.
-  type HomeItemKind = "ssh" | "forward" | "serial" | "telnet" | ConnectorSpec["type"];
-
-  interface HomeItem {
-    kind: HomeItemKind;
-    id: string; // Globally unique for keyed #each + nav.
-    name: string;
+  interface HomeItem extends HomeLayoutItem {
     sub: string;
     icon: string;
     iconClass: string;
-    group_id: string | null;
     pinProfileId: string | null;
     open: () => void;
   }
@@ -106,7 +122,7 @@
       return {
         kind: "ssh", id: `ssh:${p.id}`, name: p.name,
         sub: `${cred?.username ?? "?"}@${p.host}:${p.port}`,
-        icon: "S", iconClass: "", group_id: p.group_id ?? null,
+        icon: "S", iconClass: "", groupId: p.group_id ?? null,
         pinProfileId: p.id, open: () => connectProfile(p),
       };
     }),
@@ -114,19 +130,19 @@
       kind: "forward", id: `forward:${f.id}`, name: f.name,
       sub: `:${f.local_port} → ${f.remote_host}:${f.remote_port}`,
       icon: f.type === "dynamic" ? "D" : f.type === "local" ? "L" : "R",
-      iconClass: "fwd", group_id: f.group_id ?? null,
+      iconClass: "fwd", groupId: f.group_id ?? null,
       pinProfileId: null, open: () => openForward(f),
     })),
     ...serialProfiles.map((s): HomeItem => ({
       kind: "serial", id: `serial:${s.id}`, name: s.name,
       sub: `${s.port} · ${s.baud_rate}`,
-      icon: "⎓", iconClass: "serial", group_id: s.group_id ?? null,
+      icon: "⎓", iconClass: "serial", groupId: s.group_id ?? null,
       pinProfileId: null, open: () => app.connectSerialProfile(s),
     })),
     ...telnetProfiles.map((tp): HomeItem => ({
       kind: "telnet", id: `telnet:${tp.id}`, name: tp.name,
       sub: `${tp.host}:${tp.port}`,
-      icon: "T", iconClass: "telnet", group_id: tp.group_id ?? null,
+      icon: "T", iconClass: "telnet", groupId: tp.group_id ?? null,
       pinProfileId: null, open: () => app.connectTelnetProfile(tp),
     })),
     ...dynamicTargets.map((target): HomeItem => {
@@ -138,7 +154,7 @@
         sub: `${target.source_name} · ${target.sub}`,
         icon: presentation.icon,
         iconClass: presentation.iconClass,
-        group_id: null,
+        groupId: null,
         pinProfileId: null,
         open: () => app.connectDynamicTarget(target),
       };
@@ -156,32 +172,37 @@
       : allItems
   );
 
-  // Group into sections by group_id; groups sorted by sort_order, ungrouped
-  // last. Empty groups never appear. `offset` makes an item's global nav index
-  // `offset + i`, keeping the flat list and the rendered sections aligned.
-  let groupedItems = $derived((() => {
-    const map = new Map<string | null, HomeItem[]>();
-    for (const it of filtered) {
-      const gid = it.group_id ?? null;
-      if (!map.has(gid)) map.set(gid, []);
-      map.get(gid)!.push(it);
+  function kindLabel(kind: HomeItemKind): string {
+    switch (kind) {
+      case "ssh": return t("settings.section.profiles");
+      case "forward": return t("settings.section.forwards");
+      case "serial": return t("settings.section.serial");
+      case "telnet": return t("settings.section.telnet");
+      case "docker_exec": return t("home.type.docker");
+      case "kubectl_exec": return t("home.type.kubernetes");
     }
-    const sections: { group: Group | null; items: HomeItem[]; offset: number }[] = [];
-    for (const g of [...groups].sort((a, b) => a.sort_order - b.sort_order)) {
-      const items = map.get(g.id);
-      if (items && items.length > 0) { sections.push({ group: g, items, offset: 0 }); map.delete(g.id); }
-    }
-    // Ungrouped (null group_id or unknown group_id) → one trailing section.
-    const ungrouped: HomeItem[] = [];
-    for (const [, items] of map) ungrouped.push(...items);
-    if (ungrouped.length > 0) sections.push({ group: null, items: ungrouped, offset: 0 });
-    let off = 0;
-    for (const s of sections) { s.offset = off; off += s.items.length; }
-    return sections;
-  })());
+  }
+
+  // Section order is independent from item sorting. Group mode keeps the
+  // configured group order; type mode uses the fixed connection-kind order.
+  let sections = $derived(buildHomeSections({
+    grouping: viewPreferences.grouping,
+    sorting: viewPreferences.sorting,
+    items: filtered,
+    groups: groups.map((group: Group) => ({
+      id: group.id,
+      name: group.name,
+      color: group.color,
+      sortOrder: group.sort_order,
+    })),
+    recentItemIds: app.recentHomeItemIds(),
+    ungroupedLabel: t("profile.ungrouped"),
+    kindLabel,
+    locale: locale(),
+  }));
 
   // Flat list in display order — what arrow-key nav walks.
-  let navItems = $derived(groupedItems.flatMap((s) => s.items));
+  let navItems = $derived(sections.flatMap((section) => section.items));
 
   function getCols(): number {
     const el = gridEls.find(Boolean);
@@ -191,8 +212,8 @@
 
   // Locate which section a global navIdx falls into.
   function findSection(idx: number) {
-    for (let sIdx = 0; sIdx < groupedItems.length; sIdx++) {
-      const s = groupedItems[sIdx];
+    for (let sIdx = 0; sIdx < sections.length; sIdx++) {
+      const s = sections[sIdx];
       if (idx < s.offset + s.items.length) return { s, sIdx, i: idx - s.offset };
     }
     return null;
@@ -200,7 +221,7 @@
 
   function handleHomeKey(e: KeyboardEvent) {
     if (app.activeTabId() !== "home" || app.settingsActive()) return;
-    if (document.activeElement?.tagName === "INPUT") return;
+    if (e.target instanceof Element && e.target.closest(".home-controls, .search-input")) return;
     const total = navItems.length;
     if (!total) return;
 
@@ -225,8 +246,8 @@
       const col = cur.i % cols;
       if (cur.i + cols < cur.s.items.length) {
         navIdx = cur.s.offset + cur.i + cols; // next row within this section
-      } else if (cur.sIdx + 1 < groupedItems.length) {
-        const next = groupedItems[cur.sIdx + 1]; // next section, same column
+      } else if (cur.sIdx + 1 < sections.length) {
+        const next = sections[cur.sIdx + 1]; // next section, same column
         navIdx = next.offset + Math.min(col, next.items.length - 1);
       }
     } else if (e.key === "ArrowUp") {
@@ -237,7 +258,7 @@
       if (cur.i - cols >= 0) {
         navIdx = cur.s.offset + cur.i - cols; // prev row within this section
       } else if (cur.sIdx - 1 >= 0) {
-        const prev = groupedItems[cur.sIdx - 1]; // prev section, last row, same column
+        const prev = sections[cur.sIdx - 1]; // prev section, last row, same column
         const lastRowStart = Math.floor((prev.items.length - 1) / cols) * cols;
         navIdx = prev.offset + Math.min(lastRowStart + col, prev.items.length - 1);
       }
@@ -256,13 +277,26 @@
     return () => homeRefresh.cancel();
   });
 
-  // Clear the selection whenever the filter changes — otherwise the highlight
-  // would point at whatever item now sits at the stale navIdx in the reordered
-  // (and possibly shorter) list. First arrow press re-enters at top-left.
+  // Clear the selection whenever any layout input changes — otherwise the
+  // highlight could point at a different item after filtering or reordering.
+  // First arrow press re-enters at top-left.
   $effect(() => {
     void query;
+    void viewPreferences.grouping;
+    void viewPreferences.sorting;
+    void navItems.map((item) => item.id).join("\0");
     navIdx = -1;
   });
+
+  function setGrouping(grouping: HomeGrouping) {
+    if (viewPreferences.grouping === grouping) return;
+    viewPreferences = updateHomeViewPreferences(viewPreferences, { grouping });
+  }
+
+  function setSorting(sorting: HomeSorting) {
+    if (viewPreferences.sorting === sorting) return;
+    viewPreferences = updateHomeViewPreferences(viewPreferences, { sorting });
+  }
 
   function activate(it: HomeItem) {
     it.open();
@@ -310,39 +344,78 @@
 <div class="home">
   <div class="home-header">
     <h1 class="logo">RSSH ㋡</h1>
-    <input class="search-input" type="text" bind:value={query} placeholder="Search..." />
+    <input
+      class="search-input"
+      type="search"
+      bind:value={query}
+      aria-label={t("common.search")}
+      placeholder={`${t("common.search")}...`}
+    />
+    <div class="home-controls">
+      <div class="segmented" role="group" aria-label={t("home.display.aria")}>
+        <button
+          type="button"
+          class:active={viewPreferences.grouping === "group"}
+          aria-pressed={viewPreferences.grouping === "group"}
+          onclick={() => setGrouping("group")}
+        >{t("home.display.group")}</button>
+        <button
+          type="button"
+          class:active={viewPreferences.grouping === "type"}
+          aria-pressed={viewPreferences.grouping === "type"}
+          onclick={() => setGrouping("type")}
+        >{t("home.display.type")}</button>
+      </div>
+      <div class="segmented" role="group" aria-label={t("home.sort.aria")}>
+        <button
+          type="button"
+          class:active={viewPreferences.sorting === "name"}
+          aria-pressed={viewPreferences.sorting === "name"}
+          onclick={() => setSorting("name")}
+        >{t("home.sort.az")}</button>
+        <button
+          type="button"
+          class:active={viewPreferences.sorting === "recent"}
+          aria-pressed={viewPreferences.sorting === "recent"}
+          onclick={() => setSorting("recent")}
+        >{t("home.sort.recent")}</button>
+      </div>
+    </div>
   </div>
 
-  {#if groupedItems.length > 0}
-    {#each groupedItems as section, sIdx (section.group?.id ?? "__ungrouped__")}
-      <div class="section-label" style={section.group ? `border-left: 3px solid ${section.group.color}; padding-left: 8px` : ""}>
-        {section.group?.name ?? "UNGROUPED"}
-      </div>
-      <div class="grid" bind:this={gridEls[sIdx]}>
-        {#each section.items as it, i (it.id)}
-          <div class="card-wrap">
-            <button
-              class="card-btn surface-raised"
-              class:selected={navIdx === section.offset + i}
-              onclick={() => activate(it)}
-            >
-              <div class="card-icon {it.iconClass}">{it.icon}</div>
-              <div class="card-body">
-                <div class="card-name">{it.name}</div>
-                <div class="card-sub">{it.sub}</div>
-              </div>
-            </button>
-            {#if it.pinProfileId}
+  {#if sections.length > 0}
+    {#each sections as section, sIdx (section.key)}
+      {@const headingId = `home-section-${sIdx}`}
+      <section aria-labelledby={headingId}>
+        <h2 id={headingId} class="section-label" style={section.color ? `border-left: 3px solid ${section.color}; padding-left: 8px` : ""}>
+          {section.label}
+        </h2>
+        <div class="grid" aria-labelledby={headingId} bind:this={gridEls[sIdx]}>
+          {#each section.items as it, i (it.id)}
+            <div class="card-wrap">
               <button
-                class="pin-btn"
-                class:pinned={app.isProfilePinned(it.pinProfileId)}
-                title={app.isProfilePinned(it.pinProfileId) ? "Unpin" : "Pin to sidebar"}
-                onclick={(e) => { e.stopPropagation(); if (it.pinProfileId) toggleProfilePin(it.pinProfileId); }}
-              >{app.isProfilePinned(it.pinProfileId) ? "★" : "☆"}</button>
-            {/if}
-          </div>
-        {/each}
-      </div>
+                class="card-btn surface-raised"
+                class:selected={navIdx === section.offset + i}
+                onclick={() => activate(it)}
+              >
+                <div class="card-icon {it.iconClass}">{it.icon}</div>
+                <div class="card-body">
+                  <div class="card-name">{it.name}</div>
+                  <div class="card-sub">{it.sub}</div>
+                </div>
+              </button>
+              {#if it.pinProfileId}
+                <button
+                  class="pin-btn"
+                  class:pinned={app.isProfilePinned(it.pinProfileId)}
+                  title={app.isProfilePinned(it.pinProfileId) ? "Unpin" : "Pin to sidebar"}
+                  onclick={(e) => { e.stopPropagation(); if (it.pinProfileId) toggleProfilePin(it.pinProfileId); }}
+                >{app.isProfilePinned(it.pinProfileId) ? "★" : "☆"}</button>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      </section>
     {/each}
   {:else if allItems.length === 0}
     <div class="empty-state">
@@ -354,9 +427,39 @@
 
 <style>
   .home { padding: 24px; flex: 1; overflow-y: auto; min-height: 0; }
-  .home-header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
+  .home-header { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 16px; margin-bottom: 20px; }
   .logo { font-size: 22px; color: var(--accent); font-weight: 700; white-space: nowrap; }
-  .search-input { flex: 1; }
+  .search-input { flex: 1 1 200px; min-width: 160px; }
+  .home-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .segmented {
+    display: inline-flex;
+    padding: 2px;
+    border: 1px solid var(--divider);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+  }
+  .segmented button {
+    padding: 5px 10px;
+    border: 0;
+    border-radius: calc(var(--radius-sm) - 2px);
+    background: transparent;
+    color: var(--text-sub);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .segmented button:hover:not(.active) { color: var(--text); }
+  .segmented button.active {
+    background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+    color: var(--text);
+  }
+  .segmented button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
 
   /* Override global section-label: move spacing from padding → margin so the
      group color border-left only covers the text, not the full padded area.
@@ -413,4 +516,10 @@
 
   .empty-state { text-align: center; padding: 60px 24px; color: var(--text-dim); }
   .empty-state p { margin-bottom: 12px; }
+
+  @media (max-width: 620px) {
+    .logo { width: 100%; }
+    .search-input { flex-basis: 100%; }
+    .home-controls { width: 100%; }
+  }
 </style>
