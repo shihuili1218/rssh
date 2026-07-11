@@ -783,13 +783,15 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn cli_resolver_uses_fallback_when_gui_path_omits_the_program() {
+        let inherited = tempfile::tempdir().unwrap();
         let fallback = tempfile::tempdir().unwrap();
         let docker = fallback.path().join("docker");
         make_executable(&docker, "#!/bin/sh\nexit 0\n");
+        let path = std::env::join_paths([inherited.path()]).unwrap();
 
         let resolved = resolve_executable_in(
             "docker",
-            Some(std::ffi::OsStr::new("/usr/bin:/bin")),
+            Some(path.as_os_str()),
             &[fallback.path().to_owned()],
         );
 
@@ -823,14 +825,16 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn resolved_search_path_is_inherited_by_cli_helpers() {
+        let inherited = tempfile::tempdir().unwrap();
         let fallback = tempfile::tempdir().unwrap();
         let docker = fallback.path().join("docker");
         let helper = fallback.path().join("docker-helper");
         make_executable(&docker, "#!/bin/sh\nexec docker-helper\n");
         make_executable(&helper, "#!/bin/sh\nexit 0\n");
+        let path = std::env::join_paths([inherited.path()]).unwrap();
         let resolved = resolve_executable_in(
             "docker",
-            Some(std::ffi::OsStr::new("/usr/bin:/bin")),
+            Some(path.as_os_str()),
             &[fallback.path().to_owned()],
         )
         .unwrap();
