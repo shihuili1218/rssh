@@ -1,4 +1,4 @@
-//! `rssh edit <profile|cred|fwd> <name>` —— 交互式修改。
+//! `rssh <profile|credential|forward> edit <name>` —— 交互式修改。
 
 use rssh_lib::error::{AppError, AppResult};
 use rssh_lib::models::CredentialType;
@@ -9,19 +9,7 @@ use crate::helpers::{
     update_cred_with_secrets,
 };
 
-pub fn cmd_edit(conn: &CliCtx, kind: &str, name: &str) -> AppResult<()> {
-    match kind {
-        "profile" => edit_profile(conn, name),
-        "cred" | "creds" => edit_credential(conn, name),
-        "fwd" => edit_forward(conn, name),
-        _ => Err(AppError::config(
-            "cli_unknown_kind",
-            serde_json::json!({ "kind": kind, "valid": "profile, cred, fwd" }),
-        )),
-    }
-}
-
-fn edit_profile(conn: &CliCtx, name: &str) -> AppResult<()> {
+pub fn cmd_edit_profile(conn: &CliCtx, name: &str) -> AppResult<()> {
     let profiles = rssh_lib::db::profile::list(conn)?;
     let p = profiles
         .iter()
@@ -39,12 +27,12 @@ fn edit_profile(conn: &CliCtx, name: &str) -> AppResult<()> {
     // credential_id 必填：creds 为空时直接 fail closed。
     // 之前 `if !creds.is_empty() { ... }` 跳过 cred 选择 → p.credential_id 原样写回 DB，
     // 如果原值指向已删 cred 这次 update 就把脏数据再 commit 一次。edit 不该背"维持
-    // broken 不变量"的责任 —— 让用户先去 `rssh add cred`，整个系统才能回归一致。
+    // broken 不变量"的责任 —— 让用户先去 `rssh credential add`，整个系统才能回归一致。
     if creds.is_empty() {
         return Err(AppError::config(
             "cli_no_credentials",
             serde_json::json!({
-                "hint": "Profile must reference a credential, but no credentials exist. Run 'rssh add cred' first."
+                "hint": "Profile must reference a credential, but no credentials exist. Run 'rssh credential add' first."
             }),
         ));
     }
@@ -111,7 +99,7 @@ fn edit_profile(conn: &CliCtx, name: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn edit_credential(conn: &CliCtx, name: &str) -> AppResult<()> {
+pub fn cmd_edit_credential(conn: &CliCtx, name: &str) -> AppResult<()> {
     let creds = rssh_lib::db::credential::list(conn)?;
     let c = creds
         .iter()
@@ -156,7 +144,7 @@ fn edit_credential(conn: &CliCtx, name: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn edit_forward(conn: &CliCtx, name: &str) -> AppResult<()> {
+pub fn cmd_edit_forward(conn: &CliCtx, name: &str) -> AppResult<()> {
     let forwards = rssh_lib::db::forward::list(conn)?;
     let f = forwards
         .iter()

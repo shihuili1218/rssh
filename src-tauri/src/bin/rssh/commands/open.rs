@@ -1,5 +1,5 @@
-//! `rssh open <profile|fwd <name>>` —— 直接 exec ssh，或在 GUI 内嵌终端里
-//! emit OSC 7337 让宿主接管。
+//! `rssh profile open <name>` / `rssh forward open <name>` —— 直接 exec ssh，
+//! 或在 GUI 内嵌终端里 emit OSC 7337 让宿主接管。
 
 use std::process::Command;
 
@@ -24,21 +24,21 @@ fn osc_open(kind: &str, name: &str) -> AppResult<()> {
     Ok(())
 }
 
-pub fn cmd_open(conn: &CliCtx, target: &str, name: Option<&str>) -> AppResult<()> {
-    if target == "fwd" {
-        let fname = name.unwrap_or_else(|| die("Usage: rssh open fwd <name>"));
-        if in_rssh_app() {
-            return osc_open("fwd", fname);
-        }
-        return cmd_open_fwd(conn, fname);
-    }
+pub fn cmd_open_profile(conn: &CliCtx, name: &str) -> AppResult<()> {
     if in_rssh_app() {
-        return osc_open("open", target);
+        return osc_open("open", name);
     }
-    cmd_open_ssh(conn, target)
+    open_ssh(conn, name)
 }
 
-fn cmd_open_ssh(conn: &CliCtx, name: &str) -> AppResult<()> {
+pub fn cmd_open_forward(conn: &CliCtx, name: &str) -> AppResult<()> {
+    if in_rssh_app() {
+        return osc_open("fwd", name);
+    }
+    open_forward(conn, name)
+}
+
+fn open_ssh(conn: &CliCtx, name: &str) -> AppResult<()> {
     let profiles = rssh_lib::db::profile::list(conn)?;
     let profile = profiles
         .iter()
@@ -81,7 +81,7 @@ fn cmd_open_ssh(conn: &CliCtx, name: &str) -> AppResult<()> {
     std::process::exit(code);
 }
 
-fn cmd_open_fwd(conn: &CliCtx, name: &str) -> AppResult<()> {
+fn open_forward(conn: &CliCtx, name: &str) -> AppResult<()> {
     let forwards = rssh_lib::db::forward::list(conn)?;
     let fwd = forwards
         .iter()

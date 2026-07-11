@@ -28,7 +28,7 @@
     <circle cx="124" cy="110" r="7" fill="#ddaa33"/>
     <circle cx="148" cy="110" r="7" fill="#4cb88a"/>
     <rect x="104" y="174" width="6" height="60" rx="3" fill="#4a6cf7"/>
-    <text x="126" y="190" fill="#6f8cff" font-family="JetBrains Mono, Menlo, monospace" font-size="22">$ rssh open prod-api</text>
+    <text x="126" y="190" fill="#6f8cff" font-family="JetBrains Mono, Menlo, monospace" font-size="22">$ rssh profile open prod-api</text>
     <text x="126" y="226" fill="#4cb88a" font-family="JetBrains Mono, Menlo, monospace" font-size="22">connected via bastion-01</text>
     <rect x="104" y="260" width="6" height="92" rx="3" fill="#ddaa33"/>
     <text x="126" y="278" fill="#d9e0ed" font-family="JetBrains Mono, Menlo, monospace" font-size="21">tail -5 /var/log/app.log</text>

@@ -50,14 +50,14 @@ rssh 直接读写 `~/.ssh/known_hosts`。一份数据，两个工具共用。
 rssh 的 CLI 不是 GUI 的附庸。**两者读同一个 SQLite**：`~/.rssh/rssh.db`。
 
 ```bash
-rssh ls prod              # 模糊搜索
-rssh open gateway-01      # 直接连，在你自己的终端里
-rssh open fwd my-tunnel   # 启动命名端口转发
+rssh profile list prod            # 模糊搜索
+rssh profile open gateway-01      # 直接连，在你自己的终端里
+rssh forward open my-tunnel       # 启动命名端口转发
 ```
 
 意味着：
 
-- 你可以把 `rssh open foo` 写进 alias、Makefile、CI 脚本
+- 你可以把 `rssh profile open foo` 写进 alias、Makefile、CI 脚本
 - 你可以在 GUI 里维护 profile，在 tmux 里使用
 - 你不需要为了"图形化管理"维护两份重复的配置
 
@@ -111,7 +111,7 @@ load_skill(id)
 
 代码在 `src-tauri/src/ai/`，欢迎审计。
 
-### 五、同步：你的密钥进系统钥匙串，你的配置进你自己的 repo
+### 五、同步：你的密钥进系统钥匙串，你的配置进你控制的存储
 
 绝大多数同类产品的"同步"，本质是把你的密钥上传到他们的服务器，然后向你保证"端到端加密"。**你怎么验证？**
 
@@ -119,17 +119,20 @@ rssh 不替你保管秘密：
 
 - **密码 / 私钥 passphrase** → macOS Keychain / Windows Credential Manager / Linux Secret Service。你信任你自己的钥匙串，胜过任何第三方软件
 - **私钥默认不上传** → 每条凭据独立"是否参与同步"开关。私钥极少变更，用 U 盘、AirDrop 拷一次用十年
-- **profile / 转发 / 片段** → 加密后推到**你自己的 GitHub 私有仓库**。不是 rssh 的服务器 —— **rssh 没有服务器**
+- **profile / 转发 / 片段** → 加密后推到**你自己的 GitHub 私有仓库或 WebDAV 服务**。不是 rssh 的服务器 —— **rssh 没有服务器**
 
-加密本身没魔法：salted SHA-256（1000 轮）+ 流式异或 + HMAC-SHA256 认证。代码在 `src-tauri/src/crypto.rs`，一百行能读完。
+加密本身没魔法：Argon2id 用固定参数（19 MiB、2 次迭代、1 lane）派生密钥，再由 ChaCha20-Poly1305 做认证加密。代码在 `src-tauri/src/crypto.rs`，一百行能读完。
 
 ```bash
-rssh config set     # 配置 token 和仓库
-rssh config push    # 推送
-rssh config pull    # 拉取
+rssh config github set     # 配置 token 和仓库
+rssh config github push    # 推送到 GitHub
+rssh config github pull    # 从 GitHub 拉取
+rssh config webdav set     # 配置 WebDAV 地址
+rssh config webdav push    # 推送到 WebDAV
+rssh config webdav pull    # 从 WebDAV 拉取
 ```
 
-底层就是 base64 + GitHub API。**想换工具就换，数据就在你的 repo 里**。没有锁定，没有订阅，没有"导出到 CSV"按钮。
+底层就是加密数据和 GitHub / WebDAV API。**想换工具就换，数据始终在你控制的存储里**。没有锁定，没有订阅，没有"导出到 CSV"按钮。
 
 ---
 

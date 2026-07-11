@@ -1,4 +1,4 @@
-//! `rssh add <profile|cred|fwd>` —— 交互式新增。
+//! `rssh <profile|credential|forward> add` —— 交互式新增。
 
 use rssh_lib::error::{AppError, AppResult};
 use rssh_lib::models::{Credential, CredentialType, Forward, ForwardType, Profile};
@@ -9,21 +9,7 @@ use crate::helpers::{
     upsert_cred_with_secrets,
 };
 
-pub fn cmd_add(conn: &CliCtx, kind: &str) -> AppResult<()> {
-    match kind {
-        "profile" => add_profile(conn),
-        "cred" | "creds" => add_credential(conn),
-        "fwd" => add_forward(conn),
-        // 返回 Err 让 main 走 exit(1)；返回 Ok = 退出码 0 把无效输入伪装成成功，
-        // 脚本调用看不出问题。
-        _ => Err(AppError::config(
-            "cli_unknown_kind",
-            serde_json::json!({ "kind": kind, "valid": "profile, cred, fwd" }),
-        )),
-    }
-}
-
-fn add_profile(conn: &CliCtx) -> AppResult<()> {
+pub fn cmd_add_profile(conn: &CliCtx) -> AppResult<()> {
     let name = prompt("Name: ");
     let host = prompt("Host: ");
     let port: u16 = prompt_default("Port", "22").parse().unwrap_or(22);
@@ -35,7 +21,7 @@ fn add_profile(conn: &CliCtx) -> AppResult<()> {
         "Credentials:",
         "Credential",
         &creds,
-        "No credentials yet. Run 'rssh add cred' first.",
+        "No credentials yet. Run 'rssh credential add' first.",
         |c| format!("{} ({})", c.name, c.username),
     )
     .map(|c| c.id.clone())
@@ -43,7 +29,7 @@ fn add_profile(conn: &CliCtx) -> AppResult<()> {
         AppError::config(
             "cli_credential_required",
             serde_json::json!({
-                "hint": "Profile must reference a credential. Pick one from the list, or run 'rssh add cred' first."
+                "hint": "Profile must reference a credential. Pick one from the list, or run 'rssh credential add' first."
             }),
         )
     })?;
@@ -78,7 +64,7 @@ fn add_profile(conn: &CliCtx) -> AppResult<()> {
     Ok(())
 }
 
-fn add_credential(conn: &CliCtx) -> AppResult<()> {
+pub fn cmd_add_credential(conn: &CliCtx) -> AppResult<()> {
     let name = prompt("Name: ");
     let username = prompt("Username: ");
 
@@ -117,7 +103,7 @@ fn add_credential(conn: &CliCtx) -> AppResult<()> {
     Ok(())
 }
 
-fn add_forward(conn: &CliCtx) -> AppResult<()> {
+pub fn cmd_add_forward(conn: &CliCtx) -> AppResult<()> {
     let name = prompt("Name: ");
 
     println!("Type:");

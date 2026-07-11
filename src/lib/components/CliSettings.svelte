@@ -68,30 +68,37 @@ rssh completions powershell  # paste into $PROFILE</pre>
     <table class="cmd-table">
         <tbody>
         <tr><td class="cmd">rssh</td><td>{t("settings.cli.cmd.list")}</td></tr>
-        <tr><td class="cmd">rssh ls [query]</td><td>{t("settings.cli.cmd.ls_query")}</td></tr>
-        <tr><td class="cmd">rssh ls cred</td><td>{t("settings.cli.cmd.ls_cred")}</td></tr>
-        <tr><td class="cmd">rssh ls fwd</td><td>{t("settings.cli.cmd.ls_fwd")}</td></tr>
+        <tr><td class="cmd">rssh profile list [query]</td><td>{t("settings.cli.cmd.ls_query")}</td></tr>
+        <tr><td class="cmd">rssh credential list</td><td>{t("settings.cli.cmd.ls_cred")}</td></tr>
+        <tr><td class="cmd">rssh forward list</td><td>{t("settings.cli.cmd.ls_fwd")}</td></tr>
+        <tr><td class="cmd">rssh group list</td><td>{t("settings.cli.cmd.ls_group")}</td></tr>
         <tr class="sep"><td></td><td></td></tr>
-        <tr><td class="cmd">rssh open &lt;name&gt;</td><td>{t("settings.cli.cmd.open")}</td></tr>
-        <tr><td class="cmd">rssh open fwd &lt;name&gt;</td><td>{t("settings.cli.cmd.open_fwd")}</td></tr>
+        <tr><td class="cmd">rssh profile open &lt;name&gt;</td><td>{t("settings.cli.cmd.open")}</td></tr>
+        <tr><td class="cmd">rssh forward open &lt;name&gt;</td><td>{t("settings.cli.cmd.open_fwd")}</td></tr>
         <tr class="sep"><td></td><td></td></tr>
-        <tr><td class="cmd">rssh add profile</td><td>{t("settings.cli.cmd.add_profile")}</td></tr>
-        <tr><td class="cmd">rssh add cred</td><td>{t("settings.cli.cmd.add_cred")}</td></tr>
-        <tr><td class="cmd">rssh add fwd</td><td>{t("settings.cli.cmd.add_fwd")}</td></tr>
+        <tr><td class="cmd">rssh profile add</td><td>{t("settings.cli.cmd.add_profile")}</td></tr>
+        <tr><td class="cmd">rssh credential add</td><td>{t("settings.cli.cmd.add_cred")}</td></tr>
+        <tr><td class="cmd">rssh forward add</td><td>{t("settings.cli.cmd.add_fwd")}</td></tr>
+        <tr><td class="cmd">rssh group add</td><td>{t("settings.cli.cmd.add_group")}</td></tr>
         <tr class="sep"><td></td><td></td></tr>
-        <tr><td class="cmd">rssh edit profile &lt;name&gt;</td><td>{t("settings.cli.cmd.edit_profile")}</td></tr>
-        <tr><td class="cmd">rssh edit cred &lt;name&gt;</td><td>{t("settings.cli.cmd.edit_cred")}</td></tr>
-        <tr><td class="cmd">rssh edit fwd &lt;name&gt;</td><td>{t("settings.cli.cmd.edit_fwd")}</td></tr>
+        <tr><td class="cmd">rssh profile edit &lt;name&gt;</td><td>{t("settings.cli.cmd.edit_profile")}</td></tr>
+        <tr><td class="cmd">rssh credential edit &lt;name&gt;</td><td>{t("settings.cli.cmd.edit_cred")}</td></tr>
+        <tr><td class="cmd">rssh forward edit &lt;name&gt;</td><td>{t("settings.cli.cmd.edit_fwd")}</td></tr>
+        <tr><td class="cmd">rssh group edit &lt;name&gt;</td><td>{t("settings.cli.cmd.edit_group")}</td></tr>
         <tr class="sep"><td></td><td></td></tr>
-        <tr><td class="cmd">rssh rm profile &lt;name&gt;</td><td>{t("settings.cli.cmd.rm_profile")}</td></tr>
-        <tr><td class="cmd">rssh rm cred &lt;name&gt;</td><td>{t("settings.cli.cmd.rm_cred")}</td></tr>
-        <tr><td class="cmd">rssh rm fwd &lt;name&gt;</td><td>{t("settings.cli.cmd.rm_fwd")}</td></tr>
+        <tr><td class="cmd">rssh profile rm &lt;name&gt;</td><td>{t("settings.cli.cmd.rm_profile")}</td></tr>
+        <tr><td class="cmd">rssh credential rm &lt;name&gt;</td><td>{t("settings.cli.cmd.rm_cred")}</td></tr>
+        <tr><td class="cmd">rssh forward rm &lt;name&gt;</td><td>{t("settings.cli.cmd.rm_fwd")}</td></tr>
+        <tr><td class="cmd">rssh group rm &lt;name&gt;</td><td>{t("settings.cli.cmd.rm_group")}</td></tr>
         <tr class="sep"><td></td><td></td></tr>
         <tr><td class="cmd">rssh config export &lt;file&gt;</td><td>{t("settings.cli.cmd.export")}</td></tr>
         <tr><td class="cmd">rssh config import &lt;file&gt;</td><td>{t("settings.cli.cmd.import")}</td></tr>
-        <tr><td class="cmd">rssh config set</td><td>{t("settings.cli.cmd.config_set")}</td></tr>
-        <tr><td class="cmd">rssh config push</td><td>{t("settings.cli.cmd.config_push")}</td></tr>
-        <tr><td class="cmd">rssh config pull</td><td>{t("settings.cli.cmd.config_pull")}</td></tr>
+        <tr><td class="cmd">rssh config github set</td><td>{t("settings.cli.cmd.config_set")}</td></tr>
+        <tr><td class="cmd">rssh config github push</td><td>{t("settings.cli.cmd.config_push")}</td></tr>
+        <tr><td class="cmd">rssh config github pull</td><td>{t("settings.cli.cmd.config_pull")}</td></tr>
+        <tr><td class="cmd">rssh config webdav set</td><td>{t("settings.cli.cmd.webdav_set")}</td></tr>
+        <tr><td class="cmd">rssh config webdav push</td><td>{t("settings.cli.cmd.webdav_push")}</td></tr>
+        <tr><td class="cmd">rssh config webdav pull</td><td>{t("settings.cli.cmd.webdav_pull")}</td></tr>
         </tbody>
     </table>
 </div>

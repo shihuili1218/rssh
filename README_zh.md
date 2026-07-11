@@ -35,9 +35,9 @@
 ![彩色命令块：左侧分色定位](docs/welcome-blocks.gif)
 
 ### ⌨️ 一处配置，处处可用
-`rssh open prod` 从任意终端直接拉起会话——CLI 与 GUI 共用同一个 SQLite 库。同一套主机和密钥，还能跑在**手机**和 **JetBrains** 工具窗口里。
+`rssh profile open prod` 从任意终端直接拉起会话——CLI 与 GUI 共用同一个 SQLite 库。同一套主机和密钥，还能跑在**手机**和 **JetBrains** 工具窗口里。
 
-![CLI 直连：rssh open prod](docs/welcome-cli.gif)
+![CLI 直连：rssh profile open prod](docs/welcome-cli.gif)
 
 ---
 

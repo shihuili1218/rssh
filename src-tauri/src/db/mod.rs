@@ -63,7 +63,8 @@ impl Db {
         // this same ~/.rssh/rssh.db (GUI, headless server, `rssh` CLI). Without it,
         // a write that meets a peer's lock fails *instantly* with SQLITE_BUSY
         // instead of waiting — e.g. GUI autosaving AI history while the CLI runs
-        // `config pull`. 5s covers any real contention window.
+        // `config github pull` / `config webdav pull`. 5s covers any real
+        // contention window.
         // Install the busy handler before journal_mode itself takes locks. On
         // the first concurrent open, setting WAL can otherwise fail instantly
         // before the later timeout pragma ever runs.

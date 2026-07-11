@@ -119,8 +119,8 @@ PUT https://api.github.com/repos/<your>/<repo>/contents/rssh_backup.json
 **没有锁定**：
 
 ```
-rssh config push    # 推
-rssh config pull    # 拉
+rssh config github push    # 推到 GitHub
+rssh config github pull    # 从 GitHub 拉取
 ```
 
 底层就是 base64 + GitHub API。想换工具？拿走 `rssh_backup.json` 自己写解码就行 —— wire format 在 `crypto.rs` 开头注释里。没有"导出到 CSV"按钮，因为你的数据本来就在你的 repo 里。
