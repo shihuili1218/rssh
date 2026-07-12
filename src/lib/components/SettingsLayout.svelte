@@ -2,6 +2,7 @@
   import type { Component } from "svelte";
   import * as app from "../stores/app.svelte.ts";
   import * as updates from "../stores/updates.svelte.ts";
+  import * as syncStatus from "../stores/sync.svelte.ts";
   import { t, locale, setLocale, AVAILABLE_LOCALES, type Locale } from "../i18n/index.svelte.ts";
   import type { MessageKey } from "../i18n/locales/en";
   import CredentialManager from "./CredentialManager.svelte";
@@ -131,7 +132,7 @@
           onclick={() => app.settingsNavigate(item.id)}
         >
           {item.label}
-          {#if item.id === "about" && updates.hasUpdate()}
+          {#if (item.id === "about" && updates.hasUpdate()) || (item.id === "sync" && syncStatus.anyVersionDifference())}
             <span class="menu-dot" aria-hidden="true"></span>
           {/if}
         </button>

@@ -5,8 +5,10 @@ use serde_json::json;
 use url::Url;
 
 use crate::error::{AppError, AppResult};
+use crate::sync::metadata::SyncMetadata;
 
 const BACKUP_FILE: &str = "rssh_backup.enc";
+const METADATA_FILE: &str = "rssh_backup.meta.json";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_ERROR_BODY_LEN: usize = 2048;
 
@@ -89,16 +91,15 @@ impl WebDavSync {
         })
     }
 
-    fn build_file_url(&self) -> AppResult<Url> {
+    fn build_file_url(&self, file_name: &str) -> AppResult<Url> {
         Url::parse(&self.url)
             .map_err(|e| AppError::other("webdav_url_invalid", json!({ "err": e.to_string() })))?
-            .join(BACKUP_FILE)
+            .join(file_name)
             .map_err(|e| AppError::other("webdav_url_invalid", json!({ "err": e.to_string() })))
     }
 
-    /// 推送加密配置到 WebDAV。
-    pub async fn push(&self, content: &str) -> AppResult<()> {
-        let url = self.build_file_url()?;
+    async fn put_file(&self, file_name: &str, content: &str) -> AppResult<()> {
+        let url = self.build_file_url(file_name)?;
 
         let resp = self
             .client
@@ -134,9 +135,19 @@ impl WebDavSync {
         ))
     }
 
-    /// 从 WebDAV 拉取加密配置。
-    pub async fn pull(&self) -> AppResult<String> {
-        let url = self.build_file_url()?;
+    /// 推送加密配置到 WebDAV。
+    pub async fn push(&self, content: &str) -> AppResult<()> {
+        self.put_file(BACKUP_FILE, content).await
+    }
+
+    /// 推送配置版本与摘要到 WebDAV。元数据本身不含配置明文。
+    pub async fn push_metadata(&self, metadata: &SyncMetadata) -> AppResult<()> {
+        let content = metadata.to_json()?;
+        self.put_file(METADATA_FILE, &content).await
+    }
+
+    async fn get_file(&self, file_name: &str) -> AppResult<Option<String>> {
+        let url = self.build_file_url(file_name)?;
 
         let resp = self
             .client
@@ -153,11 +164,11 @@ impl WebDavSync {
             })?;
 
         if resp.status() == StatusCode::NOT_FOUND {
-            return Err(AppError::other("webdav_not_found", json!({})));
+            return Ok(None);
         }
 
         if resp.status().is_success() {
-            return resp.text().await.map_err(|e| {
+            return resp.text().await.map(Some).map_err(|e| {
                 AppError::other("webdav_pull_failed", json!({ "err": e.to_string() }))
             });
         }
@@ -175,6 +186,21 @@ impl WebDavSync {
             "webdav_api_error",
             json!({ "status": status, "msg": msg }),
         ))
+    }
+
+    /// 从 WebDAV 拉取加密配置。
+    pub async fn pull(&self) -> AppResult<String> {
+        self.get_file(BACKUP_FILE)
+            .await?
+            .ok_or_else(|| AppError::other("webdav_not_found", json!({})))
+    }
+
+    /// 拉取配置版本与摘要。旧备份没有元数据文件时返回 `None`。
+    pub async fn pull_metadata(&self) -> AppResult<Option<SyncMetadata>> {
+        let Some(content) = self.get_file(METADATA_FILE).await? else {
+            return Ok(None);
+        };
+        SyncMetadata::from_json(&content).map(Some)
     }
 
     /// 用 `resp.chunk()` 逐块读取错误响应体，累计到 MAX_ERROR_BODY_LEN 即停止，
@@ -281,6 +307,100 @@ mod tests {
         let base = format!("{}/rssh", server.url());
         let sync = WebDavSync::from_settings(&base, "u", "p").unwrap();
         sync.push("payload").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn push_metadata_writes_metadata_file() {
+        let mut server = mockito::Server::new_async().await;
+        let metadata = crate::sync::metadata::SyncMetadata {
+            version: 6,
+            config_digest: format!("sha256:{}", "a".repeat(64)),
+        };
+        let body = metadata.to_json().unwrap();
+        let _m = server
+            .mock("PUT", "/rssh/rssh_backup.meta.json")
+            .match_header("authorization", "Basic dTpw")
+            .match_body(body.as_str())
+            .with_status(201)
+            .create_async()
+            .await;
+        let base = format!("{}/rssh", server.url());
+        let sync = WebDavSync::from_settings(&base, "u", "p").unwrap();
+
+        sync.push_metadata(&metadata).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn pull_metadata_parses_metadata_file() {
+        let mut server = mockito::Server::new_async().await;
+        let metadata = crate::sync::metadata::SyncMetadata {
+            version: 6,
+            config_digest: format!("sha256:{}", "b".repeat(64)),
+        };
+        let body = metadata.to_json().unwrap();
+        let _m = server
+            .mock("GET", "/rssh/rssh_backup.meta.json")
+            .match_header("authorization", "Basic dTpw")
+            .with_status(200)
+            .with_body(body)
+            .create_async()
+            .await;
+        let base = format!("{}/rssh", server.url());
+        let sync = WebDavSync::from_settings(&base, "u", "p").unwrap();
+
+        assert_eq!(sync.pull_metadata().await.unwrap(), Some(metadata));
+    }
+
+    #[tokio::test]
+    async fn pull_metadata_returns_none_on_404() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/rssh_backup.meta.json")
+            .with_status(404)
+            .create_async()
+            .await;
+        let sync = WebDavSync::from_settings(&server.url(), "u", "p").unwrap();
+
+        assert_eq!(sync.pull_metadata().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn pull_metadata_rejects_invalid_json() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/rssh_backup.meta.json")
+            .with_status(200)
+            .with_body("not-json")
+            .create_async()
+            .await;
+        let sync = WebDavSync::from_settings(&server.url(), "u", "p").unwrap();
+
+        let err = sync.pull_metadata().await.unwrap_err();
+        assert_eq!(err.code(), "sync_metadata_invalid");
+    }
+
+    #[tokio::test]
+    async fn pull_metadata_401_returns_auth_failed() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/rssh_backup.meta.json")
+            .with_status(401)
+            .create_async()
+            .await;
+        let sync = WebDavSync::from_settings(&server.url(), "u", "p").unwrap();
+
+        let err = sync.pull_metadata().await.unwrap_err();
+        assert_eq!(err.code(), "webdav_auth_failed");
+    }
+
+    #[tokio::test]
+    async fn pull_metadata_network_failure_is_error() {
+        // Port 0 cannot accept a TCP connection, so this exercises reqwest's
+        // transport-error path without relying on an external network.
+        let sync = WebDavSync::from_settings("http://127.0.0.1:0", "u", "p").unwrap();
+
+        let err = sync.pull_metadata().await.unwrap_err();
+        assert_eq!(err.code(), "webdav_pull_failed");
     }
 
     #[tokio::test]

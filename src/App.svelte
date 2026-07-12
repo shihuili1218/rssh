@@ -5,6 +5,7 @@
   import WelcomeScreen from "./lib/components/WelcomeScreen.svelte";
   import { loadProfiles, loadForwards } from "./lib/stores/app.svelte.ts";
   import * as updates from "./lib/stores/updates.svelte.ts";
+  import * as sync from "./lib/stores/sync.svelte.ts";
   import * as ai from "./lib/ai/store.svelte.ts";
 
   // First-launch auto-show: when there are no profiles and no forwards,
@@ -34,6 +35,7 @@
     // they're transient and the main window already owns the timer.
     if (!window.__rssh_clone && !window.__rssh_ai_handoff) {
       updates.startBackgroundChecks();
+      sync.startBackgroundChecks();
     }
 
     // localStorage / Tauri may not be available in non-app hosts

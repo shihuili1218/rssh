@@ -37,7 +37,7 @@ use crate::models::{
     Credential, DynamicDiscoverySource, Forward, Group, HighlightRule, Profile, SerialProfile,
     Snippet, TelnetProfile,
 };
-use crate::secret::{cred_secret_key, SecretStore};
+use crate::secret::{cred_secret_key, telnet_login_script_key, SecretStore};
 use crate::telnet_profile::{self as telnet_profiles, LoginScriptIntent};
 
 /// Structured record of a failed item. `aggregate_failure` serializes the whole
@@ -544,6 +544,29 @@ pub fn build_payload(
     data_dir: &Path,
     mode: &ExportMode,
 ) -> AppResult<Value> {
+    build_payload_inner(db, ss, data_dir, mode, false)
+}
+
+/// Build the same logical remote snapshot used by push, but keep every secret
+/// opaque. `ss` must return the encrypted-at-rest blob rather than plaintext.
+/// The result never leaves the process; metadata hashes it to notice secret
+/// changes without loading the master key or publishing a plaintext hash oracle.
+pub(crate) fn build_fingerprint_payload(
+    db: &Db,
+    ss: &dyn SecretStore,
+    data_dir: &Path,
+    prefs: SyncPrefs,
+) -> AppResult<Value> {
+    build_payload_inner(db, ss, data_dir, &ExportMode::RemotePush(prefs), true)
+}
+
+fn build_payload_inner(
+    db: &Db,
+    ss: &dyn SecretStore,
+    data_dir: &Path,
+    mode: &ExportMode,
+    fingerprint: bool,
+) -> AppResult<Value> {
     let prefs = match mode {
         ExportMode::RemotePush(p) => Some(p),
         ExportMode::LocalBackup => None,
@@ -552,7 +575,9 @@ pub fn build_payload(
 
     let mut out = serde_json::Map::new();
     out.insert("version".into(), json!(1));
-    out.insert("exported_at".into(), json!(chrono::Utc::now().to_rfc3339()));
+    if !fingerprint {
+        out.insert("exported_at".into(), json!(chrono::Utc::now().to_rfc3339()));
+    }
 
     // profiles / forwards / serial_profiles — always present, filtered to the
     // selected groups on push. The forwards/serial per-category opt-out toggles
@@ -585,7 +610,20 @@ pub fn build_payload(
     let mut telnets = telnet_profile::list(db)?;
     retain_by_groups(&mut telnets, prefs, |t| t.group_id.as_deref());
     for telnet in &mut telnets {
-        if prefs.is_some() && !telnet.save_script_to_remote {
+        if fingerprint {
+            if telnet.save_script_to_remote {
+                let snapshot = crate::db::telnet_profile::snapshot(db, &telnet.id)?;
+                telnet.login_script = match snapshot.login_script.version {
+                    Some(version) => ss
+                        .get(&telnet_login_script_key(&telnet.id, &version))?
+                        .unwrap_or_default(),
+                    // Legacy plaintext is consumed by startup migration. Do not
+                    // hash it here: a public digest of a low-entropy script would
+                    // be an offline guessing oracle.
+                    None => String::new(),
+                };
+            }
+        } else if prefs.is_some() && !telnet.save_script_to_remote {
             telnet_profiles::reconcile_legacy_plaintext(db, ss, &telnet.id)?;
             telnet.login_script.clear();
         } else {

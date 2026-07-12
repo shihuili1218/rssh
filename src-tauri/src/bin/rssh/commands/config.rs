@@ -158,6 +158,7 @@ fn config_github_push(conn: &CliCtx) -> AppResult<()> {
     )?;
     let mut json_data = serde_json::to_string_pretty(&payload)
         .unwrap_or_else(|e| die(format!("Serialization failed: {e}")));
+    let metadata = rssh_lib::sync::metadata::refresh_local_metadata(conn, &conn.data_dir)?;
 
     let pw = read_password("Encryption password: ");
     let encrypted = rssh_lib::crypto::encrypt(&json_data, &pw)?;
@@ -168,7 +169,10 @@ fn config_github_push(conn: &CliCtx) -> AppResult<()> {
         .enable_all()
         .build()
         .unwrap_or_else(|e| die(format!("Tokio runtime: {e}")));
-    rt.block_on(sync.push(&encrypted))?;
+    rt.block_on(async {
+        sync.push(&encrypted).await?;
+        sync.push_metadata(&metadata).await
+    })?;
     println!("Pushed to GitHub.");
     Ok(())
 }
@@ -176,17 +180,31 @@ fn config_github_push(conn: &CliCtx) -> AppResult<()> {
 fn config_github_pull(conn: &CliCtx) -> AppResult<()> {
     let (token, repo, branch) = read_github_settings(conn)?;
 
+    let previous = rssh_lib::sync::metadata::refresh_local_metadata(conn, &conn.data_dir)?;
     let sync = rssh_lib::sync::github::GitHubSync::from_settings(&token, &repo, &branch)?;
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap_or_else(|e| die(format!("Tokio runtime: {e}")));
-    let encrypted = rt.block_on(sync.pull())?;
+    let (remote, encrypted) = rt.block_on(async {
+        let remote = sync.pull_metadata().await?;
+        let encrypted = sync.pull().await?;
+        Ok::<_, AppError>((remote, encrypted))
+    })?;
 
     let pw = read_password("Decryption password: ");
     let json = rssh_lib::crypto::decrypt(&encrypted, &pw)?;
     // pull: additive merge (no destructive clear) — same as the GUI.
-    import_config_json(conn, &json)?;
+    if let Err(err) = import_config_json(conn, &json) {
+        let _ =
+            rssh_lib::sync::metadata::adopt_remote_version(conn, &conn.data_dir, previous.version);
+        return Err(err);
+    }
+    if let Some(remote) = remote {
+        rssh_lib::sync::metadata::adopt_remote_version(conn, &conn.data_dir, remote.version)?;
+    } else {
+        rssh_lib::sync::metadata::refresh_local_metadata(conn, &conn.data_dir)?;
+    }
     println!("Pulled from GitHub.");
     Ok(())
 }
@@ -251,6 +269,7 @@ fn config_webdav_push(conn: &CliCtx) -> AppResult<()> {
     )?;
     let mut json_data = serde_json::to_string_pretty(&payload)
         .unwrap_or_else(|e| die(format!("Serialization failed: {e}")));
+    let metadata = rssh_lib::sync::metadata::refresh_local_metadata(conn, &conn.data_dir)?;
 
     let pw = read_password("Encryption password: ");
     let encrypted = rssh_lib::crypto::encrypt(&json_data, &pw)?;
@@ -261,7 +280,10 @@ fn config_webdav_push(conn: &CliCtx) -> AppResult<()> {
         .enable_all()
         .build()
         .unwrap_or_else(|e| die(format!("Tokio runtime: {e}")));
-    rt.block_on(sync.push(&encrypted))?;
+    rt.block_on(async {
+        sync.push(&encrypted).await?;
+        sync.push_metadata(&metadata).await
+    })?;
     println!("Pushed to WebDAV.");
     Ok(())
 }
@@ -269,16 +291,30 @@ fn config_webdav_push(conn: &CliCtx) -> AppResult<()> {
 fn config_webdav_pull(conn: &CliCtx) -> AppResult<()> {
     let (url, username, password) = read_webdav_settings(conn)?;
 
+    let previous = rssh_lib::sync::metadata::refresh_local_metadata(conn, &conn.data_dir)?;
     let sync = rssh_lib::sync::webdav::WebDavSync::from_settings(&url, &username, &password)?;
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap_or_else(|e| die(format!("Tokio runtime: {e}")));
-    let encrypted = rt.block_on(sync.pull())?;
+    let (remote, encrypted) = rt.block_on(async {
+        let remote = sync.pull_metadata().await?;
+        let encrypted = sync.pull().await?;
+        Ok::<_, AppError>((remote, encrypted))
+    })?;
 
     let pw = read_password("Decryption password: ");
     let json = rssh_lib::crypto::decrypt(&encrypted, &pw)?;
-    import_config_json(conn, &json)?;
+    if let Err(err) = import_config_json(conn, &json) {
+        let _ =
+            rssh_lib::sync::metadata::adopt_remote_version(conn, &conn.data_dir, previous.version);
+        return Err(err);
+    }
+    if let Some(remote) = remote {
+        rssh_lib::sync::metadata::adopt_remote_version(conn, &conn.data_dir, remote.version)?;
+    } else {
+        rssh_lib::sync::metadata::refresh_local_metadata(conn, &conn.data_dir)?;
+    }
     println!("Pulled from WebDAV.");
     Ok(())
 }

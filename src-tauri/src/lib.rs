@@ -329,6 +329,10 @@ pub fn run() {
             commands::sync::github_pull,
             commands::sync::webdav_push,
             commands::sync::webdav_pull,
+            commands::sync::sync_check,
+            commands::sync::sync_refresh_local_metadata,
+            commands::sync::sync_check_remotes,
+            commands::sync::set_sync_auto_pull,
             // AI 排障
             ai::commands::ai_list_skills,
             ai::commands::ai_get_skill,

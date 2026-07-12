@@ -2,7 +2,9 @@
     import {onMount, onDestroy} from "svelte";
     import {invoke} from "@tauri-apps/api/core";
     import { t, errMsg } from "../i18n/index.svelte.ts";
+    import * as syncStatus from "../stores/sync.svelte.ts";
     import Modal from "./Modal.svelte";
+    import SyncAutoPullToggle from "./SyncAutoPullToggle.svelte";
     import type { MessageKey } from "../i18n/locales/en";
 
     /* ── GitHub source state ─────────────────────────────────────────────── */
@@ -12,6 +14,7 @@
     let githubBranch = $state("main");
     let githubSyncing = $state(false);
     let githubMsg = $state("");
+    let githubMsgIsError = $state(false);
     let githubSaveMsg = $state("");
     let githubSaveIsError = $state(false);
     let ghSaveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -23,6 +26,7 @@
     let webdavPassword = $state("");
     let webdavSyncing = $state(false);
     let webdavMsg = $state("");
+    let webdavMsgIsError = $state(false);
     let webdavSaveMsg = $state("");
     let webdavSaveIsError = $state(false);
     let wdSaveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -48,49 +52,87 @@
 
     /* ── Password dialog state ───────────────────────────────────────────── */
     let showPwDialog = $state(false);
+    let pwSource = $state<syncStatus.SyncSource>("github");
     let pwMode = $state<"push" | "pull">("push");
     let pw1 = $state("");
     let pw2 = $state("");
     let pwError = $state("");
-    let globalMsg = $state("");
+    let localVersion = $derived(syncStatus.localMetadata()?.version ?? null);
+    let githubRemoteVersion = $derived(syncStatus.providerStatus("github")?.remote?.version ?? null);
+    let webdavRemoteVersion = $derived(syncStatus.providerStatus("webdav")?.remote?.version ?? null);
+    let githubAutoPull = $derived(syncStatus.autoPullEnabled("github"));
+    let webdavAutoPull = $derived(syncStatus.autoPullEnabled("webdav"));
+    let githubStatusError = $derived(syncStatus.providerStatus("github")?.error ?? "");
+    let webdavStatusError = $derived(syncStatus.providerStatus("webdav")?.error ?? "");
 
-    let anySyncing = $derived(githubSyncing || webdavSyncing);
+    async function loadGithubSettings() {
+        const [token, repo, branch, enabled] = await Promise.all([
+            invoke<string | null>("get_setting", { key: "github_token" }),
+            invoke<string | null>("get_setting", { key: "github_repo" }),
+            invoke<string | null>("get_setting", { key: "github_branch" }),
+            invoke<string | null>("get_setting", { key: "sync_github_enabled" }),
+        ]);
+        githubToken = token ?? "";
+        githubRepo = repo ?? "";
+        githubBranch = branch ?? "main";
+        githubEnabled = enabled !== "0";
+    }
 
-    onMount(async () => {
-        /* GitHub */
-        githubToken = await invoke<string | null>("get_setting", { key: "github_token" }) ?? "";
-        githubRepo = await invoke<string | null>("get_setting", { key: "github_repo" }) ?? "";
-        githubBranch = await invoke<string | null>("get_setting", { key: "github_branch" }) ?? "main";
-        const ghEnabled = await invoke<string | null>("get_setting", { key: "sync_github_enabled" });
-        githubEnabled = ghEnabled !== "0";
+    async function loadWebdavSettings() {
+        const [url, username, password, enabled] = await Promise.all([
+            invoke<string | null>("get_setting", { key: "webdav_url" }),
+            invoke<string | null>("get_setting", { key: "webdav_username" }),
+            invoke<string | null>("get_setting", { key: "webdav_password" }),
+            invoke<string | null>("get_setting", { key: "sync_webdav_enabled" }),
+        ]);
+        webdavUrl = url ?? "";
+        webdavUsername = username ?? "";
+        webdavPassword = password ?? "";
+        webdavEnabled = enabled === "1";
+    }
 
-        /* WebDAV */
-        webdavUrl = await invoke<string | null>("get_setting", { key: "webdav_url" }) ?? "";
-        webdavUsername = await invoke<string | null>("get_setting", { key: "webdav_username" }) ?? "";
-        webdavPassword = await invoke<string | null>("get_setting", { key: "webdav_password" }) ?? "";
-        const wdEnabled = await invoke<string | null>("get_setting", { key: "sync_webdav_enabled" });
-        webdavEnabled = wdEnabled === "1";
-
-        /* Sync content toggles + group filter */
-        for (const it of SYNC_ITEMS) {
-            const v = await invoke<string | null>("get_setting", { key: it.key });
-            flags[it.key] = v === null || v !== "0";
-        }
-        groups = await invoke<{ id: string; name: string; color: string }[]>("list_groups").catch(() => []);
-        const gjson = await invoke<string | null>("get_setting", { key: "sync_profile_group_ids" });
+    async function loadSyncPreferences() {
+        const [values, loadedGroups, gjson] = await Promise.all([
+            Promise.all(SYNC_ITEMS.map((item) =>
+                invoke<string | null>("get_setting", { key: item.key })
+            )),
+            invoke<{ id: string; name: string; color: string }[]>("list_groups").catch(() => []),
+            invoke<string | null>("get_setting", { key: "sync_profile_group_ids" }),
+        ]);
+        flags = Object.fromEntries(SYNC_ITEMS.map((item, index) => [
+            item.key,
+            values[index] === null || values[index] !== "0",
+        ]));
+        groups = loadedGroups;
+        const availableGroups = [
+            ...loadedGroups,
+            { id: "", name: t("profile.ungrouped"), color: "" },
+        ];
         if (gjson === null || gjson === "") {
-            selectedGroups = chipGroups.map((g) => g.id);
+            selectedGroups = availableGroups.map((group) => group.id);
         } else {
-            const valid = new Set(chipGroups.map((g) => g.id));
+            const valid = new Set(availableGroups.map((group) => group.id));
             let parsed: unknown;
             try { parsed = JSON.parse(gjson); } catch { parsed = undefined; }
             if (Array.isArray(parsed) && parsed.every((v) => typeof v === "string")) {
                 selectedGroups = [...new Set((parsed as string[]).filter((v) => valid.has(v)))];
             } else {
-                selectedGroups = chipGroups.map((g) => g.id);
+                selectedGroups = availableGroups.map((group) => group.id);
                 await invoke("set_setting", { key: "sync_profile_group_ids", value: "" });
             }
         }
+    }
+
+    onMount(async () => {
+        // Metadata belongs to the shared sync store, not to this form's setup.
+        // Start it before form loading; provider settings and category settings
+        // also load in parallel instead of serializing sixteen IPC round trips.
+        void syncStatus.runCheck({ silent: true });
+        await Promise.all([
+            loadGithubSettings(),
+            loadWebdavSettings(),
+            loadSyncPreferences(),
+        ]);
     });
 
     onDestroy(() => {
@@ -140,6 +182,7 @@
             await invoke("set_setting", { key: "sync_github_enabled", value: githubEnabled ? "1" : "0" });
             githubSaveMsg = t("github.saved");
             githubSaveIsError = false;
+            void syncStatus.refreshAfterMutation();
         } catch (e: any) {
             githubSaveMsg = errMsg(e);
             githubSaveIsError = true;
@@ -162,6 +205,7 @@
             await invoke("set_setting", { key: "sync_webdav_enabled", value: webdavEnabled ? "1" : "0" });
             webdavSaveMsg = t("webdav.saved");
             webdavSaveIsError = false;
+            void syncStatus.refreshAfterMutation();
         } catch (e: any) {
             webdavSaveMsg = errMsg(e);
             webdavSaveIsError = true;
@@ -172,6 +216,7 @@
     async function setFlag(key: string, val: boolean) {
         flags[key] = val;
         await invoke("set_setting", { key, value: val ? "1" : "0" });
+        await syncStatus.refreshLocalAfterMutation();
     }
 
     async function toggleGroup(id: string, checked: boolean) {
@@ -183,6 +228,7 @@
             key: "sync_profile_group_ids",
             value: allSelected ? "" : JSON.stringify(selectedGroups),
         });
+        await syncStatus.refreshLocalAfterMutation();
     }
 
     async function onEnableChange(source: "github" | "webdav") {
@@ -191,12 +237,13 @@
         } else {
             await invoke("set_setting", { key: "sync_webdav_enabled", value: webdavEnabled ? "1" : "0" });
         }
+        await syncStatus.refreshAfterMutation();
     }
 
-    function canPushPull(): boolean {
-        const gh = githubEnabled && githubToken && githubRepo;
-        const wd = webdavEnabled && webdavUrl && webdavPassword;
-        return gh || wd;
+    function sourceConfigured(source: syncStatus.SyncSource): boolean {
+        return source === "github"
+            ? Boolean(githubEnabled && githubToken && githubRepo)
+            : Boolean(webdavEnabled && webdavUrl && webdavPassword);
     }
 
     function closePwDialog() {
@@ -204,19 +251,25 @@
         pw1 = "";
         pw2 = "";
         pwError = "";
-        globalMsg = "";
     }
 
-    function askPassword(mode: "push" | "pull") {
-        if (!canPushPull()) {
-            globalMsg = t("sync.no_source");
+    function askPassword(source: syncStatus.SyncSource, mode: "push" | "pull") {
+        if (!sourceConfigured(source)) {
+            const message = t("sync.no_source");
+            if (source === "github") {
+                githubMsg = message;
+                githubMsgIsError = true;
+            } else {
+                webdavMsg = message;
+                webdavMsgIsError = true;
+            }
             return;
         }
+        pwSource = source;
         pwMode = mode;
         pw1 = "";
         pw2 = "";
         pwError = "";
-        globalMsg = "";
         showPwDialog = true;
     }
 
@@ -234,43 +287,32 @@
         const password = pw1;
         pw1 = "";
         pw2 = "";
-
-        /* GitHub */
-        if (githubEnabled && githubToken && githubRepo) {
-            githubSyncing = true;
-            githubMsg = t(pwMode === "push" ? "sync.status.pushing" : "sync.status.pulling");
-            try {
-                if (pwMode === "push") {
-                    await invoke("github_push", { password });
-                    githubMsg = t("github.push_ok");
-                } else {
-                    await invoke("github_pull", { password });
-                    githubMsg = t("github.pull_ok");
-                }
-            } catch (e: any) {
-                githubMsg = t("github.failed", { error: errMsg(e) });
-            } finally {
-                githubSyncing = false;
+        const source = pwSource;
+        const setSyncing = (value: boolean) => {
+            if (source === "github") githubSyncing = value;
+            else webdavSyncing = value;
+        };
+        const setMessage = (value: string, isError = false) => {
+            if (source === "github") {
+                githubMsg = value;
+                githubMsgIsError = isError;
+            } else {
+                webdavMsg = value;
+                webdavMsgIsError = isError;
             }
-        }
+        };
 
-        /* WebDAV */
-        if (webdavEnabled && webdavUrl && webdavPassword) {
-            webdavSyncing = true;
-            webdavMsg = t(pwMode === "push" ? "sync.status.pushing" : "sync.status.pulling");
-            try {
-                if (pwMode === "push") {
-                    await invoke("webdav_push", { password });
-                    webdavMsg = t("webdav.push_ok");
-                } else {
-                    await invoke("webdav_pull", { password });
-                    webdavMsg = t("webdav.pull_ok");
-                }
-            } catch (e: any) {
-                webdavMsg = t("webdav.failed", { error: errMsg(e) });
-            } finally {
-                webdavSyncing = false;
-            }
+        setSyncing(true);
+        setMessage("");
+        try {
+            await invoke(syncStatus.commandFor(source, pwMode), { password });
+            const key = `${source}.${pwMode}_ok` as MessageKey;
+            setMessage(t(key));
+            await syncStatus.refreshAfterMutation();
+        } catch (e: any) {
+            setMessage(t(`${source}.failed` as MessageKey, { error: errMsg(e) }), true);
+        } finally {
+            setSyncing(false);
         }
     }
 </script>
@@ -308,6 +350,54 @@
             {#if githubSaveMsg}
                 <div class="msg" class:error={githubSaveIsError}>{githubSaveMsg}</div>
             {/if}
+            <div class="source-actions">
+                <div class="auto-pull-row">
+                    <div class="auto-pull-copy">
+                        <span>{t("sync.auto_pull")}</span>
+                        <small>{t("sync.auto_pull_hint")}</small>
+                    </div>
+                    <SyncAutoPullToggle source="github" enabled={githubAutoPull}
+                                        onError={(message) => {
+                                            githubMsg = t("github.failed", { error: message });
+                                            githubMsgIsError = true;
+                                        }}>
+                        {#snippet trigger(requestToggle, saving)}
+                            <label class="switch">
+                                <input type="checkbox" checked={githubAutoPull}
+                                       disabled={githubSyncing || saving || syncStatus.providerStatus("github") === null}
+                                       onclick={(event) => {
+                                           event.preventDefault();
+                                           githubMsg = "";
+                                           githubMsgIsError = false;
+                                           if (!githubAutoPull && !sourceConfigured("github")) {
+                                               githubMsg = t("sync.no_source");
+                                               githubMsgIsError = true;
+                                               return;
+                                           }
+                                           requestToggle();
+                                       }}
+                                       aria-label={t("sync.auto_pull_github")}/>
+                                <span class="slider"></span>
+                            </label>
+                        {/snippet}
+                    </SyncAutoPullToggle>
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-accent btn-sm version-btn" onclick={() => askPassword("github", "push")} disabled={githubSyncing}>
+                        <span>𓍼 ོ☁︎ {t("sync.push")}{#if localVersion !== null} · V{localVersion}{/if}</span>
+                        {#if syncStatus.hasLocalUpdate("github")}<span class="version-dot" aria-hidden="true"></span>{/if}
+                    </button>
+                    <button class="btn btn-sm version-btn" onclick={() => askPassword("github", "pull")} disabled={githubSyncing}>
+                        <span>༄ {t("sync.pull")}{#if githubRemoteVersion !== null} · V{githubRemoteVersion}{/if}</span>
+                        {#if syncStatus.hasRemoteUpdate("github")}<span class="version-dot" aria-hidden="true"></span>{/if}
+                    </button>
+                </div>
+            </div>
+            {#if githubMsg}
+                <div class="msg" class:error={githubMsgIsError}>{githubMsg}</div>
+            {:else if githubStatusError}
+                <div class="msg error">{errMsg(githubStatusError)}</div>
+            {/if}
         {/if}
     </div>
 
@@ -340,6 +430,54 @@
             <button class="btn btn-accent btn-sm save-btn" onclick={saveWebdavSettings}>⛰ {t("common.save")}</button>
             {#if webdavSaveMsg}
                 <div class="msg" class:error={webdavSaveIsError}>{webdavSaveMsg}</div>
+            {/if}
+            <div class="source-actions">
+                <div class="auto-pull-row">
+                    <div class="auto-pull-copy">
+                        <span>{t("sync.auto_pull")}</span>
+                        <small>{t("sync.auto_pull_hint")}</small>
+                    </div>
+                    <SyncAutoPullToggle source="webdav" enabled={webdavAutoPull}
+                                        onError={(message) => {
+                                            webdavMsg = t("webdav.failed", { error: message });
+                                            webdavMsgIsError = true;
+                                        }}>
+                        {#snippet trigger(requestToggle, saving)}
+                            <label class="switch">
+                                <input type="checkbox" checked={webdavAutoPull}
+                                       disabled={webdavSyncing || saving || syncStatus.providerStatus("webdav") === null}
+                                       onclick={(event) => {
+                                           event.preventDefault();
+                                           webdavMsg = "";
+                                           webdavMsgIsError = false;
+                                           if (!webdavAutoPull && !sourceConfigured("webdav")) {
+                                               webdavMsg = t("sync.no_source");
+                                               webdavMsgIsError = true;
+                                               return;
+                                           }
+                                           requestToggle();
+                                       }}
+                                       aria-label={t("sync.auto_pull_webdav")}/>
+                                <span class="slider"></span>
+                            </label>
+                        {/snippet}
+                    </SyncAutoPullToggle>
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-accent btn-sm version-btn" onclick={() => askPassword("webdav", "push")} disabled={webdavSyncing}>
+                        <span>𓍼 ོ☁︎ {t("sync.push")}{#if localVersion !== null} · V{localVersion}{/if}</span>
+                        {#if syncStatus.hasLocalUpdate("webdav")}<span class="version-dot" aria-hidden="true"></span>{/if}
+                    </button>
+                    <button class="btn btn-sm version-btn" onclick={() => askPassword("webdav", "pull")} disabled={webdavSyncing}>
+                        <span>༄ {t("sync.pull")}{#if webdavRemoteVersion !== null} · V{webdavRemoteVersion}{/if}</span>
+                        {#if syncStatus.hasRemoteUpdate("webdav")}<span class="version-dot" aria-hidden="true"></span>{/if}
+                    </button>
+                </div>
+            </div>
+            {#if webdavMsg}
+                <div class="msg" class:error={webdavMsgIsError}>{webdavMsg}</div>
+            {:else if webdavStatusError}
+                <div class="msg error">{errMsg(webdavStatusError)}</div>
             {/if}
         {/if}
     </div>
@@ -385,19 +523,6 @@
         {/each}
     </div>
 
-    <!-- Global actions -->
-    <div class="card surface-raised actions-card">
-        <div class="btn-row">
-            <button class="btn btn-accent btn-sm" onclick={() => askPassword("push")} disabled={anySyncing}>𓍼 ོ☁︎ {t("sync.push")}</button>
-            <button class="btn btn-sm" onclick={() => askPassword("pull")} disabled={anySyncing}>༄ {t("sync.pull")}</button>
-        </div>
-        {#if globalMsg}
-            <div class="msg error">{globalMsg}</div>
-        {/if}
-        {#if githubMsg || webdavMsg}
-            <div class="msg">{[githubMsg, webdavMsg].filter(Boolean).join("\n")}</div>
-        {/if}
-    </div>
 </div>
 
 <!-- Password dialog -->
@@ -489,6 +614,44 @@
         display: flex;
         gap: 8px;
     }
+    .source-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding-top: 12px;
+        border-top: 1px solid var(--divider);
+    }
+    .version-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-variant-numeric: tabular-nums;
+    }
+    .version-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--error);
+        flex: none;
+    }
+    .auto-pull-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+    }
+    .auto-pull-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        color: var(--text);
+        font-size: 13px;
+    }
+    .auto-pull-copy small {
+        color: var(--text-dim);
+        font-size: 11px;
+        line-height: 1.5;
+    }
 
     .sync-head {
         display: flex;
@@ -545,10 +708,6 @@
         border-color: var(--chip, var(--accent));
         background: color-mix(in srgb, var(--chip, var(--accent)) 18%, transparent);
         color: var(--text);
-    }
-
-    .actions-card {
-        margin-top: 8px;
     }
 
     .msg {
