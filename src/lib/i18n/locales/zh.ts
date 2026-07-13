@@ -786,6 +786,7 @@ const zh: Messages = {
   "error.crypto_unsupported_version": "不支持的加密配置版本：{version}",
   "error.name_empty": "名称不能为空",
   "error.name_has_control_char": "名称含控制字符（码位 U+{codepoint}）",
+  "error.group_color_invalid": "分组颜色必须是 #4A6CF7 这样的六位十六进制值",
   "error.import_parse_failed": "导入解析失败 {field}[{index}]：{err}",
   "error.ssh_interactive_requires_terminal": "键盘交互认证需要终端 — 请先通过 SSH 终端连接一次",
   "error.ssh_prompt_already_pending": "Tab {tab_id} 已有未完成的 {channel} 提示",

@@ -1,8 +1,20 @@
 use rusqlite::params;
 
 use super::Db;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::models::{validate_name, Group};
+
+fn normalize_group_color(color: &str) -> AppResult<String> {
+    match color.strip_prefix('#') {
+        Some(hex) if hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()) => {
+            Ok(format!("#{}", hex.to_ascii_uppercase()))
+        }
+        _ => Err(AppError::config(
+            "group_color_invalid",
+            serde_json::json!({}),
+        )),
+    }
+}
 
 pub fn list(db: &Db) -> AppResult<Vec<Group>> {
     let conn = db.lock()?;
@@ -39,10 +51,11 @@ pub fn get(db: &Db, id: &str) -> AppResult<Group> {
 
 pub fn insert_tx(conn: &rusqlite::Connection, g: &Group) -> AppResult<()> {
     validate_name(&g.name)?;
+    let color = normalize_group_color(&g.color)?;
     conn.execute(
         "INSERT INTO groups (id, name, color, sort_order) VALUES (?1, ?2, ?3, ?4) \
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, color=excluded.color, sort_order=excluded.sort_order",
-        params![g.id, g.name, g.color, g.sort_order],
+        params![g.id, g.name, color, g.sort_order],
     )?;
     Ok(())
 }
@@ -54,10 +67,11 @@ pub fn insert(db: &Db, g: &Group) -> AppResult<()> {
 
 pub fn update(db: &Db, g: &Group) -> AppResult<()> {
     validate_name(&g.name)?;
+    let color = normalize_group_color(&g.color)?;
     let conn = db.lock()?;
     conn.execute(
         "UPDATE groups SET name=?1, color=?2, sort_order=?3 WHERE id=?4",
-        params![g.name, g.color, g.sort_order, g.id],
+        params![g.name, color, g.sort_order, g.id],
     )?;
     Ok(())
 }
@@ -168,6 +182,58 @@ mod tests {
         let got = get(&db, "g1").unwrap();
         assert_eq!(got.color, "#00FF00");
         assert_eq!(got.sort_order, 99);
+    }
+
+    #[test]
+    fn writes_normalize_group_color_to_six_digit_hex() {
+        let db = Db::open_in_memory().unwrap();
+        let mut group = mk_group("g1", "production");
+        group.color = "#a1b2c3".into();
+
+        insert(&db, &group).unwrap();
+
+        assert_eq!(get(&db, "g1").unwrap().color, "#A1B2C3");
+
+        group.color = "#d4e5f6".into();
+        update(&db, &group).unwrap();
+
+        assert_eq!(get(&db, "g1").unwrap().color, "#D4E5F6");
+    }
+
+    #[test]
+    fn writes_reject_invalid_group_colors() {
+        for color in [
+            "#fff",
+            "112233",
+            "#12345g",
+            "#112233; color:red",
+            "\x1b]52;c;payload\x07",
+            "中文",
+        ] {
+            let db = Db::open_in_memory().unwrap();
+            let mut group = mk_group("g1", "production");
+            group.color = color.into();
+
+            assert_eq!(
+                insert(&db, &group).unwrap_err().code(),
+                "group_color_invalid",
+                "color {color:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn update_rejects_invalid_group_color() {
+        let db = Db::open_in_memory().unwrap();
+        insert(&db, &mk_group("g1", "production")).unwrap();
+        let mut group = mk_group("g1", "production");
+        group.color = "#112233; color:red".into();
+
+        assert_eq!(
+            update(&db, &group).unwrap_err().code(),
+            "group_color_invalid"
+        );
+        assert_eq!(get(&db, "g1").unwrap().color, "#FF0000");
     }
 
     /// 关键不变量：删 group 时必须清掉所有指向它的 profiles.group_id，

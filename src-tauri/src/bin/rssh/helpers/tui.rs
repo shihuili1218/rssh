@@ -119,14 +119,39 @@ pub fn confirm(label: &str, default: bool) -> bool {
     }
 }
 
-pub fn hex_to_rgb(hex: &str) -> (u8, u8, u8) {
-    let hex = hex.trim_start_matches('#');
-    if hex.len() >= 6 {
-        let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(128);
-        let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(128);
-        let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(128);
-        (r, g, b)
-    } else {
-        (128, 128, 128)
+pub fn hex_to_rgb(color: &str) -> (u8, u8, u8) {
+    const FALLBACK: (u8, u8, u8) = (128, 128, 128);
+
+    let Some(hex) = color.strip_prefix('#') else {
+        return FALLBACK;
+    };
+    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return FALLBACK;
+    }
+    let Ok(value) = u32::from_str_radix(hex, 16) else {
+        return FALLBACK;
+    };
+
+    (
+        ((value >> 16) & 0xff) as u8,
+        ((value >> 8) & 0xff) as u8,
+        (value & 0xff) as u8,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hex_to_rgb;
+
+    #[test]
+    fn hex_to_rgb_parses_canonical_colors() {
+        assert_eq!(hex_to_rgb("#A1b2C3"), (0xA1, 0xB2, 0xC3));
+    }
+
+    #[test]
+    fn hex_to_rgb_falls_back_for_malformed_or_non_ascii_input() {
+        for color in ["#fff", "#12345g", "#112233; color:red", "你好"] {
+            assert_eq!(hex_to_rgb(color), (128, 128, 128), "color {color:?}");
+        }
     }
 }

@@ -24,7 +24,12 @@ pub fn cmd_rm_credential(conn: &CliCtx, name: &str) -> AppResult<()> {
         return Ok(());
     }
     rssh_lib::db::credential::delete(conn, &id)?;
-    let _ = conn.secret_store().delete(&cred_secret_key(&id));
+    if let Err(e) = conn.secret_store().delete(&cred_secret_key(&id)) {
+        eprintln!(
+            "warning: credential deleted, but secret cleanup failed: {}",
+            e.code()
+        );
+    }
     println!("Deleted.");
     Ok(())
 }

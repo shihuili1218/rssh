@@ -26,11 +26,11 @@ rssh 把"保管"和"同步"明确拆成两件事：
 | 数据类型 | 保管在哪 | 怎么同步 |
 |---|---|---|
 | 私钥 / 密码 / passphrase | 你的操作系统 keychain | 默认**不同步** |
-| AI API key / GitHub token | 你的操作系统 keychain | **永不离开本机** |
-| profile / 转发规则 / 命令片段 / skill | 你的 SQLite | 加密后推到**你自己的** GitHub repo |
+| AI API key / GitHub token / WebDAV 密码 | 你的操作系统 keychain | **不写入同步备份** |
+| profile / 转发规则 / 命令片段 / skill | 你的 SQLite | 加密后推到**你自己的** GitHub repo 或 WebDAV 服务 |
 | host key | 标准 `~/.ssh/known_hosts` | 不归 rssh 管，ssh 自己的事 |
 
-没有 rssh 服务器，也没有"账号"。同步靠 GitHub —— 不是因为 GitHub 多安全，是因为 **GitHub 已经是你的基础设施**，你已经信任它存了你的源码。再加一份加密的 240KB JSON，不增加新的攻击面。
+没有 rssh 服务器，也没有"账号"。同步通道支持 GitHub 和 WebDAV；选择 GitHub 时，不是因为 GitHub 多安全，而是因为 **GitHub 已经是很多工程师的基础设施**，他们已经信任它存放源码。无论选择哪个通道，远端拿到的都只是加密备份，解密密码不会上传。
 
 ## 第一层：本地秘密 → OS Keychain
 
@@ -97,9 +97,9 @@ base64( version[1] || salt[16] || nonce[12] || ciphertext_with_tag )
 
 测试覆盖（`src-tauri/src/crypto.rs:113-228`）包括：roundtrip、Unicode、空 payload、密码错、ciphertext 篡改、nonce 篡改、salt 篡改、非法 base64、长度不足、版本不支持、两次加密产出不同 blob。每一条都是一类已知的密码学失败模式。
 
-## 第四层：推送通道 —— 你的 GitHub repo，不是 rssh 的服务器
+## 第四层：推送通道 —— 你的存储，不是 rssh 的服务器
 
-`src-tauri/src/sync/github.rs` 总共 135 行。所有逻辑就是：
+以 GitHub 通道为例，`src-tauri/src/sync/github.rs` 的核心逻辑就是：
 
 ```
 PUT https://api.github.com/repos/<your>/<repo>/contents/rssh_backup.json
@@ -108,6 +108,8 @@ PUT https://api.github.com/repos/<your>/<repo>/contents/rssh_backup.json
 ```
 
 加密 blob → GitHub Contents API → 落到**你自己的私有 repo**。GitHub 看到的是 base64 之后的二进制，没有密钥，没法解。
+
+WebDAV 通道遵守同一边界：`src-tauri/src/sync/webdav.rs` 把同一份加密 blob 写成你指定服务上的 `rssh_backup.enc`。WebDAV 密码留在本机 keychain，备份解密密码同样不会发送给服务端。
 
 **为什么是 GitHub 而不是 S3 / Dropbox / iCloud**：
 
@@ -121,9 +123,11 @@ PUT https://api.github.com/repos/<your>/<repo>/contents/rssh_backup.json
 ```
 rssh config github push    # 推到 GitHub
 rssh config github pull    # 从 GitHub 拉取
+rssh config webdav push    # 推到 WebDAV
+rssh config webdav pull    # 从 WebDAV 拉取
 ```
 
-底层就是 base64 + GitHub API。想换工具？拿走 `rssh_backup.json` 自己写解码就行 —— wire format 在 `crypto.rs` 开头注释里。没有"导出到 CSV"按钮，因为你的数据本来就在你的 repo 里。
+底层就是加密 blob + 你选择的存储 API。想换工具？从 GitHub 拿走 `rssh_backup.json`，或从 WebDAV 拿走 `rssh_backup.enc`，自己按 `crypto.rs` 开头注释的 wire format 解码即可。没有"导出到 CSV"按钮，因为备份文件本来就在你控制的存储里。
 
 ## 拉取语义：事务性全量替换
 
@@ -156,6 +160,6 @@ rssh config github pull    # 从 GitHub 拉取
 
 **同步不需要中心节点**。
 
-你的秘密在你的 keychain。你的配置在你的 GitHub。你的 token 在你的本机。rssh 是一个程序，不是一个 SaaS —— 它跑在你的笔记本上，做完事退出，没有"我们的服务器"。
+你的秘密在你的 keychain。你的配置在你的 GitHub 或 WebDAV。你的 token 在你的本机。rssh 是一个程序，不是一个 SaaS —— 它跑在你的笔记本上，做完事退出，没有"我们的服务器"。
 
 订阅费替你买的是攻击面。rssh 不收订阅费，因为它压根没有那个攻击面可以替你管。

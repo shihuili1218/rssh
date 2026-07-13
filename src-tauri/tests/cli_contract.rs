@@ -264,6 +264,41 @@ fn group_add_uses_prompt_defaults_and_is_listed() {
 }
 
 #[test]
+fn group_add_rejects_invalid_sort_order() {
+    let home = tempfile::tempdir().expect("temporary HOME");
+    let add = rssh_in_home(home.path(), &["group", "add"], "ops\n\nnot-a-number\n");
+
+    assert_eq!(add.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&add.stderr).contains("numeric_arg_invalid"),
+        "stderr: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let list = rssh_in_home(home.path(), &["group", "list"], "");
+    assert_eq!(String::from_utf8_lossy(&list.stdout), "No groups.\n");
+}
+
+#[test]
+fn group_add_rejects_invalid_color_without_echoing_control_bytes() {
+    let home = tempfile::tempdir().expect("temporary HOME");
+    let malicious = "\x1b]52;c;payload\x07";
+    let input = format!("ops\n{malicious}\n0\n");
+    let add = rssh_in_home(home.path(), &["group", "add"], &input);
+
+    assert_eq!(add.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&add.stderr);
+    assert!(stderr.contains("group_color_invalid"), "stderr: {stderr}");
+    assert!(
+        !stderr.contains('\x1b'),
+        "stderr echoed control bytes: {stderr:?}"
+    );
+
+    let list = rssh_in_home(home.path(), &["group", "list"], "");
+    assert_eq!(String::from_utf8_lossy(&list.stdout), "No groups.\n");
+}
+
+#[test]
 fn group_edit_updates_name_color_and_order() {
     let home = tempfile::tempdir().expect("temporary HOME");
     let add = rssh_in_home(home.path(), &["group", "add"], "ops\n\n\n");
@@ -286,6 +321,31 @@ fn group_edit_updates_name_color_and_order() {
     assert!(stdout.contains("#112233"), "{stdout}");
     assert!(stdout.contains("7"), "{stdout}");
     assert!(!stdout.contains("ops"), "{stdout}");
+}
+
+#[test]
+fn group_edit_rejects_invalid_sort_order() {
+    let home = tempfile::tempdir().expect("temporary HOME");
+    let add = rssh_in_home(home.path(), &["group", "add"], "ops\n\n\n");
+    assert!(add.status.success());
+
+    let edit = rssh_in_home(
+        home.path(),
+        &["group", "edit", "ops"],
+        "platform\n#112233\nnot-a-number\n",
+    );
+
+    assert_eq!(edit.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&edit.stderr).contains("numeric_arg_invalid"),
+        "stderr: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    let list = rssh_in_home(home.path(), &["group", "list"], "");
+    let stdout = String::from_utf8(list.stdout).expect("list is UTF-8");
+    assert!(stdout.contains("ops"), "{stdout}");
+    assert!(!stdout.contains("platform"), "{stdout}");
 }
 
 #[test]
