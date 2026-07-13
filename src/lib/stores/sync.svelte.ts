@@ -25,6 +25,7 @@ export interface SyncProviderStatus {
 }
 
 export interface SyncCheckResult {
+  local: SyncMetadata;
   github: SyncProviderStatus;
   webdav: SyncProviderStatus;
 }
@@ -51,6 +52,7 @@ const emptyProviders = (): Record<SyncSource, SyncProviderStatus | null> => ({
 });
 
 let _local = $state<SyncMetadata | null>(null);
+let _localRevision = 0;
 let _autoPull = $state<AutoPullState>({
   value: null,
   loading: false,
@@ -146,12 +148,28 @@ export function anyVersionDifference(): boolean {
   );
 }
 
+function publishLocal(metadata: SyncMetadata): void {
+  _local = metadata;
+  _localRevision += 1;
+}
+
+function sameMetadata(
+  left: SyncMetadata | null,
+  right: SyncMetadata,
+): boolean {
+  return (
+    left !== null &&
+    left.version === right.version &&
+    left.config_digest === right.config_digest
+  );
+}
+
 async function drainLocalRefreshes(): Promise<void> {
   let lastError: unknown = null;
   do {
     _localRequest.pending = false;
     try {
-      _local = await invoke<SyncMetadata>("sync_refresh_local_metadata");
+      publishLocal(await invoke<SyncMetadata>("sync_refresh_local_metadata"));
       lastError = null;
     } catch (error) {
       lastError = error;
@@ -186,12 +204,20 @@ function reconcileProvider(
 async function runCheckPass(): Promise<void> {
   try {
     await refreshLocalMetadata();
+    const localRevision = _localRevision;
     const result = await invoke<SyncCheckResult>("sync_check_remotes");
-    // An automatic pull mutates the local configuration after the first local
-    // snapshot. The provider observation and that local snapshot are one UI
-    // state transition, so publish neither side when the refresh fails.
-    if (result.github.pulled || result.webdav.pulled) {
+    // The backend returns the snapshot from after all automatic-pull attempts,
+    // including partial imports that report an error. If another local refresh
+    // completed while the network request was running, settle the ordering with
+    // one final local read instead of replacing a newer snapshot with an older
+    // response.
+    if (
+      _localRevision !== localRevision &&
+      !sameMetadata(_local, result.local)
+    ) {
       await refreshLocalMetadata();
+    } else {
+      publishLocal(result.local);
     }
     _providers = {
       github: reconcileProvider(_providers.github, result.github),

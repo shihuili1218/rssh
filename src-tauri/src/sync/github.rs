@@ -59,20 +59,42 @@ impl GitHubSync {
         )
     }
 
-    async fn push_file(&self, file: &str, content: &str, message: &str) -> AppResult<()> {
-        let url = self.contents_url(file);
-        let sha = match self
+    async fn existing_file_sha(&self, url: &str) -> AppResult<Option<String>> {
+        let response = self
             .client
             .get(format!("{url}?ref={}", self.branch))
             .headers(self.headers()?)
             .send()
             .await
-        {
-            Ok(resp) if resp.status().is_success() => {
-                resp.json::<FileResponse>().await.ok().and_then(|f| f.sha)
-            }
-            _ => None,
-        };
+            .map_err(|e| AppError::other("github_push_failed", json!({ "err": e.to_string() })))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            let msg = if body.is_empty() {
+                status.to_string()
+            } else {
+                format!("{status}: {body}")
+            };
+            return Err(AppError::other("github_api_error", json!({ "msg": msg })));
+        }
+        let file = response
+            .json::<FileResponse>()
+            .await
+            .map_err(|e| AppError::other("github_parse_failed", json!({ "err": e.to_string() })))?;
+        file.sha.map(Some).ok_or_else(|| {
+            AppError::other(
+                "github_parse_failed",
+                json!({ "err": "response is missing sha" }),
+            )
+        })
+    }
+
+    async fn push_file(&self, file: &str, content: &str, message: &str) -> AppResult<()> {
+        let url = self.contents_url(file);
+        let sha = self.existing_file_sha(&url).await?;
 
         let mut body = serde_json::json!({
             "message": format!("{message} {}", chrono::Utc::now().to_rfc3339()),
@@ -381,6 +403,31 @@ mod tests {
         .unwrap();
 
         assert_eq!(sync.pull().await.unwrap(), "encrypted-backup");
+    }
+
+    #[tokio::test]
+    async fn push_reports_an_existing_file_probe_http_error() {
+        let mut server = mockito::Server::new_async().await;
+        let _get = server
+            .mock("GET", "/repos/acme/config/contents/rssh_backup.json")
+            .match_query(Matcher::UrlEncoded("ref".into(), "main".into()))
+            .with_status(401)
+            .with_body("bad credentials")
+            .create_async()
+            .await;
+        let sync = GitHubSync::with_client(
+            "token",
+            "acme/config",
+            "main",
+            &server.url(),
+            reqwest::Client::new(),
+        )
+        .unwrap();
+
+        let err = sync.push("encrypted-backup").await.unwrap_err();
+
+        assert_eq!(err.code(), "github_api_error");
+        assert!(err.to_string().contains("bad credentials"));
     }
 
     #[tokio::test]

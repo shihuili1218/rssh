@@ -299,7 +299,16 @@ async fn maybe_auto_pull(
         },
         Err(err) => {
             probe.observation.error = Some(err.to_string());
-            (probe.observation, local)
+            let refreshed = match refresh_local_metadata_blocking(state).await {
+                Ok(refreshed) => refreshed,
+                Err(refresh_err) => {
+                    log::warn!(
+                        "failed to refresh sync metadata after automatic pull error: {refresh_err}"
+                    );
+                    local
+                }
+            };
+            (probe.observation, refreshed)
         }
     }
 }
@@ -413,8 +422,13 @@ async fn refresh_local_metadata_blocking(state: &AppState) -> AppResult<SyncMeta
 
 async fn load_or_refresh_local_metadata_blocking(state: &AppState) -> AppResult<SyncMetadata> {
     let data_dir = state.data_dir.clone();
-    run_db_blocking(state, move |db, _| {
-        load_local_metadata(&db)?.map_or_else(|| refresh_local_metadata(&db, &data_dir), Ok)
+    run_db_blocking(state, move |db, _| match load_local_metadata(&db) {
+        Ok(Some(metadata)) => Ok(metadata),
+        Ok(None) => refresh_local_metadata(&db, &data_dir),
+        Err(err) if err.code() == "sync_local_metadata_invalid" => {
+            refresh_local_metadata(&db, &data_dir)
+        }
+        Err(err) => Err(err),
     })
     .await
 }

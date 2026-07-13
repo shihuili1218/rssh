@@ -145,7 +145,14 @@ fn persist(db: &Db, metadata: &SyncMetadata) -> AppResult<()> {
 
 fn refresh_local_metadata_unlocked(db: &Db, data_dir: &Path) -> AppResult<SyncMetadata> {
     let config_digest = current_digest(db, data_dir)?;
-    let previous = stored_metadata(db)?;
+    let previous = match stored_metadata(db) {
+        Ok(previous) => previous,
+        Err(err) if err.code() == "sync_local_metadata_invalid" => {
+            log::warn!("rebuilding corrupted local sync metadata: {err}");
+            None
+        }
+        Err(err) => return Err(err),
+    };
     let version = match previous {
         None => 1,
         Some(previous) if previous.config_digest == config_digest => previous.version.max(1),
@@ -195,6 +202,18 @@ mod tests {
         assert_eq!(first.version, 1);
         assert_eq!(second, first);
         assert!(first.config_digest.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn refresh_recovers_from_a_corrupted_derived_snapshot() {
+        let db = Db::open_in_memory().unwrap();
+        let data_dir = tempfile::tempdir().unwrap();
+        crate::db::settings::set(&db, LOCAL_METADATA_KEY, "not-json").unwrap();
+
+        let recovered = refresh_local_metadata(&db, data_dir.path()).unwrap();
+
+        assert_eq!(recovered.version, 1);
+        assert_eq!(load_local_metadata(&db).unwrap(), Some(recovered));
     }
 
     #[test]

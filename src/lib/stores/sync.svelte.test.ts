@@ -11,6 +11,7 @@ type ProviderObservation = {
   pulled: boolean;
 };
 type CheckResult = {
+  local: Metadata;
   github: ProviderObservation;
   webdav: ProviderObservation;
 };
@@ -18,6 +19,7 @@ type CheckResult = {
 const localV5: Metadata = { version: 5, config_digest: "local-5" };
 const githubV6: Metadata = { version: 6, config_digest: "github-6" };
 const result: CheckResult = {
+  local: localV5,
   github: { remote: githubV6, error: null, pulled: false },
   webdav: { remote: null, error: null, pulled: false },
 };
@@ -276,16 +278,14 @@ describe("sync store", () => {
     expect(sync.providerStatus("github")?.error).toBeNull();
   });
 
-  it("refreshes local metadata again after an automatic pull", async () => {
+  it("uses the backend snapshot after an automatic pull", async () => {
     const localV6 = { version: 6, config_digest: "local-6" };
-    const locals = [localV5, localV6];
     invokeMock.mockImplementation((command: string) => {
-      if (command === "sync_refresh_local_metadata") {
-        return Promise.resolve(locals.shift()!);
-      }
+      if (command === "sync_refresh_local_metadata") return Promise.resolve(localV5);
       if (command === "sync_check_remotes") {
         return Promise.resolve({
           ...result,
+          local: localV6,
           github: { ...result.github, pulled: true },
         });
       }
@@ -296,28 +296,72 @@ describe("sync store", () => {
     await sync.runCheck();
 
     expect(sync.localMetadata()).toEqual(localV6);
-    expect(commandCallCount("sync_refresh_local_metadata")).toBe(2);
+    expect(commandCallCount("sync_refresh_local_metadata")).toBe(1);
   });
 
-  it("does not publish a pulled provider before the post-pull local snapshot", async () => {
+  it("publishes the backend local snapshot after a failed automatic pull", async () => {
+    const localV6 = { version: 6, config_digest: "local-6" };
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "sync_refresh_local_metadata") return Promise.resolve(localV5);
+      if (command === "sync_check_remotes") {
+        return Promise.resolve({
+          ...result,
+          local: localV6,
+          github: { ...result.github, error: "partial import", pulled: false },
+        });
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+    const sync = await loadSyncStore();
+
+    await sync.runCheck();
+
+    expect(sync.localMetadata()).toEqual(localV6);
+  });
+
+  it("does not replace a newer local refresh with an older remote-check snapshot", async () => {
+    const remote = deferred<CheckResult>();
+    const localV6 = { version: 6, config_digest: "local-6" };
+    let localCalls = 0;
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "sync_refresh_local_metadata") {
+        localCalls += 1;
+        return Promise.resolve(localCalls === 1 ? localV5 : localV6);
+      }
+      if (command === "sync_check_remotes") return remote.promise;
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+    const sync = await loadSyncStore();
+
+    const checking = sync.runCheck();
+    await vi.waitFor(() => {
+      expect(commandCallCount("sync_check_remotes")).toBe(1);
+    });
+    await sync.refreshLocalMetadata();
+    remote.resolve(result);
+    await checking;
+
+    expect(sync.localMetadata()).toEqual(localV6);
+  });
+
+  it("publishes a pulled provider with its backend local snapshot", async () => {
     const oldRemote = { version: 4, config_digest: "github-4" };
+    const localV6 = { version: 6, config_digest: "local-6" };
     const oldResult: CheckResult = {
       ...result,
       github: { remote: oldRemote, error: null, pulled: false },
     };
     const pulledResult: CheckResult = {
       ...result,
+      local: localV6,
       github: { ...result.github, pulled: true },
     };
-    vi.spyOn(console, "error").mockImplementation(() => {});
     let localCalls = 0;
     let remoteCalls = 0;
     invokeMock.mockImplementation((command: string) => {
       if (command === "sync_refresh_local_metadata") {
         localCalls += 1;
-        return localCalls < 3
-          ? Promise.resolve(localV5)
-          : Promise.reject(new Error("post-pull refresh failed"));
+        return Promise.resolve(localCalls === 1 ? localV5 : localV6);
       }
       if (command === "sync_check_remotes") {
         remoteCalls += 1;
@@ -330,8 +374,9 @@ describe("sync store", () => {
 
     await sync.runCheck({ silent: true });
 
-    expect(sync.localMetadata()).toEqual(localV5);
-    expect(sync.providerStatus("github")).toEqual(oldResult.github);
+    expect(sync.localMetadata()).toEqual(localV6);
+    expect(sync.providerStatus("github")).toEqual(pulledResult.github);
+    expect(commandCallCount("sync_refresh_local_metadata")).toBe(2);
   });
 
   it("runs one fresh pass after requests arrive during an active pass", async () => {
@@ -346,7 +391,9 @@ describe("sync store", () => {
       }
       if (command === "sync_check_remotes") {
         remoteCalls += 1;
-        return remoteCalls === 1 ? firstRemote.promise : Promise.resolve(result);
+        return remoteCalls === 1
+          ? firstRemote.promise
+          : Promise.resolve({ ...result, local: localV6 });
       }
       return Promise.reject(new Error(`unexpected command: ${command}`));
     });
@@ -400,6 +447,7 @@ describe("sync store", () => {
 
   it("derives push, pull, and settings dots from version differences", async () => {
     const checked: CheckResult = {
+      local: localV5,
       github: {
         remote: { version: 6, config_digest: "github-6" },
         error: null,

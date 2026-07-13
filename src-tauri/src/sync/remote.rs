@@ -228,4 +228,40 @@ mod tests {
 
         assert_eq!(local.version, 3);
     }
+
+    #[test]
+    fn partial_pull_failure_keeps_the_import_error_and_refreshes_local_metadata() {
+        let db = Db::open_in_memory().unwrap();
+        let secrets = MemSecrets::default();
+        let data_dir = tempfile::tempdir().unwrap();
+        let before = refresh_local_metadata(&db, data_dir.path()).unwrap();
+        let payload = serde_json::json!({
+            "version": 1,
+            "highlights": [{ "invalid": true }],
+            "snippets": [{ "name": "remote", "command": "echo imported" }],
+        });
+        let encrypted = crate::crypto::encrypt(&payload.to_string(), "pw").unwrap();
+
+        let err = apply_fetched_backup(
+            &db,
+            &secrets,
+            data_dir.path(),
+            FetchedBackup {
+                encrypted_payload: encrypted,
+                metadata: Some(metadata(9)),
+            },
+            "pw",
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code(), "import_partial_failed");
+        let after = crate::sync::metadata::load_local_metadata(&db)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.version, before.version + 1);
+        assert!(crate::db::snippet::load(data_dir.path())
+            .unwrap()
+            .iter()
+            .any(|snippet| snippet.name == "remote"));
+    }
 }
