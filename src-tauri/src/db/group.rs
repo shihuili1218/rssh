@@ -1,4 +1,4 @@
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
 use super::Db;
 use crate::error::{AppError, AppResult};
@@ -14,6 +14,60 @@ fn normalize_group_color(color: &str) -> AppResult<String> {
             serde_json::json!({}),
         )),
     }
+}
+
+fn reconcile_sync_filter_for_group_delete(conn: &rusqlite::Connection, id: &str) -> AppResult<()> {
+    let raw = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'sync_profile_group_ids'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let Some(raw) = raw.filter(|value| !value.trim().is_empty()) else {
+        return Ok(());
+    };
+    let mut selected: Vec<String> = serde_json::from_str(&raw).map_err(|e| {
+        AppError::config(
+            "sync_profile_group_ids_invalid",
+            serde_json::json!({ "err": e.to_string() }),
+        )
+    })?;
+    let group_selected = selected.iter().any(|group_id| group_id == id);
+    let ungrouped_selected = selected.iter().any(String::is_empty);
+    if group_selected != ungrouped_selected {
+        let has_members = conn.query_row(
+            "SELECT EXISTS(\
+                 SELECT 1 FROM profiles WHERE group_id = ?1 \
+                 UNION ALL SELECT 1 FROM forwards WHERE group_id = ?1 \
+                 UNION ALL SELECT 1 FROM serial_profiles WHERE group_id = ?1 \
+                 UNION ALL SELECT 1 FROM telnet_profiles WHERE group_id = ?1\
+             )",
+            params![id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if has_members {
+            return Err(AppError::config(
+                "group_delete_sync_filter_conflict",
+                serde_json::json!({
+                    "hint": "Match this group and Ungrouped in sync settings, or move the group's connections before deleting it."
+                }),
+            ));
+        }
+    }
+
+    if group_selected {
+        selected.retain(|group_id| group_id != id);
+        let value = serde_json::to_string(&selected).map_err(|e| {
+            AppError::other("serde_failed", serde_json::json!({ "err": e.to_string() }))
+        })?;
+        conn.execute(
+            "UPDATE settings SET value = ?1 WHERE key = 'sync_profile_group_ids'",
+            params![value],
+        )?;
+    }
+
+    Ok(())
 }
 
 pub fn list(db: &Db) -> AppResult<Vec<Group>> {
@@ -81,8 +135,11 @@ pub fn delete(db: &Db, id: &str) -> AppResult<()> {
     // profiles（v10）、forwards（v20）、serial_profiles（v20）、telnet_profiles（v22）。
     // 漏清任一张，该表的行就留悬空 group_id —— UI 当未分组显示（看着没事），但
     // "按分组同步"的过滤里悬空 id 既不匹配任何现存组、也不等于未分组哨兵 ""，
-    // 于是永久漏同步。中途崩 = 残留行指向已删 group，所以包进单事务。
+    // 于是永久漏同步。删除还会把该组并入“未分组”桶：若两者同步选择不同，无法在
+    // 不漏传或扩大上传范围的前提下自动合并，必须让用户先对齐选择。检查、清 filter、
+    // 删 group、清引用必须同事务，否则中途崩仍会留下不一致状态。
     db.with_transaction(|tx| {
+        reconcile_sync_filter_for_group_delete(tx, id)?;
         tx.execute("DELETE FROM groups WHERE id = ?1", params![id])?;
         tx.execute(
             "UPDATE profiles SET group_id = NULL WHERE group_id = ?1",
@@ -117,7 +174,7 @@ pub fn clear_all(db: &Db) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::profile;
+    use crate::db::{profile, settings};
     use crate::models::Profile;
 
     fn mk_group(id: &str, name: &str) -> Group {
@@ -251,6 +308,87 @@ mod tests {
         assert!(profile::get(&db, "p1").unwrap().group_id.is_none());
         assert!(profile::get(&db, "p2").unwrap().group_id.is_none());
         assert!(profile::get(&db, "p3").unwrap().group_id.is_none());
+    }
+
+    #[test]
+    fn delete_rejects_when_sync_membership_would_change() {
+        let db = Db::open_in_memory().unwrap();
+        insert(&db, &mk_group("g1", "prod")).unwrap();
+        profile::insert(&db, &mk_profile("p1", "web1", Some("g1"))).unwrap();
+        settings::set(&db, "sync_profile_group_ids", r#"["g1"]"#).unwrap();
+
+        let err = delete(&db, "g1").unwrap_err();
+
+        assert_eq!(err.code(), "group_delete_sync_filter_conflict");
+        assert_eq!(get(&db, "g1").unwrap().name, "prod");
+        assert_eq!(
+            profile::get(&db, "p1").unwrap().group_id.as_deref(),
+            Some("g1")
+        );
+        assert_eq!(
+            settings::get(&db, "sync_profile_group_ids")
+                .unwrap()
+                .as_deref(),
+            Some(r#"["g1"]"#)
+        );
+    }
+
+    #[test]
+    fn delete_prunes_group_from_matching_sync_filter() {
+        let db = Db::open_in_memory().unwrap();
+        insert(&db, &mk_group("g1", "prod")).unwrap();
+        profile::insert(&db, &mk_profile("p1", "web1", Some("g1"))).unwrap();
+        settings::set(&db, "sync_profile_group_ids", r#"["g1",""]"#).unwrap();
+
+        delete(&db, "g1").unwrap();
+
+        assert!(profile::get(&db, "p1").unwrap().group_id.is_none());
+        assert_eq!(
+            settings::get(&db, "sync_profile_group_ids")
+                .unwrap()
+                .as_deref(),
+            Some(r#"[""]"#)
+        );
+    }
+
+    #[test]
+    fn delete_rejects_when_move_to_ungrouped_would_widen_sync() {
+        let db = Db::open_in_memory().unwrap();
+        insert(&db, &mk_group("g1", "prod")).unwrap();
+        profile::insert(&db, &mk_profile("p1", "web1", Some("g1"))).unwrap();
+        settings::set(&db, "sync_profile_group_ids", r#"[""]"#).unwrap();
+
+        let err = delete(&db, "g1").unwrap_err();
+
+        assert_eq!(err.code(), "group_delete_sync_filter_conflict");
+        assert_eq!(
+            profile::get(&db, "p1").unwrap().group_id.as_deref(),
+            Some("g1")
+        );
+        assert_eq!(
+            settings::get(&db, "sync_profile_group_ids")
+                .unwrap()
+                .as_deref(),
+            Some(r#"[""]"#)
+        );
+    }
+
+    #[test]
+    fn delete_allows_group_and_ungrouped_to_remain_excluded() {
+        let db = Db::open_in_memory().unwrap();
+        insert(&db, &mk_group("g1", "prod")).unwrap();
+        profile::insert(&db, &mk_profile("p1", "web1", Some("g1"))).unwrap();
+        settings::set(&db, "sync_profile_group_ids", "[]").unwrap();
+
+        delete(&db, "g1").unwrap();
+
+        assert!(profile::get(&db, "p1").unwrap().group_id.is_none());
+        assert_eq!(
+            settings::get(&db, "sync_profile_group_ids")
+                .unwrap()
+                .as_deref(),
+            Some("[]")
+        );
     }
 
     /// R1 regression: forwards (v20), serial_profiles (v20) and telnet_profiles

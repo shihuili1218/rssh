@@ -787,6 +787,7 @@ const zh: Messages = {
   "error.name_empty": "名称不能为空",
   "error.name_has_control_char": "名称含控制字符（码位 U+{codepoint}）",
   "error.group_color_invalid": "分组颜色必须是 #4A6CF7 这样的六位十六进制值",
+  "error.group_delete_sync_filter_conflict": "该分组与“未分组”的同步选择不同。请先在同步设置中对齐两者的选择，或先移动组内连接，再删除分组。",
   "error.import_parse_failed": "导入解析失败 {field}[{index}]：{err}",
   "error.ssh_interactive_requires_terminal": "键盘交互认证需要终端 — 请先通过 SSH 终端连接一次",
   "error.ssh_prompt_already_pending": "Tab {tab_id} 已有未完成的 {channel} 提示",

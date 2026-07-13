@@ -784,6 +784,7 @@ const en = {
   "error.name_empty": "Name cannot be empty",
   "error.name_has_control_char": "Name contains a control character (codepoint U+{codepoint})",
   "error.group_color_invalid": "Group color must be a six-digit hex value such as #4A6CF7",
+  "error.group_delete_sync_filter_conflict": "This group and Ungrouped have different sync selections. Match them in Sync settings or move the group's connections before deleting it.",
   "error.import_parse_failed": "Import parse failed at {field}[{index}]: {err}",
   "error.ssh_interactive_requires_terminal": "Keyboard-interactive auth needs a terminal — connect via the SSH terminal first",
   "error.ssh_prompt_already_pending": "Another {channel} prompt is already pending on tab {tab_id}",
