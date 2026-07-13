@@ -18,6 +18,14 @@
 
   let showWelcome = $state(false);
 
+  $effect(() => {
+    const revision = sync.configurationRevision();
+    if (revision === 0) return;
+    void ai.loadSettings().catch((e) =>
+      console.warn("[sync] AI settings refresh failed:", e),
+    );
+  });
+
   onMount(async () => {
     // 预热 AI 设置：色条"发送到 AI"等入口靠 ai.settings()?.has_api_key 同步判断是否
     // 可用，过去只有打开 AI 面板才加载它。在 app 启动时拉一次，保证任何菜单打开前

@@ -10,6 +10,7 @@
     import {listen, type UnlistenFn} from "@tauri-apps/api/event";
     import type {ConnectorSpec, HighlightRule, TelnetProfile} from "../stores/app.svelte.ts";
     import * as app from "../stores/app.svelte.ts";
+    import * as syncStatus from "../stores/sync.svelte.ts";
     import * as ai from "../ai/store.svelte.ts";
     import * as theme from "../themes/store.svelte.ts";
     import MobileKeybar from "./MobileKeybar.svelte";
@@ -50,6 +51,7 @@
     // because $effect added after an `await` is not tracked by Svelte 5.
     $effect(() => {
         app.highlightsRevision();
+        syncStatus.configurationRevision();
         if (!hlEverLoaded) return;
         void (async () => {
             try {

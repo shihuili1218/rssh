@@ -290,6 +290,7 @@
         pw1 = "";
         pw2 = "";
         const source = pwSource;
+        const action = pwMode;
         const setSyncing = (value: boolean) => {
             if (source === "github") githubSyncing = value;
             else webdavSyncing = value;
@@ -307,11 +308,19 @@
         setSyncing(true);
         setMessage("");
         try {
-            await invoke(syncStatus.commandFor(source, pwMode), { password });
-            const key = `${source}.${pwMode}_ok` as MessageKey;
+            await invoke(syncStatus.commandFor(source, action), { password });
+            const revisionBeforeRefresh = syncStatus.configurationRevision();
+            const key = `${source}.${action}_ok` as MessageKey;
             setMessage(t(key));
             await syncStatus.runCheck({ silent: true });
+            if (
+                action === "pull" &&
+                syncStatus.configurationRevision() === revisionBeforeRefresh
+            ) {
+                syncStatus.invalidateConfiguration();
+            }
         } catch (e: any) {
+            if (action === "pull") syncStatus.invalidateConfiguration();
             setMessage(t(`${source}.failed` as MessageKey, { error: errMsg(e) }), true);
         } finally {
             setSyncing(false);

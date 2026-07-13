@@ -53,6 +53,7 @@ const emptyProviders = (): Record<SyncSource, SyncProviderStatus | null> => ({
 
 let _local = $state<SyncMetadata | null>(null);
 let _localRevision = 0;
+let _configurationRevision = $state(0);
 let _autoPull = $state<AutoPullState>({
   value: null,
   loading: false,
@@ -68,6 +69,14 @@ let _intervalTimer: ReturnType<typeof setInterval> | null = null;
 
 export function localMetadata(): SyncMetadata | null {
   return _local;
+}
+
+export function configurationRevision(): number {
+  return _configurationRevision;
+}
+
+export function invalidateConfiguration(): void {
+  _configurationRevision += 1;
 }
 
 export function providerStatus(source: SyncSource): SyncProviderStatus | null {
@@ -149,8 +158,14 @@ export function anyVersionDifference(): boolean {
 }
 
 function publishLocal(metadata: SyncMetadata): void {
+  // The local fingerprint catches represented configuration changes, including
+  // many partial imports. The explicit `pulled` fallback below also covers
+  // successful imports of categories excluded by this device's sync filters.
+  const configurationChanged =
+    _local !== null && _local.config_digest !== metadata.config_digest;
   _local = metadata;
   _localRevision += 1;
+  if (configurationChanged) invalidateConfiguration();
 }
 
 function sameMetadata(
@@ -206,6 +221,7 @@ async function runCheckPass(): Promise<void> {
     await refreshLocalMetadata();
     const localRevision = _localRevision;
     const result = await invoke<SyncCheckResult>("sync_check_remotes");
+    const revisionBeforeReconcile = _configurationRevision;
     // The backend returns the snapshot from after all automatic-pull attempts,
     // including partial imports that report an error. If another local refresh
     // completed while the network request was running, settle the ordering with
@@ -223,6 +239,12 @@ async function runCheckPass(): Promise<void> {
       github: reconcileProvider(_providers.github, result.github),
       webdav: reconcileProvider(_providers.webdav, result.webdav),
     };
+    if (
+      (result.github.pulled || result.webdav.pulled) &&
+      _configurationRevision === revisionBeforeReconcile
+    ) {
+      invalidateConfiguration();
+    }
   } catch (error) {
     console.error("sync.runCheck failed:", error);
   }

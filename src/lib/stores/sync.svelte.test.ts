@@ -73,6 +73,14 @@ describe("sync store", () => {
     expect(sync.commandFor("webdav", "pull")).toBe("webdav_pull");
   });
 
+  it("exposes one invalidation signal for a manual pull attempt", async () => {
+    const sync = await loadSyncStore();
+
+    sync.invalidateConfiguration();
+
+    expect(sync.configurationRevision()).toBe(1);
+  });
+
   it("loads automatic pull from local storage while the remote check is pending", async () => {
     const remote = deferred<CheckResult>();
     invokeMock.mockImplementation((command: string) => {
@@ -278,7 +286,7 @@ describe("sync store", () => {
     expect(sync.providerStatus("github")?.error).toBeNull();
   });
 
-  it("uses the backend snapshot after an automatic pull", async () => {
+  it("uses the backend snapshot and invalidates after an automatic pull", async () => {
     const localV6 = { version: 6, config_digest: "local-6" };
     invokeMock.mockImplementation((command: string) => {
       if (command === "sync_refresh_local_metadata") return Promise.resolve(localV5);
@@ -296,7 +304,22 @@ describe("sync store", () => {
     await sync.runCheck();
 
     expect(sync.localMetadata()).toEqual(localV6);
+    expect(sync.configurationRevision()).toBe(1);
     expect(commandCallCount("sync_refresh_local_metadata")).toBe(1);
+  });
+
+  it("invalidates after an automatic pull even when local sync filters hide the change", async () => {
+    const adoptedV6 = { version: 6, config_digest: localV5.config_digest };
+    mockSuccessfulChecks(localV5, {
+      ...result,
+      local: adoptedV6,
+      github: { ...result.github, pulled: true },
+    });
+    const sync = await loadSyncStore();
+
+    await sync.runCheck();
+
+    expect(sync.configurationRevision()).toBe(1);
   });
 
   it("publishes the backend local snapshot after a failed automatic pull", async () => {
@@ -317,6 +340,7 @@ describe("sync store", () => {
     await sync.runCheck();
 
     expect(sync.localMetadata()).toEqual(localV6);
+    expect(sync.configurationRevision()).toBe(1);
   });
 
   it("does not replace a newer local refresh with an older remote-check snapshot", async () => {

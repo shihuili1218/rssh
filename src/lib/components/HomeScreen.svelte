@@ -1,5 +1,6 @@
 <script lang="ts">
   import * as app from "../stores/app.svelte.ts";
+  import * as syncStatus from "../stores/sync.svelte.ts";
   import type {
     Profile,
     Credential,
@@ -248,6 +249,7 @@
   }
 
   $effect(() => {
+    syncStatus.configurationRevision();
     if (app.activeTabId() !== "home" || app.settingsActive()) {
       homeRefresh.cancel();
       return;
