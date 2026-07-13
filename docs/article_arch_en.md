@@ -13,7 +13,7 @@ Not another chat box. It reads what is **actually happening** in your terminal, 
 Every command and its output become a block with a color-coded left edge. In a thousand-line scrollback you spot the previous command's output at a glance. Rendered **fully locally** — zero remote dependency, no agent installed on the server.
 
 ### ⌨️ Configure once, use everywhere
-`rssh open prod` launches a session from any terminal — the CLI and GUI share one SQLite store. The same hosts and keys also run on mobile and inside a JetBrains tool window.
+`rssh profile open prod` launches a session from any terminal — the CLI and GUI share one SQLite store. The same hosts and keys also run on mobile and inside a JetBrains tool window.
 
 ## One crate, three binaries
 
@@ -28,7 +28,7 @@ crate-type = ["staticlib", "cdylib", "lib"]
 name = "rssh"
 path = "src/main.rs"
 
-[[bin]]                       # the CLI: `rssh open prod`
+[[bin]]                       # the CLI: `rssh profile open prod`
 name = "rssh-cli"
 path = "src/bin/rssh/main.rs"
 required-features = ["cli"]
@@ -39,7 +39,7 @@ path = "src/server_main.rs"
 required-features = ["server"]
 ```
 
-The GUI and the CLI talk to the *same* core and the *same* on-disk SQLite database (`rusqlite` with the `bundled` feature, so there's no system SQLite to chase across platforms). `rssh open prod` from any terminal opens the host you configured in the GUI, because there is no second source of truth.
+The GUI and the CLI talk to the *same* core and the *same* on-disk SQLite database (`rusqlite` with the `bundled` feature, so there's no system SQLite to chase across platforms). `rssh profile open prod` from any terminal opens the host you configured in the GUI, because there is no second source of truth.
 
 The headless `rssh-server` is "a second adapter over the same RSSH engine" — it lets a JetBrains plugin run the full UI inside an IDE tool window. To stay self-contained it embeds the built frontend straight into the binary:
 

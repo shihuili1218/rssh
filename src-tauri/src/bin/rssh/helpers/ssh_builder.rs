@@ -81,7 +81,7 @@ pub fn build_ssh_command(
 /// 1. **Atomic 0600**: `Builder::permissions(0o600)` passes the mode to the
 ///    OS `open(2)` call, so the file is born 0600. The old "create then
 ///    chmod" leaked a window where the PEM bytes existed on disk at 0644
-///    (default umask). Short window, but reproducible on every `rssh open`,
+///    (default umask). Short window, but reproducible on every `rssh profile open`,
 ///    and `/tmp` is world-traversable on shared hosts / CI runners.
 ///
 /// 2. **User-private dir** instead of `/tmp`: even with 0600 on the file,

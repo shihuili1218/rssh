@@ -29,17 +29,42 @@ Of course, security is paramount. Every action by the LLM must go through tools 
 
 ## 2. The rssh CLI
 
-The `rssh` CLI is a special creature. You can use rssh data inside any terminal tool, do `rssh open [profile]` anytime anywhere, and it reads **the same** SQLite (`~/.rssh/rssh.db`) as the GUI. A profile added in the GUI is immediately usable from the command line; vice versa.
+The `rssh` CLI is a special creature. You can use rssh data inside any terminal tool, run `rssh profile open NAME` anywhere, and it reads **the same** SQLite (`~/.rssh/rssh.db`) as the GUI. A profile added in the GUI is immediately usable from the command line; vice versa.
 
 ```
-rssh                       # list all profiles
-rssh ls prod               # fuzzy search
-rssh open gateway-01       # connect directly
-rssh open fwd my-tunnel    # start a named port forward
-rssh add profile           # interactive create
+rssh profile list [QUERY]  # list profiles; optionally search by name or host
+rssh profile open NAME     # connect directly
+rssh profile add
+rssh profile edit NAME
+rssh profile rm NAME
+
+rssh credential list
+rssh credential add
+rssh credential edit NAME
+rssh credential rm NAME
+
+rssh forward list
+rssh forward open NAME     # start a named port forward
+rssh forward add
+rssh forward edit NAME
+rssh forward rm NAME
+
+rssh group list
+rssh group add
+rssh group edit NAME
+rssh group rm NAME
+
+rssh config export FILE
+rssh config import FILE
+rssh config github set
+rssh config github push
+rssh config github pull
+rssh config webdav set
+rssh config webdav push
+rssh config webdav pull
 ```
 
-This means you can drop `rssh open foo` into any script, alias, or Makefile, with no need to maintain a duplicate SSH config.
+This means you can drop `rssh profile open foo` into any script, alias, or Makefile, with no need to maintain a duplicate SSH config. The entity name comes before its action consistently; the former top-level `ls`, `open`, `add`, `edit`, and `rm` forms are no longer commands.
 
 ![welcome-cli.gif](welcome-cli.gif)
 
@@ -80,21 +105,24 @@ You trust your own keychain more than any third-party software — that assumpti
 
 Each credential has its own "include in sync" toggle. Private keys rarely change anyway. Copy them between two devices once via USB stick, AirDrop, or `scp`, and use them for ten years. Pushing them to the cloud for "convenience" is trading security for laziness.
 
-**3. Configuration data → encrypted, then dropped into your own private repo**
+**3. Configuration data → encrypted, then sent to storage you control**
 
-Profiles, forwarding rules, snippets — pure config data — are encrypted and pushed to **your own private GitHub repo**. Not rssh's servers — rssh has no servers.
+Profiles, forwarding rules, snippets — pure config data — are encrypted and pushed to **your own private GitHub repo or WebDAV server**. Not rssh's servers — rssh has no servers.
 
-The encryption itself is no magic: salted SHA-256 derived key (1000 rounds) + streaming XOR + HMAC-SHA256 authentication.
+The encryption itself is no magic: Argon2id derives the key with pinned parameters (19 MiB, 2 iterations, 1 lane), then ChaCha20-Poly1305 provides authenticated encryption.
 
 The code is in `src-tauri/src/crypto.rs`, a hundred lines you can finish reading. Audit welcome.
 
 ```
-rssh config set     # configure token and repo
-rssh config push    # push
-rssh config pull    # pull
+rssh config github set     # configure token and repo
+rssh config github push    # push to GitHub
+rssh config github pull    # pull from GitHub
+rssh config webdav set     # configure a WebDAV endpoint
+rssh config webdav push    # push to WebDAV
+rssh config webdav pull    # pull from WebDAV
 ```
 
-Underneath it's just base64 + GitHub API. **Switch tools whenever you want — your data is in your repo.** No lock-in, no subscription, no "Export to CSV" button.
+Underneath it's just encrypted data over the GitHub or WebDAV API. **Switch tools whenever you want — your data stays in storage you control.** No lock-in, no subscription, no "Export to CSV" button.
 
 ![welcome-sync.gif](welcome-sync.gif)
 

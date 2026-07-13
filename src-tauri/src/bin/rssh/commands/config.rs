@@ -13,9 +13,15 @@ use crate::helpers::{die, prompt_default, prompt_secret_default, read_password};
 #[derive(Subcommand)]
 pub enum ConfigCmd {
     /// Export encrypted backup
-    Export { file: String },
+    Export {
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: String,
+    },
     /// Import from encrypted backup
-    Import { file: String },
+    Import {
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: String,
+    },
     /// GitHub remote sync
     Github {
         #[command(subcommand)]

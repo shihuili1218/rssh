@@ -3,8 +3,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::error::{AppError, AppResult};
 
 /// 用户可见 name 字段的字符校验。拒绝所有 C0 控制符（含 ESC `\x1b` 和 BEL `\x07`）
-/// 以及 DEL `\x7f`。这些字符会破坏 OSC 7337 协议（CLI → GUI 的 `rssh open <name>`
-/// 转义序列），让恶意 profile/forward 名能注入额外终端转义。
+/// 以及 DEL `\x7f`。这些字符会破坏 OSC 7337 协议（CLI → GUI 的
+/// `rssh <profile|forward> open <name>` 转义序列），让恶意 profile/forward 名能
+/// 注入额外终端转义。
 /// 普通可打印 ASCII、空格、UTF-8 多字节字符均允许。
 pub fn validate_name(name: &str) -> AppResult<()> {
     if name.is_empty() {

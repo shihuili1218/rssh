@@ -72,6 +72,7 @@ futures-util = "0.3"
 
 # CLI（optional，靠 --features cli 启用）
 clap = { version = "4", features = ["derive"], optional = true }
+clap_complete = { version = "4", optional = true }
 rpassword = { version = "7", optional = true }
 tempfile = { version = "3", optional = true }
 tree-sitter = "0.26.9"
@@ -104,7 +105,7 @@ keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 
 [features]
 default = []
-cli = ["clap", "rpassword", "tempfile"]
+cli = ["clap", "clap_complete", "rpassword", "tempfile"]
 server = ["dep:tokio-tungstenite", "dep:include_dir"]
 custom-protocol = ["tauri/custom-protocol"]
 

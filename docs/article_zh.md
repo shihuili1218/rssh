@@ -28,17 +28,42 @@ skills 在 src-tauri/src/ai/prompts ，欢迎审查。
 ![welcome-ai.gif](welcome-ai.gif)
 
 ## 二、rssh CLI
-`rssh` CLI是一个特殊的存在，你可以在任意终端工具里使用rssh的数据，随时随地rssh open [profile]，并且它和 GUI **读同一个** SQLite（~/.rssh/rssh.db）。在 GUI 里加的 Profile，命令行立刻能用；反之亦然。
+`rssh` CLI 是一个特殊的存在，你可以在任意终端工具里使用 rssh 的数据，随时随地执行 `rssh profile open NAME`，并且它和 GUI **读同一个** SQLite（`~/.rssh/rssh.db`）。在 GUI 里加的 Profile，命令行立刻能用；反之亦然。
 
 ```
-rssh                       # 列出所有 profile
-rssh ls prod               # 模糊搜索
-rssh open gateway-01       # 直接连
-rssh open fwd my-tunnel    # 启动一个命名端口转发
-rssh add profile           # 交互式创建
+rssh profile list [QUERY]  # 列出 profile，可按名称或主机搜索
+rssh profile open NAME     # 直接连接
+rssh profile add
+rssh profile edit NAME
+rssh profile rm NAME
+
+rssh credential list
+rssh credential add
+rssh credential edit NAME
+rssh credential rm NAME
+
+rssh forward list
+rssh forward open NAME     # 启动命名端口转发
+rssh forward add
+rssh forward edit NAME
+rssh forward rm NAME
+
+rssh group list
+rssh group add
+rssh group edit NAME
+rssh group rm NAME
+
+rssh config export FILE
+rssh config import FILE
+rssh config github set
+rssh config github push
+rssh config github pull
+rssh config webdav set
+rssh config webdav push
+rssh config webdav pull
 ```
 
-这意味着你可以把 `rssh open foo` 塞进任何脚本、alias、Makefile，不需要再维护一份重复的 SSH 配置。
+这意味着你可以把 `rssh profile open foo` 塞进任何脚本、alias、Makefile，不需要再维护一份重复的 SSH 配置。所有实体都统一放在动作前；原来的顶层 `ls`、`open`、`add`、`edit`、`rm` 不再是命令。
 
 ![welcome-cli.gif](welcome-cli.gif)
 
@@ -79,21 +104,24 @@ rssh 的处理方式分三层：
 
 每条凭据有独立的"是否参与同步"开关。私钥这种东西本就极少变更，用 U 盘、AirDrop、`scp` 在两台设备之间拷一次，用十年。把它推到云上换"方便"，是用安全换懒惰。
 
-**3. 配置数据 → 加密后塞进你自己的私有仓库**
+**3. 配置数据 → 加密后写入你控制的存储**
 
-profile、转发规则、片段这些纯配置数据，加密后推到**你自己的 GitHub 私有仓库**。不是 rssh 的服务器——rssh 没有服务器。
+profile、转发规则、片段这些纯配置数据，加密后推到**你自己的 GitHub 私有仓库或 WebDAV 服务**。不是 rssh 的服务器——rssh 没有服务器。
 
-加密本身没有魔法：salted SHA-256 派生密钥（1000 轮）+ 流式异或 + HMAC-SHA256 认证。
+加密本身没有魔法：Argon2id 用固定参数（19 MiB、2 次迭代、1 lane）派生密钥，再由 ChaCha20-Poly1305 做认证加密。
 
 代码在 `src-tauri/src/crypto.rs`，一百行能读完，欢迎审计。
 
 ```
-rssh config set     # 配置 token 和仓库
-rssh config push    # 推送
-rssh config pull    # 拉取
+rssh config github set     # 配置 token 和仓库
+rssh config github push    # 推送到 GitHub
+rssh config github pull    # 从 GitHub 拉取
+rssh config webdav set     # 配置 WebDAV 地址
+rssh config webdav push    # 推送到 WebDAV
+rssh config webdav pull    # 从 WebDAV 拉取
 ```
 
-底层就是 base64 + GitHub API。**想换工具就换，数据就在你的 repo 里。**没有锁定，没有订阅，没有"导出到 CSV"按钮。
+底层就是加密数据和 GitHub / WebDAV API。**想换工具就换，数据始终在你控制的存储里。**没有锁定，没有订阅，没有"导出到 CSV"按钮。
 
 ![welcome-sync.gif](welcome-sync.gif)
 

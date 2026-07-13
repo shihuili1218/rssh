@@ -1,7 +1,7 @@
 <!--
   Scene 4 — CLI-First.
   Split stage: left is a mock OS terminal where someone types
-  `rssh open prod`; right is the rssh GUI. After Enter, a beam shoots
+  `rssh profile open prod`; right is the rssh GUI. After Enter, a beam shoots
   from the terminal into the GUI's tab strip, and a new "prod" tab
   slides in and becomes active. Then the terminal prints the
   confirmation line.
@@ -21,7 +21,7 @@
   let captionShown = $state(false);
   let ready = $state(false);
 
-  const CMD = "rssh open prod";
+  const CMD = "rssh profile open prod";
 
   let timers: number[] = [];
   function at(ms: number, fn: () => void) { timers.push(window.setTimeout(fn, ms)); }

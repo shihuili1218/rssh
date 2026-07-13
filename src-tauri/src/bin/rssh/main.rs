@@ -9,7 +9,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 use rssh_lib::db::Db;
 
@@ -33,27 +33,26 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// List profiles (default), credentials, or forwards
-    Ls {
-        /// "cred", "fwd", or a name filter for profiles
-        query: Option<String>,
+    /// Manage SSH profiles
+    Profile {
+        #[command(subcommand)]
+        action: ProfileCmd,
     },
-    /// Connect via SSH, or start a port forward
-    Open {
-        /// Profile name, or "fwd" for port forward
-        target: String,
-        /// Forward name (when target is "fwd")
-        name: Option<String>,
+    /// Manage credentials
+    Credential {
+        #[command(subcommand)]
+        action: CredentialCmd,
     },
-    /// Add a profile, credential, or forward
-    Add {
-        /// "profile", "cred", or "fwd"
-        kind: String,
+    /// Manage port forwards
+    Forward {
+        #[command(subcommand)]
+        action: ForwardCmd,
     },
-    /// Edit a profile, credential, or forward
-    Edit { kind: String, name: String },
-    /// Remove a profile, credential, or forward
-    Rm { kind: String, name: String },
+    /// Manage connection groups
+    Group {
+        #[command(subcommand)]
+        action: GroupCmd,
+    },
     /// Configuration: export, import, remote sync (GitHub / WebDAV)
     Config {
         #[command(subcommand)]
@@ -62,11 +61,61 @@ enum Cmd {
     /// Generate shell completion script
     Completions {
         /// "zsh", "bash", "fish", or "powershell" (alias: "pwsh")
+        #[arg(value_parser = ["zsh", "bash", "fish", "powershell", "pwsh"])]
         shell: String,
     },
-    /// (hidden) Output entity names for tab completion
-    #[command(hide = true, name = "_names")]
-    Names { kind: String },
+}
+
+#[derive(Subcommand)]
+enum ProfileCmd {
+    /// List profiles, optionally filtered by name or host
+    List { query: Option<String> },
+    /// Open an SSH profile
+    Open { name: String },
+    /// Add a profile interactively
+    Add,
+    /// Edit a profile interactively
+    Edit { name: String },
+    /// Remove a profile
+    Rm { name: String },
+}
+
+#[derive(Subcommand)]
+enum CredentialCmd {
+    /// List credentials
+    List,
+    /// Add a credential interactively
+    Add,
+    /// Edit a credential interactively
+    Edit { name: String },
+    /// Remove a credential
+    Rm { name: String },
+}
+
+#[derive(Subcommand)]
+enum ForwardCmd {
+    /// List port forwards
+    List,
+    /// Open a port forward
+    Open { name: String },
+    /// Add a port forward interactively
+    Add,
+    /// Edit a port forward interactively
+    Edit { name: String },
+    /// Remove a port forward
+    Rm { name: String },
+}
+
+#[derive(Subcommand)]
+enum GroupCmd {
+    /// List groups
+    List,
+    /// Add a group interactively
+    Add,
+    /// Edit a group interactively
+    Edit { name: String },
+    /// Remove a group
+    Rm { name: String },
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -76,7 +125,7 @@ enum Cmd {
 /// On Linux the CLI is installed as `/usr/local/bin/rssh`, which shadows the
 /// GUI binary at `/usr/bin/rssh`.  When invoked without a subcommand, detect
 /// the GUI binary and launch it instead — so `rssh` opens the app, while
-/// `rssh ls`, `rssh open …` etc. still go through the CLI path.
+/// `rssh profile list`, `rssh profile open …` etc. still use the CLI path.
 #[cfg(target_os = "linux")]
 fn try_launch_gui() -> bool {
     use std::os::unix::process::CommandExt;
@@ -150,6 +199,13 @@ fn main() {
         return;
     }
 
+    // Completion generation is derived entirely from Clap metadata. Keep it
+    // independent from HOME, the database, and secret-store initialization.
+    if let Some(Cmd::Completions { shell }) = cli.command.as_ref() {
+        commands::completions::print_completions(shell, Cli::command());
+        return;
+    }
+
     let data_dir = rssh_lib::db::data_dir().unwrap_or_else(|e| {
         eprintln!("error: {}", format_lib_error(&e));
         std::process::exit(1);
@@ -165,20 +221,35 @@ fn main() {
     };
 
     let result = match cli.command {
-        None => commands::ls::cmd_ls(&conn, None),
-        Some(Cmd::Ls { query }) => commands::ls::cmd_ls(&conn, query.as_deref()),
-        Some(Cmd::Open { target, name }) => {
-            commands::open::cmd_open(&conn, &target, name.as_deref())
-        }
-        Some(Cmd::Add { kind }) => commands::add::cmd_add(&conn, &kind),
-        Some(Cmd::Edit { kind, name }) => commands::edit::cmd_edit(&conn, &kind, &name),
-        Some(Cmd::Rm { kind, name }) => commands::rm::cmd_rm(&conn, &kind, &name),
+        None => commands::ls::cmd_list_profiles(&conn, None),
+        Some(Cmd::Profile { action }) => match action {
+            ProfileCmd::List { query } => commands::ls::cmd_list_profiles(&conn, query.as_deref()),
+            ProfileCmd::Open { name } => commands::open::cmd_open_profile(&conn, &name),
+            ProfileCmd::Add => commands::add::cmd_add_profile(&conn),
+            ProfileCmd::Edit { name } => commands::edit::cmd_edit_profile(&conn, &name),
+            ProfileCmd::Rm { name } => commands::rm::cmd_rm_profile(&conn, &name),
+        },
+        Some(Cmd::Credential { action }) => match action {
+            CredentialCmd::List => commands::ls::cmd_list_credentials(&conn),
+            CredentialCmd::Add => commands::add::cmd_add_credential(&conn),
+            CredentialCmd::Edit { name } => commands::edit::cmd_edit_credential(&conn, &name),
+            CredentialCmd::Rm { name } => commands::rm::cmd_rm_credential(&conn, &name),
+        },
+        Some(Cmd::Forward { action }) => match action {
+            ForwardCmd::List => commands::ls::cmd_list_forwards(&conn),
+            ForwardCmd::Open { name } => commands::open::cmd_open_forward(&conn, &name),
+            ForwardCmd::Add => commands::add::cmd_add_forward(&conn),
+            ForwardCmd::Edit { name } => commands::edit::cmd_edit_forward(&conn, &name),
+            ForwardCmd::Rm { name } => commands::rm::cmd_rm_forward(&conn, &name),
+        },
+        Some(Cmd::Group { action }) => match action {
+            GroupCmd::List => commands::group::cmd_list_groups(&conn),
+            GroupCmd::Add => commands::group::cmd_add_group(&conn),
+            GroupCmd::Edit { name } => commands::group::cmd_edit_group(&conn, &name),
+            GroupCmd::Rm { name } => commands::group::cmd_rm_group(&conn, &name),
+        },
         Some(Cmd::Config { action }) => commands::config::cmd_config(&conn, action),
-        Some(Cmd::Completions { shell }) => {
-            commands::completions::print_completions(&shell);
-            Ok(())
-        }
-        Some(Cmd::Names { kind }) => commands::ls::cmd_names(&conn, &kind),
+        Some(Cmd::Completions { .. }) => unreachable!("handled before database initialization"),
     };
 
     if let Err(e) = result {

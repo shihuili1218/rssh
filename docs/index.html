@@ -2207,7 +2207,7 @@
                 <circle cx="1054" cy="157" r="5" fill="#e05555"/>
                 <circle cx="1071" cy="157" r="5" fill="#ddaa33"/>
                 <circle cx="1088" cy="157" r="5" fill="#4cb88a"/>
-                <text x="1056" y="204" fill="#6f8cff" font-family="JetBrains Mono, monospace" font-size="16">$ rssh open prod-api</text>
+                <text x="1056" y="204" fill="#6f8cff" font-family="JetBrains Mono, monospace" font-size="16">$ rssh profile open prod-api</text>
                 <text x="1056" y="236" fill="#4cb88a" font-family="JetBrains Mono, monospace" font-size="16">connected via bastion-01</text>
                 <text x="1056" y="268" fill="#8794aa" font-family="JetBrains Mono, monospace" font-size="16">blocks: 18  alerts: 0</text>
             </g>
@@ -2234,7 +2234,7 @@
                 </div>
             </div>
             <p class="hero-copy">
-                Color-coded command blocks make long terminal history readable. The desktop app and bundled CLI share the same SQLite database. Secrets stay in your platform keychain; encrypted sync goes to your own private GitHub repo.
+                Color-coded command blocks make long terminal history readable. The desktop app and bundled CLI share the same SQLite database. Secrets stay in your platform keychain; encrypted sync goes to your own private GitHub repo or WebDAV endpoint.
             </p>
             <div class="hero-status stagger is-visible" aria-label="RSSH platform and product summary">
                 <div class="status-cell"><b>4</b><span>desktop and mobile targets: macOS, Windows, Linux, Android</span></div>
@@ -2249,22 +2249,22 @@
 <main id="main">
     <section class="route-strip" aria-label="RSSH workflow samples">
         <div class="route-track" aria-hidden="true">
-            <span class="route-pill"><i></i>rssh ls</span>
-            <span class="route-pill"><i></i>rssh open prod-api</span>
+            <span class="route-pill"><i></i>rssh profile list</span>
+            <span class="route-pill"><i></i>rssh profile open prod-api</span>
             <span class="route-pill"><i></i>ProxyJump through bastion hosts</span>
             <span class="route-pill"><i></i>SFTP upload and download</span>
             <span class="route-pill"><i></i>local, remote, SOCKS5 forwarding</span>
             <span class="route-pill"><i></i>session recording as asciicast v2</span>
             <span class="route-pill"><i></i>AI diagnose, never fix</span>
-            <span class="route-pill"><i></i>GitHub encrypted backup</span>
-            <span class="route-pill"><i></i>rssh ls</span>
-            <span class="route-pill"><i></i>rssh open prod-api</span>
+            <span class="route-pill"><i></i>GitHub / WebDAV encrypted backup</span>
+            <span class="route-pill"><i></i>rssh profile list</span>
+            <span class="route-pill"><i></i>rssh profile open prod-api</span>
             <span class="route-pill"><i></i>ProxyJump through bastion hosts</span>
             <span class="route-pill"><i></i>SFTP upload and download</span>
             <span class="route-pill"><i></i>local, remote, SOCKS5 forwarding</span>
             <span class="route-pill"><i></i>session recording as asciicast v2</span>
             <span class="route-pill"><i></i>AI diagnose, never fix</span>
-            <span class="route-pill"><i></i>GitHub encrypted backup</span>
+            <span class="route-pill"><i></i>GitHub / WebDAV encrypted backup</span>
         </div>
     </section>
 
@@ -2297,10 +2297,10 @@
                             <div class="mini-terminal">
                                 <div class="term-title"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>zsh</span></div>
                                 <div class="term-body">
-                                    <div><span class="text-green">~</span> <span class="text-blue">rssh</span> ls</div>
+                                    <div><span class="text-green">~</span> <span class="text-blue">rssh</span> profile list</div>
                                     <div class="text-dim">prod-api  10.0.1.42  deploy</div>
                                     <div class="text-dim">staging   10.0.2.10  ubuntu</div>
-                                    <div><span class="text-green">~</span> <span class="text-blue">rssh</span> open prod-api</div>
+                                    <div><span class="text-green">~</span> <span class="text-blue">rssh</span> profile open prod-api</div>
                                     <div><span class="text-green">ok</span> connected via bastion-01</div>
                                 </div>
                             </div>
@@ -2356,7 +2356,7 @@
                             <div class="diagram-panel" style="padding:16px;">
                                 <div class="interface-row"><i></i><div><b>Desktop GUI</b><span>profiles, files, recordings</span></div><code>rw</code></div>
                                 <div class="interface-row"><i></i><div><b>SQLite</b><span>shared local database</span></div><code>sync</code></div>
-                                <div class="interface-row"><i></i><div><b>CLI</b><span>rssh open prod</span></div><code>rw</code></div>
+                                <div class="interface-row"><i></i><div><b>CLI</b><span>rssh profile open prod</span></div><code>rw</code></div>
                             </div>
                         </div>
                         <svg class="story-circuit" viewBox="0 0 800 120" preserveAspectRatio="none" aria-hidden="true">
@@ -2366,7 +2366,7 @@
 
                     <article id="sync" class="story-card reveal" data-story="4" data-index="05">
                         <h3>Sync configuration, not blind trust.</h3>
-                        <p>Private keys and passwords stay in OS keychain storage. Each credential decides whether it can sync remotely, and the remote target is your private GitHub repo.</p>
+                        <p>Private keys and passwords stay in OS keychain storage. Each credential decides whether it can sync remotely, and the remote target is your private GitHub repo or WebDAV endpoint.</p>
                         <div class="story-visual">
                             <div class="sync-flow" role="img" aria-label="Keychain filter GitHub sync diagram">
                                 <div class="sync-node key">
@@ -2504,7 +2504,7 @@
                     <h2 class="section-title">One database, two interfaces.</h2>
                 </div>
                 <p class="section-lede">
-                    The bundled CLI reads the same SQLite database as the desktop app. Create a profile in the GUI, then run <code>rssh open prod</code> from the terminal. Shell completions cover zsh, bash, fish, and PowerShell.
+                    The bundled CLI reads the same SQLite database as the desktop app. Create a profile in the GUI, then run <code>rssh profile open prod</code> from the terminal. Shell completions cover zsh, bash, fish, and PowerShell.
                 </p>
             </div>
 
@@ -2531,10 +2531,13 @@
                 </article>
                 <article class="interface-panel">
                     <h3>Terminal CLI</h3>
-                    <div class="interface-row"><i></i><div><b>rssh ls</b><span>list saved targets</span></div><code>read</code></div>
-                    <div class="interface-row"><i></i><div><b>rssh open prod-api</b><span>open a saved session</span></div><code>ssh</code></div>
-                    <div class="interface-row"><i></i><div><b>rssh open fwd postgres</b><span>start a named tunnel</span></div><code>fwd</code></div>
-                    <div class="interface-row"><i></i><div><b>rssh config push</b><span>encrypted GitHub backup</span></div><code>sync</code></div>
+                    <div class="interface-row"><i></i><div><b>rssh profile</b><span>list [QUERY] · open NAME · add · edit NAME · rm NAME</span></div><code>ssh</code></div>
+                    <div class="interface-row"><i></i><div><b>rssh credential</b><span>list · add · edit NAME · rm NAME</span></div><code>auth</code></div>
+                    <div class="interface-row"><i></i><div><b>rssh forward</b><span>list · open NAME · add · edit NAME · rm NAME</span></div><code>fwd</code></div>
+                    <div class="interface-row"><i></i><div><b>rssh group</b><span>list · add · edit NAME · rm NAME</span></div><code>edit</code></div>
+                    <div class="interface-row"><i></i><div><b>rssh config</b><span>export FILE · import FILE</span></div><code>file</code></div>
+                    <div class="interface-row"><i></i><div><b>rssh config github</b><span>set · push · pull</span></div><code>sync</code></div>
+                    <div class="interface-row"><i></i><div><b>rssh config webdav</b><span>set · push · pull</span></div><code>sync</code></div>
                 </article>
             </div>
         </div>

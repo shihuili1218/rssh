@@ -35,9 +35,9 @@ Every command and its output become a block with a color-coded left edge. In a t
 ![Color-coded command blocks: locate output at a glance](docs/welcome-blocks.gif)
 
 ### ⌨️ Configure once, use everywhere
-`rssh open prod` launches a session from any terminal — the CLI and GUI share one SQLite store. The same hosts and keys also run on **mobile** and inside a **JetBrains** tool window.
+`rssh profile open prod` launches a session from any terminal — the CLI and GUI share one SQLite store. The same hosts and keys also run on **mobile** and inside a **JetBrains** tool window.
 
-![CLI: rssh open prod](docs/welcome-cli.gif)
+![CLI: rssh profile open prod](docs/welcome-cli.gif)
 
 ---
 
