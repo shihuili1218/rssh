@@ -6,9 +6,13 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::secret::{setting_key, SecretStore};
 use crate::state::AppState;
-use crate::sync::config::{build_payload, read_sync_prefs, ExportMode};
-use crate::sync::metadata::{
-    adopt_remote_version, load_local_metadata, refresh_local_metadata, SyncMetadata,
+#[cfg(test)]
+use crate::sync::config::read_sync_prefs;
+use crate::sync::config::{build_payload, ExportMode};
+use crate::sync::metadata::{load_local_metadata, refresh_local_metadata, SyncMetadata};
+use crate::sync::remote::{
+    apply_fetched_backup, fetch as fetch_remote, prepare_backup, publish as publish_remote,
+    RemoteBackup,
 };
 use std::sync::Arc;
 
@@ -20,13 +24,6 @@ pub enum SyncProvider {
 }
 
 impl SyncProvider {
-    fn auto_pull_setting(self) -> &'static str {
-        match self {
-            Self::Github => "sync_github_auto_pull",
-            Self::Webdav => "sync_webdav_auto_pull",
-        }
-    }
-
     fn auto_pull_password_setting(self) -> &'static str {
         match self {
             Self::Github => "sync_github_auto_pull_password",
@@ -39,13 +36,19 @@ fn auto_pull_password_key(provider: SyncProvider) -> String {
     setting_key(provider.auto_pull_password_setting())
 }
 
-fn auto_pull_enabled(db: &Db, provider: SyncProvider) -> AppResult<bool> {
-    Ok(crate::db::settings::get(db, provider.auto_pull_setting())?.as_deref() == Some("1"))
+fn auto_pull_password(
+    secrets: &dyn SecretStore,
+    provider: SyncProvider,
+) -> AppResult<Option<String>> {
+    secrets.get(&auto_pull_password_key(provider))
+}
+
+fn auto_pull_enabled(secrets: &dyn SecretStore, provider: SyncProvider) -> AppResult<bool> {
+    secrets.exists(&auto_pull_password_key(provider))
 }
 
 fn set_auto_pull(
-    db: &Db,
-    ss: &dyn SecretStore,
+    secrets: &dyn SecretStore,
     provider: SyncProvider,
     enabled: bool,
     password: Option<&str>,
@@ -54,15 +57,32 @@ fn set_auto_pull(
         let password = password
             .filter(|value| !value.is_empty())
             .ok_or_else(|| AppError::config("sync_password_empty", serde_json::json!({})))?;
-        ss.set(&auto_pull_password_key(provider), password)?;
-        crate::db::settings::set(db, provider.auto_pull_setting(), "1")
+        secrets.set(&auto_pull_password_key(provider), password)
     } else {
-        // The flag is the commit marker read by both the frontend and probes.
-        // Do the fallible secret cleanup first so a failed command cannot leave
-        // persisted OFF behind while the frontend correctly retains ON.
-        ss.delete(&auto_pull_password_key(provider))?;
-        crate::db::settings::set(db, provider.auto_pull_setting(), "0")
+        secrets.delete(&auto_pull_password_key(provider))
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SyncAutoPullStatus {
+    pub github: bool,
+    pub webdav: bool,
+}
+
+fn auto_pull_status(secrets: &dyn SecretStore) -> AppResult<SyncAutoPullStatus> {
+    Ok(SyncAutoPullStatus {
+        github: auto_pull_enabled(secrets, SyncProvider::Github)?,
+        webdav: auto_pull_enabled(secrets, SyncProvider::Webdav)?,
+    })
+}
+
+#[tauri::command]
+pub fn get_sync_auto_pull_status(state: State<'_, AppState>) -> AppResult<SyncAutoPullStatus> {
+    get_sync_auto_pull_status_impl(&state)
+}
+
+pub fn get_sync_auto_pull_status_impl(state: &AppState) -> AppResult<SyncAutoPullStatus> {
+    auto_pull_status(state.secret_store.as_ref())
 }
 
 #[tauri::command]
@@ -82,7 +102,6 @@ pub fn set_sync_auto_pull_impl(
     password: Option<String>,
 ) -> AppResult<()> {
     set_auto_pull(
-        &state.db,
         state.secret_store.as_ref(),
         provider,
         enabled,
@@ -91,19 +110,15 @@ pub fn set_sync_auto_pull_impl(
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ProviderSyncStatus {
-    pub enabled: bool,
-    pub auto_pull: bool,
+pub struct ProviderObservation {
     pub remote: Option<SyncMetadata>,
     pub error: Option<String>,
     pub pulled: bool,
 }
 
-impl ProviderSyncStatus {
-    fn new(enabled: bool, auto_pull: bool) -> Self {
+impl ProviderObservation {
+    fn empty() -> Self {
         Self {
-            enabled,
-            auto_pull,
             remote: None,
             error: None,
             pulled: false,
@@ -112,34 +127,26 @@ impl ProviderSyncStatus {
 }
 
 struct ProviderProbe {
-    status: ProviderSyncStatus,
-    password: Option<String>,
+    observation: ProviderObservation,
+    auto_pull: bool,
 }
 
 impl ProviderProbe {
     fn remote_is_newer_than(&self, local: &SyncMetadata) -> bool {
-        self.status.auto_pull
+        self.auto_pull
             && self
-                .status
+                .observation
                 .remote
                 .as_ref()
                 .is_some_and(|remote| remote.version > local.version)
     }
 }
 
-async fn join_provider_probes<G, W>(github: G, webdav: W) -> (G::Output, W::Output)
-where
-    G: std::future::Future,
-    W: std::future::Future,
-{
-    tokio::join!(github, webdav)
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct SyncCheckResult {
     pub local: SyncMetadata,
-    pub github: ProviderSyncStatus,
-    pub webdav: ProviderSyncStatus,
+    pub github: ProviderObservation,
+    pub webdav: ProviderObservation,
 }
 
 #[tauri::command]
@@ -148,7 +155,7 @@ pub async fn sync_check(state: State<'_, AppState>) -> AppResult<SyncCheckResult
 }
 
 pub async fn sync_check_impl(state: &AppState) -> AppResult<SyncCheckResult> {
-    sync_refresh_local_metadata_impl(state).await?;
+    refresh_local_metadata_blocking(state).await?;
     sync_check_remotes_impl(state).await
 }
 
@@ -158,6 +165,8 @@ pub async fn sync_refresh_local_metadata(state: State<'_, AppState>) -> AppResul
 }
 
 pub async fn sync_refresh_local_metadata_impl(state: &AppState) -> AppResult<SyncMetadata> {
+    // Local observation never waits for provider network I/O. Metadata's short
+    // local gate serializes only its version/digest read-modify-write.
     refresh_local_metadata_blocking(state).await
 }
 
@@ -171,10 +180,9 @@ pub async fn sync_check_remotes_impl(state: &AppState) -> AppResult<SyncCheckRes
     // The probes only read settings/secrets and fetch the small metadata file,
     // so they are safe to overlap. Automatic pulls remain ordered below: both
     // import configuration and rewrite local metadata.
-    let (github_probe, webdav_probe) =
-        join_provider_probes(probe_github(state), probe_webdav(state)).await;
-    let (github, local) = maybe_auto_pull_github(state, github_probe, local).await;
-    let (webdav, local) = maybe_auto_pull_webdav(state, webdav_probe, local).await;
+    let (github_probe, webdav_probe) = tokio::join!(probe_github(state), probe_webdav(state));
+    let (github, local) = maybe_auto_pull(state, SyncProvider::Github, github_probe, local).await;
+    let (webdav, local) = maybe_auto_pull(state, SyncProvider::Webdav, webdav_probe, local).await;
     Ok(SyncCheckResult {
         local,
         github,
@@ -187,12 +195,6 @@ async fn probe_github(state: &AppState) -> ProviderProbe {
 
     let runtime = run_db_blocking(state, |db, ss| {
         let enabled = crate::db::settings::get(&db, "sync_github_enabled")?.as_deref() != Some("0");
-        let auto_pull = auto_pull_enabled(&db, SyncProvider::Github)?;
-        let password = if auto_pull {
-            ss.get(&auto_pull_password_key(SyncProvider::Github))?
-        } else {
-            None
-        };
         let sync = if enabled {
             match (
                 ss.get(&setting_key("github_token"))?,
@@ -208,68 +210,108 @@ async fn probe_github(state: &AppState) -> ProviderProbe {
         } else {
             None
         };
-        Ok((enabled, auto_pull, password, sync))
+        let auto_pull = sync.is_some() && auto_pull_enabled(ss.as_ref(), SyncProvider::Github)?;
+        Ok((auto_pull, sync))
     })
     .await;
 
-    let (enabled, auto_pull, password, sync) = match runtime {
+    let (auto_pull, sync) = match runtime {
         Ok(runtime) => runtime,
         Err(err) => {
-            let mut status = ProviderSyncStatus::new(true, false);
-            status.error = Some(err.to_string());
+            let mut observation = ProviderObservation::empty();
+            observation.error = Some(err.to_string());
             return ProviderProbe {
-                status,
-                password: None,
+                observation,
+                auto_pull: false,
             };
         }
     };
     let Some(sync) = sync else {
         return ProviderProbe {
-            status: ProviderSyncStatus::new(enabled, auto_pull),
-            password,
+            observation: ProviderObservation::empty(),
+            auto_pull,
         };
     };
 
-    let mut status = ProviderSyncStatus::new(enabled, auto_pull);
+    let mut observation = ProviderObservation::empty();
     let remote = match sync.pull_metadata().await {
         Ok(remote) => remote,
         Err(err) => {
-            status.error = Some(err.to_string());
-            return ProviderProbe { status, password };
+            observation.error = Some(err.to_string());
+            return ProviderProbe {
+                observation,
+                auto_pull,
+            };
         }
     };
-    status.remote = remote;
-    ProviderProbe { status, password }
+    observation.remote = remote;
+    ProviderProbe {
+        observation,
+        auto_pull,
+    }
 }
 
-async fn maybe_auto_pull_github(
+async fn maybe_auto_pull(
     state: &AppState,
+    provider: SyncProvider,
     mut probe: ProviderProbe,
-    local: SyncMetadata,
-) -> (ProviderSyncStatus, SyncMetadata) {
-    if !probe.remote_is_newer_than(&local) {
-        return (probe.status, local);
+    local_before_probe: SyncMetadata,
+) -> (ProviderObservation, SyncMetadata) {
+    if !probe.auto_pull || probe.observation.remote.is_none() {
+        return (probe.observation, local_before_probe);
     }
-    let Some(password) = probe.password else {
-        probe.status.error =
-            Some(AppError::config("sync_auto_pull_password_missing", json!({})).to_string());
-        return (probe.status, local);
+    let local = match refresh_local_metadata_blocking(state).await {
+        Ok(local) => local,
+        Err(err) => {
+            probe.observation.error = Some(err.to_string());
+            return (probe.observation, local_before_probe);
+        }
     };
-    match github_pull_impl(state, password).await {
+    if !probe.remote_is_newer_than(&local) {
+        return (probe.observation, local);
+    }
+    let password = match run_db_blocking(state, move |_, secrets| {
+        auto_pull_password(secrets.as_ref(), provider)
+    })
+    .await
+    {
+        Ok(Some(password)) => password,
+        Ok(None) => {
+            probe.observation.error =
+                Some(AppError::config("sync_auto_pull_password_missing", json!({})).to_string());
+            return (probe.observation, local);
+        }
+        Err(err) => {
+            probe.observation.error = Some(err.to_string());
+            return (probe.observation, local);
+        }
+    };
+    match pull_provider(state, provider, password).await {
         Ok(()) => match refresh_local_metadata_blocking(state).await {
             Ok(local) => {
-                probe.status.pulled = true;
-                (probe.status, local)
+                probe.observation.pulled = true;
+                (probe.observation, local)
             }
             Err(err) => {
-                probe.status.error = Some(err.to_string());
-                (probe.status, local)
+                probe.observation.error = Some(err.to_string());
+                (probe.observation, local)
             }
         },
         Err(err) => {
-            probe.status.error = Some(err.to_string());
-            (probe.status, local)
+            probe.observation.error = Some(err.to_string());
+            (probe.observation, local)
         }
+    }
+}
+
+async fn pull_provider(
+    state: &AppState,
+    provider: SyncProvider,
+    password: String,
+) -> AppResult<()> {
+    match provider {
+        SyncProvider::Github => github_pull_impl(state, password).await,
+        SyncProvider::Webdav => webdav_pull_impl(state, password).await,
     }
 }
 
@@ -278,12 +320,6 @@ async fn probe_webdav(state: &AppState) -> ProviderProbe {
 
     let runtime = run_db_blocking(state, |db, ss| {
         let enabled = crate::db::settings::get(&db, "sync_webdav_enabled")?.as_deref() == Some("1");
-        let auto_pull = auto_pull_enabled(&db, SyncProvider::Webdav)?;
-        let password = if auto_pull {
-            ss.get(&auto_pull_password_key(SyncProvider::Webdav))?
-        } else {
-            None
-        };
         let sync = if enabled {
             match (
                 crate::db::settings::get(&db, "webdav_url")?,
@@ -305,68 +341,44 @@ async fn probe_webdav(state: &AppState) -> ProviderProbe {
         } else {
             None
         };
-        Ok((enabled, auto_pull, password, sync))
+        let auto_pull = sync.is_some() && auto_pull_enabled(ss.as_ref(), SyncProvider::Webdav)?;
+        Ok((auto_pull, sync))
     })
     .await;
 
-    let (enabled, auto_pull, password, sync) = match runtime {
+    let (auto_pull, sync) = match runtime {
         Ok(runtime) => runtime,
         Err(err) => {
-            let mut status = ProviderSyncStatus::new(false, false);
-            status.error = Some(err.to_string());
+            let mut observation = ProviderObservation::empty();
+            observation.error = Some(err.to_string());
             return ProviderProbe {
-                status,
-                password: None,
+                observation,
+                auto_pull: false,
             };
         }
     };
     let Some(sync) = sync else {
         return ProviderProbe {
-            status: ProviderSyncStatus::new(enabled, auto_pull),
-            password,
+            observation: ProviderObservation::empty(),
+            auto_pull,
         };
     };
 
-    let mut status = ProviderSyncStatus::new(enabled, auto_pull);
+    let mut observation = ProviderObservation::empty();
     let remote = match sync.pull_metadata().await {
         Ok(remote) => remote,
         Err(err) => {
-            status.error = Some(err.to_string());
-            return ProviderProbe { status, password };
+            observation.error = Some(err.to_string());
+            return ProviderProbe {
+                observation,
+                auto_pull,
+            };
         }
     };
-    status.remote = remote;
-    ProviderProbe { status, password }
-}
-
-async fn maybe_auto_pull_webdav(
-    state: &AppState,
-    mut probe: ProviderProbe,
-    local: SyncMetadata,
-) -> (ProviderSyncStatus, SyncMetadata) {
-    if !probe.remote_is_newer_than(&local) {
-        return (probe.status, local);
-    }
-    let Some(password) = probe.password else {
-        probe.status.error =
-            Some(AppError::config("sync_auto_pull_password_missing", json!({})).to_string());
-        return (probe.status, local);
-    };
-    match webdav_pull_impl(state, password).await {
-        Ok(()) => match refresh_local_metadata_blocking(state).await {
-            Ok(local) => {
-                probe.status.pulled = true;
-                (probe.status, local)
-            }
-            Err(err) => {
-                probe.status.error = Some(err.to_string());
-                (probe.status, local)
-            }
-        },
-        Err(err) => {
-            probe.status.error = Some(err.to_string());
-            (probe.status, local)
-        }
+    observation.remote = remote;
+    ProviderProbe {
+        observation,
+        auto_pull,
     }
 }
 
@@ -405,41 +417,6 @@ async fn load_or_refresh_local_metadata_blocking(state: &AppState) -> AppResult<
         load_local_metadata(&db)?.map_or_else(|| refresh_local_metadata(&db, &data_dir), Ok)
     })
     .await
-}
-
-/// Pull may partially apply rows before `merge_import` reports its aggregate
-/// error. Rebase that partial state on the old version so a higher remote stays
-/// higher and the next scheduled pass retries it.
-async fn finish_pull(
-    state: &AppState,
-    previous_version: u64,
-    remote: Option<SyncMetadata>,
-    result: AppResult<()>,
-) -> AppResult<()> {
-    let data_dir = state.data_dir.clone();
-    match result {
-        Ok(()) => {
-            run_db_blocking(state, move |db, _| {
-                if let Some(remote) = remote {
-                    adopt_remote_version(&db, &data_dir, remote.version)?;
-                } else {
-                    refresh_local_metadata(&db, &data_dir)?;
-                }
-                Ok(())
-            })
-            .await
-        }
-        Err(err) => {
-            if let Err(rebase_err) = run_db_blocking(state, move |db, _| {
-                adopt_remote_version(&db, &data_dir, previous_version).map(|_| ())
-            })
-            .await
-            {
-                log::warn!("failed to rebase sync metadata after pull error: {rebase_err}");
-            }
-            Err(err)
-        }
-    }
 }
 
 // Local import/export (cross-platform). The payload builder lives in
@@ -491,6 +468,35 @@ pub fn import_config_impl(state: &AppState, json: String) -> AppResult<()> {
     )
 }
 
+async fn push_with_remote(
+    state: &AppState,
+    remote: &dyn RemoteBackup,
+    password: &str,
+) -> AppResult<()> {
+    let data_dir = state.data_dir.clone();
+    let mut prepared = run_db_blocking(state, move |db, secrets| {
+        prepare_backup(&db, secrets.as_ref(), &data_dir)
+    })
+    .await?;
+    let encrypted = crate::crypto::encrypt(&prepared.json, password)?;
+    prepared.json.clear();
+    publish_remote(remote, &encrypted, &prepared.metadata).await
+}
+
+async fn pull_with_remote(
+    state: &AppState,
+    remote: &dyn RemoteBackup,
+    password: &str,
+) -> AppResult<SyncMetadata> {
+    let fetched = fetch_remote(remote).await?;
+    let password = password.to_owned();
+    let data_dir = state.data_dir.clone();
+    run_db_blocking(state, move |db, secrets| {
+        apply_fetched_backup(&db, secrets.as_ref(), &data_dir, fetched, &password)
+    })
+    .await
+}
+
 // ---------------------------------------------------------------------------
 // GitHub sync
 // ---------------------------------------------------------------------------
@@ -504,11 +510,7 @@ pub async fn github_push(state: State<'_, AppState>, password: String) -> AppRes
 pub async fn github_push_impl(state: &AppState, password: String) -> AppResult<()> {
     use crate::sync::github::GitHubSync;
 
-    // Build the full JSON payload off the async runtime — list_*, secret-store
-    // lookups, and serde all run in the blocking pool. See `run_db_blocking`
-    // doc for why this matters for sync but not for ssh_connect.
-    let data_dir = state.data_dir.clone();
-    let (token, repo, branch, json, metadata) = run_db_blocking(state, move |db, ss| {
+    let (token, repo, branch) = run_db_blocking(state, move |db, ss| {
         let token = ss
             .get(&setting_key("github_token"))?
             .ok_or_else(|| AppError::config("github_token_missing", json!({})))?;
@@ -516,23 +518,12 @@ pub async fn github_push_impl(state: &AppState, password: String) -> AppResult<(
             .ok_or_else(|| AppError::config("github_repo_missing", json!({})))?;
         let branch = crate::db::settings::get(&db, "github_branch")?.unwrap_or("main".into());
 
-        // Push path: apply per-category toggles + group filter, scrub
-        // local-only secrets. Same builder as local export so the shape can't
-        // drift; a disabled category is just absent from the JSON.
-        let prefs = read_sync_prefs(&db)?;
-        let payload = build_payload(&db, ss.as_ref(), &data_dir, &ExportMode::RemotePush(prefs))?;
-        let payload = serde_json::to_string_pretty(&payload)
-            .map_err(|e| AppError::other("serde_failed", json!({ "err": e.to_string() })))?;
-        let metadata = refresh_local_metadata(&db, &data_dir)?;
-
-        Ok((token, repo, branch, payload, metadata))
+        Ok((token, repo, branch))
     })
     .await?;
 
-    let encrypted = crate::crypto::encrypt(&json, &password)?;
     let sync = GitHubSync::from_settings(&token, &repo, &branch)?;
-    sync.push(&encrypted).await?;
-    sync.push_metadata(&metadata).await
+    push_with_remote(state, &sync, &password).await.map(|_| ())
 }
 
 #[tauri::command]
@@ -543,8 +534,6 @@ pub async fn github_pull(state: State<'_, AppState>, password: String) -> AppRes
 /// Transport-agnostic body shared by the Tauri command and the headless server.
 pub async fn github_pull_impl(state: &AppState, password: String) -> AppResult<()> {
     use crate::sync::github::GitHubSync;
-
-    let previous = refresh_local_metadata_blocking(state).await?;
 
     // Settings reads are cheap; group them with the network-prep step.
     // The decrypt + merge_import block — `merge_import` upserts every config
@@ -561,19 +550,7 @@ pub async fn github_pull_impl(state: &AppState, password: String) -> AppResult<(
     .await?;
 
     let sync = GitHubSync::from_settings(&token, &repo, &branch)?;
-    let remote = sync.pull_metadata().await?;
-    let encrypted = sync.pull().await?;
-
-    // decrypt + JSON parse + merge upsert: all blocking work.
-    let data_dir = state.data_dir.clone();
-    let result = run_db_blocking(state, move |db, ss| {
-        let json = crate::crypto::decrypt(&encrypted, &password)?;
-        let data: serde_json::Value = serde_json::from_str(&json)
-            .map_err(|e| AppError::config("json_parse_failed", json!({ "err": e.to_string() })))?;
-        crate::sync::config::merge_import(&db, ss.as_ref(), &data_dir, &data)
-    })
-    .await;
-    finish_pull(state, previous.version, remote, result).await
+    pull_with_remote(state, &sync, &password).await.map(|_| ())
 }
 
 // ---------------------------------------------------------------------------
@@ -589,8 +566,7 @@ pub async fn webdav_push(state: State<'_, AppState>, password: String) -> AppRes
 pub async fn webdav_push_impl(state: &AppState, password: String) -> AppResult<()> {
     use crate::sync::webdav::WebDavSync;
 
-    let data_dir = state.data_dir.clone();
-    let (url, username, wd_password, json, metadata) = run_db_blocking(state, move |db, ss| {
+    let (url, username, wd_password) = run_db_blocking(state, move |db, ss| {
         let url = crate::db::settings::get(&db, "webdav_url")?
             .ok_or_else(|| AppError::config("webdav_url_missing", json!({})))?;
         let username = crate::db::settings::get(&db, "webdav_username")?.unwrap_or_default();
@@ -598,22 +574,12 @@ pub async fn webdav_push_impl(state: &AppState, password: String) -> AppResult<(
             .get(&setting_key("webdav_password"))?
             .ok_or_else(|| AppError::config("webdav_password_missing", json!({})))?;
 
-        // Same filter + scrub rules as GitHub push; the only transport-specific
-        // part is where the encrypted blob lands.
-        let prefs = read_sync_prefs(&db)?;
-        let payload = build_payload(&db, ss.as_ref(), &data_dir, &ExportMode::RemotePush(prefs))?;
-        let payload = serde_json::to_string_pretty(&payload)
-            .map_err(|e| AppError::other("serde_failed", json!({ "err": e.to_string() })))?;
-        let metadata = refresh_local_metadata(&db, &data_dir)?;
-
-        Ok((url, username, wd_password, payload, metadata))
+        Ok((url, username, wd_password))
     })
     .await?;
 
-    let encrypted = crate::crypto::encrypt(&json, &password)?;
     let sync = WebDavSync::from_settings(&url, &username, &wd_password)?;
-    sync.push(&encrypted).await?;
-    sync.push_metadata(&metadata).await
+    push_with_remote(state, &sync, &password).await.map(|_| ())
 }
 
 #[tauri::command]
@@ -624,8 +590,6 @@ pub async fn webdav_pull(state: State<'_, AppState>, password: String) -> AppRes
 /// Transport-agnostic body shared by the Tauri command and the headless server.
 pub async fn webdav_pull_impl(state: &AppState, password: String) -> AppResult<()> {
     use crate::sync::webdav::WebDavSync;
-
-    let previous = refresh_local_metadata_blocking(state).await?;
 
     let (url, username, wd_password) = run_db_blocking(state, |db, ss| {
         let url = crate::db::settings::get(&db, "webdav_url")?
@@ -639,18 +603,7 @@ pub async fn webdav_pull_impl(state: &AppState, password: String) -> AppResult<(
     .await?;
 
     let sync = WebDavSync::from_settings(&url, &username, &wd_password)?;
-    let remote = sync.pull_metadata().await?;
-    let encrypted = sync.pull().await?;
-
-    let data_dir = state.data_dir.clone();
-    let result = run_db_blocking(state, move |db, ss| {
-        let json = crate::crypto::decrypt(&encrypted, &password)?;
-        let data: serde_json::Value = serde_json::from_str(&json)
-            .map_err(|e| AppError::config("json_parse_failed", json!({ "err": e.to_string() })))?;
-        crate::sync::config::merge_import(&db, ss.as_ref(), &data_dir, &data)
-    })
-    .await;
-    finish_pull(state, previous.version, remote, result).await
+    pull_with_remote(state, &sync, &password).await.map(|_| ())
 }
 
 #[cfg(test)]
@@ -683,32 +636,6 @@ mod tests {
         }
         fn backend_name(&self) -> &'static str {
             "mem"
-        }
-    }
-
-    #[derive(Default)]
-    struct DeleteFailStore {
-        inner: MemStore,
-    }
-
-    impl SecretStore for DeleteFailStore {
-        fn get(&self, key: &str) -> AppResult<Option<String>> {
-            self.inner.get(key)
-        }
-
-        fn set(&self, key: &str, value: &str) -> AppResult<()> {
-            self.inner.set(key, value)
-        }
-
-        fn delete(&self, _key: &str) -> AppResult<()> {
-            Err(AppError::other(
-                "test_secret_delete_failed",
-                serde_json::json!({}),
-            ))
-        }
-
-        fn backend_name(&self) -> &'static str {
-            "delete-fail"
         }
     }
 
@@ -1057,13 +984,13 @@ mod tests {
 
     #[test]
     fn auto_pull_defaults_off_and_keeps_passwords_per_provider() {
-        let (db, ss, _dir) = fixture();
-        assert!(!auto_pull_enabled(&db, SyncProvider::Github).unwrap());
-        assert!(!auto_pull_enabled(&db, SyncProvider::Webdav).unwrap());
+        let (_db, ss, _dir) = fixture();
+        assert!(!auto_pull_enabled(&ss, SyncProvider::Github).unwrap());
+        assert!(!auto_pull_enabled(&ss, SyncProvider::Webdav).unwrap());
 
-        set_auto_pull(&db, &ss, SyncProvider::Github, true, Some("github-secret")).unwrap();
-        assert!(auto_pull_enabled(&db, SyncProvider::Github).unwrap());
-        assert!(!auto_pull_enabled(&db, SyncProvider::Webdav).unwrap());
+        set_auto_pull(&ss, SyncProvider::Github, true, Some("github-secret")).unwrap();
+        assert!(auto_pull_enabled(&ss, SyncProvider::Github).unwrap());
+        assert!(!auto_pull_enabled(&ss, SyncProvider::Webdav).unwrap());
         assert_eq!(
             ss.get(&auto_pull_password_key(SyncProvider::Github))
                 .unwrap()
@@ -1071,8 +998,8 @@ mod tests {
             Some("github-secret")
         );
 
-        set_auto_pull(&db, &ss, SyncProvider::Github, false, None).unwrap();
-        assert!(!auto_pull_enabled(&db, SyncProvider::Github).unwrap());
+        set_auto_pull(&ss, SyncProvider::Github, false, None).unwrap();
+        assert!(!auto_pull_enabled(&ss, SyncProvider::Github).unwrap());
         assert!(ss
             .get(&auto_pull_password_key(SyncProvider::Github))
             .unwrap()
@@ -1080,72 +1007,16 @@ mod tests {
     }
 
     #[test]
-    fn auto_pull_disable_failure_keeps_enabled_commit_marker() {
-        let db = Db::open_in_memory().unwrap();
-        let ss = DeleteFailStore::default();
-        let key = auto_pull_password_key(SyncProvider::Github);
-        set_auto_pull(&db, &ss, SyncProvider::Github, true, Some("secret")).unwrap();
+    fn auto_pull_status_is_derived_only_from_password_presence() {
+        let (db, ss, _dir) = fixture();
+        crate::db::settings::set(&db, "sync_github_auto_pull", "1").unwrap();
+        crate::db::settings::set(&db, "sync_webdav_auto_pull", "0").unwrap();
+        ss.set(&auto_pull_password_key(SyncProvider::Webdav), "secret")
+            .unwrap();
 
-        let err = set_auto_pull(&db, &ss, SyncProvider::Github, false, None).unwrap_err();
+        let status = auto_pull_status(&ss).unwrap();
 
-        assert_eq!(err.code(), "test_secret_delete_failed");
-        assert!(
-            auto_pull_enabled(&db, SyncProvider::Github).unwrap(),
-            "a failed disable must not persist OFF while the frontend keeps showing ON"
-        );
-        assert_eq!(ss.get(&key).unwrap().as_deref(), Some("secret"));
-    }
-
-    #[test]
-    fn auto_pull_probe_rechecks_against_the_latest_local_version() {
-        let probe = ProviderProbe {
-            status: ProviderSyncStatus {
-                enabled: true,
-                auto_pull: true,
-                remote: Some(SyncMetadata {
-                    version: 5,
-                    config_digest: format!("sha256:{}", "5".repeat(64)),
-                }),
-                error: None,
-                pulled: false,
-            },
-            password: Some("secret".into()),
-        };
-        let local = |version| SyncMetadata {
-            version,
-            config_digest: format!("sha256:{}", "1".repeat(64)),
-        };
-
-        assert!(probe.remote_is_newer_than(&local(1)));
-        assert!(!probe.remote_is_newer_than(&local(6)));
-    }
-
-    #[tokio::test]
-    async fn provider_metadata_probes_start_together() {
-        use std::sync::Arc;
-        use std::time::Duration;
-        use tokio::sync::Barrier;
-
-        let barrier = Arc::new(Barrier::new(3));
-        let github_barrier = barrier.clone();
-        let webdav_barrier = barrier.clone();
-        let github = async move {
-            github_barrier.wait().await;
-            "github"
-        };
-        let webdav = async move {
-            webdav_barrier.wait().await;
-            "webdav"
-        };
-
-        let joined = join_provider_probes(github, webdav);
-        let all_started = barrier.wait();
-        let (joined, started) = tokio::join!(
-            tokio::time::timeout(Duration::from_millis(250), joined),
-            tokio::time::timeout(Duration::from_millis(250), all_started),
-        );
-
-        started.expect("both provider probes must start before either completes");
-        assert_eq!(joined.unwrap(), ("github", "webdav"));
+        assert!(!status.github, "a flag without a password is OFF");
+        assert!(status.webdav, "password presence is the only ON state");
     }
 }

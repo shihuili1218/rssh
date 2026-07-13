@@ -124,9 +124,11 @@
     }
 
     onMount(async () => {
-        // Metadata belongs to the shared sync store, not to this form's setup.
-        // Start it before form loading; provider settings and category settings
-        // also load in parallel instead of serializing sixteen IPC round trips.
+        // Automatic pull is local state and must not wait for either provider's
+        // network probe. Metadata checks and form settings start in parallel.
+        void syncStatus.loadAutoPullStatus().catch((error) => {
+            console.error("sync.loadAutoPullStatus failed:", error);
+        });
         void syncStatus.runCheck({ silent: true });
         await Promise.all([
             loadGithubSettings(),
@@ -182,7 +184,7 @@
             await invoke("set_setting", { key: "sync_github_enabled", value: githubEnabled ? "1" : "0" });
             githubSaveMsg = t("github.saved");
             githubSaveIsError = false;
-            void syncStatus.refreshAfterMutation();
+            void syncStatus.runCheck({ silent: true });
         } catch (e: any) {
             githubSaveMsg = errMsg(e);
             githubSaveIsError = true;
@@ -205,7 +207,7 @@
             await invoke("set_setting", { key: "sync_webdav_enabled", value: webdavEnabled ? "1" : "0" });
             webdavSaveMsg = t("webdav.saved");
             webdavSaveIsError = false;
-            void syncStatus.refreshAfterMutation();
+            void syncStatus.runCheck({ silent: true });
         } catch (e: any) {
             webdavSaveMsg = errMsg(e);
             webdavSaveIsError = true;
@@ -216,7 +218,7 @@
     async function setFlag(key: string, val: boolean) {
         flags[key] = val;
         await invoke("set_setting", { key, value: val ? "1" : "0" });
-        await syncStatus.refreshLocalAfterMutation();
+        await syncStatus.refreshLocalMetadata();
     }
 
     async function toggleGroup(id: string, checked: boolean) {
@@ -228,7 +230,7 @@
             key: "sync_profile_group_ids",
             value: allSelected ? "" : JSON.stringify(selectedGroups),
         });
-        await syncStatus.refreshLocalAfterMutation();
+        await syncStatus.refreshLocalMetadata();
     }
 
     async function onEnableChange(source: "github" | "webdav") {
@@ -237,7 +239,7 @@
         } else {
             await invoke("set_setting", { key: "sync_webdav_enabled", value: webdavEnabled ? "1" : "0" });
         }
-        await syncStatus.refreshAfterMutation();
+        await syncStatus.runCheck({ silent: true });
     }
 
     function sourceConfigured(source: syncStatus.SyncSource): boolean {
@@ -308,7 +310,7 @@
             await invoke(syncStatus.commandFor(source, pwMode), { password });
             const key = `${source}.${pwMode}_ok` as MessageKey;
             setMessage(t(key));
-            await syncStatus.refreshAfterMutation();
+            await syncStatus.runCheck({ silent: true });
         } catch (e: any) {
             setMessage(t(`${source}.failed` as MessageKey, { error: errMsg(e) }), true);
         } finally {
@@ -364,7 +366,7 @@
                         {#snippet trigger(requestToggle, saving)}
                             <label class="switch">
                                 <input type="checkbox" checked={githubAutoPull}
-                                       disabled={githubSyncing || saving || syncStatus.providerStatus("github") === null}
+                                       disabled={githubSyncing || saving || !syncStatus.autoPullStatusLoaded()}
                                        onclick={(event) => {
                                            event.preventDefault();
                                            githubMsg = "";
@@ -445,7 +447,7 @@
                         {#snippet trigger(requestToggle, saving)}
                             <label class="switch">
                                 <input type="checkbox" checked={webdavAutoPull}
-                                       disabled={webdavSyncing || saving || syncStatus.providerStatus("webdav") === null}
+                                       disabled={webdavSyncing || saving || !syncStatus.autoPullStatusLoaded()}
                                        onclick={(event) => {
                                            event.preventDefault();
                                            webdavMsg = "";

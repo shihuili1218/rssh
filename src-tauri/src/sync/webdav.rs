@@ -6,6 +6,7 @@ use url::Url;
 
 use crate::error::{AppError, AppResult};
 use crate::sync::metadata::SyncMetadata;
+use crate::sync::remote::RemoteBackup;
 
 const BACKUP_FILE: &str = "rssh_backup.enc";
 const METADATA_FILE: &str = "rssh_backup.meta.json";
@@ -216,6 +217,25 @@ impl WebDavSync {
             buf.extend_from_slice(&chunk[..take]);
         }
         String::from_utf8_lossy(&buf).to_string()
+    }
+}
+
+#[async_trait::async_trait]
+impl RemoteBackup for WebDavSync {
+    async fn read_payload(&self) -> AppResult<String> {
+        self.pull().await
+    }
+
+    async fn read_metadata(&self) -> AppResult<Option<SyncMetadata>> {
+        self.pull_metadata().await
+    }
+
+    async fn write_payload(&self, content: &str) -> AppResult<()> {
+        self.put_file(BACKUP_FILE, content).await
+    }
+
+    async fn write_metadata(&self, metadata: &SyncMetadata) -> AppResult<()> {
+        self.push_metadata(metadata).await
     }
 }
 

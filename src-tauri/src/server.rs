@@ -365,6 +365,9 @@ fn dispatch(
             arg(&args, "enabled")?,
             arg(&args, "password")?,
         )),
+        "get_sync_auto_pull_status" => {
+            ok(crate::commands::sync::get_sync_auto_pull_status_impl(state))
+        }
         "list_highlights" => ok(crate::db::highlight::list(&state.db)),
         "add_highlight" => ok(crate::db::highlight::insert(
             &state.db,

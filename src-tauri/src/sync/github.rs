@@ -4,6 +4,7 @@ use serde_json::json;
 
 use crate::error::{AppError, AppResult};
 use crate::sync::metadata::SyncMetadata;
+use crate::sync::remote::RemoteBackup;
 
 const API_BASE: &str = "https://api.github.com";
 const BACKUP_FILE: &str = "rssh_backup.json";
@@ -207,6 +208,25 @@ impl GitHubSync {
         );
         h.insert("User-Agent", HeaderValue::from_static("RSSH"));
         Ok(h)
+    }
+}
+
+#[async_trait::async_trait]
+impl RemoteBackup for GitHubSync {
+    async fn read_payload(&self) -> AppResult<String> {
+        self.pull().await
+    }
+
+    async fn read_metadata(&self) -> AppResult<Option<SyncMetadata>> {
+        self.pull_metadata().await
+    }
+
+    async fn write_payload(&self, content: &str) -> AppResult<()> {
+        self.push(content).await
+    }
+
+    async fn write_metadata(&self, metadata: &SyncMetadata) -> AppResult<()> {
+        self.push_metadata(metadata).await
     }
 }
 

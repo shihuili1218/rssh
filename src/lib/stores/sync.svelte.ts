@@ -19,55 +19,85 @@ export interface SyncMetadata {
 }
 
 export interface SyncProviderStatus {
-  enabled: boolean;
-  auto_pull: boolean;
   remote: SyncMetadata | null;
   error: string | null;
   pulled: boolean;
 }
 
 export interface SyncCheckResult {
-  local: SyncMetadata;
   github: SyncProviderStatus;
   webdav: SyncProviderStatus;
 }
 
-export type SyncState =
-  | { kind: "unknown" }
-  | { kind: "checking"; previous: SyncCheckResult | null }
-  | { kind: "ready"; result: SyncCheckResult }
-  | { kind: "error"; error: unknown };
+interface AutoPullStatus {
+  github: boolean;
+  webdav: boolean;
+}
 
-let _state = $state<SyncState>({ kind: "unknown" });
+interface AutoPullState {
+  value: AutoPullStatus | null;
+  loading: boolean;
+  inFlight: Promise<void> | null;
+}
+
+interface CheckRequest {
+  inFlight: Promise<void> | null;
+  pending: boolean;
+}
+
+const emptyProviders = (): Record<SyncSource, SyncProviderStatus | null> => ({
+  github: null,
+  webdav: null,
+});
+
 let _local = $state<SyncMetadata | null>(null);
-let _localRevision = 0;
-let _localInFlight: Promise<void> | null = null;
-let _autoPullRevision: Record<SyncSource, number> = { github: 0, webdav: 0 };
-let _inFlight: Promise<void> | null = null;
+let _autoPull = $state<AutoPullState>({
+  value: null,
+  loading: false,
+  inFlight: null,
+});
+let _providers = $state(emptyProviders());
+const _localRequest: CheckRequest = { inFlight: null, pending: false };
+const _request: CheckRequest = { inFlight: null, pending: false };
+
 let _scheduled = false;
 let _initialTimer: ReturnType<typeof setTimeout> | null = null;
 let _intervalTimer: ReturnType<typeof setInterval> | null = null;
 
-export function state(): SyncState {
-  return _state;
-}
-
-function visibleResult(): SyncCheckResult | null {
-  if (_state.kind === "ready") return _state.result;
-  if (_state.kind === "checking") return _state.previous;
-  return null;
-}
-
 export function localMetadata(): SyncMetadata | null {
-  return _local ?? visibleResult()?.local ?? null;
+  return _local;
 }
 
 export function providerStatus(source: SyncSource): SyncProviderStatus | null {
-  return visibleResult()?.[source] ?? null;
+  return _providers[source];
 }
 
 export function autoPullEnabled(source: SyncSource): boolean {
-  return providerStatus(source)?.auto_pull ?? false;
+  return _autoPull.value?.[source] ?? false;
+}
+
+export function autoPullStatusLoaded(): boolean {
+  return _autoPull.value !== null && !_autoPull.loading;
+}
+
+export function loadAutoPullStatus(): Promise<void> {
+  if (_autoPull.inFlight !== null) return _autoPull.inFlight;
+
+  _autoPull.loading = true;
+  const task = invoke<AutoPullStatus>("get_sync_auto_pull_status").then(
+    (status) => {
+      _autoPull.value = status;
+    },
+  );
+  _autoPull.inFlight = task;
+  const clear = () => {
+    if (_autoPull.inFlight === task) {
+      _autoPull.inFlight = null;
+      _autoPull.loading = false;
+    }
+  };
+  void task.then(clear, clear);
+  return task;
 }
 
 export async function saveAutoPull(
@@ -75,32 +105,33 @@ export async function saveAutoPull(
   enabled: boolean,
   password: string | null,
 ): Promise<void> {
+  const loading = _autoPull.inFlight;
+  if (loading !== null) await loading;
   await invoke("set_sync_auto_pull", { provider: source, enabled, password });
-  _autoPullRevision[source] += 1;
-
-  const result = visibleResult();
-  if (!result) return;
-  const updated: SyncCheckResult = {
-    ...result,
-    [source]: { ...result[source], auto_pull: enabled },
+  _autoPull.value = {
+    ...(_autoPull.value ?? { github: false, webdav: false }),
+    [source]: enabled,
   };
-  if (_state.kind === "checking") {
-    _state = { kind: "checking", previous: updated };
-  } else {
-    _state = { kind: "ready", result: updated };
-  }
 }
 
 export function hasRemoteUpdate(source: SyncSource): boolean {
-  const local = localMetadata();
-  const remote = providerStatus(source)?.remote;
-  return local !== null && remote !== null && remote.version > local.version;
+  const remote = _providers[source]?.remote;
+  return (
+    _local !== null &&
+    remote !== null &&
+    remote !== undefined &&
+    remote.version > _local.version
+  );
 }
 
 export function hasLocalUpdate(source: SyncSource): boolean {
-  const local = localMetadata();
-  const remote = providerStatus(source)?.remote;
-  return local !== null && remote !== null && local.version > remote.version;
+  const remote = _providers[source]?.remote;
+  return (
+    _local !== null &&
+    remote !== null &&
+    remote !== undefined &&
+    _local.version > remote.version
+  );
 }
 
 export function anyRemoteUpdate(): boolean {
@@ -115,100 +146,84 @@ export function anyVersionDifference(): boolean {
   );
 }
 
+async function drainLocalRefreshes(): Promise<void> {
+  let lastError: unknown = null;
+  do {
+    _localRequest.pending = false;
+    try {
+      _local = await invoke<SyncMetadata>("sync_refresh_local_metadata");
+      lastError = null;
+    } catch (error) {
+      lastError = error;
+    }
+  } while (_localRequest.pending);
+  if (lastError !== null) throw lastError;
+}
+
 export function refreshLocalMetadata(): Promise<void> {
-  if (_localInFlight) return _localInFlight;
-
-  const task = invoke<SyncMetadata>("sync_refresh_local_metadata").then((local) => {
-    _local = local;
-    _localRevision += 1;
-  });
-  _localInFlight = task;
-  const clear = () => {
-    if (_localInFlight === task) _localInFlight = null;
-  };
-  void task.then(clear, clear);
-  return task;
+  _localRequest.pending = true;
+  if (_localRequest.inFlight === null) {
+    const task = drainLocalRefreshes();
+    _localRequest.inFlight = task;
+    const clear = () => {
+      if (_localRequest.inFlight === task) _localRequest.inFlight = null;
+    };
+    void task.then(clear, clear);
+  }
+  return _localRequest.inFlight;
 }
 
-/** A config write that overlaps an older local snapshot needs one fresh pass
- * after that snapshot, otherwise the newer write can be missed. */
-export async function refreshLocalAfterMutation(): Promise<void> {
-  const active = _localInFlight;
-  if (active) await active;
-  await refreshLocalMetadata();
+function reconcileProvider(
+  previous: SyncProviderStatus | null,
+  next: SyncProviderStatus,
+): SyncProviderStatus {
+  if (next.error !== null && next.remote === null && previous?.remote) {
+    return { ...next, remote: previous.remote };
+  }
+  return next;
 }
 
-export function runCheck(opts?: { silent?: boolean }): Promise<void> {
-  // Every explicit check request refreshes the local snapshot, even when an
-  // older remote pass is still running. The remote work remains coalesced.
-  const localRefresh = refreshLocalMetadata();
-  const active = _inFlight;
-  if (active) {
-    return localRefresh.then(
-      () => active,
-      (error) => {
-        console.error("sync.refreshLocalMetadata failed:", error);
-        if (!opts?.silent) _state = { kind: "error", error };
+async function runCheckPass(): Promise<void> {
+  try {
+    await refreshLocalMetadata();
+    const result = await invoke<SyncCheckResult>("sync_check_remotes");
+    // An automatic pull mutates the local configuration after the first local
+    // snapshot. The provider observation and that local snapshot are one UI
+    // state transition, so publish neither side when the refresh fails.
+    if (result.github.pulled || result.webdav.pulled) {
+      await refreshLocalMetadata();
+    }
+    _providers = {
+      github: reconcileProvider(_providers.github, result.github),
+      webdav: reconcileProvider(_providers.webdav, result.webdav),
+    };
+  } catch (error) {
+    console.error("sync.runCheck failed:", error);
+  }
+}
+
+async function drainChecks(): Promise<void> {
+  do {
+    _request.pending = false;
+    await runCheckPass();
+  } while (_request.pending);
+}
+
+export function runCheck(_opts?: { silent?: boolean }): Promise<void> {
+  _request.pending = true;
+  if (_request.inFlight === null) {
+    const task = drainChecks();
+    _request.inFlight = task;
+    void task.then(
+      () => {
+        if (_request.inFlight === task) _request.inFlight = null;
+      },
+      () => {
+        if (_request.inFlight === task) _request.inFlight = null;
       },
     );
   }
-
-  const previous = _state;
-  const previousResult = visibleResult();
-  const autoPullRevisionAtStart = { ..._autoPullRevision };
-  _state = { kind: "checking", previous: previousResult };
-  const task = (async () => {
-    try {
-      await localRefresh;
-      const localRevisionAtRemoteStart = _localRevision;
-      const result = await invoke<SyncCheckResult>("sync_check_remotes");
-      const current = visibleResult();
-      const reconciled = { ...result };
-      for (const source of ["github", "webdav"] as const) {
-        if (
-          current !== null &&
-          autoPullRevisionAtStart[source] !== _autoPullRevision[source]
-        ) {
-          reconciled[source] = {
-            ...result[source],
-            auto_pull: current[source].auto_pull,
-          };
-        }
-      }
-      if (
-        localRevisionAtRemoteStart === _localRevision ||
-        reconciled.github.pulled ||
-        reconciled.webdav.pulled
-      ) {
-        _local = reconciled.local;
-      } else if (_local) {
-        reconciled.local = _local;
-      }
-      _state = { kind: "ready", result: reconciled };
-    } catch (error) {
-      console.error("sync.runCheck failed:", error);
-      if (opts?.silent) {
-        const current = visibleResult();
-        _state = current ? { kind: "ready", result: current } : previous;
-      } else {
-        _state = { kind: "error", error };
-      }
-    }
-  })();
-  _inFlight = task;
-  const clear = () => {
-    if (_inFlight === task) _inFlight = null;
-  };
-  void task.then(clear, clear);
-  return task;
-}
-
-/** A state-changing sync action must not reuse a check that started before it.
- * Wait for that older pass, then start (or coalesce onto) the next fresh pass. */
-export async function refreshAfterMutation(): Promise<void> {
-  const active = _inFlight;
-  if (active) await active;
-  await runCheck({ silent: true });
+  return _request.inFlight;
 }
 
 export function startBackgroundChecks(): void {

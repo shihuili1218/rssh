@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -8,6 +9,7 @@ use crate::error::{AppError, AppResult};
 use crate::secret::SecretStore;
 
 const LOCAL_METADATA_KEY: &str = "sync_local_metadata";
+static LOCAL_STATE_GATE: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncMetadata {
@@ -15,15 +17,18 @@ pub struct SyncMetadata {
     pub config_digest: String,
 }
 
+fn valid_sha256(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
 impl SyncMetadata {
     fn validate(&self) -> AppResult<()> {
-        let digest = self.config_digest.strip_prefix("sha256:").filter(|digest| {
-            digest.len() == 64
-                && digest
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        });
-        if self.version == 0 || digest.is_none() {
+        if self.version == 0 || !valid_sha256(&self.config_digest) {
             return Err(AppError::config(
                 "sync_metadata_invalid",
                 serde_json::json!({}),
@@ -138,7 +143,7 @@ fn persist(db: &Db, metadata: &SyncMetadata) -> AppResult<()> {
     crate::db::settings::set(db, LOCAL_METADATA_KEY, &raw)
 }
 
-pub fn refresh_local_metadata(db: &Db, data_dir: &Path) -> AppResult<SyncMetadata> {
+fn refresh_local_metadata_unlocked(db: &Db, data_dir: &Path) -> AppResult<SyncMetadata> {
     let config_digest = current_digest(db, data_dir)?;
     let previous = stored_metadata(db)?;
     let version = match previous {
@@ -154,10 +159,16 @@ pub fn refresh_local_metadata(db: &Db, data_dir: &Path) -> AppResult<SyncMetadat
     Ok(metadata)
 }
 
+pub fn refresh_local_metadata(db: &Db, data_dir: &Path) -> AppResult<SyncMetadata> {
+    let _guard = crate::error::locked(&LOCAL_STATE_GATE)?;
+    refresh_local_metadata_unlocked(db, data_dir)
+}
+
 /// Rebase the local digest on the configuration that exists *after* a pull,
 /// while taking the caller-provided version verbatim. Manual pull deliberately
 /// permits both upgrades and downgrades.
 pub fn adopt_remote_version(db: &Db, data_dir: &Path, version: u64) -> AppResult<SyncMetadata> {
+    let _guard = crate::error::locked(&LOCAL_STATE_GATE)?;
     let metadata = SyncMetadata {
         version,
         config_digest: current_digest(db, data_dir)?,
