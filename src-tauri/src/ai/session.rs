@@ -103,8 +103,8 @@ impl std::fmt::Debug for UserAction {
 }
 
 pub struct DiagnoseSession {
-    /// Tab 身份。actor 跟 tab 生命周期绑定 —— SSH 断了重连 tab_id 不变，
-    /// AI 会话 + 历史也跟着保留。
+    /// Tab 内的会话身份。切 Tab / SSH 重连时 tab_id 不变、actor 保留；
+    /// 用户显式关闭 AI 面板时 actor 结束，历史留在持久化会话中。
     pub tab_id: String,
     /// 当前绑定的 SSH/PTY session_id（重连时更新）。
     pub target_id: String,
@@ -117,6 +117,13 @@ pub struct DiagnoseSession {
     /// commands 层从 slot 取 Notify 调 notify_one() —— 没在 chat 时 slot 为 None，发了也无副作用。
     /// 这样 cancel 永远只能取消"当前正在进行的 chat"，不会污染后续轮次。
     pub cancel_slot: Arc<Mutex<Option<Arc<Notify>>>>,
+    /// Session teardown signal. Unlike `cancel_slot`, this notifier is always
+    /// present, so a stop racing just before `chat()` installs its per-stream
+    /// notifier still cancels that request as soon as it starts.
+    pub(crate) stop_signal: Arc<Notify>,
+    /// Owned actor completion barrier. Ready sessions always contain a task;
+    /// `Option` lets shutdown take the handle exactly once.
+    pub(crate) actor_task: Option<tauri::async_runtime::JoinHandle<()>>,
     /// Persistent identity in ai_conversations (resume reuses the old id).
     /// The front-end keys its timeline autosaves on this.
     pub conversation_id: String,
@@ -126,6 +133,43 @@ pub struct DiagnoseSession {
     /// differs, so a conversation row can never accumulate another scope's
     /// transcript. Checked by commands layer, never read by the actor.
     pub target_key: String,
+}
+
+impl DiagnoseSession {
+    fn request_stop(&self) {
+        // Cancel an already-running LLM request first. Clone the notifier out
+        // of the std mutex before notifying, matching ai_cancel_stream's lock
+        // discipline and avoiding lock inversion with the actor's slot clear.
+        let stream_cancel = self
+            .cancel_slot
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().cloned());
+        if let Some(cancel) = stream_cancel {
+            cancel.notify_one();
+        }
+
+        // Covers the narrow race where shutdown happens before cancel_slot is
+        // installed. Notify retains one permit until the chat select observes it.
+        self.stop_signal.notify_one();
+        let _ = self.action_tx.send(UserAction::Stop);
+    }
+
+    pub(crate) async fn stop(mut self) {
+        self.request_stop();
+        if let Some(task) = self.actor_task.take() {
+            // A panic/cancelled task is still fully terminated, which is the
+            // lifecycle guarantee callers need before reusing the tab id.
+            let _ = task.await;
+        }
+    }
+
+    pub(crate) fn stop_detached(self) {
+        self.request_stop();
+        // Dropping a Tokio/Tauri JoinHandle detaches rather than aborting. This
+        // keeps synchronous window/reconcile cleanup paths non-blocking while
+        // the explicit ai_session_stop path uses `stop().await` as a barrier.
+    }
 }
 
 pub struct SessionConfig {
@@ -193,8 +237,9 @@ impl PendingSession {
 
     /// spawn actor，返回最终的 DiagnoseSession。consume self 防止漏 launch。
     pub fn launch(self) -> DiagnoseSession {
-        tauri::async_runtime::spawn(self.actor.run());
-        self.session
+        let mut session = self.session;
+        session.actor_task = Some(tauri::async_runtime::spawn(self.actor.run()));
+        session
     }
 }
 
@@ -205,11 +250,7 @@ impl PendingSession {
 /// ```ignore
 /// let pending = session::start(cfg, app)?;
 /// let info = AiSessionInfo::from(pending.info());
-/// {
-///     let mut g = locked(&state.ai_sessions)?;
-///     if g.contains_key(&tab_id) { return Err(..); } // pending 在此被 drop, 0 副作用
-///     g.insert(tab_id, pending.launch());
-/// }
+/// owner_reservation.activate(pending)?; // validates first, then launches
 /// ```
 pub fn start(mut cfg: SessionConfig, app: crate::emitter::Host) -> AppResult<PendingSession> {
     // system_prompt 是静态文本（rules + user-skill catalog + locale + 平台），
@@ -227,6 +268,7 @@ pub fn start(mut cfg: SessionConfig, app: crate::emitter::Host) -> AppResult<Pen
     }
 
     let cancel_slot: Arc<Mutex<Option<Arc<Notify>>>> = Arc::new(Mutex::new(None));
+    let stop_signal = Arc::new(Notify::new());
 
     let provider = cfg.client.provider().to_string();
     let session = DiagnoseSession {
@@ -238,6 +280,8 @@ pub fn start(mut cfg: SessionConfig, app: crate::emitter::Host) -> AppResult<Pen
         action_tx,
         audit: audit.clone(),
         cancel_slot: cancel_slot.clone(),
+        stop_signal: stop_signal.clone(),
+        actor_task: None,
         conversation_id: cfg.conversation_id.clone(),
         target_key: cfg.target_key.clone(),
     };
@@ -251,6 +295,7 @@ pub fn start(mut cfg: SessionConfig, app: crate::emitter::Host) -> AppResult<Pen
         audit,
         app,
         cancel_slot,
+        stop_signal,
         remote_caps: None,
     };
 
@@ -267,6 +312,7 @@ pub(in crate::ai::session) struct Actor {
     audit: Arc<Mutex<AuditLog>>,
     app: crate::emitter::Host,
     cancel_slot: Arc<Mutex<Option<Arc<Notify>>>>,
+    stop_signal: Arc<Notify>,
     /// 远端 file_ops 能力 — lazy 探测，session 内缓存。
     /// None = 还没探测；Some = 已探测，结果有效到 session 结束。
     /// pub(in crate::ai::session) 给 `file_ops::Actor::ensure_remote_caps` 读写。
@@ -439,6 +485,7 @@ impl Actor {
             let chat_result = tokio::select! {
                 r = chat_future => Some(r),
                 _ = cancel.notified() => None,
+                _ = self.stop_signal.notified() => None,
             };
 
             if let Ok(mut g) = self.cancel_slot.lock() {

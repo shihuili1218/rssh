@@ -76,14 +76,22 @@ impl Drop for AiOwnerReservation<'_> {
 }
 
 impl AiOwnerReservation<'_> {
-    pub fn activate(mut self, session: crate::ai::session::DiagnoseSession) -> AppResult<()> {
+    pub fn activate(self, pending: crate::ai::session::PendingSession) -> AppResult<()> {
+        let conversation_id = pending.info().conversation_id.clone();
+        self.activate_after_validation(&conversation_id, || pending.launch())
+    }
+
+    fn activate_after_validation(
+        mut self,
+        conversation_id: &str,
+        launch: impl FnOnce() -> crate::ai::session::DiagnoseSession,
+    ) -> AppResult<()> {
         let mut owners = locked(&self.state.ai_session_owners)?;
         if !owners.get(&self.tab_id).is_some_and(|record| {
             record.owner == self.owner
                 && record.nonce == self.nonce
                 && record.phase == SessionPhase::Pending
         }) {
-            let _ = session.action_tx.send(crate::ai::session::UserAction::Stop);
             return Err(AppError::not_found(
                 "session_reservation_lost",
                 serde_json::json!({ "id": self.tab_id }),
@@ -91,7 +99,6 @@ impl AiOwnerReservation<'_> {
         }
         let mut sessions = locked(&self.state.ai_sessions)?;
         if sessions.contains_key(&self.tab_id) {
-            let _ = session.action_tx.send(crate::ai::session::UserAction::Stop);
             return Err(AppError::other(
                 "session_already_exists",
                 serde_json::json!({ "tab_id": self.tab_id }),
@@ -99,14 +106,16 @@ impl AiOwnerReservation<'_> {
         }
         if sessions
             .values()
-            .any(|existing| existing.conversation_id == session.conversation_id)
+            .any(|existing| existing.conversation_id == conversation_id)
         {
-            let _ = session.action_tx.send(crate::ai::session::UserAction::Stop);
             return Err(AppError::other(
                 "conversation_in_use",
                 serde_json::json!({}),
             ));
         }
+        // Launch is the first actor-side effect. All reservation and registry
+        // checks must succeed before it can run; a loser is dropped unlaunched.
+        let session = launch();
         sessions.insert(self.tab_id.clone(), session);
         drop(sessions);
         let record = owners
@@ -150,35 +159,55 @@ pub fn reserve_ai_owner(
     })
 }
 
-pub fn close_ai_session(
+pub async fn close_ai_session(
     state: &AppState,
     tab_id: &str,
     expected_owner: &SessionOwner,
 ) -> AppResult<()> {
-    let mut owners = locked(&state.ai_session_owners)?;
-    let record = owners
-        .get(tab_id)
-        .ok_or_else(|| AppError::not_found("ai_session_not_found", serde_json::json!({})))?;
-    if &record.owner != expected_owner {
-        return Err(AppError::not_found(
-            "ai_session_not_found",
-            serde_json::json!({}),
-        ));
-    }
-    let session = if record.phase == SessionPhase::Ready {
-        Some(locked(&state.ai_sessions)?.remove(tab_id).ok_or_else(|| {
+    let (nonce, session) = {
+        let mut owners = locked(&state.ai_session_owners)?;
+        let record = owners
+            .get(tab_id)
+            .ok_or_else(|| AppError::not_found("ai_session_not_found", serde_json::json!({})))?;
+        if &record.owner != expected_owner || record.phase == SessionPhase::Closed {
+            return Err(AppError::not_found(
+                "ai_session_not_found",
+                serde_json::json!({}),
+            ));
+        }
+        let nonce = record.nonce;
+        let phase = record.phase;
+
+        if phase == SessionPhase::Pending {
+            owners.remove(tab_id);
+            return Ok(());
+        }
+
+        let session = locked(&state.ai_sessions)?.remove(tab_id).ok_or_else(|| {
             AppError::other(
                 "session_registry_inconsistent",
                 serde_json::json!({ "id": tab_id }),
             )
-        })?)
-    } else {
-        None
+        })?;
+        owners
+            .get_mut(tab_id)
+            .expect("AI owner was validated")
+            .phase = SessionPhase::Closed;
+        (nonce, session)
     };
-    owners.remove(tab_id);
-    drop(owners);
-    if let Some(session) = session {
-        let _ = session.action_tx.send(crate::ai::session::UserAction::Stop);
+
+    // Keep the Closed owner tombstone while awaiting the actor. Concurrent
+    // starts therefore cannot reserve the same tab id until every old event
+    // producer has exited.
+    session.stop().await;
+
+    let mut owners = locked(&state.ai_session_owners)?;
+    if owners.get(tab_id).is_some_and(|record| {
+        record.owner == *expected_owner
+            && record.nonce == nonce
+            && record.phase == SessionPhase::Closed
+    }) {
+        owners.remove(tab_id);
     }
     Ok(())
 }
@@ -221,7 +250,7 @@ fn close_owned_ai(
     drop(sessions);
     drop(owners);
     for session in removed {
-        let _ = session.action_tx.send(crate::ai::session::UserAction::Stop);
+        session.stop_detached();
     }
     Ok(ids.len())
 }
@@ -1158,6 +1187,8 @@ mod tests {
                 action_tx,
                 audit: Arc::new(Mutex::new(crate::ai::audit::AuditLog::default())),
                 cancel_slot: Arc::new(Mutex::new(None)),
+                stop_signal: Arc::new(tokio::sync::Notify::new()),
+                actor_task: None,
                 conversation_id: conversation_id.to_owned(),
                 target_key: "local".to_owned(),
             },
@@ -1165,27 +1196,84 @@ mod tests {
         )
     }
 
-    #[test]
-    fn late_ai_activation_after_close_stops_actor_and_does_not_publish_session() {
-        let state = empty_state();
+    fn activate_fake_ai_session(
+        reservation: AiOwnerReservation<'_>,
+        session: crate::ai::session::DiagnoseSession,
+    ) -> AppResult<()> {
+        let conversation_id = session.conversation_id.clone();
+        reservation.activate_after_validation(&conversation_id, || session)
+    }
+
+    fn fake_running_ai_session(
+        tab_id: &str,
+        conversation_id: &str,
+    ) -> (
+        crate::ai::session::DiagnoseSession,
+        Arc<std::sync::atomic::AtomicBool>,
+        Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let (action_tx, mut action_rx) = tokio::sync::mpsc::unbounded_channel();
+        let stream_cancel = Arc::new(tokio::sync::Notify::new());
+        let stream_cancelled = Arc::new(AtomicBool::new(false));
+        let actor_exited = Arc::new(AtomicBool::new(false));
+        let stop_signal = Arc::new(tokio::sync::Notify::new());
+        let stream_cancel_for_actor = stream_cancel.clone();
+        let stop_signal_for_actor = stop_signal.clone();
+        let stream_cancelled_for_actor = stream_cancelled.clone();
+        let actor_exited_for_task = actor_exited.clone();
+        let actor_task = tauri::async_runtime::spawn(async move {
+            stream_cancel_for_actor.notified().await;
+            stream_cancelled_for_actor.store(true, Ordering::SeqCst);
+            // Both notifiers may fire before this task gets its first poll.
+            // Notify's retained permit makes that shutdown race lossless.
+            stop_signal_for_actor.notified().await;
+            assert!(matches!(
+                action_rx.recv().await,
+                Some(crate::ai::session::UserAction::Stop)
+            ));
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            actor_exited_for_task.store(true, Ordering::SeqCst);
+        });
+
+        (
+            crate::ai::session::DiagnoseSession {
+                tab_id: tab_id.to_owned(),
+                target_id: "target".to_owned(),
+                skill: "general".to_owned(),
+                model: "model".to_owned(),
+                provider: "provider".to_owned(),
+                action_tx,
+                audit: Arc::new(Mutex::new(crate::ai::audit::AuditLog::default())),
+                cancel_slot: Arc::new(Mutex::new(Some(stream_cancel))),
+                stop_signal,
+                actor_task: Some(actor_task),
+                conversation_id: conversation_id.to_owned(),
+                target_key: "local".to_owned(),
+            },
+            stream_cancelled,
+            actor_exited,
+        )
+    }
+
+    #[tokio::test]
+    async fn late_ai_activation_after_close_is_rejected_without_publishing_session() {
+        let state = Arc::new(empty_state());
         let owner = SessionOwner::Window("main".into());
         let reservation = reserve_ai_owner(&state, "tab".into(), owner.clone()).unwrap();
 
-        close_ai_session(&state, "tab", &owner).unwrap();
+        close_ai_session(&state, "tab", &owner).await.unwrap();
         let replacement = reserve_ai_owner(&state, "tab".into(), owner).unwrap();
-        let (session, mut actions) = fake_ai_session("tab", "conversation");
-        let error = reservation.activate(session).unwrap_err();
+        let (session, _actions) = fake_ai_session("tab", "conversation");
+        let error = activate_fake_ai_session(reservation, session).unwrap_err();
 
         assert_eq!(error.code(), "session_reservation_lost");
-        assert!(matches!(
-            actions.try_recv(),
-            Ok(crate::ai::session::UserAction::Stop)
-        ));
         assert!(state.ai_sessions.lock().unwrap().is_empty());
 
         let (replacement_session, _replacement_actions) =
             fake_ai_session("tab", "replacement-conversation");
-        replacement.activate(replacement_session).unwrap();
+        activate_fake_ai_session(replacement, replacement_session).unwrap();
         assert!(state.ai_sessions.lock().unwrap().contains_key("tab"));
         assert_eq!(
             state
@@ -1199,15 +1287,40 @@ mod tests {
         );
     }
 
-    #[test]
-    fn closed_ai_tab_id_can_be_reserved_again() {
+    #[tokio::test]
+    async fn late_ai_activation_after_close_does_not_launch_actor() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let state = empty_state();
+        let owner = SessionOwner::Window("main".into());
+        let reservation = reserve_ai_owner(&state, "tab".into(), owner.clone()).unwrap();
+        close_ai_session(&state, "tab", &owner).await.unwrap();
+        let _replacement = reserve_ai_owner(&state, "tab".into(), owner).unwrap();
+        let launched = Arc::new(AtomicBool::new(false));
+        let (session, _actions) = fake_ai_session("tab", "conversation");
+        let conversation_id = session.conversation_id.clone();
+
+        let launched_in_argument = launched.clone();
+        let error = reservation
+            .activate_after_validation(&conversation_id, || {
+                launched_in_argument.store(true, Ordering::SeqCst);
+                session
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code(), "session_reservation_lost");
+        assert!(!launched.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn closed_ai_tab_id_can_be_reserved_again() {
         let state = empty_state();
         let owner = SessionOwner::Window("main".into());
         let reservation = reserve_ai_owner(&state, "tab".into(), owner.clone()).unwrap();
         let (session, mut actions) = fake_ai_session("tab", "conversation");
-        reservation.activate(session).unwrap();
+        activate_fake_ai_session(reservation, session).unwrap();
 
-        close_ai_session(&state, "tab", &owner).unwrap();
+        close_ai_session(&state, "tab", &owner).await.unwrap();
         assert!(matches!(
             actions.try_recv(),
             Ok(crate::ai::session::UserAction::Stop)
@@ -1216,6 +1329,46 @@ mod tests {
         let replacement = reserve_ai_owner(&state, "tab".into(), owner).unwrap();
         drop(replacement);
         assert!(state.ai_session_owners.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn close_ai_session_cancels_stream_and_waits_for_actor_exit() {
+        use std::sync::atomic::Ordering;
+
+        let state = Arc::new(empty_state());
+        let owner = SessionOwner::Window("main".into());
+        let reservation = reserve_ai_owner(&state, "tab".into(), owner.clone()).unwrap();
+        let (session, stream_cancelled, actor_exited) =
+            fake_running_ai_session("tab", "conversation");
+        activate_fake_ai_session(reservation, session).unwrap();
+
+        let close_state = state.clone();
+        let close_owner = owner.clone();
+        let close_task =
+            tokio::spawn(async move { close_ai_session(&close_state, "tab", &close_owner).await });
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !stream_cancelled.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("shutdown never cancelled the active stream");
+
+        let reserve_while_stopping = reserve_ai_owner(&state, "tab".into(), owner.clone());
+        assert!(matches!(
+            reserve_while_stopping,
+            Err(ref error) if error.code() == "session_already_exists"
+        ));
+
+        close_task.await.unwrap().unwrap();
+
+        assert!(stream_cancelled.load(Ordering::SeqCst));
+        assert!(actor_exited.load(Ordering::SeqCst));
+        assert!(state.ai_sessions.lock().unwrap().is_empty());
+        assert!(state.ai_session_owners.lock().unwrap().is_empty());
+        let replacement = reserve_ai_owner(&state, "tab".into(), owner).unwrap();
+        drop(replacement);
     }
 
     #[test]

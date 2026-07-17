@@ -1100,6 +1100,7 @@ async fn dispatch_async(
         "ai_session_stop" => {
             let tab_id: String = arg(&args, "tabId")?;
             crate::commands::lifecycle::close_ai_session(state, &tab_id, owner)
+                .await
                 .map(|_| Value::Null)
                 .map_err(err_value)
         }
@@ -1506,6 +1507,7 @@ fn ai_rebind(state: &AppState, args: Value) -> Result<Value, Value> {
     use crate::ai::commands::AiTarget;
     let target: AiTarget = arg(&args, "target")?;
     let tab_id: String = arg(&args, "tabId")?;
+    let conversation_id = args.get("conversationId").and_then(Value::as_str);
     let ssh_handle = match &target {
         AiTarget::Ssh(id) => Some(
             locked(&state.sessions)
@@ -1553,6 +1555,9 @@ fn ai_rebind(state: &AppState, args: Value) -> Result<Value, Value> {
         let s = g
             .get_mut(&tab_id)
             .ok_or_else(|| json!("ai_session_not_found"))?;
+        if conversation_id.is_some_and(|expected| s.conversation_id != expected) {
+            return Err(json!("ai_session_not_found"));
+        }
         if s.target_key != new_target_key {
             return Err(json!("conversation_target_mismatch"));
         }

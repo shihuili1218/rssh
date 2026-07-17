@@ -1,7 +1,7 @@
 <script lang="ts" module>
     /** ack-only 工具（download_file / analyze_locally）不走 PTY，
      *  store 的 _runningExecutions 表登记的是 PTY 句柄，无法守门重入。
-     *  Dialog 实例可能销毁重建（panel close/reopen），且 result prop 在事件
+     *  Dialog 实例可能因列表重建而销毁重建，且 result prop 在事件
      *  抵达前是 undefined → isPending=true，会再次自动 approve 发重复 ack。
      *
      *  Set 必须在 `<script module>` 里 —— 写在 instance script 里每次组件 mount
@@ -14,7 +14,7 @@
 </script>
 
 <script lang="ts">
-    import { onMount, untrack } from "svelte";
+    import { onDestroy, onMount, untrack } from "svelte";
     import { invoke } from "@tauri-apps/api/core";
     import * as ai from "./store.svelte.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
@@ -76,15 +76,15 @@
     // 无条件批准，后台 tab 的命令会比旧行为更早执行。active 变 true 时 effect 再检查，
     // UI 上"提议→执行"全程可见，审计 trail 与原行为不变。
     //
-    // 重入防御：组件可能被销毁重建（panel close/reopen、chat list 重新 key 等）。
+    // 重入防御：组件可能被销毁重建（chat list 重新 key 等）。
     // 重建实例的 executing=false，单看 executing 拦不住第二次 approve —— 同一 tool_call_id
     // 会被粘到 PTY 两次（rm/reboot 双执行级别的灾难）。用全局 _runningExecutions 表
     // （isCommandRunning）守门：命令还在 in-flight 时拒绝再次自动批准。
     //
     // onMount 只负责恢复已在执行的卡片视觉状态。
     onMount(() => {
-        // Command already in flight when this dialog (re)mounts — e.g. the AI
-        // panel was closed and reopened mid-execution. Reflect the running state
+        // Command already in flight when this dialog remounts after a keyed list
+        // rebuild. Reflect the running state
         // so the card shows Terminate/Submit instead of a stale Approve button
         // (clicking which would be a no-op now that executeCommand guards on the
         // running map, but a dead button is confusing). The original execution
@@ -94,6 +94,17 @@
             : ai.isCommandRunning(cmd.tool_call_id);
         if (isPending && inFlight) {
             executing = true;
+        }
+    });
+
+    onDestroy(() => {
+        // Keep guards across ordinary keyed-list remounts, but release them
+        // when explicit panel/tab teardown removes the whole conversation.
+        // The replacement actor cannot start until teardown finishes and gets
+        // a fresh timeline, so no later component can reuse this tool call.
+        if (!ai.isOpen(tabId)) {
+            _ackedToolCalls.delete(cmd.tool_call_id);
+            _approveAttemptedToolCalls.delete(cmd.tool_call_id);
         }
     });
 
@@ -191,9 +202,15 @@
         }
         const reason = rejectReason.trim();
         if (!reason) return;
-        await ai.rejectCommand(tabId, cmd.tool_call_id, reason);
-        askingReason = false;
-        rejectReason = "";
+        try {
+            await ai.rejectCommand(tabId, cmd.tool_call_id, reason);
+            askingReason = false;
+            rejectReason = "";
+        } catch (e) {
+            // Close can win this invoke; the dialog is then gone, but the
+            // rejected Promise still needs an owner.
+            console.warn("[ai] reject command:", e);
+        }
     }
 
     /** ssh/local 执行中点的"提前终止"：发 Ctrl+C；后续 finish() 上报 early_terminated=true。 */

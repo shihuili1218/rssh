@@ -40,7 +40,9 @@
             toast.info(t("ai.mobile.hint"));
             mobileHintShown = true;
         }
-        ai.togglePanel(app.activeTabId());
+        void ai.togglePanel(app.activeTabId()).catch((e) => {
+            console.warn("[ai] toggle mobile panel:", e);
+        });
     }
 
     // 移动端唤起 SFTP 时提示一次：建议横屏。与 AI 面板同款，一次 app run 提一次。

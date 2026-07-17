@@ -10,7 +10,7 @@
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import { onMount } from "svelte";
 
-    // tabId 是 AI 会话身份（actor 跟 tab 同寿命，重连不丢）。
+    // tabId 是 AI 会话身份（切 tab / 重连不丢；显式关闭面板时结束）。
     // targetId 是当前 SSH/PTY session_id —— 给 executeCommand 路由 ssh_write/pty_write 用。
     // 重连后 targetId 会换（前端 prop 自动跟随），tabId 不变。
     let { tabId, targetKind, targetId, active } = $props<{
@@ -20,8 +20,16 @@
         active: boolean;
     }>();
 
-    type PanelOwner = Readonly<{ tabId: string; targetKind: AiTargetKind }>;
-    const snapshotOwner = (): PanelOwner => ({ tabId, targetKind });
+    type PanelOwner = Readonly<{
+        tabId: string;
+        targetKind: AiTargetKind;
+        lease: ai.SessionLease;
+    }>;
+    const snapshotOwner = (): PanelOwner => ({
+        tabId,
+        targetKind,
+        lease: ai.captureSessionLease(tabId),
+    });
 
     let inputText = $state("");
     let auditOpen = $state(false);
@@ -30,7 +38,7 @@
     let inputEl = $state<HTMLTextAreaElement | null>(null);
     let chatBoxEl = $state<HTMLDivElement | null>(null);
     let showClearDialog = $state(false);
-    let clearDialogTabId = $state<string | null>(null);
+    let clearDialogOwner = $state<PanelOwner | null>(null);
 
     let session = $derived(ai.sessionForTab(tabId));
     let items: ChatItem[] = $derived(ai.chatItems(tabId));
@@ -77,7 +85,7 @@
     $effect(() => {
         if (active) return;
         showClearDialog = false;
-        clearDialogTabId = null;
+        clearDialogOwner = null;
     });
 
     // 历史对话随当前 target（同一 tab 重连时 session id 会变）重新加载。
@@ -128,7 +136,7 @@
     async function rebindIfNeeded(owner: PanelOwner, startedTargetId: string) {
         const latestTargetId = liveTargetId();
         if (latestTargetId !== startedTargetId) {
-            await ai.rebindTarget(owner.tabId, owner.targetKind, latestTargetId);
+            await ai.rebindTarget(owner.tabId, owner.targetKind, latestTargetId, owner.lease);
         }
     }
 
@@ -153,6 +161,7 @@
                 targetId: startedTargetId,
                 skill: "general",
                 provider: settings.provider, model: settings.model,
+                lease: owner.lease,
             });
             await rebindIfNeeded(owner, startedTargetId);
         })();
@@ -185,6 +194,7 @@
                 targetId: startedTargetId,
                 skill: "general",
                 provider: settings.provider, model: settings.model,
+                lease: owner.lease,
             }, id);
             await rebindIfNeeded(owner, startedTargetId);
         } catch (e: any) {
@@ -222,7 +232,7 @@
         try {
             await ensureSession(owner);
             inputText = "";
-            await ai.sendMessage(owner.tabId, text);
+            await ai.sendMessage(owner.tabId, text, owner.lease);
         } catch (e: any) {
             console.error("[ai] send failed:", e);
             banner = errMsg(e);
@@ -231,36 +241,37 @@
         }
     }
 
-    /** 关面板 = 仅隐藏 UI。actor 跟 tab 同寿命，下次开面板上下文还在。
-     *  真正销毁 actor 在 app.closeTab() 里挂钩。 */
+    /** 显式关面板 = 结束并归档当前会话；重开回到首次打开状态。 */
     function closePanel() {
-        ai.closePanel(tabId);
+        void ai.closePanel(tabId).catch((e) => {
+            console.warn("[ai] close panel session:", e);
+        });
     }
 
     /** 点扫帚按钮：开二次确认模态。actor 不在就不弹（清个空气没意义）。 */
     function openClearDialog() {
         if (!session) return;
-        clearDialogTabId = tabId;
+        clearDialogOwner = snapshotOwner();
         showClearDialog = true;
     }
 
     function closeClearDialog() {
         showClearDialog = false;
-        clearDialogTabId = null;
+        clearDialogOwner = null;
     }
 
     /** 用户在模态里点"清空"：actor 不死，只把 history 清空 —— 下条消息从头来过。
      *  若正在流式响应，先把流停掉，避免 in-flight delta 落到已清空的气泡数组。 */
     async function clearContext() {
-        const ownerTabId = clearDialogTabId;
-        const wasStreaming = ownerTabId ? ai.isStreaming(ownerTabId) : false;
+        const owner = clearDialogOwner;
+        const wasStreaming = owner ? ai.isStreaming(owner.tabId) : false;
         closeClearDialog();
-        if (!ownerTabId || !ai.sessionForTab(ownerTabId)) return;
+        if (!owner || !ai.sessionForTab(owner.tabId)) return;
         try {
             if (wasStreaming) {
-                await ai.cancelStream(ownerTabId);
+                await ai.cancelStream(owner.tabId, owner.lease);
             }
-            await ai.clearContext(ownerTabId);
+            await ai.clearContext(owner.tabId, owner.lease);
         } catch (e) {
             console.error("[ai] clear context:", e);
             banner = errMsg(e);
@@ -269,10 +280,10 @@
 
     /** 打断当前流式响应；会话上下文保留，用户可立刻发下一条纠正。 */
     async function stopStreaming() {
-        const ownerTabId = tabId;
-        if (!ai.sessionForTab(ownerTabId)) return;
+        const owner = snapshotOwner();
+        if (!ai.sessionForTab(owner.tabId)) return;
         try {
-            await ai.cancelStream(ownerTabId);
+            await ai.cancelStream(owner.tabId, owner.lease);
         } catch (e) {
             // 不能只 console.error 就完事——失败的话用户还卡在 streaming/disabled 状态，
             // 看不到任何错误反馈。复用 banner 让用户知道"停止没生效，再点一次或刷新"。
@@ -349,7 +360,7 @@
                 </button>
             {/snippet}
         </DangerModeToggle>
-        <button class="btn-icon" onclick={closePanel} title={t("ai.toolbar.close_panel")} aria-label={t("ai.toolbar.close_panel")}>×</button>
+        <button class="btn-icon" onclick={closePanel} title={t("ai.toolbar.close_session")} aria-label={t("ai.toolbar.close_session")}>×</button>
     </div>
 
     {#if banner}

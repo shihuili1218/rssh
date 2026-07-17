@@ -14,6 +14,11 @@
         loading = true;
         try {
             log = await ai.getAudit(tabId);
+        } catch (e) {
+            // Explicit panel close stops the actor while an audit refresh may
+            // still be in flight. Consume that expected rejection instead of
+            // leaking an unhandled Promise from the click/onMount handler.
+            console.warn("[ai] refresh audit:", e);
         } finally {
             loading = false;
         }

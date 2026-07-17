@@ -1,7 +1,7 @@
 /**
  * AI 排障会话前端状态。
  * - 一个 tab 至多一个 AI 会话；store 全部按 tab_id 索引
- *   （actor 跟 tab 同寿命 —— SSH 断了重连 tab_id 不变，AI 会话和历史也保留）
+ *   （切 tab / SSH 重连不丢；显式关闭 AI 面板则结束当前会话）
  * - 监听 ai:*:<tab_id> 事件填充 chat 时间线
  * - keyboard lock 在 AI 命令执行期间生效
  */
@@ -73,11 +73,13 @@ const _targetKindByTab: Record<string, AiTargetKind> = {};
 const _unlistenersByTab: Record<string, UnlistenFn[]> = {};
 const _tabGeneration: Record<string, number> = {};
 const _disposedTabs = new Set<string>();
+const _sessionTeardownByTab: Record<string, Promise<void>> = {};
+const _sessionLaunchesByTab: Record<string, Set<Promise<AiSessionInfo>>> = {};
 
-class TabClosedError extends Error {
+class SessionClosedError extends Error {
   constructor(tab_id: string) {
-    super(`AI tab closed: ${tab_id}`);
-    this.name = "TabClosedError";
+    super(`AI session closed for tab: ${tab_id}`);
+    this.name = "SessionClosedError";
   }
 }
 
@@ -90,7 +92,30 @@ function isTabLive(tab_id: string, generation: number): boolean {
 }
 
 function assertTabLive(tab_id: string, generation = tabGeneration(tab_id)): void {
-  if (!isTabLive(tab_id, generation)) throw new TabClosedError(tab_id);
+  if (!isTabLive(tab_id, generation)) throw new SessionClosedError(tab_id);
+}
+
+/** Opaque ownership token for one panel-open conversation lifetime. Async UI
+ * actions capture it before their first await; closePanel bumps generation, so
+ * no old continuation can attach to or mutate a later conversation in the same tab. */
+export interface SessionLease {
+  readonly tabId: string;
+  readonly generation: number;
+}
+
+export function captureSessionLease(tab_id: string): SessionLease {
+  const generation = tabGeneration(tab_id);
+  assertTabLive(tab_id, generation);
+  return { tabId: tab_id, generation };
+}
+
+function generationForLease(tab_id: string, lease?: SessionLease): number {
+  if (lease && lease.tabId !== tab_id) throw new SessionClosedError(tab_id);
+  return lease?.generation ?? tabGeneration(tab_id);
+}
+
+function assertLeaseLive(tab_id: string, lease?: SessionLease): void {
+  assertTabLive(tab_id, generationForLease(tab_id, lease));
 }
 
 export function position() { return _position; }
@@ -103,9 +128,23 @@ export function setPosition(p: AiPosition) {
 
 export function isOpen(tab_id: string) { return _openByTab[tab_id] === true; }
 export function openPanel(tab_id: string) { _openByTab[tab_id] = true; }
-export function closePanel(tab_id: string) { delete _openByTab[tab_id]; }
-export function togglePanel(tab_id: string) {
-  if (isOpen(tab_id)) closePanel(tab_id);
+function hidePanel(tab_id: string) { delete _openByTab[tab_id]; }
+export function closePanel(tab_id: string): Promise<void> {
+  hidePanel(tab_id);
+  clearPrefill(tab_id);
+  // 面板关闭即结束这轮 conversation。先换 generation，所有迟到 listener/start
+  // continuation 都失效；宽度是 tab 偏好，不属于 conversation，继续保留。
+  _tabGeneration[tab_id] = tabGeneration(tab_id) + 1;
+  if (_sessionByTab[tab_id] || _sessionLaunchesByTab[tab_id]?.size) {
+    return stopSession(tab_id);
+  }
+  const teardown = _sessionTeardownByTab[tab_id];
+  if (teardown) return teardown;
+  clearSessionState(tab_id);
+  return Promise.resolve();
+}
+export async function togglePanel(tab_id: string): Promise<void> {
+  if (isOpen(tab_id)) await closePanel(tab_id);
   else openPanel(tab_id);
 }
 export function panelWidth(tab_id: string): number | null {
@@ -116,7 +155,7 @@ export function setPanelWidth(tab_id: string, width: number | null) {
   else _panelWidthByTab[tab_id] = width;
 }
 export function discardPanelState(tab_id: string) {
-  closePanel(tab_id);
+  hidePanel(tab_id);
   setPanelWidth(tab_id, null);
   clearPrefill(tab_id);
 }
@@ -133,9 +172,7 @@ export async function disposeTab(tab_id: string): Promise<void> {
   _tabGeneration[tab_id] = tabGeneration(tab_id) + 1;
   _disposedTabs.add(tab_id);
   discardPanelState(tab_id);
-  if (!_sessionByTab[tab_id]) {
-    // 尚在 start invoke 内的 actor 由 launchSession 在返回后识别 tombstone 并 stop；
-    // 此刻先打 stop 只会产生正常但嘈杂的 ai_session_not_found。
+  if (!_sessionByTab[tab_id] && !_sessionLaunchesByTab[tab_id]?.size) {
     clearSessionState(tab_id);
     return;
   }
@@ -196,6 +233,24 @@ function pushChat(tab_id: string, item: ChatItem) {
 // fire-and-forget：持久化是旁路功能，写失败只记 console，不打断对话。
 
 const _persistTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+const _persistWritesByTab: Record<string, Promise<void>> = {};
+
+function queueTimelinePersist(tab_id: string, id: string, timeline: string): Promise<void> {
+  // DB writes for one conversation must stay ordered. Otherwise an older slow
+  // autosave can finish after the close-time flush and overwrite the final UI
+  // timeline with stale content.
+  const previous = _persistWritesByTab[tab_id] ?? Promise.resolve();
+  const write = previous
+    .catch(() => undefined)
+    .then(() => invoke("ai_conversation_save_timeline", { id, timeline }))
+    .then(() => undefined)
+    .catch((e) => console.error("[ai] persist timeline:", e));
+  _persistWritesByTab[tab_id] = write;
+  void write.then(() => {
+    if (_persistWritesByTab[tab_id] === write) delete _persistWritesByTab[tab_id];
+  });
+  return write;
+}
 
 function schedulePersist(tab_id: string) {
   if (!_sessionByTab[tab_id]) return;
@@ -205,8 +260,7 @@ function schedulePersist(tab_id: string) {
     const id = _sessionByTab[tab_id]?.conversation_id;
     const items = _chatByTab[tab_id];
     if (!id || !items) return;
-    invoke("ai_conversation_save_timeline", { id, timeline: JSON.stringify(items) })
-      .catch((e) => console.error("[ai] persist timeline:", e));
+    void queueTimelinePersist(tab_id, id, JSON.stringify(items));
   }, 300);
 }
 
@@ -233,6 +287,7 @@ export interface StartSessionArgs {
   skill: string;
   provider: string;
   model: string;
+  lease?: SessionLease;
 }
 
 export async function startSession(args: StartSessionArgs): Promise<AiSessionInfo> {
@@ -251,8 +306,34 @@ async function launchSession(
   args: StartSessionArgs,
   resumeId: string | null,
 ): Promise<AiSessionInfo> {
-  const generation = tabGeneration(args.tabId);
+  const generation = generationForLease(args.tabId, args.lease);
   assertTabLive(args.tabId, generation);
+  // 面板可能刚关闭又打开。旧 actor 未 stop 完之前，同 tab_id 启新 actor
+  // 会撞 session_already_exists；先过 teardown barrier，再确认期间没再次关闭。
+  const teardown = _sessionTeardownByTab[args.tabId];
+  if (teardown) {
+    await teardown;
+    assertTabLive(args.tabId, generation);
+  }
+  const launch = launchSessionAtGeneration(args, resumeId, generation);
+  const launches = _sessionLaunchesByTab[args.tabId] ?? new Set<Promise<AiSessionInfo>>();
+  _sessionLaunchesByTab[args.tabId] = launches;
+  launches.add(launch);
+  try {
+    return await launch;
+  } finally {
+    launches.delete(launch);
+    if (launches.size === 0 && _sessionLaunchesByTab[args.tabId] === launches) {
+      delete _sessionLaunchesByTab[args.tabId];
+    }
+  }
+}
+
+async function launchSessionAtGeneration(
+  args: StartSessionArgs,
+  resumeId: string | null,
+  generation: number,
+): Promise<AiSessionInfo> {
   // timeline 先取后启动：取失败就整体失败，不会出现"LLM 记得、UI 一片空白"
   // 的半恢复状态。新对话跳过，timeline 就是空数组。
   let timeline: ChatItem[] = [];
@@ -264,21 +345,30 @@ async function launchSession(
     assertTabLive(args.tabId, generation);
     timeline = restoreTimeline(json, t("ai.history.stale_command"));
   }
-  const info = await invoke<AiSessionInfo>("ai_session_start", {
-    tabId: args.tabId,
-    target: { kind: args.targetKind, id: args.targetId },
-    skill: args.skill,
-    provider: args.provider,
-    model: args.model,
-    locale: currentLocale(),
-    resume: resumeId,
-  });
+  let info: AiSessionInfo;
+  try {
+    info = await invoke<AiSessionInfo>("ai_session_start", {
+      tabId: args.tabId,
+      target: { kind: args.targetKind, id: args.targetId },
+      skill: args.skill,
+      provider: args.provider,
+      model: args.model,
+      locale: currentLocale(),
+      resume: resumeId,
+    });
+  } catch (error) {
+    // Closing can cancel a Rust Pending reservation before start returns. The
+    // backend then reports reservation_lost; expose the stable frontend
+    // lifecycle meaning instead of leaking that implementation detail.
+    if (!isTabLive(args.tabId, generation)) throw new SessionClosedError(args.tabId);
+    throw error;
+  }
   if (!isTabLive(args.tabId, generation)) {
     // close 可能先打到 not_found、start 随后才成功；启动返回后必须再 stop 一次。
     await invoke("ai_session_stop", { tabId: args.tabId }).catch((e) =>
       console.warn("[ai] stop abandoned session:", e),
     );
-    throw new TabClosedError(args.tabId);
+    throw new SessionClosedError(args.tabId);
   }
   // info.tab_id 后端权威 —— 跟 args.tabId 一定一致（后端按入参 insert），但用
   // 后端返回值就消除"未来后端 normalize tab_id"导致 cache miss 的隐患。
@@ -294,7 +384,7 @@ async function launchSession(
     await invoke("ai_session_stop", { tabId: info.tab_id }).catch((e) =>
       console.warn("[ai] stop failed launch:", e),
     );
-    if (!isTabLive(args.tabId, generation)) throw new TabClosedError(args.tabId);
+    if (!isTabLive(args.tabId, generation)) throw new SessionClosedError(args.tabId);
     throw error;
   }
 }
@@ -309,7 +399,56 @@ function clearSessionState(tab_id: string) {
   delete _tokensByTab[tab_id];
 }
 
-export async function stopSession(tab_id: string) {
+export function stopSession(tab_id: string): Promise<void> {
+  const existing = _sessionTeardownByTab[tab_id];
+  if (existing) return existing;
+  return trackSessionTeardown(tab_id, stopSessionNow(tab_id));
+}
+
+function trackSessionTeardown(tab_id: string, work: Promise<void>): Promise<void> {
+  const existing = _sessionTeardownByTab[tab_id];
+  if (existing) return existing;
+  const teardown: Promise<void> = work.finally(() => {
+    if (_sessionTeardownByTab[tab_id] === teardown) delete _sessionTeardownByTab[tab_id];
+  });
+  _sessionTeardownByTab[tab_id] = teardown;
+  return teardown;
+}
+
+async function stopSessionNow(tab_id: string): Promise<void> {
+  const session = _sessionByTab[tab_id];
+  const launches = Array.from(_sessionLaunchesByTab[tab_id] ?? []);
+
+  // Always flush the final visible snapshot before clearing state. Streaming
+  // deltas mutate the current bubble in place and intentionally do not restart
+  // the 300ms debounce timer per token, so "no pending timer" does not mean the
+  // last completed autosave is current.
+  let persist: Promise<void> = _persistWritesByTab[tab_id] ?? Promise.resolve();
+  if (_persistTimers[tab_id]) {
+    clearTimeout(_persistTimers[tab_id]);
+    delete _persistTimers[tab_id];
+  }
+  const items = _chatByTab[tab_id];
+  if (session?.conversation_id && items) {
+    persist = queueTimelinePersist(tab_id, session.conversation_id, JSON.stringify(items));
+  }
+
+  // UI reset is synchronous: a rapid reopen must never flash the old session.
+  // Backend termination continues below.
+  clearSessionState(tab_id);
+
+  // Backend stop is started before cleaning frontend executions. It removes the
+  // actor from the command registry, cancels any LLM stream, and resolves only
+  // after the actor has exited; no old tab-scoped event can reach a new session.
+  const stop = invoke("ai_session_stop", { tabId: tab_id });
+  // A launch can still be fetching a resume timeline and have no backend
+  // reservation yet. In that ordering, not_found is expected: generation
+  // invalidation makes the launch abort or stop itself before resolving.
+  const backendStop = session ? stop : stop.catch(() => undefined);
+  const abandonedLaunches = launches.map((launch) =>
+    launch.then(() => undefined, () => undefined),
+  );
+
   // Tear down in-flight executions for this tab FIRST. Without this,
   // the PTY data listener + 60s setTimeout linger after the session is
   // gone, the buffer keeps appending against a defunct session, and the
@@ -318,36 +457,20 @@ export async function stopSession(tab_id: string) {
   //
   // Iterate via Array.from so the in-loop `.delete()` inside finish()
   // doesn't break Map iteration semantics.
-  for (const exec of Array.from(_runningExecutions.values())) {
-    if (exec.tabId === tab_id && !exec.resolved) {
-      await exec.terminate();
-    }
-  }
-
-  // Flush a pending timeline save synchronously-ish: cancel the timer and
-  // fire the write now, before session state is torn down.
-  if (_persistTimers[tab_id]) {
-    clearTimeout(_persistTimers[tab_id]);
-    delete _persistTimers[tab_id];
-    const id = _sessionByTab[tab_id]?.conversation_id;
-    const items = _chatByTab[tab_id];
-    if (id && items) {
-      invoke("ai_conversation_save_timeline", { id, timeline: JSON.stringify(items) })
-        .catch((e) => console.error("[ai] persist timeline:", e));
-    }
-  }
-
-  await invoke("ai_session_stop", { tabId: tab_id });
-  clearSessionState(tab_id);
+  const executions = Array.from(_runningExecutions.values())
+    .filter((exec) => exec.tabId === tab_id && !exec.resolved)
+    .map((exec) => exec.terminate());
+  await Promise.all([persist, backendStop, ...abandonedLaunches, ...executions]);
 }
 
-export async function sendMessage(tab_id: string, text: string) {
-  assertTabLive(tab_id);
+export async function sendMessage(tab_id: string, text: string, lease?: SessionLease) {
+  assertLeaseLive(tab_id, lease);
   await invoke("ai_user_message", { tabId: tab_id, text });
 }
 
 /** 清空 actor 的对话历史（audit log 保留）。actor 不死，下条消息从头来过。 */
-export async function clearContext(tab_id: string): Promise<void> {
+export async function clearContext(tab_id: string, lease?: SessionLease): Promise<void> {
+  assertLeaseLive(tab_id, lease);
   await invoke("ai_session_clear_context", { tabId: tab_id });
 }
 
@@ -356,22 +479,29 @@ export async function rebindTarget(
   tab_id: string,
   target_kind: AiTargetKind,
   target_id: string,
+  lease?: SessionLease,
 ): Promise<void> {
+  const generation = generationForLease(tab_id, lease);
+  assertTabLive(tab_id, generation);
+  const conversationId = _sessionByTab[tab_id]?.conversation_id;
+  if (!conversationId) throw new SessionClosedError(tab_id);
   await invoke("ai_session_rebind_target", {
     tabId: tab_id,
     target: { kind: target_kind, id: target_id },
+    conversationId,
   });
+  assertTabLive(tab_id, generation);
   // 同步前端 cache：AiSessionInfo.target_id 也要换，否则下次 sendMessage 走的
   // executeCommand 还会用旧 target_session_id 给 ssh_write —— 拿不到新 PTY。
   const info = _sessionByTab[tab_id];
-  if (info) {
-    _sessionByTab[tab_id] = { ...info, target_id };
-  }
+  if (!info || info.conversation_id !== conversationId) throw new SessionClosedError(tab_id);
+  _sessionByTab[tab_id] = { ...info, target_id };
 }
 
 /** 打断 actor 正在跑的 LLM 流式响应。会话上下文（history / pending command / audit）全部保留——
  *  这跟 stopSession（销毁整个会话）是两个语义。actor 不在 chat 时调用是 no-op。 */
-export async function cancelStream(tab_id: string): Promise<void> {
+export async function cancelStream(tab_id: string, lease?: SessionLease): Promise<void> {
+  assertLeaseLive(tab_id, lease);
   await invoke("ai_cancel_stream", { tabId: tab_id });
 }
 
@@ -549,8 +679,8 @@ export async function executeCommand(
   target_session_id: string,
 ): Promise<void> {
   // Re-entrancy guard: a tool_call_id must never be pasted twice. A
-  // CommandConfirmDialog remount (AI panel close→reopen mid-run) loses its local
-  // `executing` flag and can fire approve() again; without this, the command
+  // CommandConfirmDialog remount can lose its local `executing` flag and fire
+  // approve() again; without this, the command
   // (possibly rm/reboot) would be pasted a second time and the first exec's
   // listener + timer would leak when `_runningExecutions.set` below overwrites
   // the entry. The map is the single source of truth for "in flight" — honor it.
@@ -809,7 +939,7 @@ async function attachListeners(info: AiSessionInfo, generation: number) {
     });
     if (!isTabLive(tab, generation)) {
       unlisten();
-      throw new TabClosedError(tab);
+      throw new SessionClosedError(tab);
     }
     u.push(unlisten);
   };

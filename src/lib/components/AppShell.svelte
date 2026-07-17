@@ -130,7 +130,12 @@
                     // Close always works; open only on a connected terminal tab
                     // (mirrors MobileKeybar's canOpenAi guard).
                     const tab = app.activeTab();
-                    if (tab && ai.isOpen(tab.id)) { ai.closePanel(tab.id); return; }
+                    if (tab && ai.isOpen(tab.id)) {
+                        void ai.closePanel(tab.id).catch((e) => {
+                            console.warn("[ai] close panel shortcut:", e);
+                        });
+                        return;
+                    }
                     const canOpen = !!tab && app.isAiCapableTabType(tab.type) && !!app.sessionIdForTab(tab.id);
                     if (!canOpen) return false;
                     ai.openPanel(tab.id);
@@ -250,6 +255,7 @@
         const tabId = `local:${crypto.randomUUID()}`;
         app.addTab({type: "local", id: tabId, label: t("ai.handoff.tab_label"), meta: {}});
         ai.openPanel(tabId);
+        const lease = ai.captureSessionLease(tabId);
 
         // 2. Wait for the local PTY to register itself. The store fires
         //    this Promise the moment registerSession runs in TerminalPane —
@@ -259,10 +265,14 @@
             console.error("AI handoff: 本地 PTY 30s 内未就绪，放弃");
             return;
         }
+        // 用户等待 PTY 时可能已经手动关掉 AI；关闭现在代表放弃这轮会话，
+        // 不能在后台偷偷把面板对应的 actor 又启动起来。
+        if (!ai.isOpen(tabId)) return;
 
         // 3. 启动独立 AI 会话 + 发首条消息
         try {
             const settings = await ai.loadSettings();
+            if (!ai.isOpen(tabId)) return;
             if (!settings.has_api_key) {
                 console.error("AI handoff: 缺 API key，无法自动启动会话");
                 return;
@@ -274,9 +284,10 @@
                 skill: "general",
                 provider: settings.provider,
                 model: settings.model,
+                lease,
             });
             const initialMsg = t("ai.handoff.initial_msg", { path: payload.local_path, task: payload.task });
-            await ai.sendMessage(info.tab_id, initialMsg);
+            await ai.sendMessage(info.tab_id, initialMsg, lease);
         } catch (e) {
             console.error("AI handoff failed:", e);
         }

@@ -180,8 +180,8 @@ pub fn import_ai_settings(
 
 #[derive(Serialize)]
 pub struct AiSessionInfo {
-    /// Tab 身份。actor 跟 tab 同寿命 —— SSH 断了重连，前端用 tab_id 仍能定位到
-    /// 同一个 actor，历史就回来了。
+    /// Tab 内的会话身份。切 Tab / SSH 重连时前端仍用 tab_id 定位同一 actor；
+    /// 显式关闭 AI 面板会结束 actor，历史通过 conversation 恢复。
     pub tab_id: String,
     /// 当前绑定的 SSH/PTY session_id（重连时由 rebind 更新）。
     pub target_id: String,
@@ -553,7 +553,7 @@ pub async fn ai_session_start_impl(
     // 从未运行过、不会 emit `ai:session_ended:<tab_id>` 污染赢家的事件流。
     let pending = session::start(cfg, host)?;
     let info = AiSessionInfo::from(pending.info());
-    owner_reservation.activate(pending.launch())?;
+    owner_reservation.activate(pending)?;
     // Create the conversation row only for NEW conversations, and only after
     // winning the slot — a racing loser must not litter the picker with an
     // empty row. Resume must NOT create: its row already exists, and an
@@ -631,7 +631,7 @@ pub async fn ai_command_reject(
     Ok(())
 }
 
-/// 销毁 actor。前端在 tab close 时调（panel close 只隐藏 UI，不调这个）。
+/// 销毁 actor并等待完全退出。前端显式关闭 AI 面板或关闭 Tab 时调用。
 #[tauri::command]
 pub async fn ai_session_stop(
     window: tauri::Window,
@@ -643,6 +643,7 @@ pub async fn ai_session_stop(
         &tab_id,
         &crate::state::SessionOwner::Window(window.label().to_owned()),
     )
+    .await
 }
 
 /// 清空 actor 的 history（保留 audit log）。
@@ -720,6 +721,7 @@ pub async fn ai_session_rebind_target(
     state: State<'_, AppState>,
     tab_id: String,
     target: AiTarget,
+    conversation_id: Option<String>,
 ) -> AppResult<()> {
     // 重新抓 ssh_handle（local 是 None）—— 复用 ai_session_start 的同款校验。
     let ssh_handle = match &target {
@@ -773,6 +775,12 @@ pub async fn ai_session_rebind_target(
         let s = g
             .get_mut(&tab_id)
             .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
+        if conversation_id
+            .as_deref()
+            .is_some_and(|expected| s.conversation_id != expected)
+        {
+            return Err(AppError::not_found("ai_session_not_found", json!({})));
+        }
         if s.target_key != new_target_key {
             return Err(AppError::other(
                 "conversation_target_mismatch",
