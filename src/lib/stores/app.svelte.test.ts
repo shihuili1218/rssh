@@ -213,6 +213,20 @@ describe("closeTab keeps the most-recent tab active", () => {
     expect(app.tabs().map((t) => t.id)).toEqual(["home", "b", "a"]);
     expect(app.activeTabId()).toBe("b");
   });
+
+  it("discards only the closed tab's panel visibility when no AI session was started", async () => {
+    const app = await loadAppModule();
+    const ai = await import("../ai/store.svelte.ts");
+    app.addTab(local("a"));
+    ai.openPanel("a");
+    app.addTab(local("b"));
+    ai.openPanel("b");
+
+    app.closeTab("a");
+
+    expect(ai.isOpen("a")).toBe(false);
+    expect(ai.isOpen("b")).toBe(true);
+  });
 });
 
 describe("MRU toggle disables reordering", () => {

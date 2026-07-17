@@ -26,20 +26,21 @@
         if (!tab || !app.isAiCapableTabType(tab.type)) return false;
         return !!app.sessionIdForTab(tab.id);
     });
+    let aiOpen = $derived(ai.isOpen(app.activeTabId()));
 
     // 移动端唤起 AI 时提示一次：建议横屏 + 两个工具不可用。
     // 模块级 flag——一次 app run 提一次；togglePanel 只有"开"动作时才提。
     let mobileHintShown = false;
     function toggleAi() {
-        if (!ai.isOpen() && !canOpenAi) {
+        if (!aiOpen && !canOpenAi) {
             toast.info(t("ai.no_session"));
             return;
         }
-        if (!ai.isOpen() && !mobileHintShown) {
+        if (!aiOpen && !mobileHintShown) {
             toast.info(t("ai.mobile.hint"));
             mobileHintShown = true;
         }
-        ai.togglePanel();
+        ai.togglePanel(app.activeTabId());
     }
 
     // 移动端唤起 SFTP 时提示一次：建议横屏。与 AI 面板同款，一次 app run 提一次。
@@ -66,7 +67,7 @@
     {#if app.activeTab()?.type === "ssh"}
         <button class="key" title="SFTP" onpointerdown={prevent} onclick={openSftpPanel}>📁</button>
     {/if}
-    <button class="key" class:active={ai.isOpen()} class:dim={!ai.isOpen() && !canOpenAi} title="AI Chat" onpointerdown={prevent} onclick={toggleAi}>AI</button>
+    <button class="key" class:active={aiOpen} class:dim={!aiOpen && !canOpenAi} title="AI Chat" onpointerdown={prevent} onclick={toggleAi}>AI</button>
 </div>
 
 <style>

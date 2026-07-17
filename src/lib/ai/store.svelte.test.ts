@@ -22,6 +22,25 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("panel visibility", () => {
+  it("keeps each tab's open state independent", async () => {
+    vi.resetModules();
+    const ai = await import("./store.svelte.ts");
+
+    ai.openPanel("tab-a");
+    expect(ai.isOpen("tab-a")).toBe(true);
+    expect(ai.isOpen("tab-b")).toBe(false);
+
+    ai.openPanel("tab-b");
+    expect(ai.isOpen("tab-a")).toBe(true);
+    expect(ai.isOpen("tab-b")).toBe(true);
+
+    ai.closePanel("tab-a");
+    expect(ai.isOpen("tab-a")).toBe(false);
+    expect(ai.isOpen("tab-b")).toBe(true);
+  });
+});
+
 describe("executeCommand", () => {
   it("lets the Telnet backend append the profile's configured newline", async () => {
     vi.resetModules();

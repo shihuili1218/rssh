@@ -354,6 +354,9 @@ export function closeTab(id: string) {
     delete next[id];
     _sftpOpenByTab = next;
   }
+  // The panel can be open before its lazy AI actor exists, so visibility has
+  // its own unconditional teardown instead of hiding inside stopSession().
+  ai.closePanel(id);
   // AI actor 跟 tab 同寿命。fire-and-forget —— UI 拆完不必等 actor stop ack。
   // sessionForTab undefined（这个 tab 从没起过 AI）也走 stopSession 没事，
   // 后端会返回 ai_session_not_found，前端 catch 吞掉。

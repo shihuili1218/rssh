@@ -44,9 +44,9 @@ function loadPos(): AiPosition {
   return v === "left" || v === "right" ? v : "right";
 }
 
-// ─── 全局可见状态 ─────────────────────────────────────────────────
+// ─── Per-tab visibility ───────────────────────────────────────────
 
-let _open = $state(false);
+let _openByTab = $state<Record<string, true>>({});
 let _position = $state<AiPosition>(loadPos());
 let _activeTabId = $state<string | null>(null);
 let _sessionByTab = $state<Record<string, AiSessionInfo>>({});
@@ -80,10 +80,13 @@ export function setPosition(p: AiPosition) {
 
 // ─── Open/close ───────────────────────────────────────────────────
 
-export function isOpen() { return _open; }
-export function openPanel() { _open = true; }
-export function closePanel() { _open = false; }
-export function togglePanel() { _open = !_open; }
+export function isOpen(tab_id: string) { return _openByTab[tab_id] === true; }
+export function openPanel(tab_id: string) { _openByTab[tab_id] = true; }
+export function closePanel(tab_id: string) { delete _openByTab[tab_id]; }
+export function togglePanel(tab_id: string) {
+  if (isOpen(tab_id)) closePanel(tab_id);
+  else openPanel(tab_id);
+}
 
 // ─── Input prefill ────────────────────────────────────────────────
 // 把一段文本塞进某个 tab 的 ChatPanel 输入框（不发送）。色条"发送到 AI"用它：

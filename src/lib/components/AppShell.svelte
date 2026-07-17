@@ -128,11 +128,11 @@
                 handler: () => {
                     // Close always works; open only on a connected terminal tab
                     // (mirrors MobileKeybar's canOpenAi guard).
-                    if (ai.isOpen()) { ai.closePanel(); return; }
                     const tab = app.activeTab();
+                    if (tab && ai.isOpen(tab.id)) { ai.closePanel(tab.id); return; }
                     const canOpen = !!tab && app.isAiCapableTabType(tab.type) && !!app.sessionIdForTab(tab.id);
                     if (!canOpen) return false;
-                    ai.openPanel();
+                    ai.openPanel(tab.id);
                 },
             },
             {
@@ -248,7 +248,7 @@
         // 1. 开本地 shell tab
         const tabId = `local:${crypto.randomUUID()}`;
         app.addTab({type: "local", id: tabId, label: t("ai.handoff.tab_label"), meta: {}});
-        ai.openPanel();
+        ai.openPanel(tabId);
 
         // 2. Wait for the local PTY to register itself. The store fires
         //    this Promise the moment registerSession runs in TerminalPane —
@@ -351,7 +351,7 @@
     let aiActiveTab = $derived(app.activeTab());
     let aiSessionId = $derived(aiActiveTab ? app.sessionIdForTab(aiActiveTab.id) : undefined);
     let aiVisible = $derived(
-        ai.isOpen()
+        ai.isOpen(aiTabId)
         && !!aiActiveTab
         && app.isAiCapableTabType(aiActiveTab.type)
         && !!aiSessionId
@@ -805,7 +805,7 @@
                     label: t("tab.context.ai"),
                     shortcut: keymap.format("ai.toggle"),
                     disabled: !sid,
-                    onClick: () => { app.setActiveTab(tab.id); ai.openPanel(); },
+                    onClick: () => { app.setActiveTab(tab.id); ai.openPanel(tab.id); },
                 },
             ]);
         }

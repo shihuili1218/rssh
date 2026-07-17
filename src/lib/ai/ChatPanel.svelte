@@ -192,7 +192,7 @@
     /** 关面板 = 仅隐藏 UI。actor 跟 tab 同寿命，下次开面板上下文还在。
      *  真正销毁 actor 在 app.closeTab() 里挂钩。 */
     function closePanel() {
-        ai.closePanel();
+        ai.closePanel(tabId);
     }
 
     /** 点扫帚按钮：开二次确认模态。actor 不在就不弹（清个空气没意义）。 */
