@@ -29,6 +29,7 @@
     import {t, errMsg} from "../i18n/index.svelte.ts";
     import {toast} from "../stores/toast.svelte.ts";
     import {initializePrimarySessionWindow} from "./primary-session-window.ts";
+    import {defaultPanelWidth, fitPanelWidths, resizePanelWidth} from "./panel-widths.ts";
 
     let drawerOpen = $state(false);
     let focusIdx = $state(-1);
@@ -358,6 +359,14 @@
         && !app.settingsActive()
         // The Transfers popover does not affect AI panel visibility — overlay.
     );
+    // 跟 SFTP 一样：每个已打开 AI 的 tab 保留一个 keyed ChatPanel 实例。
+    // 切 tab 只改可见性，草稿、审计页、滚动位置和命令卡局部状态不会串台或丢失。
+    let aiTabs = $derived(
+        app.tabs().filter((tab) =>
+            ai.isOpen(tab.id)
+            && app.isAiCapableTabType(tab.type)
+        )
+    );
     let xferBadge = $derived.by(() => {
         const n = transfers.activeCount();
         return n > 0 ? String(n) : null;
@@ -372,30 +381,56 @@
         // The Transfers popover does not hide SFTP — overlay.
     );
 
-    /* ── AI 面板宽度：用户拖拽 → localStorage，覆盖响应式默认值。
-       未设置时回落到 CSS 中的 380px / 320px / mobile-takeover 媒体查询。 */
-    const AI_PANEL_WIDTH_KEY = "ai-panel-width";
-    const AI_PANEL_MIN_WIDTH = 280;
-    const AI_PANEL_MIN_MAIN = 320; // 终端区至少留这么宽
-    let aiPanelWidth = $state<number | null>(null);
+    /* ── 两侧面板宽度：preferred value 按 tab 保存，rendered value 按当前容器
+       动态收敛；开第二块面板、切回宽 tab 或缩窗都不能把主区挤穿。 */
+    const PANEL_MIN_WIDTH = 280;
+    const PANEL_MIN_MAIN = 320;
+    let aiPanelWidth = $derived(ai.panelWidth(aiTabId));
+    let sftpPanelWidth = $derived(app.sftpPanelWidthForTab(app.activeTabId()));
+    let contentEl = $state<HTMLDivElement | null>(null);
+    let contentWidth = $state(window.innerWidth);
+    let viewportWidth = $state(window.innerWidth);
 
-    onMount(() => {
-        const saved = localStorage.getItem(AI_PANEL_WIDTH_KEY);
-        if (saved) {
-            const n = parseInt(saved, 10);
-            if (Number.isFinite(n) && n >= AI_PANEL_MIN_WIDTH) {
-                // 大屏存的值切到小屏会溢出主区。restore 时 clamp 到当前视口可用宽度。
-                const maxWidth = Math.max(AI_PANEL_MIN_WIDTH, window.innerWidth - AI_PANEL_MIN_MAIN);
-                aiPanelWidth = Math.min(n, maxWidth);
-            }
-        }
+    $effect(() => {
+        const el = contentEl;
+        if (!el) return;
+        const sync = () => {
+            contentWidth = el.getBoundingClientRect().width;
+            viewportWidth = window.innerWidth;
+        };
+        sync();
+        const observer = new ResizeObserver(sync);
+        observer.observe(el);
+        return () => observer.disconnect();
     });
 
+    let fittedPanelWidths = $derived(fitPanelWidths({
+        containerWidth: contentWidth,
+        mainMinWidth: PANEL_MIN_MAIN,
+        panelMinWidth: PANEL_MIN_WIDTH,
+        defaultWidth: defaultPanelWidth(viewportWidth),
+        aiVisible,
+        sftpVisible,
+        aiWidth: aiPanelWidth,
+        sftpWidth: sftpPanelWidth,
+    }));
+
     let aiSideStyle = $derived(
-        aiPanelWidth != null
-            ? `flex: 0 0 ${aiPanelWidth}px; max-width: ${aiPanelWidth}px;`
-            : ""
+        `flex: 0 0 ${fittedPanelWidths.ai}px; max-width: ${fittedPanelWidths.ai}px;`
     );
+    let sftpSideStyle = $derived(
+        `flex: 0 0 ${fittedPanelWidths.sftp}px; max-width: ${fittedPanelWidths.sftp}px;`
+    );
+
+    let activePanelResizeStop: (() => void) | null = null;
+    $effect(() => {
+        // 订阅所有会改变 drag owner/visibility 的坐标；一旦变化，旧手势立即失效。
+        aiTabId;
+        aiVisible;
+        sftpVisible;
+        app.settingsActive();
+        activePanelResizeStop?.();
+    });
 
     /** 另一侧 panel 的当前渲染宽度（aside 元素的 boundingClientRect）；hidden 状态返回 0。
      *  resize 时拿来从可用空间里减掉，避免两个 panel 都拖到极端导致主区被压成 0。 */
@@ -404,97 +439,110 @@
         return el ? (el as HTMLElement).getBoundingClientRect().width : 0;
     }
 
-    function startAiResize(e: MouseEvent) {
+    function startPanelResize(e: MouseEvent, options: {
+        tabId: string;
+        currentWidth: number | null;
+        sign: number;
+        minWidth: number;
+        minMain: number;
+        otherSelector: string;
+        stillActive: () => boolean;
+        setWidth: (tabId: string, width: number) => void;
+        setOtherWidth: (tabId: string, width: number) => void;
+    }) {
         e.preventDefault();
+        activePanelResizeStop?.();
         const startX = e.clientX;
-        // 取实际渲染宽度作为起点，避免首次拖拽时的"跳变"
         const sideEl = (e.currentTarget as HTMLElement).parentElement as HTMLElement | null;
-        const startWidth = aiPanelWidth ?? (sideEl?.getBoundingClientRect().width ?? 380);
-        // AI 在右：handle 在左边缘，光标左移 → AI 变宽（dx 取反）
-        // AI 在左：handle 在右边缘，光标右移 → AI 变宽（dx 直接用）
-        const sign = aiPos === "left" ? 1 : -1;
+        // 取实际渲染宽度作为起点，避免首次拖拽时的"跳变"。
+        const measuredWidth = sideEl?.getBoundingClientRect().width ?? 0;
+        const startWidth = measuredWidth > 0 ? measuredWidth : (options.currentWidth ?? 380);
+        const otherWidthAtStart = otherPanelWidth(options.otherSelector);
+        let allocationsSettled = false;
+        let stopped = false;
 
-        const onMove = (ev: MouseEvent) => {
-            const dx = ev.clientX - startX;
-            // 减去 SFTP 当前实际占的宽，让两个 panel 互相挤不死主区
-            const maxWidth = Math.max(
-                AI_PANEL_MIN_WIDTH,
-                window.innerWidth - AI_PANEL_MIN_MAIN - otherPanelWidth('.sftp-side'),
-            );
-            const next = Math.max(AI_PANEL_MIN_WIDTH, Math.min(maxWidth, startWidth + sign * dx));
-            aiPanelWidth = next;
-        };
-        const onUp = () => {
+        function stop() {
+            if (stopped) return;
+            stopped = true;
             document.removeEventListener("mousemove", onMove);
-            document.removeEventListener("mouseup", onUp);
-            if (aiPanelWidth != null) localStorage.setItem(AI_PANEL_WIDTH_KEY, String(aiPanelWidth));
-        };
+            document.removeEventListener("mouseup", stop);
+            window.removeEventListener("blur", stop);
+            if (activePanelResizeStop === stop) activePanelResizeStop = null;
+        }
+
+        function onMove(ev: MouseEvent) {
+            // 拖动期间切 tab、关 panel 或关 tab：结束旧手势，绝不能写到新 tab。
+            if (!options.stillActive()) { stop(); return; }
+            const dx = ev.clientX - startX;
+            if (!allocationsSettled) {
+                if (dx === 0) return;
+                // fit 可能正把两个 oversized preference 临时压窄。第一次真实移动
+                // 先把对侧当前 allocation 落成 preference；整个手势固定以它为界，
+                // 当前 panel 缩小后再反向拖动不会被对侧自动扩张锁死。
+                allocationsSettled = true;
+                if (otherWidthAtStart > 0) {
+                    options.setOtherWidth(options.tabId, otherWidthAtStart);
+                }
+            }
+            const next = resizePanelWidth({
+                startWidth,
+                deltaX: dx,
+                sign: options.sign,
+                minWidth: options.minWidth,
+                containerWidth: contentWidth,
+                mainMinWidth: options.minMain,
+                otherWidthAtStart,
+            });
+            options.setWidth(options.tabId, next);
+        }
         document.addEventListener("mousemove", onMove);
-        document.addEventListener("mouseup", onUp);
+        document.addEventListener("mouseup", stop);
+        window.addEventListener("blur", stop);
+        activePanelResizeStop = stop;
+    }
+
+    function startAiResize(e: MouseEvent) {
+        const tabId = aiTabId;
+        startPanelResize(e, {
+            tabId,
+            currentWidth: ai.panelWidth(tabId),
+            // AI 在右：左移变宽；AI 在左：右移变宽。
+            sign: aiPos === "left" ? 1 : -1,
+            minWidth: PANEL_MIN_WIDTH,
+            minMain: PANEL_MIN_MAIN,
+            otherSelector: ".sftp-side",
+            stillActive: () => aiVisible && app.activeTabId() === tabId,
+            setWidth: ai.setPanelWidth,
+            setOtherWidth: app.setSftpPanelWidth,
+        });
     }
 
     /** 双击 handle：清除手动宽度，回到响应式默认（媒体查询 + 380px）。 */
     function resetAiWidth() {
-        aiPanelWidth = null;
-        localStorage.removeItem(AI_PANEL_WIDTH_KEY);
+        ai.setPanelWidth(aiTabId, null);
     }
 
-    /* ── SFTP 面板宽度：跟 AI 镜像一份，独立 localStorage key。
+    /* ── SFTP 面板宽度：跟 AI 镜像一份，同样按 tab 管理。
        SFTP 永远走 AI 的对侧（aiPos=right → SFTP 左；aiPos=left → SFTP 右），
        靠 .content.ai-left 的 row-reverse 自动翻边，不引入新位置 config。 */
-    const SFTP_PANEL_WIDTH_KEY = "sftp-panel-width";
-    const SFTP_PANEL_MIN_WIDTH = 280;
-    const SFTP_PANEL_MIN_MAIN = 320;
-    let sftpPanelWidth = $state<number | null>(null);
-
-    onMount(() => {
-        const saved = localStorage.getItem(SFTP_PANEL_WIDTH_KEY);
-        if (saved) {
-            const n = parseInt(saved, 10);
-            if (Number.isFinite(n) && n >= SFTP_PANEL_MIN_WIDTH) {
-                const maxWidth = Math.max(SFTP_PANEL_MIN_WIDTH, window.innerWidth - SFTP_PANEL_MIN_MAIN);
-                sftpPanelWidth = Math.min(n, maxWidth);
-            }
-        }
-    });
-
-    let sftpSideStyle = $derived(
-        sftpPanelWidth != null
-            ? `flex: 0 0 ${sftpPanelWidth}px; max-width: ${sftpPanelWidth}px;`
-            : ""
-    );
-
     function startSftpResize(e: MouseEvent) {
-        e.preventDefault();
-        const startX = e.clientX;
-        const sideEl = (e.currentTarget as HTMLElement).parentElement as HTMLElement | null;
-        const startWidth = sftpPanelWidth ?? (sideEl?.getBoundingClientRect().width ?? 380);
-        // SFTP 视觉在左（aiPos=right）：handle 在 SFTP 的右边缘，光标右移 → SFTP 变宽（dx 直接用）
-        // SFTP 视觉在右（aiPos=left）：handle 在 SFTP 的左边缘，光标左移 → SFTP 变宽（dx 取反）
-        const sign = aiPos === "left" ? -1 : 1;
-
-        const onMove = (ev: MouseEvent) => {
-            const dx = ev.clientX - startX;
-            // 减去 AI 当前实际占的宽，让两个 panel 互相挤不死主区
-            const maxWidth = Math.max(
-                SFTP_PANEL_MIN_WIDTH,
-                window.innerWidth - SFTP_PANEL_MIN_MAIN - otherPanelWidth('.ai-side'),
-            );
-            const next = Math.max(SFTP_PANEL_MIN_WIDTH, Math.min(maxWidth, startWidth + sign * dx));
-            sftpPanelWidth = next;
-        };
-        const onUp = () => {
-            document.removeEventListener("mousemove", onMove);
-            document.removeEventListener("mouseup", onUp);
-            if (sftpPanelWidth != null) localStorage.setItem(SFTP_PANEL_WIDTH_KEY, String(sftpPanelWidth));
-        };
-        document.addEventListener("mousemove", onMove);
-        document.addEventListener("mouseup", onUp);
+        const tabId = app.activeTabId();
+        startPanelResize(e, {
+            tabId,
+            currentWidth: app.sftpPanelWidthForTab(tabId),
+            // SFTP 在左：右移变宽；SFTP 在右：左移变宽。
+            sign: aiPos === "left" ? -1 : 1,
+            minWidth: PANEL_MIN_WIDTH,
+            minMain: PANEL_MIN_MAIN,
+            otherSelector: ".ai-side",
+            stillActive: () => sftpVisible && app.activeTabId() === tabId,
+            setWidth: app.setSftpPanelWidth,
+            setOtherWidth: ai.setPanelWidth,
+        });
     }
 
     function resetSftpWidth() {
-        sftpPanelWidth = null;
-        localStorage.removeItem(SFTP_PANEL_WIDTH_KEY);
+        app.setSftpPanelWidth(app.activeTabId(), null);
     }
 
     /* Menu data — sections describe layout (header / scrollable list / footer),
@@ -1028,6 +1076,7 @@
 
     <div
         class="content"
+        bind:this={contentEl}
         class:ai-on={aiVisible}
         class:ai-left={aiVisible && aiPos === "left"}
         class:sftp-on={sftpVisible}
@@ -1076,8 +1125,10 @@
             {/each}
         </div>
 
-        {#if aiVisible && aiActiveTab && aiSessionId}
-            <aside class="ai-side" style={aiSideStyle}>
+        <!-- 任何 tab 开了 AI 就保留对应 ChatPanel；只有当前 tab 的 pane 可见。
+             不能用 {#if aiVisible} 包住 aside，否则切到没开 AI 的 tab 会销毁旧实例。 -->
+        {#if resourcePanesAllowed && aiTabs.length > 0}
+            <aside class="ai-side" class:hidden={!aiVisible} style={aiSideStyle}>
                 <div class="ai-resize-handle"
                      class:on-right={aiPos === "left"}
                      onmousedown={startAiResize}
@@ -1085,11 +1136,18 @@
                      role="separator"
                      aria-orientation="vertical"
                      title={t("common.resize_hint")}></div>
-                <ChatPanel
-                    tabId={aiActiveTab.id}
-                    targetKind={aiActiveTab.type as AiTargetKind}
-                    targetId={aiSessionId}
-                />
+                {#each aiTabs as tab (tab.id)}
+                    {@const targetId = app.sessionIdForTab(tab.id) ?? null}
+                    {@const active = aiVisible && tab.id === aiTabId}
+                    <div class="ai-pane" class:visible={active}>
+                        <ChatPanel
+                            tabId={tab.id}
+                            targetKind={tab.type as AiTargetKind}
+                            {targetId}
+                            {active}
+                        />
+                    </div>
+                {/each}
             </aside>
         {/if}
     </div>
@@ -1264,6 +1322,20 @@
         background: var(--bg);
         position: relative;
     }
+    .ai-pane {
+        position: absolute;
+        inset: 0;
+        display: none;
+    }
+    .ai-pane.visible {
+        display: flex;
+        flex-direction: column;
+    }
+    .ai-side.hidden {
+        flex: 0 0 0 !important;
+        max-width: 0 !important;
+        overflow: hidden;
+    }
 
     @media (max-width: 800px) { .ai-side { flex-basis: 320px; } }
 
@@ -1292,7 +1364,12 @@
 
     /* 竖屏手机：AI 接管整块内容区，main-area 挤到 0（终端实例保留，关 AI 后恢复） */
     @media (max-width: 480px) {
-        .ai-side { flex: 1; }
+        /* inline preferred width 不能压过 mobile takeover。 */
+        .ai-side:not(.hidden) {
+            flex: 1 1 auto !important;
+            max-width: none !important;
+        }
+        .ai-resize-handle { display: none; }
         .content.ai-on .main-area { flex: 0; }
     }
 

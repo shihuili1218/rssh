@@ -219,13 +219,51 @@ describe("closeTab keeps the most-recent tab active", () => {
     const ai = await import("../ai/store.svelte.ts");
     app.addTab(local("a"));
     ai.openPanel("a");
+    ai.setPanelWidth("a", 480);
+    ai.prefillInput("a", "draft A");
     app.addTab(local("b"));
     ai.openPanel("b");
+    ai.setPanelWidth("b", 360);
+    ai.prefillInput("b", "draft B");
 
     app.closeTab("a");
 
     expect(ai.isOpen("a")).toBe(false);
+    expect(ai.panelWidth("a")).toBeNull();
+    expect(ai.pendingPrefill("a")).toBeNull();
     expect(ai.isOpen("b")).toBe(true);
+    expect(ai.panelWidth("b")).toBe(360);
+    expect(ai.pendingPrefill("b")?.text).toBe("draft B");
+  });
+});
+
+describe("SFTP panel state", () => {
+  it("keeps widths per tab until that tab closes", async () => {
+    const app = await loadAppModule();
+    app.addTab({ id: "a", type: "ssh", label: "A" });
+    app.openSftp();
+    app.setSftpPanelWidth("a", 520);
+    app.addTab({ id: "b", type: "ssh", label: "B" });
+    app.openSftp();
+    app.setSftpPanelWidth("b", 360);
+
+    app.setActiveTab("a");
+    app.closeSftp();
+    expect(app.sftpOpenForTab("a")).toBe(false);
+    expect(app.sftpOpenForTab("b")).toBe(true);
+    expect(app.sftpPanelWidthForTab("a")).toBe(520);
+    expect(app.sftpPanelWidthForTab("b")).toBe(360);
+
+    app.setSftpPanelWidth("a", null);
+    expect(app.sftpPanelWidthForTab("a")).toBeNull();
+    expect(app.sftpPanelWidthForTab("b")).toBe(360);
+
+    app.setSftpPanelWidth("a", 480);
+    app.closeTab("a");
+    expect(app.sftpOpenForTab("a")).toBe(false);
+    expect(app.sftpOpenForTab("b")).toBe(true);
+    expect(app.sftpPanelWidthForTab("a")).toBeNull();
+    expect(app.sftpPanelWidthForTab("b")).toBe(360);
   });
 });
 

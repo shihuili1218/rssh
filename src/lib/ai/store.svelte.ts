@@ -7,7 +7,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type Event as TauriEvent, type UnlistenFn } from "@tauri-apps/api/event";
 import { saveTextFile, fileStamp } from "../save-file.ts";
 import { t, locale as currentLocale } from "../i18n/index.svelte.ts";
 import { extractOutput, findSentinel } from "./pty-output.ts";
@@ -47,8 +47,8 @@ function loadPos(): AiPosition {
 // ─── Per-tab visibility ───────────────────────────────────────────
 
 let _openByTab = $state<Record<string, true>>({});
+let _panelWidthByTab = $state<Record<string, number>>({});
 let _position = $state<AiPosition>(loadPos());
-let _activeTabId = $state<string | null>(null);
 let _sessionByTab = $state<Record<string, AiSessionInfo>>({});
 let _chatByTab = $state<Record<string, ChatItem[]>>({});
 let _pendingByTab = $state<Record<string, CommandProposed | null>>({});
@@ -71,6 +71,27 @@ let _settings = $state<AiSettings | null>(null);
 const _targetKindByTab: Record<string, AiTargetKind> = {};
 
 const _unlistenersByTab: Record<string, UnlistenFn[]> = {};
+const _tabGeneration: Record<string, number> = {};
+const _disposedTabs = new Set<string>();
+
+class TabClosedError extends Error {
+  constructor(tab_id: string) {
+    super(`AI tab closed: ${tab_id}`);
+    this.name = "TabClosedError";
+  }
+}
+
+function tabGeneration(tab_id: string): number {
+  return _tabGeneration[tab_id] ?? 0;
+}
+
+function isTabLive(tab_id: string, generation: number): boolean {
+  return !_disposedTabs.has(tab_id) && tabGeneration(tab_id) === generation;
+}
+
+function assertTabLive(tab_id: string, generation = tabGeneration(tab_id)): void {
+  if (!isTabLive(tab_id, generation)) throw new TabClosedError(tab_id);
+}
 
 export function position() { return _position; }
 export function setPosition(p: AiPosition) {
@@ -87,27 +108,61 @@ export function togglePanel(tab_id: string) {
   if (isOpen(tab_id)) closePanel(tab_id);
   else openPanel(tab_id);
 }
+export function panelWidth(tab_id: string): number | null {
+  return _panelWidthByTab[tab_id] ?? null;
+}
+export function setPanelWidth(tab_id: string, width: number | null) {
+  if (width === null) delete _panelWidthByTab[tab_id];
+  else _panelWidthByTab[tab_id] = width;
+}
+export function discardPanelState(tab_id: string) {
+  closePanel(tab_id);
+  setPanelWidth(tab_id, null);
+  clearPrefill(tab_id);
+}
+
+/** addTab 的生命周期入口；同一个 id 即使被测试/调用方复用，旧异步任务也会因
+ * generation 不同而失效。正常产品路径使用 UUID，不依赖复用。 */
+export function activateTab(tab_id: string) {
+  _tabGeneration[tab_id] = tabGeneration(tab_id) + 1;
+  _disposedTabs.delete(tab_id);
+}
+
+/** closeTab 的唯一 AI teardown：先同步封死后续异步 continuation，再清 UI/actor。 */
+export async function disposeTab(tab_id: string): Promise<void> {
+  _tabGeneration[tab_id] = tabGeneration(tab_id) + 1;
+  _disposedTabs.add(tab_id);
+  discardPanelState(tab_id);
+  if (!_sessionByTab[tab_id]) {
+    // 尚在 start invoke 内的 actor 由 launchSession 在返回后识别 tombstone 并 stop；
+    // 此刻先打 stop 只会产生正常但嘈杂的 ai_session_not_found。
+    clearSessionState(tab_id);
+    return;
+  }
+  try {
+    await stopSession(tab_id);
+  } catch (error) {
+    // ai_session_not_found 也不能让前端残留；调用方仍能看到/记录后端错误。
+    clearSessionState(tab_id);
+    throw error;
+  }
+}
 
 // ─── Input prefill ────────────────────────────────────────────────
 // 把一段文本塞进某个 tab 的 ChatPanel 输入框（不发送）。色条"发送到 AI"用它：
 // 抽块文本 → openPanel → prefillInput，让用户过目/编辑后再发。
-// 每次都是新对象字面量，identity 必变——同一段文本塞两次也照样触发 ChatPanel 的 $effect。
-let _prefill = $state<{ tabId: string; text: string } | null>(null);
+// 每个 tab 独立一个槽；新对象 identity 保证同一段文本重复写入也能触发对应面板的 effect。
+let _prefillByTab = $state<Record<string, { text: string }>>({});
 export function prefillInput(tab_id: string, text: string) {
-  _prefill = { tabId: tab_id, text };
+  _prefillByTab[tab_id] = { text };
 }
-export function pendingPrefill() { return _prefill; }
+export function pendingPrefill(tab_id: string) { return _prefillByTab[tab_id] ?? null; }
 export function clearPrefill(tab_id: string) {
-  if (_prefill?.tabId === tab_id) _prefill = null;
+  delete _prefillByTab[tab_id];
 }
 
 // ─── Session ──────────────────────────────────────────────────────
 
-export function activeTabId() { return _activeTabId; }
-export function activeSession(): AiSessionInfo | null {
-  if (!_activeTabId) return null;
-  return _sessionByTab[_activeTabId] ?? null;
-}
 export function sessionForTab(tab_id: string): AiSessionInfo | undefined {
   return _sessionByTab[tab_id];
 }
@@ -196,6 +251,8 @@ async function launchSession(
   args: StartSessionArgs,
   resumeId: string | null,
 ): Promise<AiSessionInfo> {
+  const generation = tabGeneration(args.tabId);
+  assertTabLive(args.tabId, generation);
   // timeline 先取后启动：取失败就整体失败，不会出现"LLM 记得、UI 一片空白"
   // 的半恢复状态。新对话跳过，timeline 就是空数组。
   let timeline: ChatItem[] = [];
@@ -204,6 +261,7 @@ async function launchSession(
       id: resumeId,
       target: { kind: args.targetKind, id: args.targetId },
     });
+    assertTabLive(args.tabId, generation);
     timeline = restoreTimeline(json, t("ai.history.stale_command"));
   }
   const info = await invoke<AiSessionInfo>("ai_session_start", {
@@ -215,14 +273,40 @@ async function launchSession(
     locale: currentLocale(),
     resume: resumeId,
   });
+  if (!isTabLive(args.tabId, generation)) {
+    // close 可能先打到 not_found、start 随后才成功；启动返回后必须再 stop 一次。
+    await invoke("ai_session_stop", { tabId: args.tabId }).catch((e) =>
+      console.warn("[ai] stop abandoned session:", e),
+    );
+    throw new TabClosedError(args.tabId);
+  }
   // info.tab_id 后端权威 —— 跟 args.tabId 一定一致（后端按入参 insert），但用
   // 后端返回值就消除"未来后端 normalize tab_id"导致 cache miss 的隐患。
   _sessionByTab[info.tab_id] = info;
   _targetKindByTab[info.tab_id] = args.targetKind;
   _chatByTab[info.tab_id] = timeline;
-  _activeTabId = info.tab_id;
-  await attachListeners(info);
-  return info;
+  try {
+    await attachListeners(info, generation);
+    assertTabLive(args.tabId, generation);
+    return info;
+  } catch (error) {
+    clearSessionState(info.tab_id);
+    await invoke("ai_session_stop", { tabId: info.tab_id }).catch((e) =>
+      console.warn("[ai] stop failed launch:", e),
+    );
+    if (!isTabLive(args.tabId, generation)) throw new TabClosedError(args.tabId);
+    throw error;
+  }
+}
+
+function clearSessionState(tab_id: string) {
+  detachListeners(tab_id);
+  delete _sessionByTab[tab_id];
+  delete _pendingByTab[tab_id];
+  delete _keyboardLockedByTab[tab_id];
+  delete _targetKindByTab[tab_id];
+  delete _chatByTab[tab_id];
+  delete _tokensByTab[tab_id];
 }
 
 export async function stopSession(tab_id: string) {
@@ -254,17 +338,11 @@ export async function stopSession(tab_id: string) {
   }
 
   await invoke("ai_session_stop", { tabId: tab_id });
-  detachListeners(tab_id);
-  delete _sessionByTab[tab_id];
-  delete _pendingByTab[tab_id];
-  delete _keyboardLockedByTab[tab_id];
-  delete _targetKindByTab[tab_id];
-  delete _chatByTab[tab_id];
-  delete _tokensByTab[tab_id];
-  if (_activeTabId === tab_id) _activeTabId = null;
+  clearSessionState(tab_id);
 }
 
 export async function sendMessage(tab_id: string, text: string) {
+  assertTabLive(tab_id);
   await invoke("ai_user_message", { tabId: tab_id, text });
 }
 
@@ -562,7 +640,7 @@ export async function executeCommand(
   };
 
   try {
-    exec.unlisten = await listen<number[]>(dataEvent, (e) => {
+    const unlisten = await listen<number[]>(dataEvent, (e) => {
       if (exec.resolved) return;
       const chunk = new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(e.payload));
       exec.buffer.append(chunk);
@@ -572,7 +650,15 @@ export async function executeCommand(
       const hit = findSentinel(exec.buffer.view(), proposed.sentinel);
       if (hit) void finish(hit.output, hit.exitCode, false);
     });
+    // close/terminate may have won while listen() was registering. Never paste
+    // after that point, and do not leak the listener that arrived too late.
+    if (exec.resolved) {
+      unlisten();
+      return done;
+    }
+    exec.unlisten = unlisten;
   } catch (e) {
+    if (exec.resolved) return done;
     // listen() failed to register: release the slot reserved above so this
     // tool_call_id isn't wedged "in flight" forever.
     _runningExecutions.delete(exec.toolCallId);
@@ -594,10 +680,14 @@ export async function executeCommand(
       await invoke(writeCmd, { sessionId: target_session_id, data });
     }
   } catch (e) {
+    if (exec.resolved) return done;
     await finish(`failed to write command: ${e instanceof Error ? e.message : String(e)}`, -1, false);
     throw e;
   }
 
+  // terminate can also win while the transport write itself is in flight.
+  // finish() already cleaned the listener/map; do not resurrect a timeout.
+  if (exec.resolved) return done;
   exec.timer = window.setTimeout(() => {
     void finish(extractOutput(exec.buffer.view(), undefined, dropEcho), -1, true);
   }, Math.max(1000, proposed.timeout_s * 1000)) as unknown as number;
@@ -696,23 +786,45 @@ export async function listModels(
 
 // ─── 事件监听 ─────────────────────────────────────────────────────
 
-async function attachListeners(info: AiSessionInfo) {
+async function attachListeners(info: AiSessionInfo, generation: number) {
   // tab_id 同时是状态字典 key、事件 topic 后缀、internal_command 路由 key —— 单一坐标。
   // info.target_id 不在闭包里捕获 —— 重连后 target_id 变了，internal_command 需要走新的，
   // 闭包里写死会一直发到旧 SSH 会话。运行期通过 _sessionByTab[tab_id].target_id 读最新值。
   const tab = info.tab_id;
   const u: UnlistenFn[] = [];
+  assertTabLive(tab, generation);
+  detachListeners(tab);
+  // 先登记正在构建的数组。dispose 若发生在任一个 listen await 中，可以立刻
+  // 清掉已完成的 listener；迟到的 listener 由下面 catch 再清一次。
+  _unlistenersByTab[tab] = u;
 
-  u.push(await listen<{ text: string }>(`ai:user_message:${tab}`, (e) => {
+  const addListener = async <T>(
+    event: string,
+    handler: (event: TauriEvent<T>) => void | Promise<void>,
+  ) => {
+    const unlisten = await listen<T>(event, (payload) => {
+      // unlisten 不能撤回已排队的 callback；generation gate 防止关闭后的
+      // 迟到事件重新写入 chat/pending/keyboard 状态。
+      if (isTabLive(tab, generation)) void handler(payload);
+    });
+    if (!isTabLive(tab, generation)) {
+      unlisten();
+      throw new TabClosedError(tab);
+    }
+    u.push(unlisten);
+  };
+
+  try {
+  await addListener<{ text: string }>(`ai:user_message:${tab}`, (e) => {
     pushChat(tab, { kind: "user", text: e.payload.text, at: Date.now() });
-  }));
+  });
 
   // 流式：start 创建空气泡，delta append，end 关 streaming 标记
-  u.push(await listen<{ id: string }>(`ai:assistant_message_start:${tab}`, (e) => {
+  await addListener<{ id: string }>(`ai:assistant_message_start:${tab}`, (e) => {
     pushChat(tab, { kind: "assistant", id: e.payload.id, text: "", at: Date.now(), streaming: true });
-  }));
+  });
 
-  u.push(await listen<{ id: string; text: string }>(`ai:assistant_delta:${tab}`, (e) => {
+  await addListener<{ id: string; text: string }>(`ai:assistant_delta:${tab}`, (e) => {
     const arr = _chatByTab[tab];
     if (!arr) return;
     // Mutate the matching item in place. Svelte 5's $state proxy picks up
@@ -726,9 +838,9 @@ async function attachListeners(info: AiSessionInfo) {
         return;
       }
     }
-  }));
+  });
 
-  u.push(await listen<{
+  await addListener<{
     id: string; text: string; cancelled?: boolean;
     tokens_in?: number | null; tokens_out?: number | null;
   }>(`ai:assistant_message_end:${tab}`, (e) => {
@@ -771,17 +883,17 @@ async function attachListeners(info: AiSessionInfo) {
         return;
       }
     }
-  }));
+  });
 
-  u.push(await listen<CommandProposed>(`ai:command_proposed:${tab}`, (e) => {
+  await addListener<CommandProposed>(`ai:command_proposed:${tab}`, (e) => {
     _pendingByTab[tab] = e.payload;
     pushChat(tab, { kind: "command", cmd: e.payload, at: Date.now() });
-  }));
+  });
 
   // internal_command：当前只用于 file_ops 工具的远端能力探测（一行只读 echo "py3=... perl=... diff=..."）。
   // 不弹审批、不入 chat 时间线，直接粘到 PTY 跑——用户在终端历史里看到探测命令滚过，
   // 透明但不打断流程。后续若加其他 read-only 内部命令也走这条路径。
-  u.push(await listen<{
+  await addListener<{
     id: string;
     tool_call_id: string;
     cmd: string;
@@ -840,13 +952,13 @@ async function attachListeners(info: AiSessionInfo) {
         console.error("[ai] failed to report internal_command exec failure:", reportErr);
       }
     }
-  }));
+  });
 
-  u.push(await listen<{ id: string; lock_keyboard: boolean }>(`ai:command_executing:${tab}`, (e) => {
+  await addListener<{ id: string; lock_keyboard: boolean }>(`ai:command_executing:${tab}`, (e) => {
     _keyboardLockedByTab[tab] = !!e.payload.lock_keyboard;
-  }));
+  });
 
-  u.push(await listen<CommandResult & { lock_keyboard: boolean }>(`ai:command_completed:${tab}`, (e) => {
+  await addListener<CommandResult & { lock_keyboard: boolean }>(`ai:command_completed:${tab}`, (e) => {
     _keyboardLockedByTab[tab] = !!e.payload.lock_keyboard;
     _pendingByTab[tab] = null;
     // 给最近一条对应 id 的 command 项填上 result
@@ -860,12 +972,12 @@ async function attachListeners(info: AiSessionInfo) {
         break;
       }
     }
-  }));
+  });
 
   // 拒绝路径单独事件 —— complete 跟 reject 是两种语义，复用 command_completed
   // 加 rejected:true 字段会让 listener 分支模糊。后端 RejectCommand 分支 emit
   // 这个，前端清 pending + 标记 ChatItem.rejected。
-  u.push(await listen<{ id: string; reason: string }>(`ai:command_rejected:${tab}`, (e) => {
+  await addListener<{ id: string; reason: string }>(`ai:command_rejected:${tab}`, (e) => {
     _pendingByTab[tab] = null;
     const arr = _chatByTab[tab] ?? [];
     for (let i = arr.length - 1; i >= 0; i--) {
@@ -877,46 +989,53 @@ async function attachListeners(info: AiSessionInfo) {
         break;
       }
     }
-  }));
+  });
 
   // load_skill 成功 —— 后端 emit 这个，聊天面板出一条低调的 note 气泡，告诉用户
   // AI 加载了哪个用户技能（read-only，无审批卡片）。审计日志另有 SkillLoaded 条目。
-  u.push(await listen<{ id: string; name: string }>(`ai:skill_loaded:${tab}`, (e) => {
+  await addListener<{ id: string; name: string }>(`ai:skill_loaded:${tab}`, (e) => {
     pushChat(tab, { kind: "note", text: t("ai.note.skill_loaded", { name: e.payload.name }), at: Date.now() });
-  }));
+  });
 
   // rssh 黑名单直接拦掉命令（命令从未变成审批卡片）—— 后端 emit 这个，否则安全层
   // 静默触发，用户只看到 AI 莫名改了方案。命令可能很长，截断显示。
-  u.push(await listen<{ cmd: string; reason: string }>(`ai:command_blocked:${tab}`, (e) => {
+  await addListener<{ cmd: string; reason: string }>(`ai:command_blocked:${tab}`, (e) => {
     pushChat(tab, { kind: "note", text: t("ai.note.command_blocked", { cmd: truncateCommand(e.payload.cmd), reason: e.payload.reason }), at: Date.now() });
-  }));
+  });
 
-  u.push(await listen<{ message: string }>(`ai:error:${tab}`, (e) => {
+  await addListener<{ message: string }>(`ai:error:${tab}`, (e) => {
     pushChat(tab, { kind: "error", text: e.payload.message, at: Date.now() });
-  }));
+  });
 
   // 用户按"清理上下文"——后端清完 history 后 emit 这个事件，前端把气泡也抹掉。
   // pending command / keyboard lock 一并清：清上下文等于把这个 actor 重置回 idle。
-  u.push(await listen<{}>(`ai:context_cleared:${tab}`, () => {
+  await addListener<{}>(`ai:context_cleared:${tab}`, () => {
     _chatByTab[tab] = [];
     _pendingByTab[tab] = null;
     _keyboardLockedByTab[tab] = false;
     // 存储的 timeline 跟着清空 —— 镜像后端（它也清空了存储的 history）。
     schedulePersist(tab);
-  }));
+  });
 
-  u.push(await listen<{}>(`ai:session_ended:${tab}`, () => {
+  await addListener<{}>(`ai:session_ended:${tab}`, () => {
     pushChat(tab, { kind: "note", text: t("ai.session.ended_note"), at: Date.now() });
-  }));
+  });
 
-  _unlistenersByTab[tab] = u;
+    assertTabLive(tab, generation);
+  } catch (error) {
+    const listeners = u.splice(0);
+    listeners.forEach((fn) => fn());
+    if (_unlistenersByTab[tab] === u) delete _unlistenersByTab[tab];
+    throw error;
+  }
 }
 
 function detachListeners(tab_id: string) {
   const arr = _unlistenersByTab[tab_id];
   if (arr) {
-    arr.forEach(fn => fn());
     delete _unlistenersByTab[tab_id];
+    const listeners = arr.splice(0);
+    listeners.forEach(fn => fn());
   }
 }
 

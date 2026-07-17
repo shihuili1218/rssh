@@ -8,23 +8,27 @@
      *  都会新建一个，完全不能跨实例共享，等于没防护。
      *  生命周期：invoke 成功后才 add；result/rejected 抵达由 $effect 清理。 */
     const _ackedToolCalls = new Set<string>();
+    // 任一批准入口（自动或人工）一旦尝试过，同一 tool call 就不能再被 effect
+    // 自动批准。跨组件 remount 保留，直到后端明确给出 result/rejected。
+    const _approveAttemptedToolCalls = new Set<string>();
 </script>
 
 <script lang="ts">
-    import { onMount } from "svelte";
+    import { onMount, untrack } from "svelte";
     import { invoke } from "@tauri-apps/api/core";
     import * as ai from "./store.svelte.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import type { AiSettings, AiTargetKind, CommandKind, CommandProposed, CommandResult } from "./types.ts";
     import { isRawDeviceKind } from "./types.ts";
 
-    let { tabId, targetKind, targetSessionId, cmd, result, rejected } = $props<{
+    let { tabId, targetKind, targetSessionId, cmd, result, rejected, active } = $props<{
         tabId: string;
         targetKind: AiTargetKind;
-        targetSessionId: string;
+        targetSessionId: string | null;
         cmd: CommandProposed;
         result?: CommandResult;
         rejected?: { reason: string };
+        active: boolean;
     }>();
 
     let askingReason = $state(false);
@@ -68,17 +72,16 @@
         }
     }
 
-    // 自动批准：每次新 command 进 chat 会创建一个新的 CommandConfirmDialog 实例，
-    // onMount 触发一次按 kind 查 settings.auto_<kind>。UI 上"提议→执行"全程可见，
-    // 审计 trail 完整；后端 emit 流程不变。挂载时若已有 result/rejected（历史记录
-    // 回放）自然跳过。
+    // 自动批准只由当前可见 tab 发起。ChatPanel 现在会保活隐藏 tab；如果仍在 onMount
+    // 无条件批准，后台 tab 的命令会比旧行为更早执行。active 变 true 时 effect 再检查，
+    // UI 上"提议→执行"全程可见，审计 trail 与原行为不变。
     //
     // 重入防御：组件可能被销毁重建（panel close/reopen、chat list 重新 key 等）。
     // 重建实例的 executing=false，单看 executing 拦不住第二次 approve —— 同一 tool_call_id
     // 会被粘到 PTY 两次（rm/reboot 双执行级别的灾难）。用全局 _runningExecutions 表
     // （isCommandRunning）守门：命令还在 in-flight 时拒绝再次自动批准。
     //
-    // 历史卡片没有 kind 字段 → autoApproveAllowed 返回 false → 走人审，符合 fail-safe。
+    // onMount 只负责恢复已在执行的卡片视觉状态。
     onMount(() => {
         // Command already in flight when this dialog (re)mounts — e.g. the AI
         // panel was closed and reopened mid-execution. Reflect the running state
@@ -91,11 +94,17 @@
             : ai.isCommandRunning(cmd.tool_call_id);
         if (isPending && inFlight) {
             executing = true;
-            return;
         }
+    });
+
+    // 历史卡片没有 kind 字段 → autoApproveAllowed 返回 false → 走人审，符合 fail-safe。
+    $effect(() => {
         if (
-            isPending
+            active
+            && isPending
             && !executing
+            && !askingReason
+            && !!cmd.tool_call_id
             // No danger mode on raw devices: a bare serial peer (firmware / PLC /
             // bootloader) or a telnet peer (core switch, router) is too sensitive
             // to auto-paste into — and the POSIX-oriented blacklist can't catch
@@ -103,7 +112,10 @@
             && !isRawDeviceKind(targetKind)
             && !ai.isCommandRunning(cmd.tool_call_id)
             && !_ackedToolCalls.has(cmd.tool_call_id)
-            && autoApproveAllowed(ai.settings(), cmd.kind)
+            && !_approveAttemptedToolCalls.has(cmd.tool_call_id)
+            // Settings changes must not retroactively execute an already-pending
+            // command. active/cmd changes are the eligibility boundary.
+            && autoApproveAllowed(untrack(() => ai.settings()), cmd.kind)
         ) {
             void approve();
         }
@@ -115,12 +127,16 @@
     $effect(() => {
         if (result || rejected) {
             _ackedToolCalls.delete(cmd.tool_call_id);
+            _approveAttemptedToolCalls.delete(cmd.tool_call_id);
         }
     });
 
     async function approve() {
         if (executing) return;
         if (isAckOnly && _ackedToolCalls.has(cmd.tool_call_id)) return;
+        // Reserve before the first await. Manual approval counts too: if settings
+        // become permissive while it runs, the reactive auto path must not fire.
+        _approveAttemptedToolCalls.add(cmd.tool_call_id);
         executing = true;
         try {
             if (isAckOnly) {
@@ -149,7 +165,9 @@
                 }
                 return;
             }
-            await ai.executeCommand(tabId, cmd, targetKind, targetSessionId);
+            const liveTargetSessionId = targetSessionId;
+            if (!liveTargetSessionId) throw new Error(t("common.disconnected"));
+            await ai.executeCommand(tabId, cmd, targetKind, liveTargetSessionId);
         } catch (e) {
             console.error("[ai] execute failed:", e);
             alert(t("ai.cmd.alert.exec_failed", { error: errMsg(e) }));
