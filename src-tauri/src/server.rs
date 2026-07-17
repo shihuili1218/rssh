@@ -1071,14 +1071,10 @@ async fn dispatch_async(
             &arg::<String>(&args, "tabId")?,
             owner,
             arg(&args, "toolCallId")?,
-            args.get("exitCode").and_then(Value::as_i64).unwrap_or(0) as i32,
+            arg::<i32>(&args, "exitCode")?,
             arg(&args, "output")?,
-            args.get("timedOut")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            args.get("earlyTerminated")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+            arg::<bool>(&args, "timedOut")?,
+            arg::<Option<bool>>(&args, "earlyTerminated")?.unwrap_or(false),
             args.get("instanceId").and_then(Value::as_str),
         )
         .await),
@@ -1703,5 +1699,21 @@ mod tests {
             err_value(AppError::not_found("ai_session_not_found", json!({}))),
             json!(r#"__rssh_err__|{"code":"ai_session_not_found","params":{}}"#)
         );
+    }
+
+    #[test]
+    fn headless_command_result_fields_match_tauri_types() {
+        let valid = json!({ "exitCode": -1, "timedOut": false });
+        assert_eq!(arg::<i32>(&valid, "exitCode").unwrap(), -1);
+        assert!(!arg::<bool>(&valid, "timedOut").unwrap());
+        assert_eq!(
+            arg::<Option<bool>>(&valid, "earlyTerminated").unwrap(),
+            None
+        );
+
+        let overflow = json!({ "exitCode": i64::from(i32::MAX) + 1 });
+        assert!(arg::<i32>(&overflow, "exitCode").is_err());
+        assert!(arg::<i32>(&json!({}), "exitCode").is_err());
+        assert!(arg::<bool>(&json!({}), "timedOut").is_err());
     }
 }
