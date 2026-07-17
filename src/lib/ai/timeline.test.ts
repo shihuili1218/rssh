@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { restoreTimeline } from "./timeline.ts";
+import { applyTerminalMutations, restoreTimeline } from "./timeline.ts";
 import type { ChatItem } from "./types.ts";
 
 const STALE = "stale";
@@ -22,6 +22,20 @@ describe("restoreTimeline", () => {
       { kind: "note", text: "n", at: 4 },
     ];
     expect(roundtrip(items)).toEqual(items);
+  });
+
+  it("drops live-only user mutation metadata from legacy timelines", () => {
+    expect(roundtrip([
+      {
+        kind: "user",
+        client_id: "old-instance:100",
+        client_seq: 100,
+        text: "from an earlier runtime",
+        at: 1,
+      },
+    ])).toEqual([
+      { kind: "user", text: "from an earlier runtime", at: 1 },
+    ]);
   });
 
   it("kills a resurrected streaming cursor", () => {
@@ -83,5 +97,144 @@ describe("restoreTimeline", () => {
       { kind: "note", text: "ok", at: 4 },
     ]);
     expect(items).toEqual([{ kind: "note", text: "ok", at: 4 }]);
+  });
+});
+
+describe("applyTerminalMutations", () => {
+  it("idempotently closes a streaming assistant bubble with canonical text", () => {
+    const source: ChatItem[] = [{
+      kind: "assistant",
+      id: "reply-1",
+      text: "partial",
+      at: 1,
+      streaming: true,
+    }];
+    const terminal = [{
+      kind: "assistant_message_end",
+      payload: { id: "reply-1", text: "partial response", cancelled: true },
+    }];
+
+    const once = applyTerminalMutations(source, terminal);
+    const twice = applyTerminalMutations(once, terminal);
+
+    expect(twice).toEqual([{
+      kind: "assistant",
+      id: "reply-1",
+      text: "partial response",
+      at: 1,
+      streaming: false,
+      cancelled: true,
+    }]);
+  });
+
+  it("replays backend-sanitized command completion and rejection by card id", () => {
+    const command = (id: string): ChatItem => ({
+      kind: "command",
+      cmd: {
+        id,
+        tool_call_id: `tool-${id}`,
+        cmd: "show secret",
+        full_cmd: "show secret",
+        sentinel: "sentinel",
+        explain: "",
+        side_effect: "",
+        timeout_s: 30,
+      },
+      at: 1,
+    });
+
+    expect(applyTerminalMutations(
+      [command("complete"), command("reject")],
+      [
+        {
+          kind: "command_completed",
+          payload: {
+            id: "complete",
+            exit_code: 0,
+            timed_out: false,
+            early_terminated: true,
+            duration_ms: 12,
+            output: "[REDACTED]",
+            original_bytes: 100,
+            truncated_bytes: 80,
+            lock_keyboard: false,
+          },
+        },
+        {
+          kind: "command_rejected",
+          payload: { id: "reject", reason: "not now" },
+        },
+      ],
+    )).toEqual([
+      expect.objectContaining({
+        kind: "command",
+        result: {
+          id: "complete",
+          exit_code: 0,
+          timed_out: false,
+          early_terminated: true,
+          duration_ms: 12,
+          output: "[REDACTED]",
+          original_bytes: 100,
+          truncated_bytes: 80,
+        },
+      }),
+      expect.objectContaining({
+        kind: "command",
+        rejected: { reason: "not now" },
+      }),
+    ]);
+  });
+
+  it("drops an empty failed assistant placeholder and ignores malformed mutations", () => {
+    const source: ChatItem[] = [{
+      kind: "assistant",
+      id: "reply-1",
+      text: "",
+      at: 1,
+      streaming: true,
+    }];
+
+    expect(applyTerminalMutations(source, [
+      { kind: "command_completed", payload: { id: "missing" } },
+      { kind: "assistant_message_end", payload: { id: "reply-1", text: "" } },
+    ])).toEqual([]);
+  });
+
+  it("reconstructs a missing non-empty assistant end but not an empty failed one", () => {
+    expect(applyTerminalMutations([], [
+      {
+        kind: "assistant_message_end",
+        payload: { id: "reply-visible", text: "final response" },
+      },
+      {
+        kind: "assistant_message_end",
+        payload: { id: "reply-empty", text: "" },
+      },
+    ])).toEqual([{
+      kind: "assistant",
+      id: "reply-visible",
+      text: "final response",
+      at: expect.any(Number),
+      streaming: false,
+      cancelled: false,
+    }]);
+  });
+
+  it("settles a leftover stream if the actor exits without a terminal mutation", () => {
+    expect(applyTerminalMutations([{
+      kind: "assistant",
+      id: "reply-panic",
+      text: "partial",
+      at: 1,
+      streaming: true,
+    }], [])).toEqual([{
+      kind: "assistant",
+      id: "reply-panic",
+      text: "partial",
+      at: 1,
+      streaming: false,
+      cancelled: true,
+    }]);
   });
 });

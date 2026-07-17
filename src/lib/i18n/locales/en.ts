@@ -538,6 +538,7 @@ const en = {
   "ai.cmd.btn.terminating": "⋯ Terminating",
   "ai.cmd.btn.submit": "✓ Submit output",
   "ai.cmd.btn.submitting": "⋯ Submitting",
+  "ai.cmd.btn.retry_result": "↻ Retry result delivery",
   "ai.cmd.hint.executing": "Command pasted; waiting for sentinel in terminal output…",
   "ai.cmd.hint.executing_serial": "Command sent to the serial device. Click \"Submit output\" once it has finished responding.",
   "ai.cmd.hint.executing_telnet": "Command sent over telnet. Click \"Submit output\" once the device has finished responding.",
@@ -551,6 +552,7 @@ const en = {
   "ai.cmd.empty_output": "(empty output)",
   "ai.cmd.alert.exec_failed": "Execute failed: {error}",
   "ai.cmd.alert.submit_failed": "Submit failed: {error}",
+  "ai.cmd.alert.result_delivery_failed": "Command ran, but reporting its result failed: {error}",
   "ai.cmd.patch.tag": "[AI patch]",
   "ai.cmd.proposed.tag": "[AI]",
 

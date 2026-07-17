@@ -94,16 +94,19 @@
         try {
             await ai.saveSettings({ [field]: next });
         } catch (err) {
-            // 任一保存失败都把对应字段回滚——单 source of truth 是后端
-            switch (field) {
-                case "autoRunCommand":     autoRunCommand     = !next; break;
-                case "autoMatchFile":      autoMatchFile      = !next; break;
-                case "autoDownloadFile":   autoDownloadFile   = !next; break;
-                case "autoAnalyzeLocally": autoAnalyzeLocally = !next; break;
-                case "autoPatchCp":        autoPatchCp        = !next; break;
-                case "autoPatchModify":    autoPatchModify    = !next; break;
-                case "autoPatchDiff":      autoPatchDiff      = !next; break;
-                case "autoPatchMv":        autoPatchMv        = !next; break;
+            // Enabling failed → restore off. Disabling failed stays off locally:
+            // safety revocation is immediate and must not be undone by a DB error.
+            if (next) {
+                switch (field) {
+                    case "autoRunCommand":     autoRunCommand     = false; break;
+                    case "autoMatchFile":      autoMatchFile      = false; break;
+                    case "autoDownloadFile":   autoDownloadFile   = false; break;
+                    case "autoAnalyzeLocally": autoAnalyzeLocally = false; break;
+                    case "autoPatchCp":        autoPatchCp        = false; break;
+                    case "autoPatchModify":    autoPatchModify    = false; break;
+                    case "autoPatchDiff":      autoPatchDiff      = false; break;
+                    case "autoPatchMv":        autoPatchMv        = false; break;
+                }
             }
             dangerNote = t("ai.settings.danger.save_failed", { error: errMsg(err) });
         } finally {

@@ -24,7 +24,6 @@ use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, 
 use tokio_tungstenite::tungstenite::http;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::ai::session::UserAction;
 use crate::error::{locked, AppError, AppResult};
 use crate::models::{
     Credential, Forward, Group, HighlightRule, Profile, SerialProfile, Snippet, TelnetProfile,
@@ -74,7 +73,7 @@ fn build_state() -> AppResult<AppState> {
         #[cfg(desktop)]
         window_groups: Mutex::new(crate::commands::window::WindowGroups::default()),
         ai_sessions: Mutex::new(HashMap::new()),
-        ai_session_owners: Mutex::new(HashMap::new()),
+        ai_session_owners: Arc::new(Mutex::new(HashMap::new())),
         ai_remote_shell_cache: Mutex::new(HashMap::new()),
         data_dir,
     })
@@ -707,14 +706,16 @@ fn dispatch(
         "ai_audit_save" => {
             let tab_id: String = arg(&args, "tabId")?;
             let file_path: String = arg(&args, "filePath")?;
-            let audit = locked(&state.ai_sessions)
-                .map_err(err_value)?
-                .get(&tab_id)
-                .map(|s| s.audit.clone())
-                .ok_or_else(|| json!("ai_session_not_found"))?;
-            let g = audit.lock().map_err(|_| json!("lock_poisoned"))?;
+            let audit = crate::ai::commands::ai_audit_handle(
+                state,
+                &tab_id,
+                owner,
+                args.get("instanceId").and_then(Value::as_str),
+            )
+            .map_err(err_value)?;
+            let g = audit.lock().map_err(|_| err_value(AppError::Lock))?;
             g.save_to_file(&std::path::PathBuf::from(file_path))
-                .map_err(|e| json!(e.to_string()))?;
+                .map_err(|error| err_value(error.into()))?;
             Ok(Value::Null)
         }
         "ai_cache_remote_shell" => {
@@ -1031,14 +1032,9 @@ async fn dispatch_async(
                 .map(str::to_string),
         )
         .await),
-        "ai_list_sessions" => {
-            let g = locked(&state.ai_sessions).map_err(err_value)?;
-            let infos: Vec<crate::ai::commands::AiSessionInfo> = g
-                .values()
-                .map(crate::ai::commands::AiSessionInfo::from)
-                .collect();
-            ok(Ok::<_, AppError>(infos))
-        }
+        "ai_list_sessions" => ok(crate::ai::commands::ai_list_sessions_for_owner(
+            state, owner,
+        )),
         "ai_session_start" => {
             let host = headless_host(state, tx);
             ok(crate::ai::commands::ai_session_start_impl(
@@ -1062,57 +1058,75 @@ async fn dispatch_async(
             )
             .await)
         }
-        "ai_user_message" => ai_send(
+        "ai_user_message" => ok(crate::ai::commands::ai_user_message_impl(
             state,
             &arg::<String>(&args, "tabId")?,
-            UserAction::Message(arg(&args, "text")?),
-        ),
-        "ai_command_result" => ai_send(
+            owner,
+            arg(&args, "text")?,
+            args.get("instanceId").and_then(Value::as_str),
+        )
+        .await),
+        "ai_command_result" => ok(crate::ai::commands::ai_command_result_impl(
             state,
             &arg::<String>(&args, "tabId")?,
-            UserAction::CommandResult {
-                tool_call_id: arg(&args, "toolCallId")?,
-                exit_code: args.get("exitCode").and_then(Value::as_i64).unwrap_or(0) as i32,
-                output: arg(&args, "output")?,
-                timed_out: args
-                    .get("timedOut")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-                early_terminated: args
-                    .get("earlyTerminated")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-            },
-        ),
-        "ai_command_reject" => ai_send(
+            owner,
+            arg(&args, "toolCallId")?,
+            arg::<i32>(&args, "exitCode")?,
+            arg(&args, "output")?,
+            arg::<bool>(&args, "timedOut")?,
+            arg::<Option<bool>>(&args, "earlyTerminated")?.unwrap_or(false),
+            args.get("instanceId").and_then(Value::as_str),
+        )
+        .await),
+        "ai_command_reject" => ok(crate::ai::commands::ai_command_reject_impl(
             state,
             &arg::<String>(&args, "tabId")?,
-            UserAction::RejectCommand {
-                tool_call_id: arg(&args, "toolCallId")?,
-                reason: arg(&args, "reason")?,
-            },
-        ),
-        "ai_session_clear_context" => ai_send(
+            owner,
+            arg(&args, "toolCallId")?,
+            arg(&args, "reason")?,
+            args.get("instanceId").and_then(Value::as_str),
+        )
+        .await),
+        "ai_session_clear_context" => ok(crate::ai::commands::ai_session_clear_context_impl(
             state,
             &arg::<String>(&args, "tabId")?,
-            UserAction::ClearContext,
-        ),
+            owner,
+            args.get("instanceId").and_then(Value::as_str),
+        )
+        .await),
+        "ai_session_prepare_stop" => crate::commands::lifecycle::prepare_ai_session_stop(
+            state,
+            &arg::<String>(&args, "tabId")?,
+            owner,
+            args.get("instanceId").and_then(Value::as_str),
+        )
+        .await
+        .map(|mutations| json!(mutations))
+        .map_err(err_value),
         "ai_session_stop" => {
             let tab_id: String = arg(&args, "tabId")?;
-            crate::commands::lifecycle::close_ai_session(state, &tab_id, owner)
-                .map(|_| Value::Null)
-                .map_err(err_value)
+            crate::commands::lifecycle::close_ai_session(
+                state,
+                &tab_id,
+                owner,
+                args.get("instanceId").and_then(Value::as_str),
+            )
+            .await
+            .map(|_| Value::Null)
+            .map_err(err_value)
         }
         "ai_cancel_stream" => {
             let tab_id: String = arg(&args, "tabId")?;
-            let slot = locked(&state.ai_sessions)
-                .map_err(err_value)?
-                .get(&tab_id)
-                .map(|s| s.cancel_slot.clone())
-                .ok_or_else(|| json!("ai_session_not_found"))?;
+            let slot = crate::ai::commands::ai_cancel_slot(
+                state,
+                &tab_id,
+                owner,
+                args.get("instanceId").and_then(Value::as_str),
+            )
+            .map_err(err_value)?;
             let notify = {
                 slot.lock()
-                    .map_err(|_| json!("lock_poisoned"))?
+                    .map_err(|_| err_value(AppError::Lock))?
                     .as_ref()
                     .cloned()
             };
@@ -1121,7 +1135,7 @@ async fn dispatch_async(
             }
             Ok(Value::Null)
         }
-        "ai_session_rebind_target" => ai_rebind(state, args),
+        "ai_session_rebind_target" => ai_rebind(state, owner, args),
         "ai_list_skills" => ok(crate::ai::skills::list_all(&state.db)),
         "ai_get_skill" => ok(crate::ai::skills::get(
             &state.db,
@@ -1156,13 +1170,27 @@ async fn dispatch_async(
         )),
         "ai_audit_get" => {
             let tab_id: String = arg(&args, "tabId")?;
-            let audit = locked(&state.ai_sessions)
-                .map_err(err_value)?
-                .get(&tab_id)
-                .map(|s| s.audit.clone())
-                .ok_or_else(|| json!("ai_session_not_found"))?;
-            let g = audit.lock().map_err(|_| json!("lock_poisoned"))?;
+            let audit = crate::ai::commands::ai_audit_handle(
+                state,
+                &tab_id,
+                owner,
+                args.get("instanceId").and_then(Value::as_str),
+            )
+            .map_err(err_value)?;
+            let g = audit.lock().map_err(|_| err_value(AppError::Lock))?;
             ok(Ok::<_, AppError>(g.clone()))
+        }
+        "ai_audit_log_text" => {
+            let tab_id: String = arg(&args, "tabId")?;
+            let audit = crate::ai::commands::ai_audit_handle(
+                state,
+                &tab_id,
+                owner,
+                args.get("instanceId").and_then(Value::as_str),
+            )
+            .map_err(err_value)?;
+            let g = audit.lock().map_err(|_| err_value(AppError::Lock))?;
+            Ok(json!(g.to_log_string()))
         }
         "ai_remote_shell_probe_needed" => ok(
             crate::ai::commands::ai_remote_shell_probe_needed_impl(state, arg(&args, "targetId")?),
@@ -1171,11 +1199,14 @@ async fn dispatch_async(
             state,
             &arg(&args, "target")?,
         )),
-        "ai_conversation_timeline" => ok(crate::ai::commands::ai_conversation_timeline_impl(
-            state,
-            &arg::<String>(&args, "id")?,
-            &arg(&args, "target")?,
-        )),
+        "ai_conversation_timeline" => {
+            let target: Option<crate::ai::commands::AiTarget> = arg(&args, "target")?;
+            ok(crate::ai::commands::ai_conversation_timeline_impl(
+                state,
+                &arg::<String>(&args, "id")?,
+                target.as_ref(),
+            ))
+        }
         "ai_conversation_save_timeline" => ok(crate::db::ai_conversation::set_timeline(
             &state.db,
             &arg::<String>(&args, "id")?,
@@ -1491,80 +1522,22 @@ fn mime_for(path: &str) -> &'static str {
     }
 }
 
-fn ai_send(state: &AppState, tab_id: &str, action: UserAction) -> Result<Value, Value> {
-    let tx = locked(&state.ai_sessions)
-        .map_err(err_value)?
-        .get(tab_id)
-        .map(|s| s.action_tx.clone())
-        .ok_or_else(|| json!("ai_session_not_found"))?;
-    tx.send(action)
-        .map(|_| Value::Null)
-        .map_err(|_| json!("ai_session_stopped"))
-}
-
-fn ai_rebind(state: &AppState, args: Value) -> Result<Value, Value> {
+fn ai_rebind(state: &AppState, owner: &SessionOwner, args: Value) -> Result<Value, Value> {
     use crate::ai::commands::AiTarget;
     let target: AiTarget = arg(&args, "target")?;
     let tab_id: String = arg(&args, "tabId")?;
-    let ssh_handle = match &target {
-        AiTarget::Ssh(id) => Some(
-            locked(&state.sessions)
-                .map_err(err_value)?
-                .get(id)
-                .ok_or_else(|| json!("ssh_session_not_found"))?
-                .ssh_handle()
-                .clone(),
-        ),
-        AiTarget::Local(id) => {
-            if !locked(&state.pty_sessions)
-                .map_err(err_value)?
-                .contains_key(id)
-            {
-                return Err(json!("local_pty_not_found"));
-            }
-            None
-        }
-        AiTarget::Serial(id) => {
-            if !locked(&state.serial_sessions)
-                .map_err(err_value)?
-                .contains_key(id)
-            {
-                return Err(json!("serial_session_not_found"));
-            }
-            None
-        }
-        AiTarget::Telnet(id) => {
-            if !locked(&state.telnet_sessions)
-                .map_err(err_value)?
-                .contains_key(id)
-            {
-                return Err(json!("telnet_session_not_found"));
-            }
-            None
-        }
-    };
-    let target_id = target.id().to_string();
-    // Same conversation-scope guard as the Tauri command — a cross-scope
-    // rebind would append this transcript into another scope's stored row.
-    let new_target_key =
-        crate::ai::commands::conversation_target_key(state, &target).map_err(err_value)?;
-    let tx = {
-        let mut g = locked(&state.ai_sessions).map_err(err_value)?;
-        let s = g
-            .get_mut(&tab_id)
-            .ok_or_else(|| json!("ai_session_not_found"))?;
-        if s.target_key != new_target_key {
-            return Err(json!("conversation_target_mismatch"));
-        }
-        s.target_id = target_id.clone();
-        s.action_tx.clone()
-    };
-    tx.send(UserAction::RebindTarget {
-        target_id,
-        ssh_handle,
-    })
+    crate::ai::commands::ai_session_rebind_target_impl(
+        state,
+        owner,
+        tab_id,
+        target,
+        args.get("conversationId")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        args.get("instanceId").and_then(Value::as_str),
+    )
     .map(|_| Value::Null)
-    .map_err(|_| json!("ai_session_stopped"))
+    .map_err(err_value)
 }
 
 fn sftp_handle(
@@ -1707,4 +1680,40 @@ fn query_token(q: &str) -> Option<String> {
     q.split('&')
         .find_map(|kv| kv.strip_prefix("token="))
         .map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn headless_timeline_target_arg_is_optional() {
+        let target: Option<crate::ai::commands::AiTarget> =
+            arg(&json!({ "id": "conversation" }), "target").unwrap();
+        assert!(target.is_none());
+    }
+
+    #[test]
+    fn ai_instance_mismatch_uses_the_coded_headless_wire_format() {
+        assert_eq!(
+            err_value(AppError::not_found("ai_session_not_found", json!({}))),
+            json!(r#"__rssh_err__|{"code":"ai_session_not_found","params":{}}"#)
+        );
+    }
+
+    #[test]
+    fn headless_command_result_fields_match_tauri_types() {
+        let valid = json!({ "exitCode": -1, "timedOut": false });
+        assert_eq!(arg::<i32>(&valid, "exitCode").unwrap(), -1);
+        assert!(!arg::<bool>(&valid, "timedOut").unwrap());
+        assert_eq!(
+            arg::<Option<bool>>(&valid, "earlyTerminated").unwrap(),
+            None
+        );
+
+        let overflow = json!({ "exitCode": i64::from(i32::MAX) + 1 });
+        assert!(arg::<i32>(&overflow, "exitCode").is_err());
+        assert!(arg::<i32>(&json!({}), "exitCode").is_err());
+        assert!(arg::<bool>(&json!({}), "timedOut").is_err());
+    }
 }

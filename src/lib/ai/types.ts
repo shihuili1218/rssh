@@ -72,8 +72,10 @@ export interface ModelInfo {
 }
 
 export interface AiSessionInfo {
-  /** Tab 身份。actor 跟 tab 同寿命；SSH 断了重连，前端用 tab_id 仍能找到同一个 actor。 */
+  /** Tab 内的会话身份；切 Tab / SSH 重连不变，显式关闭 AI 面板时结束。 */
   tab_id: string;
+  /** 后端 actor 的不可复用身份；同一 tab 关闭重开会得到新值。 */
+  instance_id: string;
   /** 当前绑定的 SSH/PTY session_id。重连时由 rebindTarget 更新。 */
   target_id: string;
   skill: string;
@@ -121,7 +123,7 @@ export interface TokenUsage {
 
 /** 一条对话消息（前端展示用） */
 export type ChatItem =
-  | { kind: "user"; text: string; at: number }
+  | { kind: "user"; client_id?: string; client_seq?: number; text: string; at: number }
   | { kind: "assistant"; id: string; text: string; at: number; streaming: boolean; cancelled?: boolean }
   | { kind: "command"; cmd: CommandProposed; at: number; result?: CommandResult; rejected?: { reason: string } }
   | { kind: "error"; text: string; at: number }
@@ -129,6 +131,8 @@ export type ChatItem =
 
 export interface CommandProposed {
   id: string;
+  /** Compatibility wire alias. New backends set this to the per-card `id`; the
+   * provider's tool-call id remains backend-internal. */
   tool_call_id: string;
   cmd: string;
   /** 实际要粘贴到终端的命令（含 sentinel + exit code 回显），由后端拼装。 */

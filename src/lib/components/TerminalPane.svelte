@@ -452,7 +452,7 @@
         if (!terminal || blocks.length === 0) return;
         const text = extractBlocksText(terminal, blocks, foldStore);
         if (!text) return;
-        ai.openPanel();
+        ai.openPanel(tabId);
         ai.prefillInput(tabId, text);
         clearBlockSelection();
     }
@@ -1664,7 +1664,8 @@
                 // don't hit the dead session (telnet_not_found).
                 const aiInfo = ai.sessionForTab(tabId);
                 if (aiInfo && aiInfo.target_id !== sid && app.isAiCapableTabType(tabType) && tabType !== "serial") {
-                    ai.rebindTarget(tabId, tabType, sid).catch((e) =>
+                    const lease = ai.captureSessionLease(tabId);
+                    ai.rebindTarget(tabId, tabType, sid, lease).catch((e) =>
                         console.warn("[ai] rebind on reconnect:", e),
                     );
                 }

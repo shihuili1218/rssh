@@ -4,27 +4,49 @@
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import { truncateCommand, formatBytes } from "./format.ts";
     import type { AuditEntry, AuditLog } from "./types.ts";
+    import type { SessionInstanceRef } from "./session-identity.ts";
+    import { toast } from "../stores/toast.svelte.ts";
 
     let { tabId } = $props<{ tabId: string }>();
 
     let log = $state<AuditLog | null>(null);
     let loading = $state(false);
 
+    function currentSession(): SessionInstanceRef | null {
+        const info = ai.sessionForTab(tabId);
+        return info ? { tabId, instanceId: info.instance_id } : null;
+    }
+
     async function refresh() {
         loading = true;
+        const requested = currentSession();
+        if (!requested) { loading = false; return; }
         try {
-            log = await ai.getAudit(tabId);
+            const next = await ai.getAudit(requested);
+            if (currentSession()?.instanceId === requested.instanceId) log = next;
+        } catch (e) {
+            // Closing/replacing the actor invalidates this request. Only that
+            // lifecycle race is expected; a live actor's real failure is visible.
+            if (currentSession()?.instanceId === requested.instanceId) {
+                toast.error(errMsg(e));
+            }
         } finally {
             loading = false;
         }
     }
 
     async function saveToFile() {
+        const requested = currentSession();
+        if (!requested) return;
         try {
-            const path = await ai.saveAuditWithDialog(tabId);
-            if (path) alert(t("ai.audit.alert.saved", { path }));
+            const path = await ai.saveAuditWithDialog(requested);
+            if (path && currentSession()?.instanceId === requested.instanceId) {
+                alert(t("ai.audit.alert.saved", { path }));
+            }
         } catch (e) {
-            alert(t("ai.audit.alert.save_failed", { error: errMsg(e) }));
+            if (currentSession()?.instanceId === requested.instanceId) {
+                toast.error(errMsg(e));
+            }
         }
     }
 

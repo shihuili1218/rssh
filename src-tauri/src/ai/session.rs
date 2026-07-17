@@ -11,8 +11,9 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use serde::Serialize;
 use serde_json::json;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::{mpsc, oneshot, watch, Notify};
 
 use crate::error::{AppError, AppResult};
 use crate::ssh::client::SshHandle;
@@ -54,58 +55,80 @@ const MAX_DOWNLOAD_MB: u32 = 100;
 // 不可读字段，只标 variant）就够用了。当前代码里没人真的 fmt UserAction，但 enum
 // 暴露给 mpsc 后将来的诊断很可能需要它，保留有 Debug 比未来出问题再加好。
 pub enum UserAction {
-    Message(String),
+    Message {
+        text: String,
+        ack: Option<oneshot::Sender<AppResult<()>>>,
+    },
     RejectCommand {
-        tool_call_id: String,
+        /// Unique proposal/card id. The public IPC field remains
+        /// `tool_call_id` for compatibility, but provider tool-call ids never
+        /// cross this actor boundary.
+        command_id: String,
         reason: String,
+        ack: Option<oneshot::Sender<AppResult<()>>>,
     },
     /// 前端把命令在终端里跑完后回报结果。output 是脱敏前的原始文本。
     CommandResult {
-        tool_call_id: String,
+        command_id: String,
         exit_code: i32,
         output: String,
         timed_out: bool,
         /// 用户在执行中点了"提前终止"（前端发了 Ctrl+C）。
         early_terminated: bool,
+        ack: Option<oneshot::Sender<AppResult<()>>>,
     },
     /// 清空对话历史（保留 audit log）。actor 不死，下条消息进来时是全新对话。
     /// 也清掉 remote_caps —— 用户清上下文后再触发 file_ops 应该重新探测远端能力，
     /// 避免缓存了旧 target 的探测结果。
-    ClearContext,
+    ClearContext {
+        ack: Option<oneshot::Sender<AppResult<()>>>,
+    },
     /// SSH 重连或目标切换。actor 不变，只换 target_id + ssh_handle，
     /// 让后续 file_ops / SFTP 走新连接。remote_caps 也清掉重新探测。
     RebindTarget {
         target_id: String,
         ssh_handle: Option<SshHandle>,
     },
-    Stop,
+}
+
+/// Idempotent UI mutations returned by the prepare-stop drain barrier. Event
+/// delivery into the WebView is asynchronous with respect to an invoke reply,
+/// so close-time persistence cannot infer that an emitted terminal event has
+/// already run its JavaScript callback. Replaying these by message/card id
+/// makes the final timeline independent of that scheduling race.
+#[derive(Clone, Debug, Serialize)]
+pub struct AiTerminalMutation {
+    pub kind: String,
+    pub payload: serde_json::Value,
 }
 
 impl std::fmt::Debug for UserAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UserAction::Message(_) => f.write_str("Message"),
-            UserAction::RejectCommand { tool_call_id, .. } => {
-                write!(f, "RejectCommand({tool_call_id})")
+            UserAction::Message { .. } => f.write_str("Message"),
+            UserAction::RejectCommand { command_id, .. } => {
+                write!(f, "RejectCommand({command_id})")
             }
             UserAction::CommandResult {
-                tool_call_id,
+                command_id,
                 exit_code,
                 ..
-            } => write!(f, "CommandResult({tool_call_id} exit={exit_code})"),
-            UserAction::ClearContext => f.write_str("ClearContext"),
+            } => write!(f, "CommandResult({command_id} exit={exit_code})"),
+            UserAction::ClearContext { .. } => f.write_str("ClearContext"),
             UserAction::RebindTarget { target_id, .. } => {
                 write!(f, "RebindTarget({target_id})")
             }
-            UserAction::Stop => f.write_str("Stop"),
         }
     }
 }
 
 pub struct DiagnoseSession {
-    /// Tab 身份。actor 跟 tab 生命周期绑定 —— SSH 断了重连 tab_id 不变，
-    /// AI 会话 + 历史也跟着保留。
+    /// Tab 内的会话身份。切 Tab / SSH 重连时 tab_id 不变、actor 保留；
+    /// 用户显式关闭 AI 面板时 actor 结束，历史留在持久化会话中。
     pub tab_id: String,
+    /// One actor incarnation. Unlike tab_id and conversation_id this value is
+    /// never reused, so delayed IPC can be rejected after close/reopen.
+    pub instance_id: uuid::Uuid,
     /// 当前绑定的 SSH/PTY session_id（重连时更新）。
     pub target_id: String,
     pub skill: String,
@@ -117,6 +140,19 @@ pub struct DiagnoseSession {
     /// commands 层从 slot 取 Notify 调 notify_one() —— 没在 chat 时 slot 为 None，发了也无副作用。
     /// 这样 cancel 永远只能取消"当前正在进行的 chat"，不会污染后续轮次。
     pub cancel_slot: Arc<Mutex<Option<Arc<Notify>>>>,
+    /// Persistent session teardown state. `watch` is deliberate: shutdown is a
+    /// state transition, not a one-shot event that a nested tool wait can consume.
+    pub(crate) shutdown_tx: watch::Sender<bool>,
+    /// Owned actor completion barrier. Ready sessions always contain a task;
+    /// `Option` lets shutdown take the handle exactly once.
+    pub(crate) actor_task: Option<tauri::async_runtime::JoinHandle<()>>,
+    /// Completion barrier cloned by prepare-stop. The actor-side sender is
+    /// owned by the spawned task, so task panic/drop also closes the channel
+    /// and releases waiters instead of hanging teardown forever.
+    pub(crate) actor_done_rx: watch::Receiver<bool>,
+    /// Canonical close-time UI terminal state. The actor records before emit;
+    /// prepare-stop clones it only after `actor_done_rx` completes.
+    pub(crate) terminal_mutations: Arc<Mutex<Vec<AiTerminalMutation>>>,
     /// Persistent identity in ai_conversations (resume reuses the old id).
     /// The front-end keys its timeline autosaves on this.
     pub conversation_id: String,
@@ -126,6 +162,37 @@ pub struct DiagnoseSession {
     /// differs, so a conversation row can never accumulate another scope's
     /// transcript. Checked by commands layer, never read by the actor.
     pub target_key: String,
+}
+
+impl DiagnoseSession {
+    pub(crate) fn request_stop(&self) {
+        // Cancel an already-running LLM request first. Clone the notifier out
+        // of the std mutex before notifying, matching ai_cancel_stream's lock
+        // discipline and avoiding lock inversion with the actor's slot clear.
+        let stream_cancel = self
+            .cancel_slot
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().cloned());
+        if let Some(cancel) = stream_cancel {
+            cancel.notify_one();
+        }
+
+        self.shutdown_tx.send_replace(true);
+    }
+
+    pub(crate) fn is_stopping(&self) -> bool {
+        *self.shutdown_tx.borrow()
+    }
+
+    pub(crate) async fn stop(mut self) {
+        self.request_stop();
+        if let Some(task) = self.actor_task.take() {
+            // A panic/cancelled task is still fully terminated, which is the
+            // lifecycle guarantee callers need before reusing the tab id.
+            let _ = task.await;
+        }
+    }
 }
 
 pub struct SessionConfig {
@@ -184,6 +251,8 @@ pub struct SessionConfig {
 pub struct PendingSession {
     session: DiagnoseSession,
     actor: Actor,
+    shutdown_rx: watch::Receiver<bool>,
+    actor_done_tx: watch::Sender<bool>,
 }
 
 impl PendingSession {
@@ -192,9 +261,19 @@ impl PendingSession {
     }
 
     /// spawn actor，返回最终的 DiagnoseSession。consume self 防止漏 launch。
-    pub fn launch(self) -> DiagnoseSession {
-        tauri::async_runtime::spawn(self.actor.run());
-        self.session
+    pub fn launch(self, instance_id: uuid::Uuid) -> DiagnoseSession {
+        let PendingSession {
+            mut session,
+            actor,
+            shutdown_rx,
+            actor_done_tx,
+        } = self;
+        session.instance_id = instance_id;
+        session.actor_task = Some(tauri::async_runtime::spawn(async move {
+            actor.run(shutdown_rx).await;
+            actor_done_tx.send_replace(true);
+        }));
+        session
     }
 }
 
@@ -205,11 +284,8 @@ impl PendingSession {
 /// ```ignore
 /// let pending = session::start(cfg, app)?;
 /// let info = AiSessionInfo::from(pending.info());
-/// {
-///     let mut g = locked(&state.ai_sessions)?;
-///     if g.contains_key(&tab_id) { return Err(..); } // pending 在此被 drop, 0 副作用
-///     g.insert(tab_id, pending.launch());
-/// }
+/// owner_reservation.claim_conversation(&info.conversation_id)?;
+/// owner_reservation.activate(pending)?; // validates first, then launches
 /// ```
 pub fn start(mut cfg: SessionConfig, app: crate::emitter::Host) -> AppResult<PendingSession> {
     // system_prompt 是静态文本（rules + user-skill catalog + locale + 平台），
@@ -227,10 +303,14 @@ pub fn start(mut cfg: SessionConfig, app: crate::emitter::Host) -> AppResult<Pen
     }
 
     let cancel_slot: Arc<Mutex<Option<Arc<Notify>>>> = Arc::new(Mutex::new(None));
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (actor_done_tx, actor_done_rx) = watch::channel(false);
+    let terminal_mutations = Arc::new(Mutex::new(Vec::new()));
 
     let provider = cfg.client.provider().to_string();
     let session = DiagnoseSession {
         tab_id: cfg.tab_id.clone(),
+        instance_id: uuid::Uuid::nil(),
         target_id: cfg.target_id.clone(),
         skill: cfg.skill.clone(),
         model: cfg.model.clone(),
@@ -238,6 +318,10 @@ pub fn start(mut cfg: SessionConfig, app: crate::emitter::Host) -> AppResult<Pen
         action_tx,
         audit: audit.clone(),
         cancel_slot: cancel_slot.clone(),
+        shutdown_tx,
+        actor_task: None,
+        actor_done_rx,
+        terminal_mutations: terminal_mutations.clone(),
         conversation_id: cfg.conversation_id.clone(),
         target_key: cfg.target_key.clone(),
     };
@@ -252,9 +336,16 @@ pub fn start(mut cfg: SessionConfig, app: crate::emitter::Host) -> AppResult<Pen
         app,
         cancel_slot,
         remote_caps: None,
+        terminal_mutations,
+        context_epoch: 0,
     };
 
-    Ok(PendingSession { session, actor })
+    Ok(PendingSession {
+        session,
+        actor,
+        shutdown_rx,
+        actor_done_tx,
+    })
 }
 
 pub(in crate::ai::session) struct Actor {
@@ -271,18 +362,36 @@ pub(in crate::ai::session) struct Actor {
     /// None = 还没探测；Some = 已探测，结果有效到 session 结束。
     /// pub(in crate::ai::session) 给 `file_ops::Actor::ensure_remote_caps` 读写。
     pub(in crate::ai::session) remote_caps: Option<RemoteCapabilities>,
+    terminal_mutations: Arc<Mutex<Vec<AiTerminalMutation>>>,
+    /// Monotonic UI/history generation. Event delivery and invoke replies use
+    /// different async paths, so ordering alone cannot fence pre-clear events.
+    context_epoch: u64,
+}
+
+async fn wait_for_shutdown(shutdown_rx: &mut watch::Receiver<bool>) {
+    loop {
+        if *shutdown_rx.borrow_and_update() {
+            return;
+        }
+        if shutdown_rx.changed().await.is_err() {
+            return;
+        }
+    }
 }
 
 impl Actor {
-    async fn run(mut self) {
+    async fn run(mut self, mut shutdown_rx: watch::Receiver<bool>) {
         loop {
-            let action = match self.recv_action().await {
+            let action = match tokio::select! {
+                biased;
+                action = self.recv_action() => action,
+                _ = wait_for_shutdown(&mut shutdown_rx) => None,
+            } {
                 Some(a) => a,
                 None => break,
             };
             match action {
-                UserAction::Stop => break,
-                UserAction::Message(text) => {
+                UserAction::Message { text, ack } => {
                     self.history.push(ChatMessage::User {
                         content: text.clone(),
                     });
@@ -290,40 +399,151 @@ impl Actor {
                     // lose the message the user already typed.
                     self.persist_history();
                     self.emit("user_message", json!({ "text": text }));
-                    if let Err(e) = self.dialogue_turn().await {
-                        self.audit_push(AuditKind::Error {
-                            message: e.to_string(),
-                        });
-                        self.emit("error", json!({ "message": e.to_string() }));
+                    Self::complete_action(ack, Ok(()));
+                    if !*shutdown_rx.borrow() {
+                        if let Err(e) = self.dialogue_turn(&mut shutdown_rx).await {
+                            self.audit_push(AuditKind::Error {
+                                message: e.to_string(),
+                            });
+                            self.emit("error", json!({ "message": e.to_string() }));
+                        }
+                        // Covers the turn's terminal paths that push history without
+                        // reaching a loop commit (cancel marker, error placeholder).
+                        self.persist_history();
                     }
-                    // Covers the turn's terminal paths that push history without
-                    // reaching a loop commit (cancel marker, error placeholder).
-                    self.persist_history();
                 }
-                UserAction::ClearContext => {
-                    // 清空对话历史。audit log 保留 —— "曾经发生过什么"是审计应当
-                    // 留痕的，用户清的是 LLM 的记忆窗口，不是审计记录。
-                    // remote_caps 一起清掉 —— 假如用户清完后立即触发 file_ops，
-                    // 该重新探测，避免缓存了"用户期望已重置"之外的状态。
-                    let dropped = self.history.len();
-                    self.history.clear();
-                    self.remote_caps = None;
-                    self.audit_push(AuditKind::Note {
-                        message: format!("context cleared by user ({dropped} messages dropped)"),
-                    });
-                    // The stored conversation mirrors actor state — cleared too.
-                    self.persist_history();
-                    // 前端 listener 收到这个事件后清掉 _chatByTab[tab_id]，把气泡都抹掉。
-                    self.emit("context_cleared", json!({}));
+                UserAction::ClearContext { ack } => {
+                    self.clear_context(ack);
                 }
                 // RebindTarget 由 recv_action 透明吞掉，这里不会落到。
-                _ => {
-                    log::warn!("unexpected action outside command dialog");
+                UserAction::CommandResult {
+                    command_id, ack, ..
+                }
+                | UserAction::RejectCommand {
+                    command_id, ack, ..
+                } => {
+                    Self::reject_tool_action(ack, &command_id);
+                }
+                UserAction::RebindTarget { .. } => {
+                    unreachable!("recv_action consumes rebind events")
                 }
             }
+            if *shutdown_rx.borrow() {
+                break;
+            }
         }
+        self.drain_accepted_idle_actions();
+        self.finish_interrupted_history();
         self.audit_push(AuditKind::SessionEnded);
         self.emit("session_ended", json!({}));
+    }
+
+    /// The registry lock linearizes enqueue with prepare-stop: every action
+    /// accepted before shutdown is already in this queue. Finish those local
+    /// mutations without starting LLM/tool work, then let the receiver drop so
+    /// racing late senders observe `ai_session_stopped` through their ack.
+    fn drain_accepted_idle_actions(&mut self) {
+        loop {
+            match self.action_rx.try_recv() {
+                Ok(UserAction::Message { text, ack }) => {
+                    self.close_interrupted_history_tail();
+                    self.history.push(ChatMessage::User {
+                        content: text.clone(),
+                    });
+                    self.close_interrupted_history_tail();
+                    self.persist_history();
+                    self.emit("user_message", json!({ "text": text }));
+                    Self::complete_action(ack, Ok(()));
+                }
+                Ok(UserAction::ClearContext { ack }) => self.clear_context(ack),
+                Ok(UserAction::CommandResult {
+                    command_id, ack, ..
+                })
+                | Ok(UserAction::RejectCommand {
+                    command_id, ack, ..
+                }) => Self::reject_tool_action(ack, &command_id),
+                // Stored target state was updated atomically with enqueue in
+                // the command layer. No tool work starts during this drain.
+                Ok(UserAction::RebindTarget { .. }) => {}
+                Err(_) => break,
+            }
+        }
+    }
+
+    fn clear_context(&mut self, ack: Option<oneshot::Sender<AppResult<()>>>) {
+        // 清空对话历史。audit log 保留 —— "曾经发生过什么"是审计应当
+        // 留痕的，用户清的是 LLM 的记忆窗口，不是审计记录。
+        // remote_caps 一起清掉 —— 假如用户清完后立即触发 file_ops，
+        // 该重新探测，避免缓存了"用户期望已重置"之外的状态。
+        let dropped = self.history.len();
+        self.history.clear();
+        self.remote_caps = None;
+        self.context_epoch += 1;
+        // Terminal replay belongs to the same UI/history epoch. Keeping old
+        // assistant/card completions here would resurrect cleared bubbles when
+        // close later replays the drain snapshot.
+        if let Ok(mut terminal) = self.terminal_mutations.lock() {
+            terminal.clear();
+        }
+        self.audit_push(AuditKind::Note {
+            message: format!("context cleared by user ({dropped} messages dropped)"),
+        });
+        self.persist_history();
+        self.emit("context_cleared", json!({}));
+        Self::complete_action(ack, Ok(()));
+    }
+
+    fn complete_action<T>(ack: Option<oneshot::Sender<AppResult<T>>>, result: AppResult<T>) {
+        if let Some(ack) = ack {
+            let _ = ack.send(result);
+        }
+    }
+
+    fn reject_pending_action<T>(
+        ack: Option<oneshot::Sender<AppResult<T>>>,
+        action: &'static str,
+        tool_call_id: &str,
+    ) {
+        Self::complete_action(
+            ack,
+            Err(AppError::other(
+                "ai_action_rejected_pending_tool",
+                json!({ "action": action, "tool_call_id": tool_call_id }),
+            )),
+        );
+    }
+
+    fn reject_tool_action(ack: Option<oneshot::Sender<AppResult<()>>>, command_id: &str) {
+        Self::complete_action(
+            ack,
+            Err(AppError::other(
+                "ai_tool_call_not_pending",
+                json!({ "tool_call_id": command_id }),
+            )),
+        );
+    }
+
+    /// Keep persisted history protocol-valid when shutdown lands between the
+    /// accepted user message and the start/completion of its assistant turn.
+    fn finish_interrupted_history(&mut self) {
+        if self.close_interrupted_history_tail() {
+            self.persist_history();
+        }
+    }
+
+    fn close_interrupted_history_tail(&mut self) -> bool {
+        if matches!(
+            self.history.last(),
+            Some(ChatMessage::User { .. } | ChatMessage::ToolResult { .. })
+        ) {
+            self.history.push(ChatMessage::Assistant {
+                content: "[session closed by user]".into(),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return true;
+        }
+        false
     }
 
     /// recv_action 是 action_rx.recv 的薄封装：把 RebindTarget 这种**生命周期类事件**
@@ -358,8 +578,11 @@ impl Actor {
         }
     }
 
-    async fn dialogue_turn(&mut self) -> AppResult<()> {
+    async fn dialogue_turn(&mut self, shutdown_rx: &mut watch::Receiver<bool>) -> AppResult<()> {
         loop {
+            if *shutdown_rx.borrow() {
+                return Ok(());
+            }
             // 脱敏在 LLM 边界统一发生。原文留在 self.history（永不离开本机），
             // 副本送 LLM 也送 audit —— LLM 看到的就是 audit 记录的，一致。
             // system_prompt 在 start() 已经脱敏过，循环里直接复用。
@@ -403,6 +626,7 @@ impl Actor {
             let app = self.app.clone();
             let tab_id = self.cfg.tab_id.clone();
             let sink_msg_id = msg_id.clone();
+            let context_epoch = self.context_epoch;
             // captured：sink 边 emit 边累积文本副本。取消时 chat() future 被 drop，
             // 内部的 text_out 跟着没了，但 captured 还在——拿它写一条 partial assistant
             // 进 history，否则下次发消息时 LLM 看到 [user, user] 序列会报 400（Anthropic 严格）。
@@ -415,7 +639,11 @@ impl Actor {
                     }
                     let _ = app.emit(
                         &format!("ai:assistant_delta:{tab_id}"),
-                        json!({ "id": sink_msg_id, "text": t }),
+                        json!({
+                            "id": sink_msg_id,
+                            "text": t,
+                            "context_epoch": context_epoch,
+                        }),
                     );
                 }
             });
@@ -437,8 +665,10 @@ impl Actor {
 
             let chat_future = self.cfg.client.chat(req, sink);
             let chat_result = tokio::select! {
+                biased;
                 r = chat_future => Some(r),
                 _ = cancel.notified() => None,
+                _ = wait_for_shutdown(shutdown_rx) => None,
             };
 
             if let Ok(mut g) = self.cancel_slot.lock() {
@@ -550,23 +780,49 @@ impl Actor {
             let mut pending: Vec<ChatMessage> = Vec::with_capacity(1 + resp.tool_calls.len());
             pending.push(assistant);
 
+            // If a completed LLM response races with shutdown, retain the
+            // response but do not start any newly proposed side effect.
+            let mut stopping = *shutdown_rx.borrow();
             for tc in resp.tool_calls {
                 let tc_id = tc.id.clone();
-                let result_msg = match self.handle_tool_call(tc).await {
-                    Ok(msg) => msg,
-                    Err(e) => {
-                        // Convert AppError → ToolResult so the turn closes
-                        // cleanly. The error code/payload is intentionally
-                        // not exposed to the LLM verbatim (may contain
-                        // internal endpoint details); the audit log keeps
-                        // the full error.
-                        self.make_tool_error(
-                            &tc_id,
-                            &format!("internal tool error ({}): {}", e.code(), e),
-                        )
+                let result_msg = if stopping {
+                    self.make_tool_error(&tc_id, "session closed before tool execution completed")
+                } else {
+                    let handled = tokio::select! {
+                        biased;
+                        result = self.handle_tool_call(tc) => Some(result),
+                        _ = wait_for_shutdown(shutdown_rx) => None,
+                    };
+                    match handled {
+                        Some(Ok(msg)) => msg,
+                        Some(Err(e)) => {
+                            if matches!(e.code(), "session_stopped_user" | "session_channel_closed")
+                            {
+                                stopping = true;
+                            }
+                            // Convert AppError → ToolResult so the turn closes
+                            // cleanly. The error code/payload is intentionally
+                            // not exposed to the LLM verbatim (may contain
+                            // internal endpoint details); the audit log keeps
+                            // the full error.
+                            self.make_tool_error(
+                                &tc_id,
+                                &format!("internal tool error ({}): {}", e.code(), e),
+                            )
+                        }
+                        None => {
+                            stopping = true;
+                            self.make_tool_error(
+                                &tc_id,
+                                "session closed before tool execution completed",
+                            )
+                        }
                     }
                 };
                 pending.push(result_msg);
+                if *shutdown_rx.borrow() {
+                    stopping = true;
+                }
             }
 
             self.history.extend(pending);
@@ -574,6 +830,9 @@ impl Actor {
             // and a crash there must not roll the conversation back to the
             // previous user message.
             self.persist_history();
+            if stopping || *shutdown_rx.borrow() {
+                return Ok(());
+            }
         }
     }
 
@@ -603,8 +862,8 @@ impl Actor {
     /// `handle_run_command` 用自己的 loop（要做不同的 audit/emit）—— 没复用这里。
     pub(in crate::ai::session) async fn wait_command_outcome(
         &mut self,
-        tool_call_id: &str,
-    ) -> AppResult<CommandOutcome> {
+        card_id: &str,
+    ) -> AppResult<(CommandOutcome, Option<oneshot::Sender<AppResult<()>>>)> {
         loop {
             let action = match self.recv_action().await {
                 Some(a) => a,
@@ -612,34 +871,49 @@ impl Actor {
             };
             match action {
                 UserAction::CommandResult {
-                    tool_call_id: rid,
+                    command_id: received_id,
                     exit_code,
                     output,
                     timed_out,
                     early_terminated,
-                } if rid == tool_call_id => {
-                    return Ok(CommandOutcome::Result {
-                        exit_code,
-                        output,
-                        timed_out,
-                        early_terminated,
-                    });
+                    ack,
+                } if received_id == card_id => {
+                    return Ok((
+                        CommandOutcome::Result {
+                            exit_code,
+                            output,
+                            timed_out,
+                            early_terminated,
+                        },
+                        ack,
+                    ));
                 }
                 UserAction::RejectCommand {
-                    tool_call_id: rid,
+                    command_id: received_id,
                     reason,
-                } if rid == tool_call_id => {
-                    return Ok(CommandOutcome::Rejected { reason });
+                    ack,
+                } if received_id == card_id => {
+                    return Ok((CommandOutcome::Rejected { reason }, ack));
                 }
-                UserAction::Stop => {
-                    return Err(AppError::other("session_stopped_user", json!({})));
+                UserAction::CommandResult {
+                    command_id: received_id,
+                    ack,
+                    ..
                 }
-                UserAction::Message(text) => {
+                | UserAction::RejectCommand {
+                    command_id: received_id,
+                    ack,
+                    ..
+                } => {
+                    Self::reject_tool_action(ack, &received_id);
+                    continue;
+                }
+                UserAction::Message { text, ack } => {
                     // 工具调用中拒绝新消息（同 handle_run_command 现有行为）
                     let redacted = sanitize::redact(&text, &self.cfg.redact_rules);
                     self.audit_push(AuditKind::Note {
                         message: format!(
-                            "user message dropped during tool call {tool_call_id}: {redacted}"
+                            "user message dropped during tool call {card_id}: {redacted}"
                         ),
                     });
                     self.emit(
@@ -649,14 +923,15 @@ impl Actor {
                             "message": "Cannot send a new message while a tool call is running. Wait for it to finish, or approve/reject the command card.",
                         }),
                     );
+                    Self::reject_pending_action(ack, "message", card_id);
                     continue;
                 }
-                UserAction::ClearContext => {
+                UserAction::ClearContext { ack } => {
                     // 工具调用中 history 含未配对的 tool_use（还没 tool_result），
                     // 直接清会让下一轮 LLM 调用 400。让用户先等命令走完。
                     // 给明确反馈而不是静默丢弃，跟 Message 处理一致。
                     self.audit_push(AuditKind::Note {
-                        message: format!("clear context dropped during tool call {tool_call_id}"),
+                        message: format!("clear context dropped during tool call {card_id}"),
                     });
                     self.emit(
                         "error",
@@ -664,6 +939,7 @@ impl Actor {
                             "message": "Cannot clear context while a tool call is running. Wait for it to finish, then clear.",
                         }),
                     );
+                    Self::reject_pending_action(ack, "clear_context", card_id);
                     continue;
                 }
                 _ => continue,
@@ -790,7 +1066,7 @@ impl Actor {
             "command_proposed",
             json!({
                 "id": dl_id,
-                "tool_call_id": tc.id,
+                "tool_call_id": dl_id,
                 "cmd": format!("download_file: {} (max {} MB)", input.remote_path, input.max_mb),
                 "full_cmd": "",
                 "sentinel": "",
@@ -804,15 +1080,21 @@ impl Actor {
         // 前端 CommandResult.duration_ms 期待这个字段，缺了会渲染 "undefinedms"。
         let started_at = std::time::Instant::now();
 
-        match self.wait_command_outcome(&tc.id).await? {
+        let (outcome, ack) = self.wait_command_outcome(&dl_id).await?;
+        match outcome {
             CommandOutcome::Rejected { reason } => {
                 self.record_rejection(&dl_id, &reason);
+                Self::complete_action(ack, Ok(()));
                 return Ok(self.make_tool_error(
                     &tc.id,
                     &format!("User rejected download_file. Reason: {reason}."),
                 ));
             }
-            CommandOutcome::Result { .. } => { /* approved (前端 ack)，继续实际 SFTP */ }
+            CommandOutcome::Result { .. } => {
+                // For this tool the CommandResult means approval, not the
+                // eventual SFTP result. Consumption is the processing point.
+                Self::complete_action(ack, Ok(()));
+            }
         }
 
         let basename = std::path::Path::new(&input.remote_path)
@@ -965,7 +1247,7 @@ impl Actor {
             "command_proposed",
             json!({
                 "id": card_id,
-                "tool_call_id": tc.id,
+                "tool_call_id": card_id,
                 "cmd": format!("analyze_locally: {} ({})", input.local_path, input.task),
                 "full_cmd": "",
                 "sentinel": "",
@@ -976,15 +1258,20 @@ impl Actor {
             }),
         );
         let started_at = std::time::Instant::now();
-        match self.wait_command_outcome(&tc.id).await? {
+        let (outcome, ack) = self.wait_command_outcome(&card_id).await?;
+        match outcome {
             CommandOutcome::Rejected { reason } => {
                 self.record_rejection(&card_id, &reason);
+                Self::complete_action(ack, Ok(()));
                 return Ok(self.make_tool_error(
                     &tc.id,
                     &format!("User rejected analyze_locally. Reason: {reason}."),
                 ));
             }
-            CommandOutcome::Result { .. } => { /* approved，继续实际开窗口 */ }
+            CommandOutcome::Result { .. } => {
+                // Approval is fully consumed before the window side effect.
+                Self::complete_action(ack, Ok(()));
+            }
         }
 
         // Inject handoff into the new window's `window.__rssh_ai_handoff`;
@@ -1123,7 +1410,7 @@ impl Actor {
             "command_proposed",
             json!({
                 "id": cmd_id,
-                "tool_call_id": tc.id,
+                "tool_call_id": cmd_id,
                 "cmd": input.cmd,
                 "full_cmd": full_cmd,
                 "sentinel": sentinel,
@@ -1141,22 +1428,25 @@ impl Actor {
             };
             match action {
                 UserAction::RejectCommand {
-                    tool_call_id,
+                    command_id,
                     reason,
-                } if tool_call_id == tc.id => {
+                    ack,
+                } if command_id == cmd_id => {
                     self.record_rejection(&cmd_id, &reason);
+                    Self::complete_action(ack, Ok(()));
                     return Ok(self.make_tool_error(
                         &tc.id,
                         &format!("User rejected the command. Reason: {reason}. Adjust your plan based on this reason."),
                     ));
                 }
                 UserAction::CommandResult {
-                    tool_call_id,
+                    command_id,
                     exit_code,
                     output,
                     timed_out,
                     early_terminated,
-                } if tool_call_id == tc.id => {
+                    ack,
+                } if command_id == cmd_id => {
                     let redacted = sanitize::redact(&output, &self.cfg.redact_rules);
                     let trunc = sanitize::truncate(&redacted, self.cfg.max_output_bytes);
 
@@ -1182,6 +1472,9 @@ impl Actor {
                         truncated_bytes: trunc.truncated_bytes,
                         duration_ms: started_at.elapsed().as_millis() as u64,
                     });
+                    // Processing ack: the canonical terminal mutation and
+                    // audit entry exist before the invoke resolves.
+                    Self::complete_action(ack, Ok(()));
 
                     let tool_payload = format!(
                         "exit={exit_code} timed_out={timed_out} early_terminated={early_terminated}\n--- output ---\n{}",
@@ -1197,11 +1490,19 @@ impl Actor {
                         pre_redacted: true,
                     });
                 }
-                UserAction::Stop => return Err(AppError::other("session_stopped_user", json!({}))),
+                UserAction::CommandResult {
+                    command_id, ack, ..
+                }
+                | UserAction::RejectCommand {
+                    command_id, ack, ..
+                } => {
+                    Self::reject_tool_action(ack, &command_id);
+                    continue;
+                }
                 // 命令审批期间不能接受新消息：tool_use 必须有对应 tool_result 才能再开下一轮 user。
                 // 之前 _ => continue 把 Message 默默吞掉——用户敲完字消息消失，没有任何反馈。
                 // 现在显式 audit + emit ai:error，让用户知道"先决定命令再发消息"。
-                UserAction::Message(text) => {
+                UserAction::Message { text, ack } => {
                     // 不要把用户原文裸塞进 audit——可能含 secret/PII（用户复制粘贴
                     // 时随手带的）。audit log 可能离开本机（用户分享给开发者排错），
                     // 走跟 history/command_output 同一套 redact 规则，至少把已知模式
@@ -1210,7 +1511,7 @@ impl Actor {
                     self.audit_push(AuditKind::Note {
                         message: format!(
                             "user message dropped during command approval (pending tool_call {}): {redacted}",
-                            tc.id
+                            cmd_id
                         ),
                     });
                     self.emit(
@@ -1219,15 +1520,16 @@ impl Actor {
                             "message": "Cannot send a new message while a command is pending approval. Approve or reject the command first.",
                         }),
                     );
+                    Self::reject_pending_action(ack, "message", &cmd_id);
                     continue;
                 }
-                UserAction::ClearContext => {
+                UserAction::ClearContext { ack } => {
                     // 命令审批期间 history 含未配对的 tool_use，清空会让下一轮 400。
                     // 拒绝并提示——同 Message 处理模式，给反馈而非静默丢弃。
                     self.audit_push(AuditKind::Note {
                         message: format!(
                             "clear context dropped during command approval (pending tool_call {})",
-                            tc.id
+                            cmd_id
                         ),
                     });
                     self.emit(
@@ -1236,6 +1538,7 @@ impl Actor {
                             "message": "Cannot clear context while a command is pending approval. Approve or reject the command first.",
                         }),
                     );
+                    Self::reject_pending_action(ack, "clear_context", &cmd_id);
                     continue;
                 }
                 // 落到这里的只剩 stale RejectCommand/CommandResult（id 不匹配），静默丢即可。
@@ -1333,7 +1636,29 @@ impl Actor {
         }
     }
 
-    pub(in crate::ai::session) fn emit(&self, kind: &str, payload: serde_json::Value) {
+    pub(in crate::ai::session) fn emit(&self, kind: &str, mut payload: serde_json::Value) {
+        match payload.as_object_mut() {
+            Some(object) => {
+                object.insert("context_epoch".into(), json!(self.context_epoch));
+            }
+            None => {
+                payload = json!({
+                    "value": payload,
+                    "context_epoch": self.context_epoch,
+                });
+            }
+        }
+        if matches!(
+            kind,
+            "assistant_message_end" | "command_completed" | "command_rejected"
+        ) {
+            if let Ok(mut terminal) = self.terminal_mutations.lock() {
+                terminal.push(AiTerminalMutation {
+                    kind: kind.to_owned(),
+                    payload: payload.clone(),
+                });
+            }
+        }
         let event = format!("ai:{kind}:{}", self.cfg.tab_id);
         let _ = self.app.emit(&event, payload);
     }

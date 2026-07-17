@@ -6,24 +6,31 @@
      logic + the confirm modal. Never call saveSettings({dangerMode:true})
      anywhere else — route every toggle through requestToggle so the warning
      can't be bypassed. -->
+<script lang="ts" module>
+    // danger_mode 是全局设置；所有 ChatPanel/AiSettings 实例共享一次写入闸门。
+    // 切 tab 不能让第二个 toggle 绕过第一个仍在进行的 save。
+    let toggleInFlight: Promise<void> | null = null;
+</script>
+
 <script lang="ts">
     import type { Snippet } from "svelte";
     import * as ai from "./store.svelte.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import Modal from "../components/Modal.svelte";
 
-    let { trigger, onError }: {
+    let { trigger, onError, active = true }: {
         // trigger(requestToggle, saving): the caller wires these onto its control.
         trigger: Snippet<[() => void, boolean]>;
         // Raw error message; each surface routes it to its own error UI.
         onError?: (msg: string) => void;
+        active?: boolean;
     } = $props();
 
     let showDialog = $state(false);
     let saving = $state(false);
 
     function requestToggle() {
-        if (saving) return;
+        if (saving || toggleInFlight) return;
         if (ai.settings()?.danger_mode === true) {
             void apply(false); // disabling → immediate
         } else {
@@ -32,17 +39,25 @@
     }
 
     async function apply(wantOn: boolean) {
+        if (toggleInFlight) return;
         saving = true;
         showDialog = false;
+        const operation = ai.saveSettings({ dangerMode: wantOn });
+        toggleInFlight = operation;
         try {
-            await ai.saveSettings({ dangerMode: wantOn });
+            await operation;
         } catch (e) {
             console.error("[ai] toggle danger mode:", e);
             onError?.(errMsg(e));
         } finally {
+            if (toggleInFlight === operation) toggleInFlight = null;
             saving = false;
         }
     }
+
+    $effect(() => {
+        if (!active) showDialog = false;
+    });
 </script>
 
 {@render trigger(requestToggle, saving)}

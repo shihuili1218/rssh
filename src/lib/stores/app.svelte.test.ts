@@ -213,6 +213,135 @@ describe("closeTab keeps the most-recent tab active", () => {
     expect(app.tabs().map((t) => t.id)).toEqual(["home", "b", "a"]);
     expect(app.activeTabId()).toBe("b");
   });
+
+  it("discards only the closed tab's panel visibility when no AI session was started", async () => {
+    const app = await loadAppModule();
+    const ai = await import("../ai/store.svelte.ts");
+    app.addTab(local("a"));
+    ai.openPanel("a");
+    ai.setPanelWidth("a", 480);
+    ai.prefillInput("a", "draft A");
+    app.addTab(local("b"));
+    ai.openPanel("b");
+    ai.setPanelWidth("b", 360);
+    ai.prefillInput("b", "draft B");
+
+    app.closeTab("a");
+
+    expect(ai.isOpen("a")).toBe(false);
+    expect(ai.panelWidth("a")).toBeNull();
+    expect(ai.pendingPrefill("a")).toBeNull();
+    expect(ai.isOpen("b")).toBe(true);
+    expect(ai.panelWidth("b")).toBe(360);
+    expect(ai.pendingPrefill("b")?.text).toBe("draft B");
+  });
+
+  it("reports an asynchronous AI disposal failure to the user", async () => {
+    const app = await loadAppModule();
+    const ai = await import("../ai/store.svelte.ts");
+    const { toasts } = await import("./toast.svelte.ts");
+    vi.spyOn(ai, "disposeTab").mockRejectedValueOnce(
+      new Error("final timeline write failed"),
+    );
+    app.addTab(local("a"));
+
+    app.closeTab("a");
+    await vi.waitFor(() => {
+      expect(toasts()).toContainEqual(expect.objectContaining({
+        kind: "error",
+        message: "final timeline write failed",
+      }));
+    });
+  });
+});
+
+describe("SFTP panel state", () => {
+  it("seeds a new SSH tab from the persisted panel width", async () => {
+    localStorage.setItem("sftp-panel-width", "460");
+    const app = await loadAppModule();
+
+    app.addTab({ id: "a", type: "ssh", label: "A" });
+
+    expect(app.sftpPanelWidthForTab("a")).toBe(460);
+  });
+
+  it("keeps seeded widths independent and persists the latest width for future tabs", async () => {
+    localStorage.setItem("sftp-panel-width", "460");
+    const app = await loadAppModule();
+    app.addTab({ id: "a", type: "ssh", label: "A" });
+    app.addTab({ id: "b", type: "ssh", label: "B" });
+
+    app.setSftpPanelWidth("a", 520);
+    app.commitSftpPanelWidth("a");
+    app.addTab({ id: "c", type: "ssh", label: "C" });
+
+    expect(app.sftpPanelWidthForTab("a")).toBe(520);
+    expect(app.sftpPanelWidthForTab("b")).toBe(460);
+    expect(app.sftpPanelWidthForTab("c")).toBe(520);
+    expect(localStorage.getItem("sftp-panel-width")).toBe("520");
+
+    const reloaded = await loadAppModule();
+    reloaded.addTab({ id: "d", type: "ssh", label: "D" });
+    expect(reloaded.sftpPanelWidthForTab("d")).toBe(520);
+  });
+
+  it("resets the persisted default without changing already-seeded tabs", async () => {
+    localStorage.setItem("sftp-panel-width", "460");
+    const app = await loadAppModule();
+    app.addTab({ id: "a", type: "ssh", label: "A" });
+    app.addTab({ id: "b", type: "ssh", label: "B" });
+
+    app.setSftpPanelWidth("a", null);
+    app.commitSftpPanelWidth("a");
+    app.addTab({ id: "c", type: "ssh", label: "C" });
+
+    expect(app.sftpPanelWidthForTab("a")).toBeNull();
+    expect(app.sftpPanelWidthForTab("b")).toBe(460);
+    expect(app.sftpPanelWidthForTab("c")).toBeNull();
+    expect(localStorage.getItem("sftp-panel-width")).toBeNull();
+  });
+
+  it("ignores a delayed drag commit after its tab has closed", async () => {
+    localStorage.setItem("sftp-panel-width", "460");
+    const app = await loadAppModule();
+    app.addTab({ id: "a", type: "ssh", label: "A" });
+    app.setSftpPanelWidth("a", 520);
+
+    app.closeTab("a");
+    app.commitSftpPanelWidth("a");
+    app.addTab({ id: "b", type: "ssh", label: "B" });
+
+    expect(app.sftpPanelWidthForTab("b")).toBe(460);
+    expect(localStorage.getItem("sftp-panel-width")).toBe("460");
+  });
+
+  it("keeps widths per tab until that tab closes", async () => {
+    const app = await loadAppModule();
+    app.addTab({ id: "a", type: "ssh", label: "A" });
+    app.openSftp();
+    app.setSftpPanelWidth("a", 520);
+    app.addTab({ id: "b", type: "ssh", label: "B" });
+    app.openSftp();
+    app.setSftpPanelWidth("b", 360);
+
+    app.setActiveTab("a");
+    app.closeSftp();
+    expect(app.sftpOpenForTab("a")).toBe(false);
+    expect(app.sftpOpenForTab("b")).toBe(true);
+    expect(app.sftpPanelWidthForTab("a")).toBe(520);
+    expect(app.sftpPanelWidthForTab("b")).toBe(360);
+
+    app.setSftpPanelWidth("a", null);
+    expect(app.sftpPanelWidthForTab("a")).toBeNull();
+    expect(app.sftpPanelWidthForTab("b")).toBe(360);
+
+    app.setSftpPanelWidth("a", 480);
+    app.closeTab("a");
+    expect(app.sftpOpenForTab("a")).toBe(false);
+    expect(app.sftpOpenForTab("b")).toBe(true);
+    expect(app.sftpPanelWidthForTab("a")).toBeNull();
+    expect(app.sftpPanelWidthForTab("b")).toBe(360);
+  });
 });
 
 describe("MRU toggle disables reordering", () => {

@@ -74,8 +74,9 @@ pub fn get(db: &Db, id: &str) -> AppResult<Option<ConversationRow>> {
     Ok(row)
 }
 
-/// Create the row — called exactly once, by session start, after it has won
-/// the ai_sessions slot. Row creation is deliberately NOT part of
+/// Create the row — called exactly once by a new session after it has leased
+/// the conversation id and before its actor is published. Row creation is
+/// deliberately NOT part of
 /// `save_history`: if autosaves could insert, a dying actor's last write
 /// would resurrect a conversation the user just deleted. With UPDATE-only
 /// autosaves that race is structurally impossible.

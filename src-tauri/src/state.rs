@@ -54,6 +54,10 @@ pub struct AiSessionRecord {
     pub nonce: uuid::Uuid,
     pub owner: SessionOwner,
     pub phase: SessionPhase,
+    /// Persistent conversation currently leased by this actor. Pending starts
+    /// set it as soon as an id is resolved; Ready and Closed/Stopping records
+    /// retain it until the actor has fully exited.
+    pub conversation_id: Option<String>,
 }
 
 pub struct OwnedWaiter<T> {
@@ -101,7 +105,7 @@ pub struct AppState {
     pub ai_sessions: Mutex<HashMap<String, DiagnoseSession>>,
     /// AI actors intentionally keep `tab_id` reuse semantics, so ownership is
     /// tracked separately from the transport registry's permanent UUID tombstones.
-    pub ai_session_owners: Mutex<HashMap<String, AiSessionRecord>>,
+    pub ai_session_owners: Arc<Mutex<HashMap<String, AiSessionRecord>>>,
     /// 远端 shell 探测结果缓存：profile_id → ShellKind。
     /// 进程级（不落盘）—— 同一 profile 重连/多次开 AI panel 复用结果。
     /// 命中即用，不重发探针；用户切了远端 DefaultShell 注册表后需要重启 app
