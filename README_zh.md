@@ -46,7 +46,7 @@
 - **SSH** —— 密码、私钥、SSH Agent/Pageant、键盘交互、跳板机（ProxyJump）
 - **Telnet** —— 保存连接配置、回显协商、行规程设置、expect/send 登录脚本
 - **串口控制台（桌面端）** —— 保存 UART 配置、文本/Hex 模式、流控、登录脚本、DTR/RTS/Break 控制
-- **动态发现（Docker/K8S）** —— 通过本机 CLI context 发现 Docker 容器和运行中的 Kubernetes Pod，直接打开临时 exec 终端
+- **动态发现（Docker/K8S）** —— 通过本机 CLI context 发现 Docker 容器和运行中的 Kubernetes Pod，直接打开临时 exec 终端；[为什么需要动态发现](docs/article_dynamic_discovery_zh.md)
 - **终端** —— xterm 仿真、10 000 行回滚、可折叠彩色命令块、正则高亮、搜索
 - **多会话工作台（桌面端）** —— 实时预览已连接终端，并向选中的会话广播内容
 - **SFTP** —— 远程文件浏览和上传/下载
