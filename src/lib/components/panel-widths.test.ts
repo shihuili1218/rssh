@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { defaultPanelWidth, fitPanelWidths, resizePanelWidth } from "./panel-widths.ts";
+import {
+  defaultPanelWidth,
+  fitPanelWidths,
+  resizePanelWidth,
+} from "./panel-widths.ts";
 
 const base = {
   containerWidth: 1200,
@@ -90,10 +94,89 @@ describe("fitPanelWidths", () => {
       minWidth: 280,
       containerWidth: 1200,
       mainMinWidth: 320,
-      otherWidthAtStart: 440,
+      otherPanelVisible: true,
     };
 
     expect(resizePanelWidth({ ...gesture, deltaX: -10 })).toBe(430);
     expect(resizePanelWidth({ ...gesture, deltaX: 0 })).toBe(440);
+  });
+
+  it("changes only the gesture-priority preference and restores the opposite preference later", () => {
+    const sftpPreference = 800;
+    const resizedAi = resizePanelWidth({
+      startWidth: 440,
+      deltaX: -10,
+      sign: 1,
+      minWidth: 280,
+      containerWidth: 1200,
+      mainMinWidth: 320,
+      otherPanelVisible: true,
+    });
+
+    expect(resizedAi).toBe(430);
+    expect(fitPanelWidths({
+      ...base,
+      aiWidth: resizedAi,
+      sftpWidth: sftpPreference,
+    })).toEqual({ ai: 430, sftp: 450 });
+    expect(fitPanelWidths({
+      ...base,
+      aiVisible: false,
+      aiWidth: resizedAi,
+      sftpWidth: sftpPreference,
+    })).toEqual({ ai: 430, sftp: sftpPreference });
+  });
+
+  it("lets either fitted panel grow without overwriting the opposite preference", () => {
+    const initial = fitPanelWidths({
+      ...base,
+      aiWidth: 500,
+      sftpWidth: 500,
+    });
+    expect(initial).toEqual({ ai: 440, sftp: 440 });
+
+    const aiPreference = resizePanelWidth({
+      startWidth: initial.ai,
+      deltaX: 40,
+      sign: 1,
+      minWidth: base.panelMinWidth,
+      containerWidth: base.containerWidth,
+      mainMinWidth: base.mainMinWidth,
+      otherPanelVisible: true,
+    });
+    expect(aiPreference).toBe(480);
+    const afterAiDrag = fitPanelWidths({
+      ...base,
+      aiWidth: aiPreference,
+      sftpWidth: 500,
+      priority: "ai",
+    });
+    expect(afterAiDrag).toEqual({ ai: 480, sftp: 400 });
+
+    const sftpPreference = resizePanelWidth({
+      startWidth: afterAiDrag.sftp,
+      deltaX: 80,
+      sign: 1,
+      minWidth: base.panelMinWidth,
+      containerWidth: base.containerWidth,
+      mainMinWidth: base.mainMinWidth,
+      otherPanelVisible: true,
+    });
+    expect(sftpPreference).toBe(480);
+    expect(fitPanelWidths({
+      ...base,
+      aiWidth: aiPreference,
+      sftpWidth: sftpPreference,
+      priority: "sftp",
+    })).toEqual({ ai: 400, sftp: 480 });
+  });
+
+  it("keeps the main pane and opposite panel minima under drag priority", () => {
+    expect(fitPanelWidths({
+      ...base,
+      aiWidth: 700,
+      sftpWidth: 500,
+      priority: "ai",
+    })).toEqual({ ai: 600, sftp: 280 });
   });
 });

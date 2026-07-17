@@ -476,7 +476,6 @@ impl Actor {
         if let Some(c) = self.remote_caps {
             return Ok(c);
         }
-        let probe_tc_id = uuid::Uuid::new_v4().to_string();
         let cmd_id = uuid::Uuid::new_v4().to_string();
         // PROBE_CMD is a POSIX-only shell script (python3/perl/diff `which` probes).
         // On Windows targets the probe itself can't succeed, but the sentinel
@@ -490,16 +489,18 @@ impl Actor {
             "internal_command",
             json!({
                 "id": cmd_id,
-                "tool_call_id": probe_tc_id,
+                "tool_call_id": cmd_id,
                 "cmd": PROBE_CMD,
                 "full_cmd": full_cmd,
                 "sentinel": sentinel,
             }),
         );
 
-        let output = match self.wait_command_outcome(&probe_tc_id).await? {
+        let (outcome, ack) = self.wait_command_outcome(&cmd_id).await?;
+        let output = match outcome {
             CommandOutcome::Result { output, .. } => output,
             CommandOutcome::Rejected { reason } => {
+                Self::complete_action(ack, Ok(()));
                 return Err(AppError::other(
                     "caps_probe_aborted",
                     json!({ "reason": reason }),
@@ -514,6 +515,9 @@ impl Actor {
             ),
         });
         self.remote_caps = Some(caps);
+        // The internal probe has no terminal card mutation. Its processing ack
+        // means the output was consumed into the actor's capability state.
+        Self::complete_action(ack, Ok(()));
         Ok(caps)
     }
 
@@ -534,7 +538,6 @@ impl Actor {
     /// 材料展示在卡片上 —— 用户审批 mv 时不用回滚翻第 3 张结果区域。其他卡片传 None。
     async fn run_file_op(
         &mut self,
-        tool_call_id: &str,
         cmd: String,
         explain: String,
         side_effect: String,
@@ -555,7 +558,7 @@ impl Actor {
 
         let mut payload = json!({
             "id": cmd_id,
-            "tool_call_id": tool_call_id,
+            "tool_call_id": cmd_id,
             "cmd": cmd,
             "full_cmd": full_cmd,
             "sentinel": sentinel,
@@ -571,9 +574,11 @@ impl Actor {
         }
         self.emit("command_proposed", payload);
 
-        match self.wait_command_outcome(tool_call_id).await? {
+        let (outcome, ack) = self.wait_command_outcome(&cmd_id).await?;
+        match outcome {
             CommandOutcome::Rejected { reason } => {
                 self.record_rejection(&cmd_id, &reason);
+                Self::complete_action(ack, Ok(()));
                 Ok(CommandOutcome::Rejected { reason })
             }
             CommandOutcome::Result {
@@ -605,6 +610,10 @@ impl Actor {
                     truncated_bytes: trunc.truncated_bytes,
                     duration_ms: started_at.elapsed().as_millis() as u64,
                 });
+                // Ack only after the canonical terminal mutation and audit
+                // entry exist. Prepare-stop may cancel this handler as soon as
+                // the frontend sees the ack.
+                Self::complete_action(ack, Ok(()));
                 // 返回 redact 前的 raw output —— 上层要从中 extract_json_payload，
                 // 脱敏后的版本里 marker 可能被改写。脱敏只作用于 audit / UI 显示，
                 // 不影响 rssh 内部解析。
@@ -658,7 +667,6 @@ impl Actor {
         let cmd = build_match_cmd(interp, &input.path, &input.find, before, after);
         let outcome = self
             .run_file_op(
-                &tc.id,
                 cmd,
                 format!("match_file: search `{}` (read-only)", input.path),
                 "read-only".into(),
@@ -803,7 +811,6 @@ impl Actor {
         // ── Card 1/4: cp 原文到 tmp ──────────────────────────────
         let outcome = self
             .run_file_op(
-                &tc.id,
                 build_cp_cmd(&input.path, &tmp_path),
                 format!(
                     "patch_file 1/4: copy `{}` to staging `{}`",
@@ -839,7 +846,6 @@ impl Actor {
         // ── Card 2/4: 解释器 in-place 改 tmp（校验 count → 替换 → 回 {count}） ──
         let outcome = self
             .run_file_op(
-                &tc.id,
                 build_modify_cmd(
                     interp,
                     &tmp_path,
@@ -927,7 +933,6 @@ impl Actor {
         // exit 0=无差异 / 1=有差异（正常）/ >=2=工具失败
         let outcome = self
             .run_file_op(
-                &tc.id,
                 build_diff_cmd(&input.path, &tmp_path),
                 format!(
                     "patch_file 3/4: review diff of `{}` vs staged tmp",
@@ -999,7 +1004,6 @@ impl Actor {
         // ── Card 4/4: mv tmp → path（原子覆盖） ─────────────────
         let outcome = self
             .run_file_op(
-                &tc.id,
                 build_mv_cmd(&tmp_path, &input.path),
                 format!(
                     "patch_file 4/4: apply via `mv {} -> {}`",

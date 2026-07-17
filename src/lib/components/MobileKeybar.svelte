@@ -2,7 +2,7 @@
     import * as app from "../stores/app.svelte.ts";
     import * as ai from "../ai/store.svelte.ts";
     import { toast } from "../stores/toast.svelte.ts";
-    import { t } from "../i18n/index.svelte.ts";
+    import { t, errMsg } from "../i18n/index.svelte.ts";
 
     function prevent(e: Event) { e.preventDefault(); }
 
@@ -42,6 +42,7 @@
         }
         void ai.togglePanel(app.activeTabId()).catch((e) => {
             console.warn("[ai] toggle mobile panel:", e);
+            toast.error(errMsg(e));
         });
     }
 

@@ -155,7 +155,7 @@ pub fn run() {
                 #[cfg(desktop)]
                 window_groups: Mutex::new(commands::window::WindowGroups::default()),
                 ai_sessions: Mutex::new(HashMap::new()),
-                ai_session_owners: Mutex::new(HashMap::new()),
+                ai_session_owners: Arc::new(Mutex::new(HashMap::new())),
                 ai_remote_shell_cache: Mutex::new(HashMap::new()),
                 data_dir,
             });
@@ -345,6 +345,7 @@ pub fn run() {
             ai::commands::ai_list_command_blacklist,
             ai::commands::ai_replace_command_blacklist,
             ai::commands::ai_session_start,
+            ai::commands::ai_session_prepare_stop,
             ai::commands::ai_session_stop,
             ai::commands::ai_session_clear_context,
             ai::commands::ai_session_rebind_target,

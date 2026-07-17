@@ -1,28 +1,17 @@
-<script lang="ts" module>
-    /** ack-only 工具（download_file / analyze_locally）不走 PTY，
-     *  store 的 _runningExecutions 表登记的是 PTY 句柄，无法守门重入。
-     *  Dialog 实例可能因列表重建而销毁重建，且 result prop 在事件
-     *  抵达前是 undefined → isPending=true，会再次自动 approve 发重复 ack。
-     *
-     *  Set 必须在 `<script module>` 里 —— 写在 instance script 里每次组件 mount
-     *  都会新建一个，完全不能跨实例共享，等于没防护。
-     *  生命周期：invoke 成功后才 add；result/rejected 抵达由 $effect 清理。 */
-    const _ackedToolCalls = new Set<string>();
-    // 任一批准入口（自动或人工）一旦尝试过，同一 tool call 就不能再被 effect
-    // 自动批准。跨组件 remount 保留，直到后端明确给出 result/rejected。
-    const _approveAttemptedToolCalls = new Set<string>();
-</script>
-
 <script lang="ts">
-    import { onDestroy, onMount, untrack } from "svelte";
+    import { onDestroy, onMount } from "svelte";
     import { invoke } from "@tauri-apps/api/core";
     import * as ai from "./store.svelte.ts";
+    import { commandApprovals, isAutoApprovalAllowed } from "./command-approval.ts";
+    import type { SessionInstanceRef } from "./session-identity.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
-    import type { AiSettings, AiTargetKind, CommandKind, CommandProposed, CommandResult } from "./types.ts";
+    import { toast } from "../stores/toast.svelte.ts";
+    import type { AiTargetKind, CommandProposed, CommandResult } from "./types.ts";
     import { isRawDeviceKind } from "./types.ts";
 
-    let { tabId, targetKind, targetSessionId, cmd, result, rejected, active } = $props<{
+    let { tabId, instanceId, targetKind, targetSessionId, cmd, result, rejected, active } = $props<{
         tabId: string;
+        instanceId: string;
         targetKind: AiTargetKind;
         targetSessionId: string | null;
         cmd: CommandProposed;
@@ -34,10 +23,16 @@
     let askingReason = $state(false);
     let rejectReason = $state("");
     let executing = $state(false);
+    let transportRunning = $state(false);
+    let resultDeliveryFailed = $state(false);
     let terminating = $state(false);
     // Raw devices (serial/telnet) only: the "submit output" button (distinct
     // from terminate) is in flight.
     let submitting = $state(false);
+    let eligibilityReady = $state(false);
+    let autoApproveEligible = $state(false);
+
+    const sessionRef = (): SessionInstanceRef => ({ tabId, instanceId });
 
     let isPending = $derived(!result && !rejected);
     // patch 卡片视觉特化（accent 高亮 + diff 框）—— 4 个阶段任一都算
@@ -50,26 +45,11 @@
     // download_file / analyze_locally 不走 PTY，approve 只发 ack 给后端；视觉无需特化。
     let isAckOnly = $derived(cmd.kind === "download_file" || cmd.kind === "analyze_locally");
 
-    /** 把 kind 映射到 settings 上对应的 auto_* 字段 —— 命中即可自动批准。
-     *  default 分支用 `never` 哨兵：CommandKind 新增联合成员时这里类型推断会失败、
-     *  编译报错提醒补 case；同时运行时 fail-closed（type-violation 入参也不放过）。 */
-    function autoApproveAllowed(s: AiSettings | null, kind?: CommandKind): boolean {
-        if (!s || !s.danger_mode || !kind) return false;
-        switch (kind) {
-            case "run_command":     return s.auto_run_command;
-            case "match_file":      return s.auto_match_file;
-            case "download_file":   return s.auto_download_file;
-            case "analyze_locally": return s.auto_analyze_locally;
-            case "patch_cp":        return s.auto_patch_cp;
-            case "patch_modify":    return s.auto_patch_modify;
-            case "patch_diff":      return s.auto_patch_diff;
-            case "patch_mv":        return s.auto_patch_mv;
-            default: {
-                const _exhaustive: never = kind;
-                void _exhaustive;
-                return false;
-            }
-        }
+    function syncExecutionStatus() {
+        const status = ai.commandExecutionStatus(sessionRef(), cmd.id);
+        transportRunning = status === "running";
+        resultDeliveryFailed = status === "delivery_failed";
+        executing = status === "running" || status === "reporting" || status === "delivered";
     }
 
     // 自动批准只由当前可见 tab 发起。ChatPanel 现在会保活隐藏 tab；如果仍在 onMount
@@ -77,23 +57,31 @@
     // UI 上"提议→执行"全程可见，审计 trail 与原行为不变。
     //
     // 重入防御：组件可能被销毁重建（chat list 重新 key 等）。
-    // 重建实例的 executing=false，单看 executing 拦不住第二次 approve —— 同一 tool_call_id
-    // 会被粘到 PTY 两次（rm/reboot 双执行级别的灾难）。用全局 _runningExecutions 表
+    // 重建实例的 executing=false，单看 executing 拦不住同一命令卡第二次 approve
+    // 会被粘到 PTY 两次（rm/reboot 双执行级别的灾难）。用 store 的 per-execution registry
     // （isCommandRunning）守门：命令还在 in-flight 时拒绝再次自动批准。
     //
     // onMount 只负责恢复已在执行的卡片视觉状态。
     onMount(() => {
+        const session = sessionRef();
+        autoApproveEligible = commandApprovals.eligibleWhileAllowed(
+            session,
+            cmd.id,
+            isAutoApprovalAllowed(ai.settings(), cmd.kind),
+        );
+        eligibilityReady = true;
         // Command already in flight when this dialog remounts after a keyed list
         // rebuild. Reflect the running state
         // so the card shows Terminate/Submit instead of a stale Approve button
         // (clicking which would be a no-op now that executeCommand guards on the
         // running map, but a dead button is confusing). The original execution
         // still owns the listener/timer and delivers the result.
-        const inFlight = isAckOnly
-            ? _ackedToolCalls.has(cmd.tool_call_id)
-            : ai.isCommandRunning(cmd.tool_call_id);
-        if (isPending && inFlight) {
-            executing = true;
+        if (isPending) {
+            if (isAckOnly) {
+                executing = commandApprovals.isAcknowledged(session, cmd.id);
+            } else {
+                syncExecutionStatus();
+            }
         }
     });
 
@@ -101,10 +89,29 @@
         // Keep guards across ordinary keyed-list remounts, but release them
         // when explicit panel/tab teardown removes the whole conversation.
         // The replacement actor cannot start until teardown finishes and gets
-        // a fresh timeline, so no later component can reuse this tool call.
+        // a fresh timeline, so no later component can reuse this command card.
         if (!ai.isOpen(tabId)) {
-            _ackedToolCalls.delete(cmd.tool_call_id);
-            _approveAttemptedToolCalls.delete(cmd.tool_call_id);
+            commandApprovals.clear(sessionRef(), cmd.id);
+        }
+    });
+
+    // Execution can outlive this component (for example, switch to Audit and
+    // back). The registry is reactive, so a remounted card still observes a
+    // later running → delivery_failed transition and exposes report-only retry.
+    $effect(() => {
+        if (isPending && !isAckOnly) syncExecutionStatus();
+    });
+
+    // Eligibility is snapshotted when the command arrives. A later settings
+    // enable cannot authorize an old proposal; a later disable can still revoke
+    // the captured permission before this hidden tab becomes active.
+    $effect(() => {
+        if (eligibilityReady && autoApproveEligible) {
+            autoApproveEligible = commandApprovals.eligibleWhileAllowed(
+                sessionRef(),
+                cmd.id,
+                isAutoApprovalAllowed(ai.settings(), cmd.kind),
+            );
         }
     });
 
@@ -112,43 +119,45 @@
     $effect(() => {
         if (
             active
+            && eligibilityReady
+            && autoApproveEligible
             && isPending
             && !executing
             && !askingReason
-            && !!cmd.tool_call_id
             // No danger mode on raw devices: a bare serial peer (firmware / PLC /
             // bootloader) or a telnet peer (core switch, router) is too sensitive
             // to auto-paste into — and the POSIX-oriented blacklist can't catch
             // network-OS dangers (`reload`, `erase startup-config`). Always ask.
             && !isRawDeviceKind(targetKind)
-            && !ai.isCommandRunning(cmd.tool_call_id)
-            && !_ackedToolCalls.has(cmd.tool_call_id)
-            && !_approveAttemptedToolCalls.has(cmd.tool_call_id)
-            // Settings changes must not retroactively execute an already-pending
-            // command. active/cmd changes are the eligibility boundary.
-            && autoApproveAllowed(untrack(() => ai.settings()), cmd.kind)
+            && !ai.isCommandRunning(sessionRef(), cmd.id)
+            && !commandApprovals.isAcknowledged(sessionRef(), cmd.id)
+            && !commandApprovals.wasAttempted(sessionRef(), cmd.id)
         ) {
             void approve();
         }
     });
 
-    // result / rejected prop 抵达 → 把对应 tool_call_id 从 _ackedToolCalls 移除。
-    // 此后该 dialog 再 remount 走的是 isPending=false 分支不会触发 approve，
-    // Set 也不会无限增长。
+    // Result/rejected ends every guard for this exact actor + command card. A later
+    // actor in the same tab has another instance id and never shares this entry.
     $effect(() => {
         if (result || rejected) {
-            _ackedToolCalls.delete(cmd.tool_call_id);
-            _approveAttemptedToolCalls.delete(cmd.tool_call_id);
+            commandApprovals.clear(sessionRef(), cmd.id);
         }
     });
 
     async function approve() {
         if (executing) return;
-        if (isAckOnly && _ackedToolCalls.has(cmd.tool_call_id)) return;
+        const session = sessionRef();
+        if (isAckOnly && commandApprovals.isAcknowledged(session, cmd.id)) return;
+        const retryingResultDelivery = !isAckOnly && resultDeliveryFailed;
         // Reserve before the first await. Manual approval counts too: if settings
         // become permissive while it runs, the reactive auto path must not fire.
-        _approveAttemptedToolCalls.add(cmd.tool_call_id);
+        if (!retryingResultDelivery) {
+            commandApprovals.markAttempted(session, cmd.id);
+        }
+        resultDeliveryFailed = false;
         executing = true;
+        transportRunning = !isAckOnly && !retryingResultDelivery;
         try {
             if (isAckOnly) {
                 // 不走 PTY：后端 actor 此刻阻塞在 wait_command_outcome 等批准结果。
@@ -160,36 +169,47 @@
                 // 1) 先 add 防 await 期间并发 onMount 撞重复 invoke
                 // 2) catch 里 delete 回退，让用户能重试
                 // 走到 return 之前 invoke 已 resolve，acked 状态留着到 result 抵达
-                _ackedToolCalls.add(cmd.tool_call_id);
+                commandApprovals.markAcknowledged(session, cmd.id);
                 try {
                     await invoke("ai_command_result", {
                         tabId,
-                        toolCallId: cmd.tool_call_id,
+                        instanceId,
+                        toolCallId: cmd.id,
                         exitCode: 0,
                         output: "",
                         timedOut: false,
                         earlyTerminated: false,
                     });
                 } catch (e) {
-                    _ackedToolCalls.delete(cmd.tool_call_id);
+                    commandApprovals.clearAcknowledged(session, cmd.id);
                     throw e;
                 }
                 return;
             }
             const liveTargetSessionId = targetSessionId;
             if (!liveTargetSessionId) throw new Error(t("common.disconnected"));
-            await ai.executeCommand(tabId, cmd, targetKind, liveTargetSessionId);
+            await ai.executeCommand(session, cmd, targetKind, liveTargetSessionId);
         } catch (e) {
             console.error("[ai] execute failed:", e);
-            alert(t("ai.cmd.alert.exec_failed", { error: errMsg(e) }));
-            executing = false;
+            if (isAckOnly) {
+                executing = false;
+                transportRunning = false;
+            } else {
+                syncExecutionStatus();
+            }
+            toast.error(t(
+                resultDeliveryFailed
+                    ? "ai.cmd.alert.result_delivery_failed"
+                    : "ai.cmd.alert.exec_failed",
+                { error: errMsg(e) },
+            ));
             terminating = false;
             submitting = false;
             return;
         }
         // 成功路径：ack-only 等 result 抵达再 reset；PTY 路径 executeCommand 已等到 result。
         if (!isAckOnly) {
-            executing = false;
+            syncExecutionStatus();
             terminating = false;
             submitting = false;
         }
@@ -203,7 +223,7 @@
         const reason = rejectReason.trim();
         if (!reason) return;
         try {
-            await ai.rejectCommand(tabId, cmd.tool_call_id, reason);
+            await ai.rejectCommand(sessionRef(), cmd.id, reason);
             askingReason = false;
             rejectReason = "";
         } catch (e) {
@@ -218,9 +238,11 @@
         if (terminating) return;
         terminating = true;
         try {
-            await ai.terminateCommand(cmd.tool_call_id);
+            await ai.terminateCommand(sessionRef(), cmd.id);
+            syncExecutionStatus();
         } catch (e) {
             console.error("[ai] terminate failed:", e);
+            syncExecutionStatus();
             terminating = false;
         }
     }
@@ -235,12 +257,19 @@
         if (submitting) return;
         submitting = true;
         try {
-            await ai.submitCommand(cmd.tool_call_id);
+            await ai.submitCommand(sessionRef(), cmd.id);
+            syncExecutionStatus();
         } catch (e) {
             // Match approve()'s feedback — otherwise a failed submit looks like a
             // dead button (user clicked, nothing happened, no clue why).
             console.error("[ai] submit failed:", e);
-            alert(t("ai.cmd.alert.submit_failed", { error: errMsg(e) }));
+            syncExecutionStatus();
+            toast.error(t(
+                resultDeliveryFailed
+                    ? "ai.cmd.alert.result_delivery_failed"
+                    : "ai.cmd.alert.submit_failed",
+                { error: errMsg(e) },
+            ));
             submitting = false;
         }
     }
@@ -270,26 +299,26 @@
         {#if !askingReason}
             <div class="actions">
                 <button class="btn btn-approve" onclick={approve} disabled={executing}>
-                    {executing ? t("ai.cmd.btn.executing") : t("ai.cmd.btn.approve")}
+                    {resultDeliveryFailed ? t("ai.cmd.btn.retry_result") : executing ? t("ai.cmd.btn.executing") : t("ai.cmd.btn.approve")}
                 </button>
-                {#if executing && !isAckOnly && isRawDeviceKind(targetKind)}
+                {#if transportRunning && !isAckOnly && isRawDeviceKind(targetKind)}
                     <!-- Raw devices: a dedicated "submit output" button, fully separate
                          from Terminate. The user clicks it when the device has finished
                          responding; it reports the buffer as a clean result. -->
                     <button class="btn btn-submit" onclick={submit} disabled={submitting}>
                         {submitting ? t("ai.cmd.btn.submitting") : t("ai.cmd.btn.submit")}
                     </button>
-                {:else if executing && !isAckOnly}
+                {:else if transportRunning && !isAckOnly}
                     <!-- ack-only 命令（download_file / analyze_locally）没 PTY，
                          Terminate 发 Ctrl+C 是 no-op，不该露给用户当 affordance。 -->
                     <button class="btn btn-terminate" onclick={terminate} disabled={terminating}>
                         {terminating ? t("ai.cmd.btn.terminating") : t("ai.cmd.btn.terminate")}
                     </button>
-                {:else if !executing}
+                {:else if !executing && !resultDeliveryFailed}
                     <button class="btn btn-reject" onclick={reject}>{t("ai.cmd.btn.reject")}</button>
                 {/if}
             </div>
-            {#if executing}
+            {#if transportRunning}
                 <div class="hint">{targetKind === "serial" ? t("ai.cmd.hint.executing_serial") : targetKind === "telnet" ? t("ai.cmd.hint.executing_telnet") : t("ai.cmd.hint.executing")}</div>
             {/if}
         {:else}

@@ -235,9 +235,86 @@ describe("closeTab keeps the most-recent tab active", () => {
     expect(ai.panelWidth("b")).toBe(360);
     expect(ai.pendingPrefill("b")?.text).toBe("draft B");
   });
+
+  it("reports an asynchronous AI disposal failure to the user", async () => {
+    const app = await loadAppModule();
+    const ai = await import("../ai/store.svelte.ts");
+    const { toasts } = await import("./toast.svelte.ts");
+    vi.spyOn(ai, "disposeTab").mockRejectedValueOnce(
+      new Error("final timeline write failed"),
+    );
+    app.addTab(local("a"));
+
+    app.closeTab("a");
+    await vi.waitFor(() => {
+      expect(toasts()).toContainEqual(expect.objectContaining({
+        kind: "error",
+        message: "final timeline write failed",
+      }));
+    });
+  });
 });
 
 describe("SFTP panel state", () => {
+  it("seeds a new SSH tab from the persisted panel width", async () => {
+    localStorage.setItem("sftp-panel-width", "460");
+    const app = await loadAppModule();
+
+    app.addTab({ id: "a", type: "ssh", label: "A" });
+
+    expect(app.sftpPanelWidthForTab("a")).toBe(460);
+  });
+
+  it("keeps seeded widths independent and persists the latest width for future tabs", async () => {
+    localStorage.setItem("sftp-panel-width", "460");
+    const app = await loadAppModule();
+    app.addTab({ id: "a", type: "ssh", label: "A" });
+    app.addTab({ id: "b", type: "ssh", label: "B" });
+
+    app.setSftpPanelWidth("a", 520);
+    app.commitSftpPanelWidth("a");
+    app.addTab({ id: "c", type: "ssh", label: "C" });
+
+    expect(app.sftpPanelWidthForTab("a")).toBe(520);
+    expect(app.sftpPanelWidthForTab("b")).toBe(460);
+    expect(app.sftpPanelWidthForTab("c")).toBe(520);
+    expect(localStorage.getItem("sftp-panel-width")).toBe("520");
+
+    const reloaded = await loadAppModule();
+    reloaded.addTab({ id: "d", type: "ssh", label: "D" });
+    expect(reloaded.sftpPanelWidthForTab("d")).toBe(520);
+  });
+
+  it("resets the persisted default without changing already-seeded tabs", async () => {
+    localStorage.setItem("sftp-panel-width", "460");
+    const app = await loadAppModule();
+    app.addTab({ id: "a", type: "ssh", label: "A" });
+    app.addTab({ id: "b", type: "ssh", label: "B" });
+
+    app.setSftpPanelWidth("a", null);
+    app.commitSftpPanelWidth("a");
+    app.addTab({ id: "c", type: "ssh", label: "C" });
+
+    expect(app.sftpPanelWidthForTab("a")).toBeNull();
+    expect(app.sftpPanelWidthForTab("b")).toBe(460);
+    expect(app.sftpPanelWidthForTab("c")).toBeNull();
+    expect(localStorage.getItem("sftp-panel-width")).toBeNull();
+  });
+
+  it("ignores a delayed drag commit after its tab has closed", async () => {
+    localStorage.setItem("sftp-panel-width", "460");
+    const app = await loadAppModule();
+    app.addTab({ id: "a", type: "ssh", label: "A" });
+    app.setSftpPanelWidth("a", 520);
+
+    app.closeTab("a");
+    app.commitSftpPanelWidth("a");
+    app.addTab({ id: "b", type: "ssh", label: "B" });
+
+    expect(app.sftpPanelWidthForTab("b")).toBe(460);
+    expect(localStorage.getItem("sftp-panel-width")).toBe("460");
+  });
+
   it("keeps widths per tab until that tab closes", async () => {
     const app = await loadAppModule();
     app.addTab({ id: "a", type: "ssh", label: "A" });

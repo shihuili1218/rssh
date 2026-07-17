@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import * as ai from "../ai/store.svelte.ts";
+import { errMsg } from "../i18n/index.svelte.ts";
 import type { ViewportSnapshot } from "../terminal/viewport-snapshot.ts";
+import { toast } from "./toast.svelte.ts";
 
 /* ═══════════════════════════════════════════════════════
    Platform
@@ -174,7 +176,22 @@ let _connectionEditorIntent = $state<ConnectionEditorIntent>({ mode: "create", k
    新开 tab 不自动开 SFTP——每个 tab 手动开。
    (老的全局 _sftpOpen 已废，那是 fullscreen overlay 时代的产物。) */
 let _sftpOpenByTab = $state<Record<string, boolean>>({});
-let _sftpPanelWidthByTab = $state<Record<string, number>>({});
+const sftpPanelWidthKey = "sftp-panel-width";
+const sftpPanelMinWidth = 280;
+
+function loadSftpPanelWidth(): number | null {
+  try {
+    const raw = localStorage.getItem(sftpPanelWidthKey);
+    if (raw === null) return null;
+    const width = Number.parseInt(raw, 10);
+    return Number.isFinite(width) && width >= sftpPanelMinWidth ? width : null;
+  } catch {
+    return null;
+  }
+}
+
+let _sftpPanelDefaultWidth = loadSftpPanelWidth();
+let _sftpPanelWidthByTab = $state<Record<string, number | null>>({});
 /* Transfers popover: an overlay, no longer a sibling route of Settings.
    State is independent — switching tabs / opening Settings does not close it;
    the user must dismiss explicitly (X / click outside / Esc / re-click entry).
@@ -221,6 +238,14 @@ function safeSetItem(key: string, value: string) {
     } catch (e) {
         // One warn per failure is enough; don't spam if quota stays exceeded.
         console.warn(`[app] localStorage setItem(${key}) failed:`, e);
+    }
+}
+
+function safeRemoveItem(key: string) {
+    try {
+        localStorage.removeItem(key);
+    } catch (e) {
+        console.warn(`[app] localStorage removeItem(${key}) failed:`, e);
     }
 }
 
@@ -275,8 +300,17 @@ export function sftpPanelWidthForTab(tabId: string): number | null {
   return _sftpPanelWidthByTab[tabId] ?? null;
 }
 export function setSftpPanelWidth(tabId: string, width: number | null) {
-  if (width === null) delete _sftpPanelWidthByTab[tabId];
-  else _sftpPanelWidthByTab[tabId] = width;
+  _sftpPanelWidthByTab[tabId] = width;
+}
+export function commitSftpPanelWidth(tabId: string) {
+  if (!Object.prototype.hasOwnProperty.call(_sftpPanelWidthByTab, tabId)) return;
+  const width = _sftpPanelWidthByTab[tabId] ?? null;
+  _sftpPanelDefaultWidth = width;
+  if (width === null) {
+    safeRemoveItem(sftpPanelWidthKey);
+  } else {
+    safeSetItem(sftpPanelWidthKey, String(width));
+  }
 }
 export function downloadsActive() { return _downloadsActive; }
 export function pinnedProfileIds() { return _pinnedProfileIds; }
@@ -299,6 +333,9 @@ export function setActiveTab(id: string) {
 
 export function addTab(tab: Tab) {
   ai.activateTab(tab.id);
+  if (tab.type === "ssh") {
+    _sftpPanelWidthByTab[tab.id] = _sftpPanelDefaultWidth;
+  }
   // MRU on: new tab is the most-recently-focused → front of the session region
   // (index 1, right after the fixed home tab), no "freshly created but not at
   // front" special case. MRU off: append at the end (pre-MRU behavior).
@@ -366,7 +403,10 @@ export function closeTab(id: string) {
   delete _sftpPanelWidthByTab[id];
   // 同步 tombstone 先封死 start/send 的异步 continuation，再 fire-and-forget
   // 清 actor；即使 lazy actor 尚未落前端 store，也不会在 tab 关闭后复活。
-  ai.disposeTab(id).catch((e) => console.warn("[ai] dispose on tab close:", e));
+  ai.disposeTab(id).catch((error) => {
+    console.warn("[ai] dispose on tab close:", error);
+    toast.error(errMsg(error));
+  });
   if (wasActive) {
     _activeTabId = _tabs[Math.min(idx, _tabs.length - 1)]?.id ?? "home";
   }

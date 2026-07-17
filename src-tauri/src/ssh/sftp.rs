@@ -58,6 +58,52 @@ pub struct WalkEntry {
 /// pathological server-side trees.
 const WALK_DEPTH_CAP: u32 = 32;
 
+/// Owns an AI download's deterministic `.part` path. Dropping the future at
+/// any await point drops this guard after the open file, so cancellation cannot
+/// leave a partial artifact behind.
+struct PartialDownloadGuard {
+    path: PathBuf,
+    committed: bool,
+}
+
+impl PartialDownloadGuard {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            committed: false,
+        }
+    }
+
+    fn commit(mut self, local_path: &Path) -> std::io::Result<()> {
+        replace_local_file(&self.path, local_path)?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for PartialDownloadGuard {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// Replace the completed download without yielding. On Windows, `rename`
+/// cannot overwrite an existing file, so removal and rename stay in one
+/// synchronous section where task cancellation cannot split them.
+fn replace_local_file(tmp_path: &Path, local_path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        match std::fs::remove_file(local_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    std::fs::rename(tmp_path, local_path)
+}
+
 /// Join a remote path segment. Special-cases dir == "/" so the result never
 /// contains "//foo"; matches the convention used by the existing callers.
 fn join_remote(dir: &str, name: &str) -> String {
@@ -438,70 +484,57 @@ impl SftpHandle {
                 )
             })?;
         let tmp_path = local_path.with_file_name(format!("{file_name}.part"));
+        let partial = PartialDownloadGuard::new(tmp_path.clone());
+        let mut remote_file = self.sftp.open(remote_path).await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "open", "err": e.to_string() }),
+            )
+        })?;
+        // `tokio::fs::File::create` runs on the blocking pool; dropping its
+        // future cannot cancel an already-started create, so it could recreate
+        // `.part` after the guard had removed it. The syscall is tiny: perform
+        // it in this poll, then hand the open descriptor to Tokio for writes.
+        let local_file = std::fs::File::create(&tmp_path)?;
+        let mut local_file = tokio::fs::File::from_std(local_file);
 
-        let result: AppResult<u64> = async {
-            let mut remote_file = self.sftp.open(remote_path).await.map_err(|e| {
+        let mut transferred: u64 = 0;
+        let mut buf = vec![0u8; 32768];
+        loop {
+            let n = remote_file.read(&mut buf).await.map_err(|e| {
                 AppError::sftp(
                     "sftp_io_failed",
-                    json!({ "op": "open", "err": e.to_string() }),
+                    json!({ "op": "read", "err": e.to_string() }),
                 )
             })?;
-            let mut local_file = tokio::fs::File::create(&tmp_path).await?;
-
-            let mut transferred: u64 = 0;
-            let mut buf = vec![0u8; 32768];
-            loop {
-                let n = remote_file.read(&mut buf).await.map_err(|e| {
-                    AppError::sftp(
-                        "sftp_io_failed",
-                        json!({ "op": "read", "err": e.to_string() }),
-                    )
-                })?;
-                if n == 0 {
-                    break;
-                }
-                // 运行时 cap：metadata 缺失 / 撒谎 / 下载途中文件增长都靠这里兜底。
-                // 这是 max_bytes 的唯一权威检查点，预检只是优化。
-                let next = transferred + n as u64;
-                if next > max_bytes {
-                    // 主动关闭 server-side handle，免得让远端 fd 等到 session drop 才回收。
-                    let _ = remote_file.shutdown().await;
-                    return Err(AppError::sftp(
-                        "sftp_file_too_large",
-                        json!({ "path": remote_path, "size": next, "limit": max_bytes }),
-                    ));
-                }
-                local_file.write_all(&buf[..n]).await?;
-                transferred = next;
+            if n == 0 {
+                break;
             }
-
-            remote_file.shutdown().await.map_err(|e| {
-                AppError::sftp(
-                    "sftp_io_failed",
-                    json!({ "op": "close", "err": e.to_string() }),
-                )
-            })?;
-            local_file.shutdown().await?;
-            Ok(transferred)
+            // 运行时 cap：metadata 缺失 / 撒谎 / 下载途中文件增长都靠这里兜底。
+            // 这是 max_bytes 的唯一权威检查点，预检只是优化。
+            let next = transferred + n as u64;
+            if next > max_bytes {
+                // 主动关闭 server-side handle，免得让远端 fd 等到 session drop 才回收。
+                let _ = remote_file.shutdown().await;
+                return Err(AppError::sftp(
+                    "sftp_file_too_large",
+                    json!({ "path": remote_path, "size": next, "limit": max_bytes }),
+                ));
+            }
+            local_file.write_all(&buf[..n]).await?;
+            transferred = next;
         }
-        .await;
 
-        match result {
-            Ok(n) => {
-                // Windows `MoveFileExW` 默认不覆盖已存在目标 —— ai/session.rs
-                // 在同一 session 内反复用同一 local_path，第二次 rename 就会
-                // 失败。Unix 上 rename 本来就覆盖，预先 remove 是 no-op。
-                let _ = tokio::fs::remove_file(local_path).await;
-                tokio::fs::rename(&tmp_path, local_path).await?;
-                Ok(n)
-            }
-            Err(e) => {
-                // best-effort cleanup — 即使 unlink 失败，也只是留一个 .part，
-                // 不会污染 local_path（消费端约定的产出路径）。
-                let _ = tokio::fs::remove_file(&tmp_path).await;
-                Err(e)
-            }
-        }
+        remote_file.shutdown().await.map_err(|e| {
+            AppError::sftp(
+                "sftp_io_failed",
+                json!({ "op": "close", "err": e.to_string() }),
+            )
+        })?;
+        local_file.shutdown().await?;
+        drop(local_file);
+        partial.commit(local_path)?;
+        Ok(transferred)
     }
 
     /// Stream-download a remote file to a local path, emitting progress events.
@@ -852,6 +885,35 @@ where
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn dropping_partial_download_removes_the_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let tmp_path = dir.path().join("artifact.part");
+        std::fs::write(&tmp_path, b"partial").unwrap();
+
+        {
+            let _partial = PartialDownloadGuard::new(tmp_path.clone());
+        }
+
+        assert!(!tmp_path.exists());
+    }
+
+    #[test]
+    fn committing_partial_download_replaces_the_existing_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let local_path = dir.path().join("artifact");
+        let tmp_path = dir.path().join("artifact.part");
+        std::fs::write(&local_path, b"old").unwrap();
+        std::fs::write(&tmp_path, b"new").unwrap();
+
+        PartialDownloadGuard::new(tmp_path.clone())
+            .commit(&local_path)
+            .unwrap();
+
+        assert_eq!(std::fs::read(&local_path).unwrap(), b"new");
+        assert!(!tmp_path.exists());
+    }
 
     /// Both copy loops must move every byte intact and report monotonic progress
     /// ending at the total. Driven over in-memory buffers — no SSH, no Tauri.

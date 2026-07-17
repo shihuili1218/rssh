@@ -183,6 +183,9 @@ pub struct AiSessionInfo {
     /// Tab 内的会话身份。切 Tab / SSH 重连时前端仍用 tab_id 定位同一 actor；
     /// 显式关闭 AI 面板会结束 actor，历史通过 conversation 恢复。
     pub tab_id: String,
+    /// Unique actor incarnation used to reject delayed commands after a tab
+    /// closes and starts a replacement session.
+    pub instance_id: String,
     /// 当前绑定的 SSH/PTY session_id（重连时由 rebind 更新）。
     pub target_id: String,
     pub skill: String,
@@ -195,8 +198,15 @@ pub struct AiSessionInfo {
 
 impl From<&DiagnoseSession> for AiSessionInfo {
     fn from(s: &DiagnoseSession) -> Self {
+        Self::from_with_instance(s, s.instance_id)
+    }
+}
+
+impl AiSessionInfo {
+    fn from_with_instance(s: &DiagnoseSession, instance_id: uuid::Uuid) -> Self {
         Self {
             tab_id: s.tab_id.clone(),
+            instance_id: instance_id.to_string(),
             target_id: s.target_id.clone(),
             skill: s.skill.clone(),
             model: s.model.clone(),
@@ -374,8 +384,8 @@ pub async fn ai_session_start_impl(
     locale: Option<String>,
     resume: Option<String>,
 ) -> AppResult<AiSessionInfo> {
-    let owner_reservation =
-        crate::commands::lifecycle::reserve_ai_owner(state, tab_id.clone(), owner)?;
+    let mut owner_reservation =
+        crate::commands::lifecycle::reserve_ai_owner(state, tab_id.clone(), owner.clone())?;
     {
         let g = locked(&state.ai_sessions)?;
         // 一个 tab 至多一个 actor。前端 ensureSession 已经做了"有 session 就复用"的判断，
@@ -412,12 +422,16 @@ pub async fn ai_session_start_impl(
     let mut initial_shell = super::shell::ShellKind::default();
     let ssh_handle = match &target {
         AiTarget::Ssh(target_id) => {
-            let (handle, profile_id) = {
-                let g = locked(&state.sessions)?;
-                let h = g
-                    .get(target_id)
-                    .ok_or_else(|| AppError::not_found("ssh_session_not_found", json!({})))?;
-                (h.ssh_handle().clone(), h.profile_id().to_string())
+            let (handle, profile_id) = match crate::commands::lifecycle::owned_ready_ai_target(
+                state,
+                target_id,
+                crate::state::SessionKind::Ssh,
+                &owner,
+            )? {
+                crate::commands::lifecycle::OwnedAiTarget::Ssh { handle, profile_id } => {
+                    (handle, profile_id)
+                }
+                _ => unreachable!("SSH lifecycle kind returned a non-SSH target"),
             };
             if auto_detect {
                 if let Some(k) = locked(&state.ai_remote_shell_cache)?
@@ -432,11 +446,16 @@ pub async fn ai_session_start_impl(
         }
         #[cfg(not(target_os = "android"))]
         AiTarget::Local(target_id) => {
-            let g = locked(&state.pty_sessions)?;
-            let pty = g
-                .get(target_id)
-                .ok_or_else(|| AppError::not_found("local_pty_not_found", json!({})))?;
-            initial_shell = super::shell::ShellKind::from_local_path(pty.shell_path());
+            let shell_path = match crate::commands::lifecycle::owned_ready_ai_target(
+                state,
+                target_id,
+                crate::state::SessionKind::Pty,
+                &owner,
+            )? {
+                crate::commands::lifecycle::OwnedAiTarget::PtyShellPath(path) => path,
+                _ => unreachable!("PTY lifecycle kind returned a non-PTY target"),
+            };
+            initial_shell = super::shell::ShellKind::from_local_path(&shell_path);
             None
         }
         #[cfg(target_os = "android")]
@@ -446,9 +465,12 @@ pub async fn ai_session_start_impl(
             // No shell to probe — a serial port is raw bytes. Validate it exists,
             // then run with ShellKind::Serial (no sentinel, no exit code) and no
             // ssh_handle (like Local; the front-end does the serial_write/read).
-            if !locked(&state.serial_sessions)?.contains_key(target_id) {
-                return Err(AppError::not_found("serial_session_not_found", json!({})));
-            }
+            let _ = crate::commands::lifecycle::owned_ready_ai_target(
+                state,
+                target_id,
+                crate::state::SessionKind::Serial,
+                &owner,
+            )?;
             initial_shell = super::shell::ShellKind::Serial;
             None
         }
@@ -459,9 +481,12 @@ pub async fn ai_session_start_impl(
         AiTarget::Telnet(target_id) => {
             // Same raw-device path as Serial: validate it exists, run with
             // ShellKind::Telnet, no ssh_handle (front-end does telnet_write/read).
-            if !locked(&state.telnet_sessions)?.contains_key(target_id) {
-                return Err(AppError::not_found("telnet_session_not_found", json!({})));
-            }
+            let _ = crate::commands::lifecycle::owned_ready_ai_target(
+                state,
+                target_id,
+                crate::state::SessionKind::Telnet,
+                &owner,
+            )?;
             initial_shell = super::shell::ShellKind::Telnet;
             None
         }
@@ -489,17 +514,10 @@ pub async fn ai_session_start_impl(
     let is_new_conversation = resume.is_none();
     let (conversation_id, initial_history) = match resume {
         Some(id) => {
-            // One live actor per conversation — a second resume would mean two
-            // writers autosaving over each other (last-writer-wins). Best-effort
-            // check (a concurrent double-resume can still race past it between
-            // this lock and the insert below); the common path it guards is
-            // "user clicks the same history entry in two tabs".
-            if locked(&state.ai_sessions)?
-                .values()
-                .any(|s| s.conversation_id == id)
-            {
-                return Err(AppError::other("conversation_in_use", json!({})));
-            }
+            // Claim before reading the row. Otherwise delete or another resume
+            // can win the load-to-activation gap and leave two writers (or
+            // resurrect a deleted conversation on the next autosave).
+            owner_reservation.claim_conversation(&id)?;
             let row = crate::db::ai_conversation::get(&state.db, &id)?
                 .ok_or_else(|| AppError::not_found("conversation_not_found", json!({})))?;
             if row.target_key != target_key {
@@ -514,7 +532,11 @@ pub async fn ai_session_start_impl(
                 })?;
             (id, history)
         }
-        None => (uuid::Uuid::new_v4().to_string(), Vec::new()),
+        None => {
+            let id = uuid::Uuid::new_v4().to_string();
+            owner_reservation.claim_conversation(&id)?;
+            (id, Vec::new())
+        }
     };
 
     let cfg = session::SessionConfig {
@@ -552,43 +574,307 @@ pub async fn ai_session_start_impl(
     // 锁下再查一遍，撞了直接 return Err，PendingSession 就地 drop，actor
     // 从未运行过、不会 emit `ai:session_ended:<tab_id>` 污染赢家的事件流。
     let pending = session::start(cfg, host)?;
-    let info = AiSessionInfo::from(pending.info());
-    owner_reservation.activate(pending)?;
-    // Create the conversation row only for NEW conversations, and only after
-    // winning the slot — a racing loser must not litter the picker with an
-    // empty row. Resume must NOT create: its row already exists, and an
-    // unconditional INSERT OR IGNORE here would resurrect a conversation
-    // deleted in the load→insert window, breaking the anti-resurrection
-    // invariant (autosaves are UPDATE-only precisely to uphold it).
-    // Failure is logged, not fatal: the session is already live, and killing
-    // it over a persistence miss would be backwards.
+    let info = AiSessionInfo::from_with_instance(pending.info(), owner_reservation.instance_id());
+    activate_pending_ai_session(
+        state,
+        owner_reservation,
+        pending,
+        is_new_conversation,
+        &target_key,
+    )?;
+    Ok(info)
+}
+
+pub(crate) fn activate_pending_ai_session(
+    state: &AppState,
+    owner_reservation: crate::commands::lifecycle::AiOwnerReservation<'_>,
+    pending: session::PendingSession,
+    is_new_conversation: bool,
+    target_key: &str,
+) -> AppResult<()> {
+    let conversation_id = pending.info().conversation_id.clone();
     if is_new_conversation {
-        if let Err(e) =
-            crate::db::ai_conversation::create(&state.db, &info.conversation_id, &target_key)
-        {
-            log::warn!("conversation row create failed: {e}");
+        // Ready actors use UPDATE-only autosaves, so their row must exist before
+        // launch/publication. A create failure leaves PendingSession unlaunched.
+        crate::db::ai_conversation::create(&state.db, &conversation_id, target_key)?;
+    }
+
+    match owner_reservation.activate(pending) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            // Close can remove the Pending reservation while the row is being
+            // created. Delete only while it remains unleased; another claimant
+            // winning the gap owns the row and must not be disturbed.
+            if is_new_conversation {
+                if let Err(cleanup_error) = ai_conversation_delete_impl(state, &conversation_id) {
+                    log::warn!(
+                        "failed to clean unactivated conversation {conversation_id}: {cleanup_error}"
+                    );
+                }
+            }
+            Err(error)
         }
     }
-    Ok(info)
+}
+
+fn ai_session_not_found() -> AppError {
+    AppError::not_found("ai_session_not_found", json!({}))
+}
+
+pub(crate) fn ensure_ai_running(session: &DiagnoseSession) -> AppResult<()> {
+    if session.is_stopping() {
+        return Err(AppError::other("ai_session_stopped", json!({})));
+    }
+    Ok(())
+}
+
+/// Access a live AI actor only after proving that the caller owns its tab.
+///
+/// AI actor ids intentionally reuse tab ids, so an id alone is never an
+/// authority boundary. Keep the owner registry locked before the actor map;
+/// lifecycle start/stop follows the same order, which prevents lock inversion
+/// and makes owner/actor validation one atomic registry observation.
+pub(crate) fn with_owned_ready_ai_session<T>(
+    state: &AppState,
+    tab_id: &str,
+    expected_owner: &crate::state::SessionOwner,
+    expected_instance_id: Option<&str>,
+    access: impl FnOnce(&mut DiagnoseSession) -> AppResult<T>,
+) -> AppResult<T> {
+    let owners = locked(&state.ai_session_owners)?;
+    let record = owners.get(tab_id).ok_or_else(ai_session_not_found)?;
+    if &record.owner != expected_owner
+        || record.phase != crate::state::SessionPhase::Ready
+        || expected_instance_id.is_some_and(|expected| expected != record.nonce.to_string())
+    {
+        return Err(ai_session_not_found());
+    }
+
+    let mut sessions = locked(&state.ai_sessions)?;
+    let session = sessions
+        .get_mut(tab_id)
+        .ok_or_else(|| AppError::other("session_registry_inconsistent", json!({ "id": tab_id })))?;
+    if session.instance_id != record.nonce {
+        return Err(AppError::other(
+            "session_registry_inconsistent",
+            json!({ "id": tab_id }),
+        ));
+    }
+    access(session)
+}
+
+pub(crate) fn ai_list_sessions_for_owner(
+    state: &AppState,
+    expected_owner: &crate::state::SessionOwner,
+) -> AppResult<Vec<AiSessionInfo>> {
+    let owners = locked(&state.ai_session_owners)?;
+    let sessions = locked(&state.ai_sessions)?;
+    owners
+        .iter()
+        .filter(|(_, record)| {
+            &record.owner == expected_owner && record.phase == crate::state::SessionPhase::Ready
+        })
+        .map(|(tab_id, record)| {
+            let session = sessions.get(tab_id).ok_or_else(|| {
+                AppError::other("session_registry_inconsistent", json!({ "id": tab_id }))
+            })?;
+            if session.instance_id != record.nonce {
+                return Err(AppError::other(
+                    "session_registry_inconsistent",
+                    json!({ "id": tab_id }),
+                ));
+            }
+            Ok(AiSessionInfo::from(session))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+pub(crate) fn ai_action_sender(
+    state: &AppState,
+    tab_id: &str,
+    expected_owner: &crate::state::SessionOwner,
+    expected_instance_id: Option<&str>,
+) -> AppResult<tokio::sync::mpsc::UnboundedSender<UserAction>> {
+    with_owned_ready_ai_session(
+        state,
+        tab_id,
+        expected_owner,
+        expected_instance_id,
+        |session| {
+            ensure_ai_running(session)?;
+            Ok(session.action_tx.clone())
+        },
+    )
+}
+
+/// Enqueue while holding the session registry lock. Prepare-stop takes the
+/// same lock before flipping shutdown, so an action is either fully queued
+/// before the cutoff or rejected after it; there is no clone-then-send gap.
+pub(crate) fn ai_send_action(
+    state: &AppState,
+    tab_id: &str,
+    expected_owner: &crate::state::SessionOwner,
+    expected_instance_id: Option<&str>,
+    action: UserAction,
+) -> AppResult<()> {
+    with_owned_ready_ai_session(
+        state,
+        tab_id,
+        expected_owner,
+        expected_instance_id,
+        |session| {
+            ensure_ai_running(session)?;
+            session
+                .action_tx
+                .send(action)
+                .map_err(|_| AppError::other("ai_session_stopped", json!({})))
+        },
+    )
+}
+
+async fn ai_send_processed_action(
+    state: &AppState,
+    tab_id: &str,
+    expected_owner: &crate::state::SessionOwner,
+    expected_instance_id: Option<&str>,
+    build: impl FnOnce(tokio::sync::oneshot::Sender<AppResult<()>>) -> UserAction,
+) -> AppResult<()> {
+    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+    ai_send_action(
+        state,
+        tab_id,
+        expected_owner,
+        expected_instance_id,
+        build(ack_tx),
+    )?;
+    ack_rx
+        .await
+        .unwrap_or_else(|_| Err(AppError::other("ai_session_stopped", json!({}))))
+}
+
+pub(crate) async fn ai_user_message_impl(
+    state: &AppState,
+    tab_id: &str,
+    expected_owner: &crate::state::SessionOwner,
+    text: String,
+    expected_instance_id: Option<&str>,
+) -> AppResult<()> {
+    ai_send_processed_action(state, tab_id, expected_owner, expected_instance_id, |ack| {
+        UserAction::Message {
+            text,
+            ack: Some(ack),
+        }
+    })
+    .await
+}
+
+pub(crate) async fn ai_session_clear_context_impl(
+    state: &AppState,
+    tab_id: &str,
+    expected_owner: &crate::state::SessionOwner,
+    expected_instance_id: Option<&str>,
+) -> AppResult<()> {
+    ai_send_processed_action(state, tab_id, expected_owner, expected_instance_id, |ack| {
+        UserAction::ClearContext { ack: Some(ack) }
+    })
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn ai_command_result_impl(
+    state: &AppState,
+    tab_id: &str,
+    expected_owner: &crate::state::SessionOwner,
+    tool_call_id: String,
+    exit_code: i32,
+    output: String,
+    timed_out: bool,
+    early_terminated: bool,
+    expected_instance_id: Option<&str>,
+) -> AppResult<()> {
+    ai_send_processed_action(state, tab_id, expected_owner, expected_instance_id, |ack| {
+        UserAction::CommandResult {
+            command_id: tool_call_id,
+            exit_code,
+            output,
+            timed_out,
+            early_terminated,
+            ack: Some(ack),
+        }
+    })
+    .await
+}
+
+pub(crate) async fn ai_command_reject_impl(
+    state: &AppState,
+    tab_id: &str,
+    expected_owner: &crate::state::SessionOwner,
+    tool_call_id: String,
+    reason: String,
+    expected_instance_id: Option<&str>,
+) -> AppResult<()> {
+    ai_send_processed_action(state, tab_id, expected_owner, expected_instance_id, |ack| {
+        UserAction::RejectCommand {
+            command_id: tool_call_id,
+            reason,
+            ack: Some(ack),
+        }
+    })
+    .await
+}
+
+pub(crate) fn ai_cancel_slot(
+    state: &AppState,
+    tab_id: &str,
+    expected_owner: &crate::state::SessionOwner,
+    expected_instance_id: Option<&str>,
+) -> AppResult<std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<tokio::sync::Notify>>>>> {
+    with_owned_ready_ai_session(
+        state,
+        tab_id,
+        expected_owner,
+        expected_instance_id,
+        |session| Ok(session.cancel_slot.clone()),
+    )
+}
+
+pub(crate) fn ai_audit_handle(
+    state: &AppState,
+    tab_id: &str,
+    expected_owner: &crate::state::SessionOwner,
+    expected_instance_id: Option<&str>,
+) -> AppResult<std::sync::Arc<std::sync::Mutex<super::audit::AuditLog>>> {
+    with_owned_ready_ai_session(
+        state,
+        tab_id,
+        expected_owner,
+        expected_instance_id,
+        |session| Ok(session.audit.clone()),
+    )
 }
 
 #[tauri::command]
 pub async fn ai_user_message(
+    window: tauri::Window,
     state: State<'_, AppState>,
     tab_id: String,
     text: String,
+    instance_id: Option<String>,
 ) -> AppResult<()> {
-    let tx = locked(&state.ai_sessions)?
-        .get(&tab_id)
-        .map(|s| s.action_tx.clone())
-        .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
-    tx.send(UserAction::Message(text))
-        .map_err(|_| AppError::other("ai_session_stopped", json!({})))?;
-    Ok(())
+    ai_user_message_impl(
+        &state,
+        &tab_id,
+        &crate::state::SessionOwner::Window(window.label().to_owned()),
+        text,
+        instance_id.as_deref(),
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn ai_command_result(
+    window: tauri::Window,
     state: State<'_, AppState>,
     tab_id: String,
     tool_call_id: String,
@@ -596,39 +882,60 @@ pub async fn ai_command_result(
     output: String,
     timed_out: bool,
     early_terminated: Option<bool>,
+    instance_id: Option<String>,
 ) -> AppResult<()> {
-    let tx = locked(&state.ai_sessions)?
-        .get(&tab_id)
-        .map(|s| s.action_tx.clone())
-        .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
-    tx.send(UserAction::CommandResult {
+    ai_command_result_impl(
+        &state,
+        &tab_id,
+        &crate::state::SessionOwner::Window(window.label().to_owned()),
         tool_call_id,
         exit_code,
         output,
         timed_out,
-        early_terminated: early_terminated.unwrap_or(false),
-    })
-    .map_err(|_| AppError::other("ai_session_stopped", json!({})))?;
-    Ok(())
+        early_terminated.unwrap_or(false),
+        instance_id.as_deref(),
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn ai_command_reject(
+    window: tauri::Window,
     state: State<'_, AppState>,
     tab_id: String,
     tool_call_id: String,
     reason: String,
+    instance_id: Option<String>,
 ) -> AppResult<()> {
-    let tx = locked(&state.ai_sessions)?
-        .get(&tab_id)
-        .map(|s| s.action_tx.clone())
-        .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
-    tx.send(UserAction::RejectCommand {
+    ai_command_reject_impl(
+        &state,
+        &tab_id,
+        &crate::state::SessionOwner::Window(window.label().to_owned()),
         tool_call_id,
         reason,
-    })
-    .map_err(|_| AppError::other("ai_session_stopped", json!({})))?;
-    Ok(())
+        instance_id.as_deref(),
+    )
+    .await
+}
+
+/// Phase 1 of panel teardown: cancel network/tool work, stop accepting actions,
+/// and await the actor's final event drain while retaining its registry entry
+/// and conversation lease. The returned terminal mutations are replayable by
+/// id, so the UI can persist an exact final timeline before full stop releases.
+#[tauri::command]
+pub async fn ai_session_prepare_stop(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    tab_id: String,
+    instance_id: Option<String>,
+) -> AppResult<Vec<session::AiTerminalMutation>> {
+    crate::commands::lifecycle::prepare_ai_session_stop(
+        &state,
+        &tab_id,
+        &crate::state::SessionOwner::Window(window.label().to_owned()),
+        instance_id.as_deref(),
+    )
+    .await
 }
 
 /// 销毁 actor并等待完全退出。前端显式关闭 AI 面板或关闭 Tab 时调用。
@@ -637,11 +944,13 @@ pub async fn ai_session_stop(
     window: tauri::Window,
     state: State<'_, AppState>,
     tab_id: String,
+    instance_id: Option<String>,
 ) -> AppResult<()> {
     crate::commands::lifecycle::close_ai_session(
         &state,
         &tab_id,
         &crate::state::SessionOwner::Window(window.label().to_owned()),
+        instance_id.as_deref(),
     )
     .await
 }
@@ -649,14 +958,19 @@ pub async fn ai_session_stop(
 /// 清空 actor 的 history（保留 audit log）。
 /// 用户手动按"清理上下文"按钮触发。actor 不死，下条 message 进来时是全新对话。
 #[tauri::command]
-pub async fn ai_session_clear_context(state: State<'_, AppState>, tab_id: String) -> AppResult<()> {
-    let tx = locked(&state.ai_sessions)?
-        .get(&tab_id)
-        .map(|s| s.action_tx.clone())
-        .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
-    tx.send(UserAction::ClearContext)
-        .map_err(|_| AppError::other("ai_session_stopped", json!({})))?;
-    Ok(())
+pub async fn ai_session_clear_context(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    tab_id: String,
+    instance_id: Option<String>,
+) -> AppResult<()> {
+    ai_session_clear_context_impl(
+        &state,
+        &tab_id,
+        &crate::state::SessionOwner::Window(window.label().to_owned()),
+        instance_id.as_deref(),
+    )
+    .await
 }
 
 /// 连接时探测前的门控查询：这个 target 现在需要跑 shell 探测吗？
@@ -718,34 +1032,67 @@ pub async fn ai_cache_remote_shell(
 /// 成功后立刻调，target 存在是常态。
 #[tauri::command]
 pub async fn ai_session_rebind_target(
+    window: tauri::Window,
     state: State<'_, AppState>,
     tab_id: String,
     target: AiTarget,
     conversation_id: Option<String>,
+    instance_id: Option<String>,
 ) -> AppResult<()> {
+    ai_session_rebind_target_impl(
+        &state,
+        &crate::state::SessionOwner::Window(window.label().to_owned()),
+        tab_id,
+        target,
+        conversation_id,
+        instance_id.as_deref(),
+    )
+}
+
+pub(crate) fn ai_session_rebind_target_impl(
+    state: &AppState,
+    expected_owner: &crate::state::SessionOwner,
+    tab_id: String,
+    target: AiTarget,
+    conversation_id: Option<String>,
+    instance_id: Option<&str>,
+) -> AppResult<()> {
+    // Reject an alien actor before touching its requested transport. The
+    // mutation below repeats this check while holding both registries, so a
+    // concurrent stop cannot create a validate-then-mutate gap.
+    with_owned_ready_ai_session(state, &tab_id, expected_owner, instance_id, |_| Ok(()))?;
+
     // 重新抓 ssh_handle（local 是 None）—— 复用 ai_session_start 的同款校验。
     let ssh_handle = match &target {
-        AiTarget::Ssh(target_id) => {
-            let g = locked(&state.sessions)?;
-            let h = g
-                .get(target_id)
-                .ok_or_else(|| AppError::not_found("ssh_session_not_found", json!({})))?;
-            Some(h.ssh_handle().clone())
-        }
+        AiTarget::Ssh(target_id) => match crate::commands::lifecycle::owned_ready_ai_target(
+            state,
+            target_id,
+            crate::state::SessionKind::Ssh,
+            expected_owner,
+        )? {
+            crate::commands::lifecycle::OwnedAiTarget::Ssh { handle, .. } => Some(handle),
+            _ => unreachable!("SSH lifecycle kind returned a non-SSH target"),
+        },
         #[cfg(not(target_os = "android"))]
         AiTarget::Local(target_id) => {
-            if !locked(&state.pty_sessions)?.contains_key(target_id) {
-                return Err(AppError::not_found("local_pty_not_found", json!({})));
-            }
+            let _ = crate::commands::lifecycle::owned_ready_ai_target(
+                state,
+                target_id,
+                crate::state::SessionKind::Pty,
+                expected_owner,
+            )?;
             None
         }
         #[cfg(target_os = "android")]
         AiTarget::Local(_) => return Err(AppError::not_found("local_pty_not_found", json!({}))),
         #[cfg(not(target_os = "android"))]
         AiTarget::Serial(target_id) => {
-            if !locked(&state.serial_sessions)?.contains_key(target_id) {
-                return Err(AppError::not_found("serial_session_not_found", json!({})));
-            }
+            let _ = crate::commands::lifecycle::owned_ready_ai_target(
+                state,
+                target_id,
+                crate::state::SessionKind::Serial,
+                expected_owner,
+            )?;
             None
         }
         #[cfg(target_os = "android")]
@@ -753,9 +1100,12 @@ pub async fn ai_session_rebind_target(
             return Err(AppError::not_found("serial_session_not_found", json!({})))
         }
         AiTarget::Telnet(target_id) => {
-            if !locked(&state.telnet_sessions)?.contains_key(target_id) {
-                return Err(AppError::not_found("telnet_session_not_found", json!({})));
-            }
+            let _ = crate::commands::lifecycle::owned_ready_ai_target(
+                state,
+                target_id,
+                crate::state::SessionKind::Telnet,
+                expected_owner,
+            )?;
             None
         }
     };
@@ -767,34 +1117,36 @@ pub async fn ai_session_rebind_target(
     // conversation, so it is rejected outright.
     let new_target_key = conversation_target_key(&state, &target)?;
 
-    // 锁里一次完成：拿 action_tx + 同步更新 stored target_id。
+    // 锁里一次完成：发送 RebindTarget + 同步更新 stored target_id。
+    // prepare-stop 也拿同一把锁，因此 rebind 要么完整排在 cutoff 之前，
+    // 要么在 cutoff 之后被拒绝；不能留下“stored 已更新、actor 未收到”的半状态。
     // 不更新 stored 那一份的话，ai_list_sessions / AiSessionInfo::from 会一直
     // 报老 target_id；前端 resync 时反向把本地缓存覆盖回旧值。
-    let tx = {
-        let mut g = locked(&state.ai_sessions)?;
-        let s = g
-            .get_mut(&tab_id)
-            .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
-        if conversation_id
-            .as_deref()
-            .is_some_and(|expected| s.conversation_id != expected)
-        {
-            return Err(AppError::not_found("ai_session_not_found", json!({})));
-        }
-        if s.target_key != new_target_key {
-            return Err(AppError::other(
-                "conversation_target_mismatch",
-                json!({ "expected": s.target_key, "actual": new_target_key }),
-            ));
-        }
-        s.target_id = target_id.clone();
-        s.action_tx.clone()
-    };
-    tx.send(UserAction::RebindTarget {
-        target_id,
-        ssh_handle,
-    })
-    .map_err(|_| AppError::other("ai_session_stopped", json!({})))?;
+    {
+        with_owned_ready_ai_session(state, &tab_id, expected_owner, instance_id, |s| {
+            ensure_ai_running(s)?;
+            if conversation_id
+                .as_deref()
+                .is_some_and(|expected| s.conversation_id != expected)
+            {
+                return Err(ai_session_not_found());
+            }
+            if s.target_key != new_target_key {
+                return Err(AppError::other(
+                    "conversation_target_mismatch",
+                    json!({ "expected": s.target_key, "actual": new_target_key }),
+                ));
+            }
+            s.action_tx
+                .send(UserAction::RebindTarget {
+                    target_id: target_id.clone(),
+                    ssh_handle,
+                })
+                .map_err(|_| AppError::other("ai_session_stopped", json!({})))?;
+            s.target_id = target_id.clone();
+            Ok(())
+        })?;
+    }
     Ok(())
 }
 
@@ -802,11 +1154,18 @@ pub async fn ai_session_rebind_target(
 /// 否则 slot 为 None，这是 no-op（不算错——用户也可能恰好在响应完结那一刻按下）。
 /// 会话本身（history / pending command / audit）全部保留。
 #[tauri::command]
-pub async fn ai_cancel_stream(state: State<'_, AppState>, tab_id: String) -> AppResult<()> {
-    let slot = locked(&state.ai_sessions)?
-        .get(&tab_id)
-        .map(|s| s.cancel_slot.clone())
-        .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
+pub async fn ai_cancel_stream(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    tab_id: String,
+    instance_id: Option<String>,
+) -> AppResult<()> {
+    let slot = ai_cancel_slot(
+        &state,
+        &tab_id,
+        &crate::state::SessionOwner::Window(window.label().to_owned()),
+        instance_id.as_deref(),
+    )?;
     // 先把 Notify clone 出来再释放锁——slot 用的是 std::sync::Mutex，
     // 持锁期间调 notify_one 阻塞 actor 端尝试清空 slot 的同一把锁。
     // 用代码块限定 guard 生命周期，notify_one 在 lock 释放后才执行。
@@ -822,14 +1181,18 @@ pub async fn ai_cancel_stream(state: State<'_, AppState>, tab_id: String) -> App
 
 #[tauri::command]
 pub async fn ai_audit_save(
+    window: tauri::Window,
     state: State<'_, AppState>,
     tab_id: String,
     file_path: String,
+    instance_id: Option<String>,
 ) -> AppResult<()> {
-    let audit = locked(&state.ai_sessions)?
-        .get(&tab_id)
-        .map(|s| s.audit.clone())
-        .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
+    let audit = ai_audit_handle(
+        &state,
+        &tab_id,
+        &crate::state::SessionOwner::Window(window.label().to_owned()),
+        instance_id.as_deref(),
+    )?;
     let g = audit.lock().map_err(|_| AppError::Lock)?;
     g.save_to_file(&PathBuf::from(file_path))?;
     Ok(())
@@ -838,32 +1201,48 @@ pub async fn ai_audit_save(
 /// 返回审计日志的人类可读文本（.log 格式）。前端配合 plugin-dialog/plugin-fs
 /// 存盘，桌面 / 移动 / 浏览器统一一套。
 #[tauri::command]
-pub async fn ai_audit_log_text(state: State<'_, AppState>, tab_id: String) -> AppResult<String> {
-    let audit = locked(&state.ai_sessions)?
-        .get(&tab_id)
-        .map(|s| s.audit.clone())
-        .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
+pub async fn ai_audit_log_text(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    tab_id: String,
+    instance_id: Option<String>,
+) -> AppResult<String> {
+    let audit = ai_audit_handle(
+        &state,
+        &tab_id,
+        &crate::state::SessionOwner::Window(window.label().to_owned()),
+        instance_id.as_deref(),
+    )?;
     let g = audit.lock().map_err(|_| AppError::Lock)?;
     Ok(g.to_log_string())
 }
 
 #[tauri::command]
 pub async fn ai_audit_get(
+    window: tauri::Window,
     state: State<'_, AppState>,
     tab_id: String,
+    instance_id: Option<String>,
 ) -> AppResult<super::audit::AuditLog> {
-    let audit = locked(&state.ai_sessions)?
-        .get(&tab_id)
-        .map(|s| s.audit.clone())
-        .ok_or_else(|| AppError::not_found("ai_session_not_found", json!({})))?;
+    let audit = ai_audit_handle(
+        &state,
+        &tab_id,
+        &crate::state::SessionOwner::Window(window.label().to_owned()),
+        instance_id.as_deref(),
+    )?;
     let g = audit.lock().map_err(|_| AppError::Lock)?;
     Ok(g.clone())
 }
 
 #[tauri::command]
-pub async fn ai_list_sessions(state: State<'_, AppState>) -> AppResult<Vec<AiSessionInfo>> {
-    let g = locked(&state.ai_sessions)?;
-    Ok(g.values().map(AiSessionInfo::from).collect())
+pub async fn ai_list_sessions(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<AiSessionInfo>> {
+    ai_list_sessions_for_owner(
+        &state,
+        &crate::state::SessionOwner::Window(window.label().to_owned()),
+    )
 }
 
 // ─── 对话持久化 ────────────────────────────────────────────────────
@@ -928,27 +1307,30 @@ pub fn ai_conversations_list_impl(
 pub async fn ai_conversation_timeline(
     state: State<'_, AppState>,
     id: String,
-    target: AiTarget,
+    target: Option<AiTarget>,
 ) -> AppResult<String> {
-    ai_conversation_timeline_impl(&state, &id, &target)
+    ai_conversation_timeline_impl(&state, &id, target.as_ref())
 }
 
-/// Takes the caller's target and enforces the same scope check resume itself
-/// does: this fetch is the first half of the resume flow, and the data must
-/// not be readable across scopes when the second half would reject the id.
+/// When a caller supplies its target, enforce the same scope check resume does:
+/// this fetch is the first half of the resume flow, and the data must not be
+/// readable across scopes when the second half would reject the id. `None`
+/// preserves the original id-only command contract for older clients.
 pub fn ai_conversation_timeline_impl(
     state: &AppState,
     id: &str,
-    target: &AiTarget,
+    target: Option<&AiTarget>,
 ) -> AppResult<String> {
     let row = crate::db::ai_conversation::get(&state.db, id)?
         .ok_or_else(|| AppError::not_found("conversation_not_found", json!({})))?;
-    let key = conversation_target_key(state, target)?;
-    if row.target_key != key {
-        return Err(AppError::other(
-            "conversation_target_mismatch",
-            json!({ "expected": row.target_key, "actual": key }),
-        ));
+    if let Some(target) = target {
+        let key = conversation_target_key(state, target)?;
+        if row.target_key != key {
+            return Err(AppError::other(
+                "conversation_target_mismatch",
+                json!({ "expected": row.target_key, "actual": key }),
+            ));
+        }
     }
     Ok(row.timeline_json)
 }
@@ -969,11 +1351,13 @@ pub async fn ai_conversation_delete(state: State<'_, AppState>, id: String) -> A
 }
 
 pub fn ai_conversation_delete_impl(state: &AppState, id: &str) -> AppResult<()> {
-    // A conversation owned by a live actor must not be deleted out from under
-    // it — the actor's next autosave would resurrect the row half-formed.
-    if locked(&state.ai_sessions)?
+    // Hold the owner registry across the short synchronous delete. This makes
+    // delete atomic with pending `claim_conversation`: either delete wins and
+    // resume subsequently sees no row, or the claim wins and delete is rejected.
+    let owners = locked(&state.ai_session_owners)?;
+    if owners
         .values()
-        .any(|s| s.conversation_id == id)
+        .any(|record| record.conversation_id.as_deref() == Some(id))
     {
         return Err(AppError::other("conversation_in_use", json!({})));
     }

@@ -8,6 +8,7 @@
     import { renderMarkdown } from "./markdown.ts";
     import { formatTokenCount } from "./tokens.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
+    import { toast } from "../stores/toast.svelte.ts";
     import { onMount } from "svelte";
 
     // tabId 是 AI 会话身份（切 tab / 重连不丢；显式关闭面板时结束）。
@@ -245,6 +246,7 @@
     function closePanel() {
         void ai.closePanel(tabId).catch((e) => {
             console.warn("[ai] close panel session:", e);
+            toast.error(errMsg(e));
         });
     }
 
@@ -393,9 +395,10 @@
                             {/if}
                         </div>
                     {:else if item.kind === "command" && session}
-                        {#key item.cmd.tool_call_id || item.cmd.id}
+                        {#key item.cmd.id}
                             <CommandConfirmDialog
                                 {tabId}
+                                instanceId={session.instance_id}
                                 targetKind={targetKind}
                                 targetSessionId={targetId}
                                 cmd={item.cmd}

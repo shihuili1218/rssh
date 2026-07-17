@@ -12,6 +12,11 @@
  */
 import type { ChatItem } from "./types.ts";
 
+export interface AiTerminalMutation {
+  kind: string;
+  payload: unknown;
+}
+
 function isStr(v: unknown): v is string {
   return typeof v === "string";
 }
@@ -55,6 +60,14 @@ export function restoreTimeline(json: string, staleCommandReason: string): ChatI
     if (!raw || typeof raw !== "object") continue;
     const item = raw as ChatItem;
     if (!isRenderable(item)) continue;
+    if (item.kind === "user") {
+      // client_id/client_seq only correlate optimistic mutations in the live
+      // renderer. Old versions persisted them, but carrying those sequence
+      // numbers into a new process would make a later context clear compare
+      // against a counter from the wrong runtime.
+      items.push({ kind: "user", text: item.text, at: item.at });
+      continue;
+    }
     if (item.kind === "assistant") {
       // Mirror the live assistant_message_end rule: an empty non-cancelled
       // bubble (the placeholder pushed at message_start, persisted by a
@@ -80,4 +93,113 @@ export function restoreTimeline(json: string, staleCommandReason: string): ChatI
     items.push(item);
   }
   return items;
+}
+
+/** Replay the backend actor's canonical close-time terminal events onto a
+ * private timeline snapshot. The actor records these before emitting them, and
+ * prepare-stop returns them only after the actor drains. Event callbacks may
+ * therefore arrive before or after the invoke reply without changing the
+ * persisted result. Every mutation is keyed by message/card id and idempotent. */
+export function applyTerminalMutations(
+  source: ChatItem[],
+  mutations: readonly AiTerminalMutation[],
+): ChatItem[] {
+  let items = source;
+  for (const mutation of mutations) {
+    if (!mutation.payload || typeof mutation.payload !== "object") continue;
+    const payload = mutation.payload as Record<string, unknown>;
+    if (!isStr(payload.id)) continue;
+
+    if (mutation.kind === "assistant_message_end") {
+      if (!isStr(payload.text)) continue;
+      const index = findLastIndex(items, (item) =>
+        item.kind === "assistant" && item.id === payload.id);
+      if (index < 0) {
+        if (payload.text || payload.cancelled === true) {
+          items = [...items, {
+            kind: "assistant",
+            id: payload.id,
+            text: payload.text,
+            at: Date.now(),
+            streaming: false,
+            cancelled: payload.cancelled === true,
+          }];
+        }
+        continue;
+      }
+      const item = items[index];
+      if (item.kind !== "assistant") continue;
+      if (!payload.text && payload.cancelled !== true) {
+        items = [...items.slice(0, index), ...items.slice(index + 1)];
+        continue;
+      }
+      const replacement: ChatItem = {
+        ...item,
+        text: payload.text || item.text,
+        streaming: false,
+        cancelled: payload.cancelled === true,
+      };
+      items = replaceAt(items, index, replacement);
+      continue;
+    }
+
+    const index = findLastIndex(items, (item) =>
+      item.kind === "command" && item.cmd.id === payload.id);
+    if (index < 0) continue;
+    const item = items[index];
+    if (item.kind !== "command") continue;
+
+    if (mutation.kind === "command_rejected") {
+      if (!isStr(payload.reason)) continue;
+      items = replaceAt(items, index, {
+        ...item,
+        result: undefined,
+        rejected: { reason: payload.reason },
+      });
+      continue;
+    }
+    if (mutation.kind !== "command_completed") continue;
+    if (
+      typeof payload.exit_code !== "number"
+      || typeof payload.timed_out !== "boolean"
+      || typeof payload.duration_ms !== "number"
+      || !isStr(payload.output)
+      || typeof payload.original_bytes !== "number"
+      || typeof payload.truncated_bytes !== "number"
+    ) continue;
+    items = replaceAt(items, index, {
+      ...item,
+      rejected: undefined,
+      result: {
+        id: payload.id,
+        exit_code: payload.exit_code,
+        timed_out: payload.timed_out,
+        early_terminated: payload.early_terminated === true,
+        duration_ms: payload.duration_ms,
+        output: payload.output,
+        original_bytes: payload.original_bytes,
+        truncated_bytes: payload.truncated_bytes,
+      },
+    });
+  }
+  // prepare-stop has drained the actor: no stream can still produce deltas.
+  // If the actor panicked before recording its terminal event, persist the
+  // partial bubble as cancelled instead of resurrecting a permanent cursor.
+  return items.map((item) => item.kind === "assistant" && item.streaming
+    ? { ...item, streaming: false, cancelled: true }
+    : item);
+}
+
+function findLastIndex(
+  items: ChatItem[],
+  predicate: (item: ChatItem) => boolean,
+): number {
+  for (let index = items.length - 1; index >= 0; index--) {
+    if (predicate(items[index])) return index;
+  }
+  return -1;
+}
+
+function replaceAt(items: ChatItem[], index: number, item: ChatItem): ChatItem[] {
+  return [...items.slice(0, index), item, ...items.slice(index + 1)];
 }
