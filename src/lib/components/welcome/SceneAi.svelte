@@ -9,6 +9,7 @@
   import { t } from "../../i18n/index.svelte.ts";
   import MockCursor from "./MockCursor.svelte";
   import NextButton from "./NextButton.svelte";
+  import AppIcon from "../AppIcon.svelte";
 
   let { onNext }: { onNext: () => void } = $props();
 
@@ -78,7 +79,7 @@
         </div>
         <div class="app-title">rssh — prod-web-01</div>
         <button class="ai-btn" class:active={panelOpen} tabindex="-1">
-          <span class="ai-glyph">✦</span> AI
+          <span class="ai-glyph"><AppIcon name="ai" size={13} /></span> AI
         </button>
       </div>
 
@@ -114,13 +115,15 @@
                       <span class="tool-name">list_dir</span>
                       {#if approved}
                         <span class="tool-status">
-                          <span class="ok">✓</span> {t("welcome.scene.ai.tool_approved")}
+                          <span class="ok"><AppIcon name="check" size={11} /></span> {t("welcome.scene.ai.tool_approved")}
                         </span>
                       {/if}
                     </div>
                     <div class="tool-args">{`{ "path": "/var/log", "depth": 1 }`}</div>
                     <div class="tool-guard">
-                      <span>shape ✓</span><span>redact ✓</span><span>approve {approved ? "✓" : "…"}</span>
+                      <span class="guard-item">shape <AppIcon name="check" size={9} /></span>
+                      <span class="guard-item">redact <AppIcon name="check" size={9} /></span>
+                      <span class="guard-item">approve {#if approved}<AppIcon name="check" size={9} />{:else}…{/if}</span>
                     </div>
                   </div>
                 {/if}
@@ -439,7 +442,7 @@
     align-items: center;
     gap: 4px;
   }
-  .ok { font-size: 12px; }
+  .ok { display: inline-flex; }
   .tool-args {
     color: var(--text-sub);
     font-family: "SF Mono", Menlo, Consolas, monospace;
@@ -455,6 +458,7 @@
     color: var(--text-dim);
     letter-spacing: 0.4px;
   }
+  .guard-item { display: inline-flex; align-items: center; gap: 3px; }
 
   .ai-input {
     margin: 0 12px 12px;

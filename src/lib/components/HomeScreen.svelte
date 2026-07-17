@@ -14,6 +14,12 @@
   import { errMsg, locale, t } from "../i18n/index.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
   import { createHomeRefresh } from "./home-refresh.ts";
+  import AppIcon from "./AppIcon.svelte";
+  import {
+    connectionIconName,
+    dynamicPlatformIconName,
+    type AppIconName,
+  } from "./app-icon";
   import {
     buildHomeSections,
     HOME_VIEW_STORAGE_KEY,
@@ -99,7 +105,7 @@
   // discovered target is a container/pod connector.
   interface HomeItem extends HomeLayoutItem {
     sub: string;
-    icon: string;
+    icon: AppIconName;
     iconClass: string;
     pinProfileId: string | null;
     open: () => void;
@@ -108,9 +114,9 @@
   function dynamicTargetPresentation(target: DynamicDiscoveredTarget): Pick<HomeItem, "icon" | "iconClass"> {
     switch (target.connector_spec.type) {
       case "docker_exec":
-        return { icon: "D", iconClass: "docker" };
+        return { icon: dynamicPlatformIconName("docker"), iconClass: "docker" };
       case "kubectl_exec":
-        return { icon: "K", iconClass: "k8s" };
+        return { icon: dynamicPlatformIconName("k8s"), iconClass: "k8s" };
     }
 
     const _exhaustive: never = target.connector_spec;
@@ -123,27 +129,27 @@
       return {
         kind: "ssh", id: `ssh:${p.id}`, name: p.name,
         sub: `${cred?.username ?? "?"}@${p.host}:${p.port}`,
-        icon: "S", iconClass: "", groupId: p.group_id ?? null,
+        icon: connectionIconName("ssh"), iconClass: "", groupId: p.group_id ?? null,
         pinProfileId: p.id, open: () => connectProfile(p),
       };
     }),
     ...forwards.map((f): HomeItem => ({
       kind: "forward", id: `forward:${f.id}`, name: f.name,
       sub: `:${f.local_port} → ${f.remote_host}:${f.remote_port}`,
-      icon: f.type === "dynamic" ? "D" : f.type === "local" ? "L" : "R",
+      icon: connectionIconName("forward"),
       iconClass: "fwd", groupId: f.group_id ?? null,
       pinProfileId: null, open: () => openForward(f),
     })),
     ...serialProfiles.map((s): HomeItem => ({
       kind: "serial", id: `serial:${s.id}`, name: s.name,
       sub: `${s.port} · ${s.baud_rate}`,
-      icon: "⎓", iconClass: "serial", groupId: s.group_id ?? null,
+      icon: connectionIconName("serial"), iconClass: "serial", groupId: s.group_id ?? null,
       pinProfileId: null, open: () => app.connectSerialProfile(s),
     })),
     ...telnetProfiles.map((tp): HomeItem => ({
       kind: "telnet", id: `telnet:${tp.id}`, name: tp.name,
       sub: `${tp.host}:${tp.port}`,
-      icon: "T", iconClass: "telnet", groupId: tp.group_id ?? null,
+      icon: connectionIconName("telnet"), iconClass: "telnet", groupId: tp.group_id ?? null,
       pinProfileId: null, open: () => app.connectTelnetProfile(tp),
     })),
     ...dynamicTargets.map((target): HomeItem => {
@@ -345,7 +351,7 @@
 
 <div class="home">
   <div class="home-header">
-    <h1 class="logo">RSSH ㋡</h1>
+    <h1 class="logo">RSSH <AppIcon name="terminal" size={24} /></h1>
     <input
       class="search-input"
       type="search"
@@ -400,7 +406,7 @@
                 class:selected={navIdx === section.offset + i}
                 onclick={() => activate(it)}
               >
-                <div class="card-icon {it.iconClass}">{it.icon}</div>
+                <div class="card-icon {it.iconClass}"><AppIcon name={it.icon} size={20} /></div>
                 <div class="card-body">
                   <div class="card-name">{it.name}</div>
                   <div class="card-sub">{it.sub}</div>
@@ -411,8 +417,9 @@
                   class="pin-btn"
                   class:pinned={app.isProfilePinned(it.pinProfileId)}
                   title={app.isProfilePinned(it.pinProfileId) ? "Unpin" : "Pin to sidebar"}
+                  aria-label={app.isProfilePinned(it.pinProfileId) ? "Unpin" : "Pin to sidebar"}
                   onclick={(e) => { e.stopPropagation(); if (it.pinProfileId) toggleProfilePin(it.pinProfileId); }}
-                >{app.isProfilePinned(it.pinProfileId) ? "★" : "☆"}</button>
+                ><AppIcon name="star" size={16} filled={app.isProfilePinned(it.pinProfileId)} /></button>
               {/if}
             </div>
           {/each}
@@ -430,7 +437,7 @@
 <style>
   .home { padding: 24px; flex: 1; overflow-y: auto; min-height: 0; }
   .home-header { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 16px; margin-bottom: 20px; }
-  .logo { font-size: 22px; color: var(--accent); font-weight: 700; white-space: nowrap; }
+  .logo { display: inline-flex; align-items: center; gap: 6px; font-size: 22px; color: var(--accent); font-weight: 700; white-space: nowrap; }
   .search-input { flex: 1 1 200px; min-width: 160px; }
   .home-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
   .segmented {
@@ -481,7 +488,8 @@
   .card-wrap { position: relative; }
   .pin-btn {
     position: absolute; top: 6px; right: 6px;
-    background: none; border: none; font-size: 16px;
+    display: grid; place-items: center;
+    background: none; border: none;
     color: var(--text-dim); cursor: pointer;
     opacity: 0; transition: opacity 0.15s;
     padding: 2px 4px; line-height: 1;

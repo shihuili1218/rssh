@@ -20,6 +20,8 @@
 
 <script lang="ts">
     import { t } from "../i18n/index.svelte.ts";
+    import AppIcon from "./AppIcon.svelte";
+    import { tabIconName, type AppIconName } from "./app-icon";
 
     interface Props {
         item: NavItem;
@@ -66,21 +68,15 @@
         onDragEnd,
     }: Props = $props();
 
-    function iconOf(i: NavItem): string {
-        if (i.kind === "new-tab") return "+";
-        if (i.kind === "new-edit") return "✎";
-        if (i.kind === "pin") return i.profile.name.charAt(0).toUpperCase();
-        if (i.kind === "pinned-menu") return "★";
-        if (i.kind === "pin-window") return "📌";
-        if (i.kind === "downloads") return "⇅";
-        if (i.kind === "settings") return "⚙";
-        // tab
-        const tab = i.tab;
-        if (tab.type === "home") return "㋡";
-        if (tab.type === "local") return "$";
-        if (tab.type === "forward") return "F";
-        if (tab.type === "edit") return "ᝰ";
-        return tab.label.charAt(0).toUpperCase();
+    function iconOf(i: NavItem): AppIconName {
+        if (i.kind === "new-tab") return "add";
+        if (i.kind === "new-edit") return "edit";
+        if (i.kind === "pin") return "ssh";
+        if (i.kind === "pinned-menu") return "star";
+        if (i.kind === "pin-window") return "pin";
+        if (i.kind === "downloads") return "transfer";
+        if (i.kind === "settings") return "settings";
+        return tabIconName(i.tab.type);
     }
 
     function labelOf(i: NavItem): string {
@@ -143,7 +139,9 @@
     style={styleAttr}
 >
     <span class="sb-icon-wrap">
-        <span class="sb-icon" style={groupColor ? `background: ${groupColor}; color: white` : ''}>{icon}</span>
+        <span class="sb-icon" style={groupColor ? `background: ${groupColor}; color: white` : ''}>
+            <AppIcon name={icon} size={14} filled={item.kind === "pinned-menu"} />
+        </span>
         {#if badge}
             <span class="sb-badge">{badge}</span>
         {:else if redDot}
@@ -254,9 +252,6 @@
         align-items: center;
         justify-content: center;
         flex-shrink: 0;
-        font-family: monospace;
-        font-size: 12px;
-        font-weight: 700;
         border-radius: 4px;
         background: var(--surface);
     }

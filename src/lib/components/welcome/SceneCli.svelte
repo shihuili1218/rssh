@@ -10,6 +10,7 @@
   import { onMount } from "svelte";
   import { t } from "../../i18n/index.svelte.ts";
   import NextButton from "./NextButton.svelte";
+  import AppIcon from "../AppIcon.svelte";
 
   let { onNext }: { onNext: () => void } = $props();
 
@@ -91,16 +92,16 @@
       </div>
       <div class="gui-body">
         <nav class="gui-sidebar">
-          <div class="gui-tab tab-home" title="Home">⌂</div>
-          <div class="gui-tab tab-add" title="New">+</div>
+          <div class="gui-tab tab-home" title="Home"><AppIcon name="home" size={14} /></div>
+          <div class="gui-tab tab-add" title="New"><AppIcon name="add" size={14} /></div>
           <div class="gui-sep"></div>
-          <div class="gui-tab tab-local">L</div>
+          <div class="gui-tab tab-local"><AppIcon name="terminal" size={14} /></div>
           <div class="gui-tab tab-prod" class:appear={newTabOpen} class:active={newTabOpen} title="prod">
-            <span class="tab-letter">P</span>
+            <span class="tab-letter"><AppIcon name="ssh" size={14} /></span>
             <span class="tab-label-ext">prod</span>
           </div>
           <div class="gui-spacer"></div>
-          <div class="gui-tab tab-settings" title="Settings">⚙</div>
+          <div class="gui-tab tab-settings" title="Settings"><AppIcon name="settings" size={14} /></div>
         </nav>
         <div class="gui-content">
           <div class="gui-content-inner" class:active={newTabOpen}>

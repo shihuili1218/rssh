@@ -557,7 +557,7 @@ const en = {
   "ai.cmd.proposed.tag": "[AI]",
 
   // ── AI Diagnose: AiSettings ──
-  "ai.settings.warn.byok": "⚠️ BYOK: command output is sanitized locally before being sent to the LLM provider. The provider may use this data per their terms",
+  "ai.settings.warn.byok": "BYOK: command output is sanitized locally before being sent to the LLM provider. The provider may use this data per their terms",
   "ai.settings.label.provider": "PROVIDER",
   "ai.settings.label.model": "MODEL",
   "ai.settings.label.endpoint": "ENDPOINT",
@@ -579,7 +579,7 @@ const en = {
   "ai.settings.danger.section": "DANGER MODE",
   "ai.settings.danger.label": "Auto-approve AI proposed commands",
   "ai.settings.danger.desc": "When ON, the AI runs every proposed command immediately without asking you to confirm. Only enable on disposable VMs / sandboxes you're prepared to lose. A bad prompt or hijacked model can rm -rf or exfiltrate data in seconds.",
-  "ai.settings.danger.confirm_title": "⚠️ Enable Danger Mode?",
+  "ai.settings.danger.confirm_title": "Enable Danger Mode?",
   "ai.settings.danger.confirm_body": "The AI will execute every command it proposes IMMEDIATELY, with no confirmation step.\n\nA single bad command can wipe files, leak credentials, or take the host down. Only enable this on disposable VMs / sandboxes you can afford to lose.",
   "ai.settings.danger.confirm_enable": "Enable anyway",
   "ai.settings.danger.save_failed": "Failed to save danger mode: {error}",

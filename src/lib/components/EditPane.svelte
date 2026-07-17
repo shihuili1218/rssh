@@ -11,6 +11,8 @@
   import SessionMinimap from "./SessionMinimap.svelte";
   import SessionPreviewPopover from "./SessionPreviewPopover.svelte";
   import { pickBroadcastText } from "../terminal/broadcast-text.ts";
+  import AppIcon from "./AppIcon.svelte";
+  import { tabIconName } from "./app-icon";
 
   let { tabId }: { tabId: string } = $props();
 
@@ -155,7 +157,7 @@
           >
             <SessionMinimap tabId={s.tabId} />
             <span class="session-meta">
-              <span class="session-type">{s.type === "local" ? "$" : s.type === "serial" ? "⎓" : s.type === "telnet" ? "T" : "SSH"}</span>
+              <span class="session-type"><AppIcon name={tabIconName(s.type)} size={13} /></span>
               <span class="session-label">{s.label}</span>
             </span>
           </button>
