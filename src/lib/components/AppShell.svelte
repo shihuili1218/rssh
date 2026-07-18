@@ -573,7 +573,7 @@
             ...app.tabs().filter(t => t.type === "home").map(t => ({kind: "tab" as const, tab: t})),
             ...(app.isMobile ? [] : [{kind: "new-tab" as const}, {kind: "new-edit" as const}]),
             // Horizontal strip would burst sideways with N pinned profiles — collapse
-            // them into one ★ button that pops a menu. Vertical sidebar keeps the list.
+            // them into one star button that pops a menu. Vertical sidebar keeps the list.
             ...(isHorizontal
                 ? (pinnedProfiles.length > 0 ? [{kind: "pinned-menu" as const}] : [])
                 : pinnedProfiles.map(p => ({kind: "pin" as const, profile: p}))),

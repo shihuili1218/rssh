@@ -3,6 +3,7 @@
     import * as ai from "../ai/store.svelte.ts";
     import { toast } from "../stores/toast.svelte.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
+    import AppIcon from "./AppIcon.svelte";
 
     function prevent(e: Event) { e.preventDefault(); }
 
@@ -66,9 +67,13 @@
     <button class="key" onpointerdown={prevent} onclick={() => arrow('B')}>↓</button>
     <button class="key" onpointerdown={prevent} onclick={() => arrow('D')}>←</button>
     <button class="key" onpointerdown={prevent} onclick={() => arrow('C')}>→</button>
-    <button class="key" title="Snippets" onpointerdown={prevent} onclick={() => app.openSnippetPicker()}>⚡</button>
+    <button class="key" title="Snippets" aria-label="Snippets" onpointerdown={prevent} onclick={() => app.openSnippetPicker()}>
+        <AppIcon name="snippet" size={16} />
+    </button>
     {#if app.activeTab()?.type === "ssh"}
-        <button class="key" title="SFTP" onpointerdown={prevent} onclick={openSftpPanel}>📁</button>
+        <button class="key" title="SFTP" aria-label="SFTP" onpointerdown={prevent} onclick={openSftpPanel}>
+            <AppIcon name="folder" size={16} />
+        </button>
     {/if}
     <button class="key" class:active={aiOpen} class:dim={!aiOpen && !canOpenAi} title="AI Chat" onpointerdown={prevent} onclick={toggleAi}>AI</button>
 </div>
@@ -96,6 +101,7 @@
         -webkit-tap-highlight-color: transparent;
         user-select: none;
     }
+    .key :global(svg) { margin: auto; }
     .key:active {
         background: var(--divider);
     }

@@ -17,6 +17,7 @@
     import * as ai from "./store.svelte.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import Modal from "../components/Modal.svelte";
+    import AppIcon from "../components/AppIcon.svelte";
 
     let { trigger, onError, active = true }: {
         // trigger(requestToggle, saving): the caller wires these onto its control.
@@ -65,7 +66,10 @@
 {#if showDialog}
     <Modal onClose={() => (showDialog = false)} class="stack"
            aria-labelledby="danger-confirm-title" aria-describedby="danger-confirm-body">
-        <h3 id="danger-confirm-title" class="title">{t("ai.settings.danger.confirm_title")}</h3>
+        <h3 id="danger-confirm-title" class="title">
+            <AppIcon name="warning" size={18} />
+            {t("ai.settings.danger.confirm_title")}
+        </h3>
         <div id="danger-confirm-body" class="body">{t("ai.settings.danger.confirm_body")}</div>
         <div class="modal-actions">
             <button class="btn btn-sm" onclick={() => (showDialog = false)}>{t("common.cancel")}</button>
@@ -78,6 +82,9 @@
 
 <style>
     .title {
+        display: flex;
+        align-items: center;
+        gap: 7px;
         font-size: 16px;
         color: var(--error);
         font-weight: 700;

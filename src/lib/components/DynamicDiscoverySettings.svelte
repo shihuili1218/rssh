@@ -10,6 +10,8 @@
   import { toast } from "../stores/toast.svelte.ts";
   import { t, errMsg } from "../i18n/index.svelte.ts";
   import DynamicDiscoverySourceForm from "./DynamicDiscoverySourceForm.svelte";
+  import AppIcon from "./AppIcon.svelte";
+  import { dynamicPlatformIconName } from "./app-icon";
 
   let items = $state<DynamicDiscoverySource[]>([]);
   let contexts = $state<DynamicDiscoveryContext[]>([]);
@@ -201,7 +203,9 @@
     {:else}
       <div class="card item-row">
         <div class="item-info" class:dimmed={!source.enabled}>
-          <div class="item-icon" class:k8s={source.platform === "k8s"}>{source.platform === "docker" ? "D" : "K"}</div>
+          <div class="item-icon" class:k8s={source.platform === "k8s"}>
+            <AppIcon name={dynamicPlatformIconName(source.platform)} size={17} />
+          </div>
           <div class="item-text">
             <div class="item-name">{source.name}</div>
             <div class="item-sub">{sourceMeta(source)}</div>
@@ -257,8 +261,6 @@
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    font-weight: 700;
-    font-size: 12px;
     color: var(--accent);
     background: var(--accent-soft);
   }

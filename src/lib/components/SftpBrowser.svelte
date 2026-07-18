@@ -8,6 +8,7 @@
     import { fileStamp } from "../save-file.ts";
     import { remoteUploadName } from "../sftp-name.ts";
     import Modal from "./Modal.svelte";
+    import AppIcon from "./AppIcon.svelte";
 
     /** Mirrors the backend WalkEntry; rel_path is always '/'-separated. */
     interface WalkEntry { rel_path: string; size: number; }
@@ -621,7 +622,9 @@
                         />
                     </span>
                     <button class="file-name cell-name" onclick={() => openEntry(e)} title={e.name}>
-                        <span class="file-icon">{e.is_dir ? "📁" : (e.is_symlink ? "🔗" : "📄")}</span>
+                        <span class="file-icon">
+                            <AppIcon name={e.is_dir ? "folder" : e.is_symlink ? "link" : "file"} size={15} />
+                        </span>
                         <span class="file-label">{e.name}</span>
                     </button>
                     <span class="cell-size">{e.is_dir ? "—" : formatSize(e.size)}</span>
@@ -932,7 +935,7 @@
     }
 
     .file-icon {
-        font-size: 14px;
+        display: inline-flex;
         flex-shrink: 0;
     }
 

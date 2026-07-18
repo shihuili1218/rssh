@@ -7,6 +7,7 @@
     import Select from "./Select.svelte";
     import SearchSelect from "./SearchSelect.svelte";
     import DangerModeToggle from "../ai/DangerModeToggle.svelte";
+    import AppIcon from "./AppIcon.svelte";
 
     /** Provider 下拉选项 —— OpenAI 那项的翻译用 $derived 跟着 locale 自动重算。 */
     let providerOptions = $derived([
@@ -515,11 +516,14 @@
          .warn 留在卡片顶部作"PAT hint"的等价位置，但保留自身警告样式（border-left + tint bg）。 -->
     <div class="card surface-raised provider-card">
         <div class="warn">
-            {t("ai.settings.warn.byok")}
-            （<a href="https://www.anthropic.com/legal/privacy" onclick={(e) => openExternal(e, "https://www.anthropic.com/legal/privacy")}>Anthropic</a>
-             / <a href="https://openai.com/policies/privacy-policy/" onclick={(e) => openExternal(e, "https://openai.com/policies/privacy-policy/")}>OpenAI</a>
-             / <a href="https://platform.deepseek.com/downloads" onclick={(e) => openExternal(e, "https://platform.deepseek.com/downloads")}>DeepSeek</a>
-             / <a href="https://docs.bigmodel.cn/cn/terms/privacy-policy" onclick={(e) => openExternal(e, "https://docs.bigmodel.cn/cn/terms/privacy-policy")}>GLM</a>）。
+            <AppIcon name="warning" size={16} />
+            <span>
+                {t("ai.settings.warn.byok")}
+                （<a href="https://www.anthropic.com/legal/privacy" onclick={(e) => openExternal(e, "https://www.anthropic.com/legal/privacy")}>Anthropic</a>
+                 / <a href="https://openai.com/policies/privacy-policy/" onclick={(e) => openExternal(e, "https://openai.com/policies/privacy-policy/")}>OpenAI</a>
+                 / <a href="https://platform.deepseek.com/downloads" onclick={(e) => openExternal(e, "https://platform.deepseek.com/downloads")}>DeepSeek</a>
+                 / <a href="https://docs.bigmodel.cn/cn/terms/privacy-policy" onclick={(e) => openExternal(e, "https://docs.bigmodel.cn/cn/terms/privacy-policy")}>GLM</a>）。
+            </span>
         </div>
 
         <div class="row">
@@ -865,6 +869,9 @@
     }
 
     .warn {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
         background: color-mix(in srgb, var(--warning) 12%, var(--bg));
         border-left: 3px solid var(--warning);
         padding: 8px 12px;

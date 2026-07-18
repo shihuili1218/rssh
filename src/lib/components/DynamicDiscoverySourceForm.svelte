@@ -7,6 +7,8 @@
   } from "../stores/app.svelte.ts";
   import { t } from "../i18n/index.svelte.ts";
   import SearchSelect from "./SearchSelect.svelte";
+  import AppIcon from "./AppIcon.svelte";
+  import { dynamicPlatformIconName } from "./app-icon";
 
   let {
     source,
@@ -50,9 +52,9 @@
     loadFromSource(source);
   });
 
-  const cliOptions: { platform: DynamicPlatform; label: string; command: string; icon: string }[] = [
-    { platform: "docker", label: "Docker CLI", command: "docker", icon: "D" },
-    { platform: "k8s", label: "kubectl CLI", command: "kubectl", icon: "K" },
+  const cliOptions: { platform: DynamicPlatform; label: string; command: string }[] = [
+    { platform: "docker", label: "Docker CLI", command: "docker" },
+    { platform: "k8s", label: "kubectl CLI", command: "kubectl" },
   ];
 
   const contextSelectId = $derived(`dynamic-context-select-${formId || "new"}`);
@@ -180,7 +182,7 @@
           aria-pressed={formPlatform === cli.platform}
           onclick={() => choosePlatform(cli.platform)}
         >
-          <span class="cli-icon">{cli.icon}</span>
+          <span class="cli-icon"><AppIcon name={dynamicPlatformIconName(cli.platform)} size={17} /></span>
           <span class="cli-text">
             <span class="cli-title">{cli.label}</span>
             <span class="cli-sub">{cli.command} · {cliStatus(cli.platform)}</span>
@@ -312,8 +314,6 @@
     flex-shrink: 0;
     color: var(--accent);
     background: var(--accent-soft);
-    font-size: 12px;
-    font-weight: 700;
   }
   .cli-card.k8s .cli-icon {
     color: var(--purple);

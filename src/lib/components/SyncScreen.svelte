@@ -5,6 +5,7 @@
     import * as syncStatus from "../stores/sync.svelte.ts";
     import Modal from "./Modal.svelte";
     import SyncAutoPullToggle from "./SyncAutoPullToggle.svelte";
+    import AppIcon from "./AppIcon.svelte";
     import type { MessageKey } from "../i18n/locales/en";
 
     /* ── GitHub source state ─────────────────────────────────────────────── */
@@ -357,7 +358,9 @@
                 <label for="gh-branch">{t("github.branch")}</label>
                 <input id="gh-branch" type="text" bind:value={githubBranch} placeholder="main" autocomplete="off"/>
             </div>
-            <button class="btn btn-accent btn-sm save-btn" onclick={saveGithubSettings}>⛰ {t("common.save")}</button>
+            <button class="btn btn-accent btn-sm save-btn" onclick={saveGithubSettings}>
+                <span class="button-content"><AppIcon name="save" size={14} />{t("common.save")}</span>
+            </button>
             {#if githubSaveMsg}
                 <div class="msg" class:error={githubSaveIsError}>{githubSaveMsg}</div>
             {/if}
@@ -395,11 +398,11 @@
                 </div>
                 <div class="btn-row">
                     <button class="btn btn-accent btn-sm version-btn" onclick={() => askPassword("github", "push")} disabled={githubSyncing}>
-                        <span>𓍼 ོ☁︎ {t("sync.push")}{#if localVersion !== null} · V{localVersion}{/if}</span>
+                        <span class="button-content"><AppIcon name="cloud-upload" size={14} />{t("sync.push")}{#if localVersion !== null} · V{localVersion}{/if}</span>
                         {#if syncStatus.hasLocalUpdate("github")}<span class="version-dot" aria-hidden="true"></span>{/if}
                     </button>
                     <button class="btn btn-sm version-btn" onclick={() => askPassword("github", "pull")} disabled={githubSyncing}>
-                        <span>༄ {t("sync.pull")}{#if githubRemoteVersion !== null} · V{githubRemoteVersion}{/if}</span>
+                        <span class="button-content"><AppIcon name="cloud-download" size={14} />{t("sync.pull")}{#if githubRemoteVersion !== null} · V{githubRemoteVersion}{/if}</span>
                         {#if syncStatus.hasRemoteUpdate("github")}<span class="version-dot" aria-hidden="true"></span>{/if}
                     </button>
                 </div>
@@ -438,7 +441,9 @@
                 <label for="wd-password">{t("webdav.password")}</label>
                 <input id="wd-password" type="password" bind:value={webdavPassword} autocomplete="new-password"/>
             </div>
-            <button class="btn btn-accent btn-sm save-btn" onclick={saveWebdavSettings}>⛰ {t("common.save")}</button>
+            <button class="btn btn-accent btn-sm save-btn" onclick={saveWebdavSettings}>
+                <span class="button-content"><AppIcon name="save" size={14} />{t("common.save")}</span>
+            </button>
             {#if webdavSaveMsg}
                 <div class="msg" class:error={webdavSaveIsError}>{webdavSaveMsg}</div>
             {/if}
@@ -476,11 +481,11 @@
                 </div>
                 <div class="btn-row">
                     <button class="btn btn-accent btn-sm version-btn" onclick={() => askPassword("webdav", "push")} disabled={webdavSyncing}>
-                        <span>𓍼 ོ☁︎ {t("sync.push")}{#if localVersion !== null} · V{localVersion}{/if}</span>
+                        <span class="button-content"><AppIcon name="cloud-upload" size={14} />{t("sync.push")}{#if localVersion !== null} · V{localVersion}{/if}</span>
                         {#if syncStatus.hasLocalUpdate("webdav")}<span class="version-dot" aria-hidden="true"></span>{/if}
                     </button>
                     <button class="btn btn-sm version-btn" onclick={() => askPassword("webdav", "pull")} disabled={webdavSyncing}>
-                        <span>༄ {t("sync.pull")}{#if webdavRemoteVersion !== null} · V{webdavRemoteVersion}{/if}</span>
+                        <span class="button-content"><AppIcon name="cloud-download" size={14} />{t("sync.pull")}{#if webdavRemoteVersion !== null} · V{webdavRemoteVersion}{/if}</span>
                         {#if syncStatus.hasRemoteUpdate("webdav")}<span class="version-dot" aria-hidden="true"></span>{/if}
                     </button>
                 </div>
@@ -619,6 +624,11 @@
 
     .save-btn {
         align-self: flex-start;
+    }
+    .button-content {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
     }
 
     .btn-row {

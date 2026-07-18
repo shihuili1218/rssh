@@ -17,6 +17,8 @@
     groupConnectionItems,
     type ConnectionListItem,
   } from "./connection-list.ts";
+  import AppIcon from "./AppIcon.svelte";
+  import { connectionIconName } from "./app-icon";
 
   let profiles = $state<Profile[]>([]);
   let forwards = $state<Forward[]>([]);
@@ -65,15 +67,6 @@
     }
   }
 
-  function kindIcon(kind: ConnectionKind): string {
-    switch (kind) {
-      case "ssh": return "S";
-      case "forward": return "F";
-      case "serial": return "⎓";
-      case "telnet": return "T";
-    }
-  }
-
   function deleteCommand(kind: ConnectionKind): string {
     switch (kind) {
       case "ssh": return "delete_profile";
@@ -116,7 +109,7 @@
       {#each section.items as item (itemKey(item))}
         <div class="card item-row">
           <div class="item-main">
-            <span class="item-icon" class:serial={item.kind === "serial"} aria-hidden="true">{kindIcon(item.kind)}</span>
+            <span class="item-icon"><AppIcon name={connectionIconName(item.kind)} size={18} /></span>
             <div class="item-info">
               <div class="item-title-row">
                 <span class="item-name">{item.name}</span>
@@ -201,7 +194,6 @@
     font-size: 12px;
     font-weight: 700;
   }
-  .item-icon.serial { font-size: 17px; }
   .item-info { min-width: 0; }
   .item-title-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .item-name { overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }

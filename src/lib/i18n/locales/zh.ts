@@ -560,7 +560,7 @@ const zh: Messages = {
   "ai.cmd.proposed.tag": "[AI]",
 
   // ── AI 排障：AiSettings ──
-  "ai.settings.warn.byok": "⚠️ BYOK：你的命令输出经本地脱敏后会发送到所选 LLM 提供方。提供方可能按其条款使用这些数据",
+  "ai.settings.warn.byok": "BYOK：你的命令输出经本地脱敏后会发送到所选 LLM 提供方。提供方可能按其条款使用这些数据",
   "ai.settings.label.provider": "PROVIDER",
   "ai.settings.label.model": "MODEL",
   "ai.settings.label.endpoint": "ENDPOINT",
@@ -582,7 +582,7 @@ const zh: Messages = {
   "ai.settings.danger.section": "危险模式",
   "ai.settings.danger.label": "自动执行 AI 提议的命令",
   "ai.settings.danger.desc": "开启后，AI 提议的每一条命令都会立刻在终端执行，跳过你的确认。仅在可以随时丢弃的虚拟机 / 沙箱环境里启用。Prompt 写错或模型被劫持都可能在几秒内 rm -rf 或外泄数据。",
-  "ai.settings.danger.confirm_title": "⚠️ 确认开启危险模式？",
+  "ai.settings.danger.confirm_title": "确认开启危险模式？",
   "ai.settings.danger.confirm_body": "AI 提议的每条命令都将立刻执行，跳过你的所有确认。\n\n一条坏命令就能抹掉文件、泄露凭证、把机器搞挂。仅在可随时丢弃的虚拟机 / 沙箱环境里这么做。",
   "ai.settings.danger.confirm_enable": "确认开启",
   "ai.settings.danger.save_failed": "保存危险模式失败: {error}",

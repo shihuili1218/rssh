@@ -7,6 +7,8 @@
   import ForwardEditor from "./ForwardEditor.svelte";
   import SerialProfileEditor from "./SerialProfileEditor.svelte";
   import TelnetProfileEditor from "./TelnetProfileEditor.svelte";
+  import AppIcon from "./AppIcon.svelte";
+  import { connectionIconName } from "./app-icon";
 
   const intent = app.connectionEditorIntent();
   const locked = app.connectionTypeLocked();
@@ -18,7 +20,7 @@
     kind,
     label: kindLabel(kind),
     description: kindDescription(kind),
-    icon: kindIcon(kind),
+    icon: connectionIconName(kind),
   })));
 
   function kindLabel(kind: ConnectionKind): string {
@@ -39,14 +41,6 @@
     }
   }
 
-  function kindIcon(kind: ConnectionKind): string {
-    switch (kind) {
-      case "ssh": return "S";
-      case "forward": return "F";
-      case "serial": return "⎓";
-      case "telnet": return "T";
-    }
-  }
 </script>
 
 <div class="page">
@@ -62,7 +56,7 @@
           <label class="type-option">
             <input type="radio" name="connection-type" value={option.kind} bind:group={selectedKind} />
             <span class="type-card">
-              <span class="type-icon" aria-hidden="true">{option.icon}</span>
+              <span class="type-icon"><AppIcon name={option.icon} size={17} /></span>
               <span class="type-copy">
                 <span class="type-title">{option.label}</span>
                 <span class="type-sub">{option.description}</span>
