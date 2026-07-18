@@ -29,6 +29,10 @@ export const APP_ICON_NAMES = [
 
 export type AppIconName = (typeof APP_ICON_NAMES)[number];
 
+export function sidebarInitial(label: string): string {
+  return Array.from(label.trim())[0]?.toUpperCase() ?? "?";
+}
+
 export function connectionIconName(kind: ConnectionKind): AppIconName {
   switch (kind) {
     case "ssh": return "ssh";

@@ -21,7 +21,11 @@
 <script lang="ts">
     import { t } from "../i18n/index.svelte.ts";
     import AppIcon from "./AppIcon.svelte";
-    import { tabIconName, type AppIconName } from "./app-icon";
+    import { sidebarInitial, type AppIconName } from "./app-icon";
+
+    type MenuIcon =
+        | { kind: "initial"; text: string }
+        | { kind: "svg"; name: AppIconName; filled?: boolean };
 
     interface Props {
         item: NavItem;
@@ -68,15 +72,16 @@
         onDragEnd,
     }: Props = $props();
 
-    function iconOf(i: NavItem): AppIconName {
-        if (i.kind === "new-tab") return "add";
-        if (i.kind === "new-edit") return "edit";
-        if (i.kind === "pin") return "ssh";
-        if (i.kind === "pinned-menu") return "star";
-        if (i.kind === "pin-window") return "pin";
-        if (i.kind === "downloads") return "transfer";
-        if (i.kind === "settings") return "settings";
-        return tabIconName(i.tab.type);
+    function iconOf(i: NavItem): MenuIcon {
+        if (i.kind === "new-tab") return { kind: "svg", name: "add" };
+        if (i.kind === "new-edit") return { kind: "svg", name: "edit" };
+        if (i.kind === "pin") return { kind: "initial", text: sidebarInitial(i.profile.name) };
+        if (i.kind === "pinned-menu") return { kind: "svg", name: "star", filled: true };
+        if (i.kind === "pin-window") return { kind: "svg", name: "pin" };
+        if (i.kind === "downloads") return { kind: "svg", name: "transfer" };
+        if (i.kind === "settings") return { kind: "svg", name: "settings" };
+        if (i.tab.type === "home") return { kind: "svg", name: "home" };
+        return { kind: "initial", text: sidebarInitial(i.tab.label) };
     }
 
     function labelOf(i: NavItem): string {
@@ -140,7 +145,11 @@
 >
     <span class="sb-icon-wrap">
         <span class="sb-icon" style={groupColor ? `background: ${groupColor}; color: white` : ''}>
-            <AppIcon name={icon} size={14} filled={item.kind === "pinned-menu"} />
+            {#if icon.kind === "svg"}
+                <AppIcon name={icon.name} size={14} filled={icon.filled} />
+            {:else}
+                {icon.text}
+            {/if}
         </span>
         {#if badge}
             <span class="sb-badge">{badge}</span>
@@ -252,6 +261,9 @@
         align-items: center;
         justify-content: center;
         flex-shrink: 0;
+        font-family: monospace;
+        font-size: 12px;
+        font-weight: 700;
         border-radius: 4px;
         background: var(--surface);
     }

@@ -5,6 +5,7 @@ import {
   APP_ICON_NAMES,
   connectionIconName,
   dynamicPlatformIconName,
+  sidebarInitial,
   tabIconName,
 } from "./app-icon";
 
@@ -52,5 +53,12 @@ describe("app icon registry", () => {
       });
 
     expect(offenders).toEqual([]);
+  });
+
+  it("keeps user-named sidebar entries identifiable by their first character", () => {
+    expect(sidebarInitial("production")).toBe("P");
+    expect(sidebarInitial("  staging")).toBe("S");
+    expect(sidebarInitial("生产环境")).toBe("生");
+    expect(sidebarInitial("   ")).toBe("?");
   });
 });
