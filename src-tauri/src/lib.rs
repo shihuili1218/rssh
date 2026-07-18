@@ -9,7 +9,7 @@ pub mod models;
 pub mod secret;
 mod ssh;
 pub use ssh::bastion;
-#[cfg(all(feature = "server", not(target_os = "android")))]
+#[cfg(all(feature = "server", desktop))]
 pub mod server;
 mod state;
 pub mod sync;
@@ -23,7 +23,7 @@ use tauri::Manager;
 
 use state::AppState;
 
-#[cfg(all(target_os = "linux", not(target_os = "android")))]
+#[cfg(target_os = "linux")]
 fn apply_linux_wayland_compat() {
     if std::env::var_os("RSSH_DISABLE_WAYLAND_COMPAT").is_some() {
         return;
@@ -53,7 +53,7 @@ fn apply_linux_wayland_compat() {
     }
 }
 
-#[cfg(any(not(target_os = "linux"), target_os = "android"))]
+#[cfg(not(target_os = "linux"))]
 fn apply_linux_wayland_compat() {}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -109,15 +109,15 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            #[cfg(target_os = "android")]
+            #[cfg(mobile)]
             let data_dir = app.path().app_data_dir()?;
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             let data_dir = db::data_dir()?;
 
             // 启动时扫一次本机可用 shell，结果缓存到进程退出。
             // 用户在 Shell 设置页打开时直接读缓存，没冷启动开销。
-            // PTY 模块本身就是桌面端独占（android 上没有 portable_pty）。
-            #[cfg(not(target_os = "android"))]
+            // PTY 模块本身就是桌面端独占（移动端没有 portable_pty）。
+            #[cfg(desktop)]
             terminal::pty::init_available_shells();
             let db = Arc::new(db::Db::open(&data_dir)?);
             // secret::open 可能失败：sticky backend 标记 keyring 但 keychain 现在
@@ -140,9 +140,9 @@ pub fn run() {
                 secret_store: secret_system.store,
                 lifecycle_sessions: Mutex::new(HashMap::new()),
                 sessions: Mutex::new(HashMap::new()),
-                #[cfg(not(target_os = "android"))]
+                #[cfg(desktop)]
                 pty_sessions: Mutex::new(HashMap::new()),
-                #[cfg(not(target_os = "android"))]
+                #[cfg(desktop)]
                 serial_sessions: Mutex::new(HashMap::new()),
                 telnet_sessions: Mutex::new(HashMap::new()),
                 sftp_sessions: Mutex::new(HashMap::new()),
@@ -227,44 +227,44 @@ pub fn run() {
             // session lifecycle
             commands::lifecycle::reconcile_sessions,
             // PTY (desktop only)
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::pty::list_shells,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::pty::refresh_shells,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::pty::pty_spawn,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::pty::pty_spawn_connector,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::pty::pty_write,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::pty::pty_resize,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::pty::pty_close,
             // Serial (desktop only)
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::serial::serial_list_ports,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::serial::serial_open,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::serial::serial_write,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::serial::serial_close,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::serial::serial_set_dtr,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::serial::serial_set_rts,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::serial::serial_send_break,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::serial::list_serial_profiles,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::serial::get_serial_profile,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::serial::create_serial_profile,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::serial::update_serial_profile,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::serial::delete_serial_profile,
             // Telnet (all platforms — plain TCP)
             commands::telnet::telnet_open,
@@ -292,31 +292,33 @@ pub fn run() {
             commands::sftp::sftp_download_to,
             commands::sftp::sftp_upload_from,
             // SFTP native file transfer (desktop only)
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::sftp::sftp_save_file,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::sftp::sftp_pick_and_upload,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::sftp::sftp_pick_save_path,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::sftp::sftp_pick_open_path,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::sftp::sftp_pick_folder,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::sftp::sftp_pick_open_files,
             commands::sftp::sftp_cancel_transfer,
             commands::sftp::sftp_remove,
             commands::sftp::sftp_rename,
             commands::sftp::sftp_stat,
             // CLI install
+            #[cfg(desktop)]
             commands::cli::cli_status,
+            #[cfg(desktop)]
             commands::cli::cli_install,
             // multi-window (desktop only)
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::window::open_tab_in_new_window,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::window::clipboard_read,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             commands::window::clipboard_write,
             // external URL opener — cross-platform via tauri-plugin-opener
             commands::external::open_external_url,

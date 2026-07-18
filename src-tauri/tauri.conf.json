@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/nickel-org/nickel.rs/master/examples/hello-world/src/main.rs",
+  "$schema": "https://schema.tauri.app/config/2",
   "productName": "RSSH",
   "version": "0.0.1",
   "identifier": "com.rssh.app",

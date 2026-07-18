@@ -143,7 +143,7 @@
        set by the .sb-* variants below to mirror the sidebar's anchor edge. */
     .downloads {
         position: fixed;
-        width: min(460px, calc(100vw - 24px));
+        width: min(460px, calc(100vw - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
         max-height: 70vh;
         background: var(--bg);
         border: 1px solid var(--divider);
@@ -161,20 +161,20 @@
        if the sidebar resize ever changes, the popover follows automatically.
        The extra 8px gap separates the popover from the sidebar visually. */
     .downloads.sb-left {
-        left:   calc(var(--sb-left, 0px) + 8px);
-        bottom: 12px;
+        left:   calc(var(--sb-left, 0px) + 8px + env(safe-area-inset-left, 0px));
+        bottom: calc(12px + env(safe-area-inset-bottom, 0px));
     }
     .downloads.sb-right {
-        right:  calc(var(--sb-right, 0px) + 8px);
-        bottom: 12px;
+        right:  calc(var(--sb-right, 0px) + 8px + env(safe-area-inset-right, 0px));
+        bottom: calc(12px + env(safe-area-inset-bottom, 0px));
     }
     .downloads.sb-top {
-        top:   calc(var(--sb-top, 0px) + 8px);
-        right: 12px;
+        top:   calc(var(--sb-top, 0px) + 8px + env(safe-area-inset-top, 0px));
+        right: calc(12px + env(safe-area-inset-right, 0px));
     }
     .downloads.sb-bottom {
-        bottom: calc(var(--sb-bottom, 0px) + 8px);
-        right:  12px;
+        bottom: calc(var(--sb-bottom, 0px) + 8px + env(safe-area-inset-bottom, 0px));
+        right:  calc(12px + env(safe-area-inset-right, 0px));
     }
 
     header {

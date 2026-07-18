@@ -36,13 +36,15 @@
   let customMode = $derived(pendingCustom || (selectedShell !== "" && !shells.includes(selectedShell)));
 
   onMount(async () => {
-    try { shells = await invoke<string[]>("list_shells"); } catch { shells = []; }
-    selectedShell = await invoke<string | null>("get_setting", { key: "local_shell" }) ?? "";
-    if (selectedShell && !shells.includes(selectedShell)) {
-      customPath = selectedShell;
+    if (!app.isMobile) {
+      try { shells = await invoke<string[]>("list_shells"); } catch { shells = []; }
+      selectedShell = await invoke<string | null>("get_setting", { key: "local_shell" }) ?? "";
+      if (selectedShell && !shells.includes(selectedShell)) {
+        customPath = selectedShell;
+      }
+      openLocalOnStartup = (await invoke<string | null>("get_setting", { key: "open_local_on_startup" })) === "true";
     }
     verboseLog = (await invoke<string | null>("get_setting", { key: "verbose_log" })) !== "false";
-    openLocalOnStartup = (await invoke<string | null>("get_setting", { key: "open_local_on_startup" })) === "true";
     const ts = await invoke<string | null>("get_setting", { key: "connect_timeout" });
     if (ts) connectTimeout = parseInt(ts, 10) || 10;
     copyOnSelect = await app.loadCopyOnSelect();
@@ -140,8 +142,9 @@
 </script>
 
 <div class="page">
-  <div class="section-label" id="local-shell-label">{t("settings.shell.local_shell")}</div>
-  <div class="card surface-raised shell-card">
+  {#if !app.isMobile}
+    <div class="section-label" id="local-shell-label">{t("settings.shell.local_shell")}</div>
+    <div class="card surface-raised shell-card">
     <div class="shell-hint">
       {t("settings.shell.pick_hint")}
     </div>
@@ -190,7 +193,8 @@
         <span class="slider"></span>
       </label>
     </div>
-  </div>
+    </div>
+  {/if}
 
   <div class="section-label">{t("settings.shell.connection_timeout")}</div>
   <div class="timeout-row">

@@ -1,18 +1,18 @@
 //! known_hosts 路径策略：复用系统标准位置 `~/.ssh/known_hosts`，
 //! 让用户在 OpenSSH / rssh / 其他 SSH 客户端之间共享同一份信任链。
 //!
-//! Android 没有 home，退到 app_data_dir/.ssh/known_hosts。
+//! 移动端没有可依赖的用户 home，退到 app_data_dir/.ssh/known_hosts。
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-/// 解析 known_hosts 文件路径。`fallback_dir` 仅 Android 用。
+/// 解析 known_hosts 文件路径。`fallback_dir` 仅移动端使用。
 pub fn path_for(fallback_dir: &Path) -> PathBuf {
-    #[cfg(target_os = "android")]
+    #[cfg(mobile)]
     {
         return fallback_dir.join(".ssh").join("known_hosts");
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(desktop)]
     {
         let _ = fallback_dir;
         if let Some(home) = dirs::home_dir() {
@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn path_for_returns_some_path_under_home_or_fallback() {
-        // path_for 在 cfg(not(android)) 下走 home_dir() 或 fallback_dir。
+        // path_for 在 desktop 下走 home_dir() 或 fallback_dir。
         // 不验证具体路径（CI 环境 HOME 不一定存在），只保证返回值以
         // `known_hosts` 结尾且非空。
         let dir = tempfile::tempdir().unwrap();

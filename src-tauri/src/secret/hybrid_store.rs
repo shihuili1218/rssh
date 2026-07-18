@@ -48,7 +48,7 @@ pub struct HybridStore {
 impl HybridStore {
     /// `backend_label`: 对外暴露的 backend 名字（CLI `rssh config show`、GUI tauri
     /// command `secret_backend` 显示给用户）。**保留 PR #60 前的字符串契约**：
-    /// keychain 路径仍叫 `macos-keychain` / `windows-credential-manager` /
+    /// keychain 路径仍叫 `macos-keychain` / `ios-keychain` / `windows-credential-manager` /
     /// `linux-secret-service`；新增的 `file` 给 FileMasterKey 路径。这样用户在
     /// CLI/GUI 看到的"我的 secret 存在哪"语义不变 —— secret 本来就锚定在 master
     /// key 的存储位置（root of trust），envelope 加密 DB 只是实现细节。

@@ -4,7 +4,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { t } from "../i18n/index.svelte.ts";
   import * as updates from "../stores/updates.svelte.ts";
-  import { writeClipboard } from "../stores/app.svelte.ts";
+  import { isIOS, writeClipboard } from "../stores/app.svelte.ts";
   import WelcomeScreen from "./WelcomeScreen.svelte";
 
   const REPO = "shihuili1218/rssh";
@@ -50,7 +50,8 @@
     <div class="app-version">v{version}</div>
   </div>
 
-  <div class="update">
+  {#if !isIOS}
+    <div class="update">
     {#if update.kind === "outdated"}
       <button class="update-btn primary surface-raised-sm" onclick={() => openUrl(RELEASES_PAGE)}>
         {t("about.update.download")} v{update.latest}
@@ -68,7 +69,8 @@
     {:else if update.kind === "error"}
       <span class="update-hint err">{t("about.update.error")}</span>
     {/if}
-  </div>
+    </div>
+  {/if}
 
   <div class="links">
     <button class="link-row surface-raised-sm" onclick={() => openUrl(REPO_URL)}>

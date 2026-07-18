@@ -18,7 +18,7 @@ All platforms need:
 - **Rust** stable (install via [rustup](https://rustup.rs))
 - **npm** (comes with Node)
 
-### macOS
+### macOS desktop
 
 No extra dependencies. Xcode Command Line Tools must be installed:
 
@@ -111,6 +111,34 @@ npx tauri android build --apk
 
 The release APK requires a signing keystore. See `src-tauri/gen/android/key.properties`.
 
+### iOS
+
+iOS release packaging runs on GitHub Actions; no signing certificate is required
+on a contributor's machine. Before enabling it, register the identifier from
+`src-tauri/tauri.conf.json` (`com.rssh.app` by default) as an explicit App ID.
+The registered Bundle ID and the Tauri `identifier` must match exactly.
+
+Configure these GitHub Actions secrets with the manual signing material:
+
+- `APPLE_DEVELOPMENT_TEAM`: the 10-character Apple Developer Team ID
+- `IOS_CERTIFICATE`: base64-encoded Apple Distribution `.p12`
+- `IOS_CERTIFICATE_PASSWORD`: password used when exporting that `.p12`
+- `IOS_MOBILE_PROVISION`: base64-encoded App Store Connect provisioning profile
+
+Run **iOS Release** manually from the Actions tab to test the setup. Its optional
+`build_number` input defaults to the monotonically increasing GitHub Actions run
+number. To package iOS automatically for `v*` tags, set the repository variable
+`IOS_BUILD_ENABLED` to `true`; without that opt-in, tag-triggered iOS jobs are
+skipped and the existing desktop/Android release workflow is unchanged.
+
+The workflow builds with `--export-method app-store-connect`, uploads the IPA as
+a workflow artifact, and, for tags, appends it to the draft GitHub release. The
+IPA is not uploaded to App Store Connect automatically. The CI helper copies the
+required privacy manifest into the generated Xcode project before packaging.
+
+iOS may suspend network sessions when RSSH enters the background; this project
+does not claim a background execution mode it cannot guarantee.
+
 ## Running outside Tauri (headless server + IDEA plugin)
 
 The frontend can run **outside** the Tauri desktop shell — in a plain browser, or
@@ -188,6 +216,7 @@ src-tauri/                    # backend (Rust)
     sync/                     # Remote sync (GitHub + WebDAV)
   src/bin/rssh.rs             # CLI binary (behind `cli` feature flag)
   gen/android/                # Android build files
+  gen/apple/                  # iOS Xcode project and privacy manifest
 ```
 
 ## Release
@@ -199,11 +228,17 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-GitHub Actions builds all platforms and creates a draft release. Artifact naming:
+GitHub Actions builds desktop and Android artifacts and creates a draft release.
+The separate **iOS Release** workflow adds a signed IPA only when explicitly run
+or when `IOS_BUILD_ENABLED=true` enables tag builds.
+Desktop/Android artifact naming:
 
 ```
 rssh-{version}-{os}-{arch}.{ext}
 ```
+
+The iOS Actions artifact is named `rssh-ios-{run_id}-build-{build_number}`;
+the signed file inside it, and on a tagged draft release, is `RSSH.ipa`.
 
 Version is derived from the git tag. No need to manually update `tauri.conf.json` or `Cargo.toml` -- CI syncs them automatically.
 

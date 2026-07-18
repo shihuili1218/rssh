@@ -1,16 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import * as ai from "../ai/store.svelte.ts";
 import { errMsg } from "../i18n/index.svelte.ts";
+import { isIOS, isMobile } from "../platform.ts";
 import type { ViewportSnapshot } from "../terminal/viewport-snapshot.ts";
 import { toast } from "./toast.svelte.ts";
 
 /* ═══════════════════════════════════════════════════════
    Platform
    ═══════════════════════════════════════════════════════ */
-// `navigator` is absent in the node test env; guard so importing this module
-// from a unit test doesn't throw. Browsers always have it → behavior unchanged.
-export const isMobile =
-  typeof navigator !== "undefined" && /Android|iPhone|iPad/i.test(navigator.userAgent);
+export { isIOS, isMobile };
 
 /* ═══════════════════════════════════════════════════════
    Types
@@ -566,6 +564,7 @@ export function readTerminalViewportText(tabId: string): string[] | null {
  *  WebKit's permission prompt for externally-sourced content. */
 export async function readClipboard(): Promise<string> {
   if (isMobile) {
+    if (!navigator.clipboard?.readText) return "";
     return navigator.clipboard.readText().catch(() => "");
   }
   return invoke<string>("clipboard_read").catch(() => "");
@@ -576,6 +575,7 @@ export async function readClipboard(): Promise<string> {
  *  right-click / unfocused context. Mobile uses the web API. */
 export async function writeClipboard(text: string): Promise<void> {
   if (isMobile) {
+    if (!navigator.clipboard?.writeText) return;
     await navigator.clipboard.writeText(text).catch(() => {});
     return;
   }
@@ -929,7 +929,7 @@ export async function loadForwards(): Promise<Forward[]> {
   return invoke<Forward[]>("list_forwards");
 }
 export async function loadSerialProfiles(): Promise<SerialProfile[]> {
-  // Desktop-only: the command isn't registered on Android. Degrade to [] rather
+  // Desktop-only: the command isn't registered on mobile. Degrade to [] rather
   // than rejecting, so callers (e.g. HomeScreen's Promise.all) don't break on mobile.
   // On desktop the command IS registered, so a failure is a real problem (DB /
   // serialization) — log it so it's diagnosable instead of silently showing "no

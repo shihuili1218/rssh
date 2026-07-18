@@ -1,7 +1,7 @@
-#[cfg(not(target_os = "android"))]
+#[cfg(desktop)]
 pub mod pty;
 pub mod recorder;
-#[cfg(not(target_os = "android"))]
+#[cfg(desktop)]
 pub mod serial;
-// No android gate: telnet is plain TCP, it works on every platform.
+// No mobile gate: telnet is plain TCP, so it works on every platform.
 pub mod telnet;

@@ -9,18 +9,18 @@ use crate::secret::SecretStore;
 use crate::ssh::client::SessionHandle;
 use crate::ssh::forward::ForwardHandle;
 use crate::ssh::sftp::SftpHandle;
-#[cfg(not(target_os = "android"))]
+#[cfg(desktop)]
 use crate::terminal::pty::PtyHandle;
-#[cfg(not(target_os = "android"))]
+#[cfg(desktop)]
 use crate::terminal::serial::SerialHandle;
 use crate::terminal::telnet::TelnetHandle;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionKind {
     Ssh,
-    #[cfg(not(target_os = "android"))]
+    #[cfg(desktop)]
     Pty,
-    #[cfg(not(target_os = "android"))]
+    #[cfg(desktop)]
     Serial,
     Telnet,
     Sftp,
@@ -73,11 +73,11 @@ pub struct AppState {
     /// Typed handle maps below contain Ready handles only.
     pub lifecycle_sessions: Mutex<HashMap<String, SessionRecord>>,
     pub sessions: Mutex<HashMap<String, SessionHandle>>,
-    #[cfg(not(target_os = "android"))]
+    #[cfg(desktop)]
     pub pty_sessions: Mutex<HashMap<String, PtyHandle>>,
-    #[cfg(not(target_os = "android"))]
+    #[cfg(desktop)]
     pub serial_sessions: Mutex<HashMap<String, SerialHandle>>,
-    /// Telnet is plain TCP — available on every platform, no android gate.
+    /// Telnet is plain TCP — available on every platform, no mobile gate.
     pub telnet_sessions: Mutex<HashMap<String, TelnetHandle>>,
     pub sftp_sessions: Mutex<HashMap<String, Arc<SftpHandle>>>,
     /// 进行中的 SFTP 传输 cancel flag：transfer_id → AtomicBool。

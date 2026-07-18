@@ -12,7 +12,7 @@ use crate::ssh::sftp::{FileStat, RemoteEntry, SftpHandle, WalkEntry};
 use crate::state::AppState;
 use crate::state::{SessionKind, SessionOwner};
 
-#[cfg(not(target_os = "android"))]
+#[cfg(desktop)]
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
 /// Maximum recursion depth for the local walker. Mirrors the remote-side cap.
@@ -262,22 +262,22 @@ pub async fn sftp_close(
     )
 }
 
-/// dialog plugin 的 FilePath → 本地 PathBuf。SFTP 命令全是 `cfg(not(android))`，
-/// dialog 在桌面总返回真实路径，移动端的 content URI 不会出现在这里。
-#[cfg(not(target_os = "android"))]
+/// dialog plugin 的 FilePath → 本地 PathBuf。这里的命令仅在桌面注册，
+/// 所以 dialog 总返回真实路径，移动端 URI 不会出现在这里。
+#[cfg(desktop)]
 fn dialog_to_path(fp: FilePath) -> AppResult<PathBuf> {
     fp.into_path()
         .map_err(|e| AppError::other("file_path_invalid", json!({ "err": e.to_string() })))
 }
 
 /// `spawn_blocking` 的 JoinError → AppError。
-#[cfg(not(target_os = "android"))]
+#[cfg(desktop)]
 fn dialog_join_err(e: tokio::task::JoinError) -> AppError {
     AppError::other("dialog_task_failed", json!({ "err": e.to_string() }))
 }
 
 /// Download a remote file via native Save As dialog with streaming + progress.
-#[cfg(not(target_os = "android"))]
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn sftp_save_file(
     app: tauri::AppHandle,
@@ -309,7 +309,7 @@ pub async fn sftp_save_file(
 }
 
 /// Pick a local file via native Open dialog and upload with streaming + progress.
-#[cfg(not(target_os = "android"))]
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn sftp_pick_and_upload(
     app: tauri::AppHandle,
@@ -355,7 +355,7 @@ pub async fn sftp_pick_and_upload(
 }
 
 /// Open native Save-As dialog and return the chosen path. No transfer happens here.
-#[cfg(not(target_os = "android"))]
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn sftp_pick_save_path(
     app: tauri::AppHandle,
@@ -376,7 +376,7 @@ pub async fn sftp_pick_save_path(
 }
 
 /// Open native Open dialog and return the chosen path. No transfer happens here.
-#[cfg(not(target_os = "android"))]
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn sftp_pick_open_path(app: tauri::AppHandle) -> AppResult<Option<String>> {
     let picked = tokio::task::spawn_blocking(move || app.dialog().file().blocking_pick_file())
@@ -391,7 +391,7 @@ pub async fn sftp_pick_open_path(app: tauri::AppHandle) -> AppResult<Option<Stri
 /// Pick a folder via the native dialog. Used both as the destination root
 /// (multi-select download) and the source root (recursive upload) — both
 /// flows want the same `blocking_pick_folder()` call, so a single command suffices.
-#[cfg(not(target_os = "android"))]
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn sftp_pick_folder(app: tauri::AppHandle) -> AppResult<Option<String>> {
     let picked = tokio::task::spawn_blocking(move || app.dialog().file().blocking_pick_folder())
@@ -405,7 +405,7 @@ pub async fn sftp_pick_folder(app: tauri::AppHandle) -> AppResult<Option<String>
 
 /// Pick multiple source files for upload. `blocking_pick_files` supports
 /// multi-selection on every desktop platform we ship to.
-#[cfg(not(target_os = "android"))]
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn sftp_pick_open_files(app: tauri::AppHandle) -> AppResult<Option<Vec<String>>> {
     let picked = tokio::task::spawn_blocking(move || app.dialog().file().blocking_pick_files())
@@ -427,14 +427,60 @@ fn open_err(e: std::io::Error) -> AppError {
     )
 }
 
-/// Resolve a `FilePath` (a desktop path or a mobile SAF `content://` URI) to a
-/// real `std::fs::File` for reading, via plugin-fs. Desktop paths open directly;
-/// Android URIs resolve to an fd through the ContentResolver bridge.
-fn fs_open_read(app: &tauri::AppHandle, fp: tauri_plugin_fs::FilePath) -> AppResult<std::fs::File> {
+/// Keeps an iOS security-scoped file URL active for exactly as long as the
+/// transfer owns its file handle. Other platforms need no matching release.
+struct FileAccessGuard {
+    #[cfg(target_os = "ios")]
+    app: tauri::AppHandle,
+    #[cfg(target_os = "ios")]
+    path: Option<tauri_plugin_fs::FilePath>,
+}
+
+impl FileAccessGuard {
+    fn new(app: &tauri::AppHandle, path: &tauri_plugin_fs::FilePath) -> Self {
+        #[cfg(target_os = "ios")]
+        {
+            let path = match path {
+                tauri_plugin_fs::FilePath::Url(url) if url.scheme() == "file" => Some(path.clone()),
+                _ => None,
+            };
+            Self {
+                app: app.clone(),
+                path,
+            }
+        }
+        #[cfg(not(target_os = "ios"))]
+        {
+            let _ = (app, path);
+            Self {}
+        }
+    }
+}
+
+impl Drop for FileAccessGuard {
+    fn drop(&mut self) {
+        #[cfg(target_os = "ios")]
+        if let Some(path) = self.path.take() {
+            use tauri_plugin_fs::FsExt;
+            if let Err(e) = self.app.fs().stop_accessing_security_scoped_resource(path) {
+                log::warn!("failed to release iOS security-scoped file: {e}");
+            }
+        }
+    }
+}
+
+/// Resolve a desktop path, Android content URI, or iOS security-scoped file URL
+/// to a real file. The guard must live until the file handle is dropped.
+fn fs_open_read(
+    app: &tauri::AppHandle,
+    fp: tauri_plugin_fs::FilePath,
+) -> AppResult<(std::fs::File, FileAccessGuard)> {
     use tauri_plugin_fs::{FsExt, OpenOptions};
     let mut opts = OpenOptions::new();
     opts.read(true);
-    app.fs().open(fp, opts).map_err(open_err)
+    let access = FileAccessGuard::new(app, &fp);
+    let file = app.fs().open(fp, opts).map_err(open_err)?;
+    Ok((file, access))
 }
 
 /// Same as [`fs_open_read`] but opens (create + truncate) for writing — the
@@ -442,11 +488,13 @@ fn fs_open_read(app: &tauri::AppHandle, fp: tauri_plugin_fs::FilePath) -> AppRes
 fn fs_open_write(
     app: &tauri::AppHandle,
     fp: tauri_plugin_fs::FilePath,
-) -> AppResult<std::fs::File> {
+) -> AppResult<(std::fs::File, FileAccessGuard)> {
     use tauri_plugin_fs::{FsExt, OpenOptions};
     let mut opts = OpenOptions::new();
     opts.write(true).create(true).truncate(true);
-    app.fs().open(fp, opts).map_err(open_err)
+    let access = FileAccessGuard::new(app, &fp);
+    let file = app.fs().open(fp, opts).map_err(open_err)?;
+    Ok((file, access))
 }
 
 /// Stream-download to a caller-supplied local target. transfer_id is used as the
@@ -477,7 +525,8 @@ pub async fn sftp_download_to(
             .await
             .map(|_| ()),
         fp @ tauri_plugin_fs::FilePath::Url(_) => {
-            let mut dst = tokio::fs::File::from_std(fs_open_write(&app, fp)?);
+            let (dst, _access) = fs_open_write(&app, fp)?;
+            let mut dst = tokio::fs::File::from_std(dst);
             sftp.download_streaming_to_writer(&remote_path, &mut dst, &host, &transfer_id, cancel)
                 .await
                 .map(|_| ())
@@ -503,7 +552,8 @@ pub async fn sftp_upload_from(
     let fp = local_path
         .parse::<tauri_plugin_fs::FilePath>()
         .expect("FilePath::from_str is infallible");
-    let mut reader = tokio::fs::File::from_std(fs_open_read(&app, fp)?);
+    let (reader, _access) = fs_open_read(&app, fp)?;
+    let mut reader = tokio::fs::File::from_std(reader);
     // content:// fds may not support fstat; fall back to 0 (indeterminate bar).
     let total = reader.metadata().await.map(|m| m.len()).unwrap_or(0);
     sftp.upload_streaming(

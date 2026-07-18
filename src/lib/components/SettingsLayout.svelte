@@ -88,11 +88,13 @@
   ]);
 
   const hiddenOnCompact = new Set<string>(["cli", "shortcuts"]);
+  const hiddenOnMobile = new Set<string>(["cli", "dynamic-discovery"]);
   // ConnectionEditor removes the desktop-only Serial type on mobile;
   // the unified connection-list entry itself remains available.
   let menu = $derived(
     allMenu
       .filter(m => !(compact && hiddenOnCompact.has(m.id)))
+      .filter(m => !(app.isMobile && hiddenOnMobile.has(m.id)))
   );
 
   let sections = $derived((() => {
