@@ -814,7 +814,7 @@ const zh: Messages = {
   "error.webdav_client_build_failed": "WebDAV 客户端初始化失败：{err}",
   "error.webdav_url_userinfo_forbidden": "WebDAV URL 不能包含用户名或密码",
   "error.webdav_url_query_fragment_forbidden": "WebDAV URL 不能包含查询参数或锚点",
-  "error.webdav_timeout": "WebDAV 请求超时",
+  "error.webdav_timeout": "WebDAV 请求超时：{err}",
   "error.sftp_io_failed": "SFTP {op} 失败：{err}",
   "error.transfer_cancelled": "传输已取消",
   "error.sftp_tree_too_deep": "远端目录层级超过上限（{limit}）：{path}",

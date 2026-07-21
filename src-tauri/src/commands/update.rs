@@ -4,7 +4,7 @@
 //! and any future "new version available" UI lives here. Kept separate from
 //! `commands::window` (desktop-only system-window plumbing).
 
-use crate::error::{AppError, AppResult};
+use crate::error::{error_chain, AppError, AppResult};
 
 /// Fetch the latest release tag from a GitHub repo.
 ///
@@ -34,14 +34,14 @@ pub async fn fetch_latest_release_tag(repo: String) -> AppResult<String> {
         .map_err(|e| {
             AppError::other(
                 "update_http_failed",
-                serde_json::json!({ "op": "client", "err": e.to_string() }),
+                serde_json::json!({ "op": "client", "err": error_chain(&e) }),
             )
         })?;
 
     let resp = client.get(&url).send().await.map_err(|e| {
         AppError::other(
             "update_http_failed",
-            serde_json::json!({ "op": "request", "err": e.to_string() }),
+            serde_json::json!({ "op": "request", "err": error_chain(&e) }),
         )
     })?;
 

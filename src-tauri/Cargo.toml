@@ -54,7 +54,7 @@ include_dir = { version = "0.7", optional = true }
 russh-sftp = "2"
 
 # HTTP + crypto
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "stream", "system-proxy"] }
 base64 = "0.22"
 # 配置备份/同步走 Argon2id（KDF）+ ChaCha20-Poly1305（AEAD），
 # 标准 RustCrypto 实现；不再手搓。getrandom 用于生成 salt + nonce。

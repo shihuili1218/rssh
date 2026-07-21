@@ -15,7 +15,7 @@ use super::{
     ChatDelta, ChatMessage, ChatRequest, ChatResponse, DeltaSink, LlmClient, ModelInfo, SseParser,
     ToolCall,
 };
-use crate::error::{AppError, AppResult};
+use crate::error::{error_chain, AppError, AppResult};
 
 const DEFAULT_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const MODELS_ENDPOINT: &str = "https://api.anthropic.com/v1/models";
@@ -109,7 +109,9 @@ impl LlmClient for AnthropicClient {
             .header("accept", "application/json")
             .send()
             .await
-            .map_err(|e| AppError::other("llm_request_failed", json!({ "err": e.to_string() })))?;
+            .map_err(|e| {
+                AppError::other("llm_request_failed", json!({ "err": error_chain(&e) }))
+            })?;
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
@@ -121,7 +123,7 @@ impl LlmClient for AnthropicClient {
         let v: serde_json::Value = resp
             .json()
             .await
-            .map_err(|e| AppError::other("llm_decode_failed", json!({ "err": e.to_string() })))?;
+            .map_err(|e| AppError::other("llm_decode_failed", json!({ "err": error_chain(&e) })))?;
         let data = v["data"].as_array().cloned().unwrap_or_default();
         let mut models: Vec<ModelInfo> = data
             .into_iter()
@@ -222,7 +224,7 @@ impl LlmClient for AnthropicClient {
             .map_err(|e| {
                 AppError::other(
                     "llm_request_failed",
-                    serde_json::json!({ "err": e.to_string() }),
+                    serde_json::json!({ "err": error_chain(&e) }),
                 )
             })?;
 
@@ -249,7 +251,7 @@ impl LlmClient for AnthropicClient {
             let bytes = chunk.map_err(|e| {
                 AppError::other(
                     "llm_stream_read_failed",
-                    serde_json::json!({ "err": e.to_string() }),
+                    serde_json::json!({ "err": error_chain(&e) }),
                 )
             })?;
             for ev_data in parser.feed(&bytes) {

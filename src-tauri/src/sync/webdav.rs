@@ -4,7 +4,7 @@ use reqwest::{Client, StatusCode};
 use serde_json::json;
 use url::Url;
 
-use crate::error::{AppError, AppResult};
+use crate::error::{error_chain, AppError, AppResult};
 use crate::sync::metadata::SyncMetadata;
 use crate::sync::remote::RemoteBackup;
 
@@ -40,7 +40,7 @@ impl WebDavSync {
             .map_err(|e| {
                 AppError::other(
                     "webdav_client_build_failed",
-                    json!({ "err": e.to_string() }),
+                    json!({ "err": error_chain(&e) }),
                 )
             })?;
         Self::with_client(url, username, password, client)
@@ -111,9 +111,9 @@ impl WebDavSync {
             .await
             .map_err(|e| {
                 if e.is_timeout() {
-                    AppError::other("webdav_timeout", json!({}))
+                    AppError::other("webdav_timeout", json!({ "err": error_chain(&e) }))
                 } else {
-                    AppError::other("webdav_push_failed", json!({ "err": e.to_string() }))
+                    AppError::other("webdav_push_failed", json!({ "err": error_chain(&e) }))
                 }
             })?;
 
@@ -158,9 +158,9 @@ impl WebDavSync {
             .await
             .map_err(|e| {
                 if e.is_timeout() {
-                    AppError::other("webdav_timeout", json!({}))
+                    AppError::other("webdav_timeout", json!({ "err": error_chain(&e) }))
                 } else {
-                    AppError::other("webdav_pull_failed", json!({ "err": e.to_string() }))
+                    AppError::other("webdav_pull_failed", json!({ "err": error_chain(&e) }))
                 }
             })?;
 
@@ -170,7 +170,7 @@ impl WebDavSync {
 
         if resp.status().is_success() {
             return resp.text().await.map(Some).map_err(|e| {
-                AppError::other("webdav_pull_failed", json!({ "err": e.to_string() }))
+                AppError::other("webdav_pull_failed", json!({ "err": error_chain(&e) }))
             });
         }
 
@@ -417,7 +417,8 @@ mod tests {
     async fn pull_metadata_network_failure_is_error() {
         // Port 0 cannot accept a TCP connection, so this exercises reqwest's
         // transport-error path without relying on an external network.
-        let sync = WebDavSync::from_settings("http://127.0.0.1:0", "u", "p").unwrap();
+        let client = Client::builder().no_proxy().build().unwrap();
+        let sync = WebDavSync::with_client("http://127.0.0.1:0", "u", "p", client).unwrap();
 
         let err = sync.pull_metadata().await.unwrap_err();
         assert_eq!(err.code(), "webdav_pull_failed");

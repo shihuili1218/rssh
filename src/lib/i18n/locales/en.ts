@@ -811,7 +811,7 @@ const en = {
   "error.webdav_client_build_failed": "WebDAV client build failed: {err}",
   "error.webdav_url_userinfo_forbidden": "WebDAV URL must not contain username or password",
   "error.webdav_url_query_fragment_forbidden": "WebDAV URL must not contain query or fragment",
-  "error.webdav_timeout": "WebDAV request timed out",
+  "error.webdav_timeout": "WebDAV request timed out: {err}",
   "error.sftp_io_failed": "SFTP {op} failed: {err}",
   "error.transfer_cancelled": "Transfer cancelled",
   "error.sftp_tree_too_deep": "Remote directory exceeds depth limit ({limit}) at {path}",
