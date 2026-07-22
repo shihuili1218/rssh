@@ -4,8 +4,7 @@
   import * as app from "../stores/app.svelte.ts";
   import * as transfers from "../stores/transfers.svelte.ts";
   import { isMac } from "../stores/keymap.svelte.ts";
-  import { t, errMsg } from "../i18n/index.svelte.ts";
-  import { toast } from "../stores/toast.svelte.ts";
+  import { t } from "../i18n/index.svelte.ts";
   import Select from "./Select.svelte";
   import Modal from "./Modal.svelte";
 
@@ -25,7 +24,7 @@
   let rightClickAction = $state<app.RightClickAction>("menu");
   let ctrlRightClickMenu = $state(false);
   /** Modifier key label for the ctrl+right-click hint — Cmd on macOS, Ctrl elsewhere. */
-  const modKey = isMac ? "Cmd" : "Ctrl";
+  const modKey = isMac ? "⌘" : "Ctrl";
   let rightClickOptions = $derived([
     { value: "menu", label: t("settings.shell.right_click_menu") },
     { value: "paste", label: t("settings.shell.right_click_paste") },
@@ -139,11 +138,7 @@
   }
 
   async function saveCtrlRightClickMenu() {
-    try {
-      await app.setCtrlRightClickMenu(ctrlRightClickMenu);
-    } catch (e: any) {
-      toast.error(`${t("toast.error.save")}: ${errMsg(e)}`);
-    }
+    await app.setCtrlRightClickMenu(ctrlRightClickMenu);
   }
 
   async function saveSftpMaxConcurrent() {
@@ -154,57 +149,59 @@
 </script>
 
 <div class="page">
-  <div class="section-label" id="local-shell-label">{t("settings.shell.local_shell")}</div>
-  <div class="card surface-raised shell-card">
-    <div class="shell-hint">
-      {t("settings.shell.pick_hint")}
-    </div>
-    <div class="radio-group" role="radiogroup" aria-labelledby="local-shell-label">
-      {#each shells as sh, i}
-        {@const id = `shell-r-${i}`}
-        {@const basename = (sh.split("/").pop() || sh).toUpperCase()}
+  {#if !app.isMobile}
+    <div class="section-label" id="local-shell-label">{t("settings.shell.local_shell")}</div>
+    <div class="card surface-raised shell-card">
+      <div class="shell-hint">
+        {t("settings.shell.pick_hint")}
+      </div>
+      <div class="radio-group" role="radiogroup" aria-labelledby="local-shell-label">
+        {#each shells as sh, i}
+          {@const id = `shell-r-${i}`}
+          {@const basename = (sh.split("/").pop() || sh).toUpperCase()}
+          <div class="radio-wrapper">
+            <input type="radio" id={id} name="local-shell" class="radio-state"
+                   value={sh} checked={!customMode && (selectedShell === sh || (!selectedShell && shells[0] === sh))}
+                   onchange={() => pickShell(sh)} />
+            <label for={id} class="radio-label">
+              <span class="shell-radio-indicator" aria-hidden="true"></span>
+              <span class="info">
+                <span class="name">{basename}</span>
+                <span class="path">({sh})</span>
+              </span>
+            </label>
+          </div>
+        {/each}
         <div class="radio-wrapper">
-          <input type="radio" id={id} name="local-shell" class="radio-state"
-                 value={sh} checked={!customMode && (selectedShell === sh || (!selectedShell && shells[0] === sh))}
-                 onchange={() => pickShell(sh)} />
-          <label for={id} class="radio-label">
+          <input type="radio" id="shell-r-custom" name="local-shell" class="radio-state"
+                 checked={customMode}
+                 onchange={pickCustom} />
+          <label for="shell-r-custom" class="radio-label">
             <span class="shell-radio-indicator" aria-hidden="true"></span>
             <span class="info">
-              <span class="name">{basename}</span>
-              <span class="path">({sh})</span>
+              <span class="name">{t("settings.shell.custom")}</span>
+              <input class="custom-input" type="text"
+                     bind:value={customPath}
+                     placeholder={t("settings.shell.custom_placeholder")}
+                     onfocus={() => pickCustom()}
+                     onblur={onCustomBlur} />
             </span>
           </label>
         </div>
-      {/each}
-      <div class="radio-wrapper">
-        <input type="radio" id="shell-r-custom" name="local-shell" class="radio-state"
-               checked={customMode}
-               onchange={pickCustom} />
-        <label for="shell-r-custom" class="radio-label">
-          <span class="shell-radio-indicator" aria-hidden="true"></span>
-          <span class="info">
-            <span class="name">{t("settings.shell.custom")}</span>
-            <input class="custom-input" type="text"
-                   bind:value={customPath}
-                   placeholder={t("settings.shell.custom_placeholder")}
-                   onfocus={() => pickCustom()}
-                   onblur={onCustomBlur} />
-          </span>
+      </div>
+      <div class="card-divider"></div>
+      <div class="cmd-block-head">
+        <div class="cmd-block-head-body">
+          <div class="cmd-block-title" class:on={openLocalOnStartup} class:off={!openLocalOnStartup}>{t("settings.shell.open_local_on_startup")}</div>
+          <div class="cmd-block-desc">{t("settings.shell.open_local_on_startup_desc")}</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" bind:checked={openLocalOnStartup} onchange={saveOpenLocalOnStartup} />
+          <span class="slider"></span>
         </label>
       </div>
     </div>
-    <div class="card-divider"></div>
-    <div class="cmd-block-head">
-      <div class="cmd-block-head-body">
-        <div class="cmd-block-title" class:on={openLocalOnStartup} class:off={!openLocalOnStartup}>{t("settings.shell.open_local_on_startup")}</div>
-        <div class="cmd-block-desc">{t("settings.shell.open_local_on_startup_desc")}</div>
-      </div>
-      <label class="switch">
-        <input type="checkbox" bind:checked={openLocalOnStartup} onchange={saveOpenLocalOnStartup} />
-        <span class="slider"></span>
-      </label>
-    </div>
-  </div>
+  {/if}
 
   <div class="section-label">{t("settings.shell.connection_timeout")}</div>
   <div class="timeout-row">
@@ -242,18 +239,20 @@
   <!-- 终端交互：选中即复制（开关）+ 关闭标签页确认（开关）+ 右键动作（下拉）合在一张卡片，
        "行 + 分隔线 + 行"结构，跟命令块卡片同款，避免控件割裂。 -->
   <div class="card surface-raised mouse-card">
-    <div class="cmd-block-head">
-      <div class="cmd-block-head-body">
-        <div class="cmd-block-title" class:on={copyOnSelect} class:off={!copyOnSelect}>{t("settings.shell.copy_on_select")}</div>
-        <div class="cmd-block-desc">{t("settings.shell.copy_on_select_desc")}</div>
+    {#if !app.isMobile}
+      <div class="cmd-block-head">
+        <div class="cmd-block-head-body">
+          <div class="cmd-block-title" class:on={copyOnSelect} class:off={!copyOnSelect}>{t("settings.shell.copy_on_select")}</div>
+          <div class="cmd-block-desc">{t("settings.shell.copy_on_select_desc")}</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" bind:checked={copyOnSelect} onchange={saveCopyOnSelect} />
+          <span class="slider"></span>
+        </label>
       </div>
-      <label class="switch">
-        <input type="checkbox" bind:checked={copyOnSelect} onchange={saveCopyOnSelect} />
-        <span class="slider"></span>
-      </label>
-    </div>
 
-    <div class="card-divider"></div>
+      <div class="card-divider"></div>
+    {/if}
 
     <div class="cmd-block-head">
       <div class="cmd-block-head-body">
@@ -266,34 +265,19 @@
       </label>
     </div>
 
-    <div class="card-divider"></div>
-
-    <div class="cmd-block-head">
-      <div class="cmd-block-head-body">
-        <label for="rca-select" class="cmd-block-title">{t("settings.shell.right_click")}</label>
-        <div class="cmd-block-desc">{t("settings.shell.right_click_desc")}</div>
-      </div>
-      <div class="rca-select">
-        <Select id="rca-select" bind:value={rightClickAction}
-                options={rightClickOptions}
-                onchange={(v) => saveRightClickAction(v as app.RightClickAction)} />
-      </div>
-    </div>
-
-    {#if rightClickAction === "paste" || rightClickAction === "copyPaste"}
+    {#if !app.isMobile}
       <div class="card-divider"></div>
+
       <div class="cmd-block-head">
         <div class="cmd-block-head-body">
-          <div class="cmd-block-title"
-               class:on={ctrlRightClickMenu} class:off={!ctrlRightClickMenu}>
-            {t("settings.shell.ctrl_right_click_menu", { mod: modKey })}
-          </div>
-          <div class="cmd-block-desc">{t("settings.shell.ctrl_right_click_menu_desc", { mod: modKey })}</div>
+          <label for="rca-select" class="cmd-block-title">{t("settings.shell.right_click")}</label>
+          <div class="cmd-block-desc">{t("settings.shell.right_click_desc")}</div>
         </div>
-        <label class="switch">
-          <input type="checkbox" bind:checked={ctrlRightClickMenu} onchange={saveCtrlRightClickMenu} />
-          <span class="slider"></span>
-        </label>
+        <div class="rca-select">
+          <Select id="rca-select" bind:value={rightClickAction}
+                  options={rightClickOptions}
+                  onchange={(v) => saveRightClickAction(v as app.RightClickAction)} />
+        </div>
       </div>
     {/if}
   </div>
@@ -307,6 +291,19 @@
       <h3 id="rca-confirm-title" class="dialog-title">{t("settings.shell.right_click_confirm_title")}</h3>
       <div id="rca-confirm-body" class="dialog-body">{t("settings.shell.right_click_confirm_body", { action: actionLabel })}</div>
       <div class="dialog-hint">{t("settings.shell.right_click_confirm_hint")}</div>
+      <div class="cmd-block-head">
+        <div class="cmd-block-head-body">
+          <div class="cmd-block-title"
+               class:on={ctrlRightClickMenu} class:off={!ctrlRightClickMenu}>
+            {t("settings.shell.ctrl_right_click_menu", { mod: modKey })}
+          </div>
+          <div class="cmd-block-desc">{t("settings.shell.ctrl_right_click_menu_desc", { mod: modKey })}</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" bind:checked={ctrlRightClickMenu} onchange={saveCtrlRightClickMenu} />
+          <span class="slider"></span>
+        </label>
+      </div>
       <div class="modal-actions">
         <button class="btn btn-sm" onclick={cancelRightClick}>{t("common.cancel")}</button>
         <button class="btn btn-sm btn-primary" onclick={confirmRightClick}>{t("settings.shell.right_click_confirm_ok")}</button>
