@@ -10,6 +10,7 @@
 use std::sync::{Arc, OnceLock};
 
 use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{ArgValueCompleter, CompleteEnv};
 
 use rssh_lib::db::Db;
 
@@ -71,13 +72,22 @@ enum ProfileCmd {
     /// List profiles, optionally filtered by name or host
     List { query: Option<String> },
     /// Open an SSH profile
-    Open { name: String },
+    Open {
+        #[arg(add = ArgValueCompleter::new(commands::completions::complete_profiles))]
+        name: String,
+    },
     /// Add a profile interactively
     Add,
     /// Edit a profile interactively
-    Edit { name: String },
+    Edit {
+        #[arg(add = ArgValueCompleter::new(commands::completions::complete_profiles))]
+        name: String,
+    },
     /// Remove a profile
-    Rm { name: String },
+    Rm {
+        #[arg(add = ArgValueCompleter::new(commands::completions::complete_profiles))]
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -87,9 +97,15 @@ enum CredentialCmd {
     /// Add a credential interactively
     Add,
     /// Edit a credential interactively
-    Edit { name: String },
+    Edit {
+        #[arg(add = ArgValueCompleter::new(commands::completions::complete_credentials))]
+        name: String,
+    },
     /// Remove a credential
-    Rm { name: String },
+    Rm {
+        #[arg(add = ArgValueCompleter::new(commands::completions::complete_credentials))]
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -97,13 +113,22 @@ enum ForwardCmd {
     /// List port forwards
     List,
     /// Open a port forward
-    Open { name: String },
+    Open {
+        #[arg(add = ArgValueCompleter::new(commands::completions::complete_forwards))]
+        name: String,
+    },
     /// Add a port forward interactively
     Add,
     /// Edit a port forward interactively
-    Edit { name: String },
+    Edit {
+        #[arg(add = ArgValueCompleter::new(commands::completions::complete_forwards))]
+        name: String,
+    },
     /// Remove a port forward
-    Rm { name: String },
+    Rm {
+        #[arg(add = ArgValueCompleter::new(commands::completions::complete_forwards))]
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -113,9 +138,15 @@ enum GroupCmd {
     /// Add a group interactively
     Add,
     /// Edit a group interactively
-    Edit { name: String },
+    Edit {
+        #[arg(add = ArgValueCompleter::new(commands::completions::complete_groups))]
+        name: String,
+    },
     /// Remove a group
-    Rm { name: String },
+    Rm {
+        #[arg(add = ArgValueCompleter::new(commands::completions::complete_groups))]
+        name: String,
+    },
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -191,6 +222,12 @@ fn format_lib_error(e: &rssh_lib::error::AppError) -> String {
 }
 
 fn main() {
+    CompleteEnv::with_factory(Cli::command)
+        .var("_RSSH_COMPLETE")
+        .bin("rssh")
+        .completer("rssh")
+        .complete();
+
     let cli = Cli::parse();
 
     // No subcommand → try launching GUI on Linux.
@@ -199,10 +236,10 @@ fn main() {
         return;
     }
 
-    // Completion generation is derived entirely from Clap metadata. Keep it
-    // independent from HOME, the database, and secret-store initialization.
+    // Script generation is independent from HOME, the database, and secret storage.
+    // The installed script calls back into the runtime completers on each Tab.
     if let Some(Cmd::Completions { shell }) = cli.command.as_ref() {
-        commands::completions::print_completions(shell, Cli::command());
+        commands::completions::print_completions(shell);
         return;
     }
 

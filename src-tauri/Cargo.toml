@@ -72,7 +72,7 @@ futures-util = "0.3"
 
 # CLI（optional，靠 --features cli 启用）
 clap = { version = "4", features = ["derive"], optional = true }
-clap_complete = { version = "4", optional = true }
+clap_complete = { version = "4", features = ["unstable-dynamic"], optional = true }
 rpassword = { version = "7", optional = true }
 tempfile = { version = "3", optional = true }
 tree-sitter = "0.26.9"
