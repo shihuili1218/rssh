@@ -70,12 +70,16 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .on_window_event(|window, event| {
             match event {
+                // Mobile (Android/iOS): Activity lifecycle changes can fire
+                // WindowEvent::Destroyed when the app merely goes to background
+                // (e.g. a fullscreen file picker opens). Closing sessions there
+                // would silently disconnect every SSH tab. Desktop only.
+                #[cfg(desktop)]
                 tauri::WindowEvent::Destroyed => {
                     let state = window.state::<AppState>();
                     // Close only sessions belonging to this window.
                     commands::lifecycle::close_window_sessions(&state, window.label());
                     // Drop it from any move-together group (survivors stay bound).
-                    #[cfg(desktop)]
                     state
                         .window_groups
                         .lock()
