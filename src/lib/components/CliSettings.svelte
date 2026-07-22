@@ -2,16 +2,14 @@
     import {onMount} from "svelte";
     import {invoke} from "@tauri-apps/api/core";
     import { t, errMsg } from "../i18n/index.svelte.ts";
+    import * as cli from "../stores/cli.svelte.ts";
 
-    let status = $state<{ installed: boolean; path: string; bundled: boolean } | null>(null);
     let installing = $state(false);
     let msg = $state("");
+    let state = $derived(cli.state());
+    let status = $derived(cli.status());
 
-    onMount(refresh);
-
-    async function refresh() {
-        status = await invoke("cli_status");
-    }
+    onMount(() => { void cli.runCheck(); });
 
     async function install() {
         installing = true;
@@ -19,7 +17,7 @@
         try {
             const path = await invoke<string>("cli_install");
             msg = t("settings.cli.installed_to", { path });
-            await refresh();
+            await cli.runCheck();
         } catch (e: any) {
             msg = errMsg(e);
         } finally {
@@ -32,11 +30,19 @@
     <h3>{t("settings.section.cli")}</h3>
 
     <div class="status-card">
-        {#if status === null}
+        {#if state.kind === "unknown" || state.kind === "checking"}
             <p>{t("common.loading")}</p>
-        {:else if status.installed}
-            <div class="badge installed">{t("settings.cli.installed")}</div>
+        {:else if state.kind === "error"}
+            <p class="msg error">{t("settings.cli.status_error")}</p>
+        {:else if status?.installed}
+            <div class="badge" class:installed={!status.needs_update} class:outdated={status.needs_update}>
+                {status.needs_update ? t("settings.cli.outdated") : t("settings.cli.installed")}
+            </div>
             <p class="path">{status.path}</p>
+            <p class="version">{t("settings.cli.version", {
+                installed: status.installed_version ?? t("settings.cli.version_unknown"),
+                expected: status.expected_version,
+            })}</p>
             <button class="btn btn-sm" onclick={install} disabled={installing || !status.bundled}>
                 {installing ? t("settings.cli.reinstalling") : t("settings.cli.reinstall")}
             </button>
@@ -67,6 +73,7 @@ rssh completions powershell  # paste into $PROFILE</pre>
     <h3>{t("settings.cli.commands")}</h3>
     <table class="cmd-table">
         <tbody>
+        <tr><td class="cmd">rssh version</td><td>{t("settings.cli.cmd.version")}</td></tr>
         <tr><td class="cmd">rssh</td><td>{t("settings.cli.cmd.list")}</td></tr>
         <tr><td class="cmd">rssh profile list [query]</td><td>{t("settings.cli.cmd.ls_query")}</td></tr>
         <tr><td class="cmd">rssh credential list</td><td>{t("settings.cli.cmd.ls_cred")}</td></tr>
@@ -133,10 +140,13 @@ rssh completions powershell  # paste into $PROFILE</pre>
         width: fit-content;
     }
     .badge.installed { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
+    .badge.outdated { background: color-mix(in srgb, var(--error) 15%, transparent); color: var(--error); }
     .badge.not-installed { background: color-mix(in srgb, var(--error) 15%, transparent); color: var(--error); }
     .path { font-family: monospace; font-size: 12px; color: var(--text-sub); }
+    .version { font-family: monospace; font-size: 12px; color: var(--text-dim); }
     .hint { font-size: 13px; color: var(--text-sub); }
     .msg { font-size: 12px; color: var(--accent); }
+    .msg.error { color: var(--error); }
     .code-block {
         font-family: monospace;
         font-size: 12px;

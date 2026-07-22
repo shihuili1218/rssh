@@ -6,6 +6,7 @@
   import { loadProfiles, loadForwards } from "./lib/stores/app.svelte.ts";
   import * as updates from "./lib/stores/updates.svelte.ts";
   import * as sync from "./lib/stores/sync.svelte.ts";
+  import * as cli from "./lib/stores/cli.svelte.ts";
   import * as ai from "./lib/ai/store.svelte.ts";
 
   // First-launch auto-show: when there are no profiles and no forwards,
@@ -44,6 +45,7 @@
     if (!window.__rssh_clone && !window.__rssh_ai_handoff) {
       updates.startBackgroundChecks();
       sync.startBackgroundChecks();
+      cli.startBackgroundChecks();
     }
 
     // localStorage / Tauri may not be available in non-app hosts

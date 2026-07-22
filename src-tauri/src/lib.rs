@@ -1,5 +1,6 @@
 mod ai;
 mod commands;
+pub use commands::cli::CLI_VERSION;
 pub mod crypto;
 pub mod db;
 pub mod emitter;

@@ -3,6 +3,7 @@
   import * as app from "../stores/app.svelte.ts";
   import * as updates from "../stores/updates.svelte.ts";
   import * as syncStatus from "../stores/sync.svelte.ts";
+  import * as cliStatus from "../stores/cli.svelte.ts";
   import { t, locale, setLocale, AVAILABLE_LOCALES, type Locale } from "../i18n/index.svelte.ts";
   import type { MessageKey } from "../i18n/locales/en";
   import CredentialManager from "./CredentialManager.svelte";
@@ -116,6 +117,12 @@
     if (id === "import-export" && p === "import-ssh-config") return true;
     return false;
   }
+
+  function hasMenuDot(id: app.SettingsPage): boolean {
+    return (id === "about" && updates.hasUpdate())
+      || (id === "sync" && syncStatus.anyVersionDifference())
+      || (id === "cli" && cliStatus.needsAttention());
+  }
 </script>
 
 <div class="settings-layout" class:compact>
@@ -132,7 +139,7 @@
           onclick={() => app.settingsNavigate(item.id)}
         >
           {item.label}
-          {#if (item.id === "about" && updates.hasUpdate()) || (item.id === "sync" && syncStatus.anyVersionDifference())}
+          {#if hasMenuDot(item.id)}
             <span class="menu-dot" aria-hidden="true"></span>
           {/if}
         </button>

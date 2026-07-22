@@ -6,11 +6,16 @@ use tauri::{AppHandle, Manager};
 
 use crate::error::{AppError, AppResult};
 
+pub const CLI_VERSION: &str = "1.0.0";
+
 #[derive(Serialize)]
 pub struct CliStatus {
     pub installed: bool,
     pub path: String,
     pub bundled: bool,
+    pub installed_version: Option<String>,
+    pub expected_version: &'static str,
+    pub needs_update: bool,
 }
 
 fn install_dir() -> PathBuf {
@@ -89,17 +94,58 @@ fn find_bundled(app: &AppHandle) -> Option<PathBuf> {
     None
 }
 
-#[tauri::command]
-pub fn cli_status(app: AppHandle) -> CliStatus {
-    let installed = find_installed();
-    let bundled = find_bundled(&app).is_some();
+fn installed_version(path: &PathBuf) -> Option<String> {
+    let output = Command::new(path).arg("version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let version = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    parse_version(&version).map(|_| version)
+}
+
+fn parse_version(version: &str) -> Option<Vec<u64>> {
+    let version = version.strip_prefix('v').unwrap_or(version);
+    if version.is_empty() {
+        return None;
+    }
+    version.split('.').map(|part| part.parse().ok()).collect()
+}
+
+fn version_is_older(installed: &str, expected: &str) -> bool {
+    let Some(mut installed) = parse_version(installed) else {
+        return true;
+    };
+    let Some(mut expected) = parse_version(expected) else {
+        return false;
+    };
+    let length = installed.len().max(expected.len());
+    installed.resize(length, 0);
+    expected.resize(length, 0);
+    installed < expected
+}
+
+fn build_status(installed: Option<PathBuf>, bundled: bool) -> CliStatus {
+    let installed_version = installed.as_ref().and_then(installed_version);
+    let needs_update = installed_version
+        .as_deref()
+        .map(|version| version_is_older(version, CLI_VERSION))
+        .unwrap_or(true);
+
     CliStatus {
         installed: installed.is_some(),
         path: installed
-            .map(|p| p.display().to_string())
+            .map(|path| path.display().to_string())
             .unwrap_or_default(),
         bundled,
+        installed_version,
+        expected_version: CLI_VERSION,
+        needs_update,
     }
+}
+
+#[tauri::command]
+pub fn cli_status(app: AppHandle) -> CliStatus {
+    build_status(find_installed(), find_bundled(&app).is_some())
 }
 
 /// Headless CLI status: PATH-based install check only. The bundled-resource
@@ -107,13 +153,25 @@ pub fn cli_status(app: AppHandle) -> CliStatus {
 /// the embedded server prepends its own dir to the shell PATH instead, so it
 /// reports `bundled: false` and leaves install to the host (IDEA plugin / app).
 pub fn cli_status_headless() -> CliStatus {
-    let installed = find_installed();
-    CliStatus {
-        installed: installed.is_some(),
-        path: installed
-            .map(|p| p.display().to_string())
-            .unwrap_or_default(),
-        bundled: false,
+    build_status(find_installed(), false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_comparison_handles_old_equal_and_newer_cli() {
+        assert!(version_is_older("0.9.9", CLI_VERSION));
+        assert!(!version_is_older(CLI_VERSION, CLI_VERSION));
+        assert!(!version_is_older("1.1.0", CLI_VERSION));
+        assert!(!version_is_older("1.0", CLI_VERSION));
+    }
+
+    #[test]
+    fn malformed_version_is_outdated() {
+        assert!(version_is_older("rssh 1.0.0", CLI_VERSION));
+        assert!(version_is_older("", CLI_VERSION));
     }
 }
 

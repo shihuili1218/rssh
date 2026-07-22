@@ -26,7 +26,11 @@ use ctx::CliCtx;
 // ═══════════════════════════════════════════════════════════════════
 
 #[derive(Parser)]
-#[command(name = "rssh", version, about = "RSSH — SSH connection manager")]
+#[command(
+    name = "rssh",
+    version = rssh_lib::CLI_VERSION,
+    about = "RSSH — SSH connection manager"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Cmd>,
@@ -34,6 +38,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Print the CLI version
+    Version,
     /// Manage SSH profiles
     Profile {
         #[command(subcommand)]
@@ -242,6 +248,10 @@ fn main() {
         commands::completions::print_completions(shell);
         return;
     }
+    if matches!(cli.command, Some(Cmd::Version)) {
+        println!("{}", rssh_lib::CLI_VERSION);
+        return;
+    }
 
     let data_dir = rssh_lib::db::data_dir().unwrap_or_else(|e| {
         eprintln!("error: {}", format_lib_error(&e));
@@ -259,6 +269,7 @@ fn main() {
 
     let result = match cli.command {
         None => commands::ls::cmd_list_profiles(&conn, None),
+        Some(Cmd::Version) => unreachable!("handled before database initialization"),
         Some(Cmd::Profile { action }) => match action {
             ProfileCmd::List { query } => commands::ls::cmd_list_profiles(&conn, query.as_deref()),
             ProfileCmd::Open { name } => commands::open::cmd_open_profile(&conn, &name),

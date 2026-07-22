@@ -107,6 +107,19 @@ fn legacy_top_level_commands_are_rejected_by_clap() {
 }
 
 #[test]
+fn version_reports_the_independent_cli_version() {
+    let home_file = tempfile::NamedTempFile::new().expect("temporary HOME file");
+    let output = Command::new(env!("CARGO_BIN_EXE_rssh-cli"))
+        .arg("version")
+        .env("HOME", home_file.path())
+        .output()
+        .expect("run rssh CLI");
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "1.0.0\n");
+}
+
+#[test]
 fn bash_completions_follow_the_typed_command_tree() {
     assert_dynamic_completion_registration("bash");
 }
