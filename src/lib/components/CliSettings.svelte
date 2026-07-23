@@ -9,7 +9,7 @@
 
     const completionCommands = [
         "rssh completions zsh > ~/.zsh/completions/_rssh",
-        "mkdir -p ~/.local/share/bash-completion/completions && rssh completions bash > ~/.local/share/bash-completion/completions/rssh",
+        "mkdir -p ~/.local/share/bash-completion/completions && rssh completions bash > ~/.local/share/bash-completion/completions/rssh && { grep -qxF 'source ~/.local/share/bash-completion/completions/rssh' ~/.bashrc 2>/dev/null || printf '\\nsource ~/.local/share/bash-completion/completions/rssh\\n' >> ~/.bashrc; }",
         "rssh completions fish > ~/.config/fish/completions/rssh.fish",
         "rssh completions powershell  # paste into $PROFILE",
     ];
