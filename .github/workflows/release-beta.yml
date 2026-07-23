@@ -1,4 +1,4 @@
-name: Share-Next
+name: Release Beta
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ on:
         default: ''
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   # ── Tests (gate for all build jobs) ──────────────────────────────
@@ -150,17 +150,97 @@ jobs:
           APPIMAGE="$(ls "${BUNDLE}"/appimage/*.AppImage 2>/dev/null | head -1 || true)"
           [ -n "$APPIMAGE" ] && bash .github/scripts/fix-appimage-icon.sh "$APPIMAGE" || echo "No AppImage; skipping."
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      # Rename to the same `rssh-<version>-<os>-<arch>.<ext>` convention as
+      # release.yml so users get identical filenames whether they grab a
+      # pre-release or a final release.
+      - name: Rename artifacts
+        shell: bash
+        run: |
+          VERSION="${{ steps.ver.outputs.v }}"
+          PREFIX="rssh-${VERSION}-${{ matrix.name }}"
+          BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle"
+          mkdir -p dist
+          for f in "${BUNDLE}"/dmg/*.dmg;             do [ -f "$f" ] && cp "$f" "dist/${PREFIX}.dmg";       done
+          for f in "${BUNDLE}"/deb/*.deb;             do [ -f "$f" ] && cp "$f" "dist/${PREFIX}.deb";       done
+          for f in "${BUNDLE}"/rpm/*.rpm;             do [ -f "$f" ] && cp "$f" "dist/${PREFIX}.rpm";       done
+          for f in "${BUNDLE}"/appimage/*.AppImage;   do [ -f "$f" ] && cp "$f" "dist/${PREFIX}.AppImage";  done
+          for f in "${BUNDLE}"/msi/*.msi;             do [ -f "$f" ] && cp "$f" "dist/${PREFIX}.msi";       done
+          for f in "${BUNDLE}"/nsis/*-setup.exe;      do [ -f "$f" ] && cp "$f" "dist/${PREFIX}-setup.exe"; done
+          ls -lh dist/
+
+      # 解压即可用版：跟 release.yml 同一步，pre-release 也产出免安装 zip。
+      # 唯一差异是版本号来源（steps.ver.outputs.v，而非 release 的 tag）。
+      # 文件名用 matrix.name（windows-x86_64）跟上面 Rename 一致，产出
+      # rssh-<ver>-windows-x86_64-portable.zip，与正式 release 完全同名。
+      - name: Build Windows portable zip
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          VERSION="${{ steps.ver.outputs.v }}"
+          PORTABLE="rssh-${VERSION}-${{ matrix.name }}-portable"
+          REL="src-tauri/target/${{ matrix.target }}/release"
+          mkdir -p "${PORTABLE}"
+          cp "${REL}/rssh.exe" "${PORTABLE}/"
+          cp "${REL}/rssh-cli.exe" "${PORTABLE}/"
+          cat > "${PORTABLE}/README.txt" <<'EOF'
+          RSSH portable for Windows x86_64
+          --------------------------------
+          Just unzip and run rssh.exe — no installation needed.
+          rssh-cli.exe is the CLI binary; add this folder to PATH if you want
+          to use `rssh` from any terminal.
+
+          WebView2 Runtime requirement:
+            - Windows 11 / Windows 10 1803+ : built-in, ready to go.
+            - Older / stripped Windows      : install WebView2 Runtime first:
+              https://developer.microsoft.com/microsoft-edge/webview2/
+
+          User data is stored under %USERPROFILE%\.rssh (same as installed
+          builds — portable here means "no installer", not "fully isolated").
+          EOF
+          7z a "dist/${PORTABLE}.zip" "${PORTABLE}/"
+          ls -lh dist/
+
+      # ── JetBrains plugin (per-OS: bundles THIS target's rssh-server) ──
+      # The plugin embeds a native rssh-server, so one zip is platform-specific;
+      # each matrix leg produces rssh-<ver>-<os-arch>-jetbrains-plugin.zip.
+      # CI has no local IDE, so build.gradle downloads the 2024.2 SDK (the
+      # sinceBuild floor, JBR 21) via -PrsshIdeVersion.
+      - name: Set up JDK 21 (JetBrains plugin)
+        uses: actions/setup-java@v4
         with:
-          name: rssh-${{ steps.ver.outputs.v }}-${{ matrix.name }}
-          path: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
-            src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
-            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
-            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
-            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*-setup.exe
+          distribution: temurin
+          java-version: 21
+
+      - name: Build rssh-server (for plugin)
+        working-directory: src-tauri
+        run: cargo build --release --features server --bin rssh-server --target ${{ matrix.target }}
+
+      - name: Build JetBrains plugin
+        shell: bash
+        run: |
+          VERSION="${{ steps.ver.outputs.v }}"
+          BIN="rssh-server"
+          [[ "${{ matrix.target }}" == *windows* ]] && BIN="rssh-server.exe"
+          SRV="$(pwd)/src-tauri/target/${{ matrix.target }}/release/${BIN}"
+          chmod +x idea-plugin/gradlew || true
+          (cd idea-plugin && ./gradlew --no-daemon clean buildPlugin \
+            -PrsshIdeVersion=2024.2 \
+            -PrsshServerBin="${SRV}" \
+            -PpluginVersion="${VERSION}")
+          mkdir -p dist
+          cp idea-plugin/build/distributions/*.zip \
+            "dist/rssh-${VERSION}-${{ matrix.name }}-jetbrains-plugin.zip"
+          ls -lh dist/
+
+      - name: Upload to pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          tag_name: v${{ steps.ver.outputs.v }}
+          name: "RSSH v${{ steps.ver.outputs.v }} Beta"
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-android:
     needs: test
@@ -238,8 +318,21 @@ jobs:
       - name: Build Android APK
         run: npx tauri android build --apk
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - name: Rename APK
+        shell: bash
+        run: |
+          VERSION="${{ steps.ver.outputs.v }}"
+          mkdir -p dist
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -type f | head -1)
+          cp "$APK" "dist/rssh-${VERSION}-android-universal.apk"
+          ls -lh dist/
+
+      - name: Upload to pre-release
+        uses: softprops/action-gh-release@v2
         with:
-          name: rssh-${{ steps.ver.outputs.v }}-android
-          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          prerelease: true
+          tag_name: v${{ steps.ver.outputs.v }}
+          name: "RSSH v${{ steps.ver.outputs.v }} Beta"
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

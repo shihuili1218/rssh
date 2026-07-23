@@ -7,6 +7,10 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
 // The store transitively imports the AI store, which reads localStorage at
 // module load (loadPos). Node has no localStorage, so give the import an
 // in-memory stub. Fresh per test to avoid cross-test leakage.
+//
+// app.svelte.ts also reads navigator.userAgent at module load (isMobile).
+// Node < 21 has no navigator global, so stub a desktop UA — the MRU tests
+// don't exercise mobile behavior, any string is fine.
 beforeEach(() => {
   const store = new Map<string, string>();
   vi.stubGlobal("localStorage", {
@@ -15,6 +19,7 @@ beforeEach(() => {
     removeItem: (k: string) => void store.delete(k),
     clear: () => store.clear(),
   });
+  vi.stubGlobal("navigator", { userAgent: "node" });
 });
 
 afterEach(() => {

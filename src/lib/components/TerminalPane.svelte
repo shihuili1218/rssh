@@ -824,6 +824,14 @@
      *  suppress the menu. */
     function onTerminalContextMenu(e: MouseEvent) {
         if (app.isMobile) return; // mobile keeps the native long-press menu
+        // Cmd on macOS, Ctrl elsewhere + right-click falls back to the native menu
+        // even in paste/copyPaste modes — an opt-in escape hatch toggled in Shell
+        // settings. Returns without preventDefault/stopPropagation so xterm's own
+        // listener and the OS-native menu both run, identical to the "menu" path.
+        const menuModifier = keymap.isMac ? e.metaKey : e.ctrlKey;
+        if (menuModifier && app.ctrlRightClickMenu() && app.rightClickAction() !== "menu") {
+            return;
+        }
         const action = app.rightClickAction();
         if (action === "menu") return; // let xterm + the native system menu through
         e.preventDefault();

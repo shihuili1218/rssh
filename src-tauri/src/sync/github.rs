@@ -2,7 +2,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::error::{AppError, AppResult};
+use crate::error::{error_chain, AppError, AppResult};
 use crate::sync::metadata::SyncMetadata;
 use crate::sync::remote::RemoteBackup;
 
@@ -66,7 +66,9 @@ impl GitHubSync {
             .headers(self.headers()?)
             .send()
             .await
-            .map_err(|e| AppError::other("github_push_failed", json!({ "err": e.to_string() })))?;
+            .map_err(|e| {
+                AppError::other("github_push_failed", json!({ "err": error_chain(&e) }))
+            })?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -80,10 +82,9 @@ impl GitHubSync {
             };
             return Err(AppError::other("github_api_error", json!({ "msg": msg })));
         }
-        let file = response
-            .json::<FileResponse>()
-            .await
-            .map_err(|e| AppError::other("github_parse_failed", json!({ "err": e.to_string() })))?;
+        let file = response.json::<FileResponse>().await.map_err(|e| {
+            AppError::other("github_parse_failed", json!({ "err": error_chain(&e) }))
+        })?;
         file.sha.map(Some).ok_or_else(|| {
             AppError::other(
                 "github_parse_failed",
@@ -112,7 +113,9 @@ impl GitHubSync {
             .json(&body)
             .send()
             .await
-            .map_err(|e| AppError::other("github_push_failed", json!({ "err": e.to_string() })))?;
+            .map_err(|e| {
+                AppError::other("github_push_failed", json!({ "err": error_chain(&e) }))
+            })?;
 
         if !resp.status().is_success() {
             let msg = resp.text().await.unwrap_or_default();
@@ -137,17 +140,18 @@ impl GitHubSync {
             .headers(self.headers()?)
             .send()
             .await
-            .map_err(|e| AppError::other("github_pull_failed", json!({ "err": e.to_string() })))?;
+            .map_err(|e| {
+                AppError::other("github_pull_failed", json!({ "err": error_chain(&e) }))
+            })?;
 
         if !resp.status().is_success() {
             let msg = resp.text().await.unwrap_or_default();
             return Err(AppError::other("github_api_error", json!({ "msg": msg })));
         }
 
-        let file: FileResponse = resp
-            .json()
-            .await
-            .map_err(|e| AppError::other("github_parse_failed", json!({ "err": e.to_string() })))?;
+        let file: FileResponse = resp.json().await.map_err(|e| {
+            AppError::other("github_parse_failed", json!({ "err": error_chain(&e) }))
+        })?;
 
         let raw = file
             .content
@@ -181,7 +185,9 @@ impl GitHubSync {
             .headers(self.headers()?)
             .send()
             .await
-            .map_err(|e| AppError::other("github_pull_failed", json!({ "err": e.to_string() })))?;
+            .map_err(|e| {
+                AppError::other("github_pull_failed", json!({ "err": error_chain(&e) }))
+            })?;
 
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
@@ -191,10 +197,9 @@ impl GitHubSync {
             return Err(AppError::other("github_api_error", json!({ "msg": msg })));
         }
 
-        let file: FileResponse = resp
-            .json()
-            .await
-            .map_err(|e| AppError::other("github_parse_failed", json!({ "err": e.to_string() })))?;
+        let file: FileResponse = resp.json().await.map_err(|e| {
+            AppError::other("github_parse_failed", json!({ "err": error_chain(&e) }))
+        })?;
         let raw = file
             .content
             .ok_or_else(|| AppError::other("github_empty_content", json!({})))?
@@ -364,14 +369,9 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let unavailable = format!("http://{}", listener.local_addr().unwrap());
         drop(listener);
-        let sync = GitHubSync::with_client(
-            "token",
-            "acme/config",
-            "main",
-            &unavailable,
-            reqwest::Client::new(),
-        )
-        .unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let sync =
+            GitHubSync::with_client("token", "acme/config", "main", &unavailable, client).unwrap();
 
         let err = sync.pull_metadata().await.unwrap_err();
         assert_eq!(err.code(), "github_pull_failed");

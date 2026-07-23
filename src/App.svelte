@@ -6,6 +6,7 @@
   import { isIOS, loadProfiles, loadForwards } from "./lib/stores/app.svelte.ts";
   import * as updates from "./lib/stores/updates.svelte.ts";
   import * as sync from "./lib/stores/sync.svelte.ts";
+  import * as cli from "./lib/stores/cli.svelte.ts";
   import * as ai from "./lib/ai/store.svelte.ts";
 
   // First-launch auto-show: when there are no profiles and no forwards,
@@ -46,6 +47,7 @@
       // GitHub desktop/Android artifact.
       if (!isIOS) updates.startBackgroundChecks();
       sync.startBackgroundChecks();
+      cli.startBackgroundChecks();
     }
 
     // localStorage / Tauri may not be available in non-app hosts

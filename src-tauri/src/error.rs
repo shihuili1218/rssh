@@ -140,13 +140,65 @@ impl Serialize for AppError {
 
 pub type AppResult<T> = Result<T, AppError>;
 
+/// Format an error together with every underlying cause. `Display` commonly
+/// omits `source()` details, which hides actionable DNS, proxy, and TLS errors.
+pub fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::error::Error;
+    use std::fmt;
 
     /// 前端 `errMsg()` 硬编码识别这个前缀，改了字面值即破整套 i18n 翻译。
     const PROTO_PREFIX: &str = "__rssh_err__|";
+
+    #[derive(Debug)]
+    struct ChainedError {
+        message: &'static str,
+        source: Option<Box<ChainedError>>,
+    }
+
+    impl fmt::Display for ChainedError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.message)
+        }
+    }
+
+    impl Error for ChainedError {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            self.source.as_deref().map(|e| e as _)
+        }
+    }
+
+    #[test]
+    fn error_chain_includes_every_source() {
+        let error = ChainedError {
+            message: "error sending request for url (https://api.deepseek.com)",
+            source: Some(Box::new(ChainedError {
+                message: "client error (Connect)",
+                source: Some(Box::new(ChainedError {
+                    message: "certificate verify failed",
+                    source: None,
+                })),
+            })),
+        };
+
+        assert_eq!(
+            error_chain(&error),
+            "error sending request for url (https://api.deepseek.com): client error (Connect): certificate verify failed"
+        );
+    }
 
     // ── 字节级 wire format 钉死 ────────────────────────────────────
     //

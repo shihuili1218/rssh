@@ -8,12 +8,11 @@
 - home搜索框，改成快速连接 ？
 - 导入阿里云、aws账号资源
 - AI 上下文管理，压缩、历史记忆(rag?)
-- 外观字体只能控制终端，最好要控制全局字体（AI）❌
 - AI 导入～/CLAUDE.md
-- 统一图标：自绘 SVG 替换 emoji（MobileKeybar 的 ⚡/📁、SftpBrowser 的 📁🔗📄），落实 AGENT.md「图标自己画，别用emoji」
 - 接入cloudflare https://linux.do/t/topic/2487408/74
 - https://linux.do/t/topic/2487408/70
 - cat profile.html ls折叠/展开，会出现很多clear不掉的行，调整size后clear会清理 ???
+- 移动端增加键盘
 
 ![Stars](https://img.shields.io/github/stars/shihuili1218/rssh)
 ![Forks](https://img.shields.io/github/forks/shihuili1218/rssh)

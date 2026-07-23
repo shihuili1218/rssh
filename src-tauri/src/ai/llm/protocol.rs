@@ -15,7 +15,7 @@ use serde_json::json;
 use super::{
     ChatDelta, ChatMessage, ChatRequest, ChatResponse, DeltaSink, ModelInfo, SseParser, ToolCall,
 };
-use crate::error::{AppError, AppResult};
+use crate::error::{error_chain, AppError, AppResult};
 
 /// 把用户配置的 endpoint 归一化成"chat completions URL"。
 /// 接受两种输入：
@@ -197,7 +197,7 @@ pub async fn chat(
         .json(&body)
         .send()
         .await
-        .map_err(|e| AppError::other("llm_request_failed", json!({ "err": e.to_string() })))?;
+        .map_err(|e| AppError::other("llm_request_failed", json!({ "err": error_chain(&e) })))?;
 
     let status = resp.status();
     if !status.is_success() {
@@ -219,7 +219,7 @@ pub async fn chat(
     let mut stream = resp.bytes_stream();
     'stream: while let Some(chunk) = stream.next().await {
         let bytes = chunk.map_err(|e| {
-            AppError::other("llm_stream_read_failed", json!({ "err": e.to_string() }))
+            AppError::other("llm_stream_read_failed", json!({ "err": error_chain(&e) }))
         })?;
         for ev_data in parser.feed(&bytes) {
             if ev_data.trim() == "[DONE]" {
@@ -323,7 +323,7 @@ pub async fn list_models(
         .header("accept", "application/json")
         .send()
         .await
-        .map_err(|e| AppError::other("llm_request_failed", json!({ "err": e.to_string() })))?;
+        .map_err(|e| AppError::other("llm_request_failed", json!({ "err": error_chain(&e) })))?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -335,7 +335,7 @@ pub async fn list_models(
     let v: serde_json::Value = resp
         .json()
         .await
-        .map_err(|e| AppError::other("llm_decode_failed", json!({ "err": e.to_string() })))?;
+        .map_err(|e| AppError::other("llm_decode_failed", json!({ "err": error_chain(&e) })))?;
     let data = v["data"].as_array().cloned().unwrap_or_default();
     let mut models: Vec<ModelInfo> = data
         .into_iter()
