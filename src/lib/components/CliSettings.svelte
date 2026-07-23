@@ -3,8 +3,15 @@
     import {invoke} from "@tauri-apps/api/core";
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import * as cli from "../stores/cli.svelte.ts";
+    import { writeClipboard } from "../stores/app.svelte.ts";
+
+    const completionCommands = `rssh completions zsh > ~/.zsh/completions/_rssh
+rssh completions bash >> ~/.bashrc
+rssh completions fish > ~/.config/fish/completions/rssh.fish
+rssh completions powershell  # paste into $PROFILE`;
 
     let installing = $state(false);
+    let completionsCopied = $state(false);
     let msg = $state("");
     let state = $derived(cli.state());
     let status = $derived(cli.status());
@@ -23,6 +30,12 @@
         } finally {
             installing = false;
         }
+    }
+
+    async function copyCompletions() {
+        await writeClipboard(completionCommands);
+        completionsCopied = true;
+        setTimeout(() => { completionsCopied = false; }, 1500);
     }
 </script>
 
@@ -63,12 +76,14 @@
         {/if}
     </div>
 
-    <h3>{t("settings.cli.completions")}</h3>
+    <div class="section-heading">
+        <h3>{t("settings.cli.completions")}</h3>
+        <button type="button" class="btn btn-sm" onclick={copyCompletions}>
+            {completionsCopied ? t("about.copied") : t("common.copy")}
+        </button>
+    </div>
     <p class="hint">{t("settings.cli.completions_hint")}</p>
-    <pre class="code-block">rssh completions zsh &gt; ~/.zsh/completions/_rssh
-rssh completions bash &gt;&gt; ~/.bashrc
-rssh completions fish &gt; ~/.config/fish/completions/rssh.fish
-rssh completions powershell  # paste into $PROFILE</pre>
+    <pre class="code-block">{completionCommands}</pre>
 
     <h3>{t("settings.cli.commands")}</h3>
     <table class="cmd-table">
@@ -122,6 +137,12 @@ rssh completions powershell  # paste into $PROFILE</pre>
         font-weight: 700;
         color: var(--text);
         margin: 0;
+    }
+    .section-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
     }
     .status-card {
         display: flex;
