@@ -21,6 +21,11 @@ describe("remoteUploadName", () => {
     expect(remoteUploadName("C:\\Users\\me\\key.pem")).toBe("key.pem");
   });
 
+  it("recovers a decoded basename from an iOS security-scoped file URL", () => {
+    expect(remoteUploadName("file:///private/var/mobile/Containers/Shared/AppGroup/report%20x.pdf"))
+      .toBe("report x.pdf");
+  });
+
   it("returns empty when nothing usable remains (caller adds a fallback)", () => {
     expect(remoteUploadName("")).toBe("");
     expect(remoteUploadName("/")).toBe("");

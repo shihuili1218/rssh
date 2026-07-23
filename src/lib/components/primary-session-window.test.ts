@@ -59,6 +59,23 @@ describe("initializePrimarySessionWindow", () => {
     expect(events).toEqual(["reconcile", "release", "load auto-open"]);
   });
 
+  it("does not read or apply the desktop local-terminal setting on mobile", async () => {
+    const events: string[] = [];
+
+    await initializePrimarySessionWindow({
+      canOpenLocal: false,
+      reconcile: async () => events.push("reconcile"),
+      allowResourcePanes: () => events.push("release"),
+      loadAutoOpenLocal: async () => {
+        events.push("load auto-open");
+        return true;
+      },
+      openLocal: () => events.push("open local"),
+    });
+
+    expect(events).toEqual(["reconcile", "release"]);
+  });
+
   it("does nothing after its owner is cancelled", async () => {
     const reconcile = deferred<void>();
     const controller = new AbortController();

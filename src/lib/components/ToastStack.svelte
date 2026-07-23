@@ -13,8 +13,8 @@
 <style>
     .toast-stack {
         position: fixed;
-        top: 16px;
-        right: 16px;
+        top: calc(16px + env(safe-area-inset-top, 0px));
+        right: calc(16px + env(safe-area-inset-right, 0px));
         z-index: 1000;
         display: flex;
         flex-direction: column;

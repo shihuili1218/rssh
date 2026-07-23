@@ -65,7 +65,7 @@ pub fn reset_highlights(state: State<AppState>) -> Result<(), AppError> {
     crate::db::highlight::reset_defaults(&state.db)
 }
 
-/// 当前 secret 存储后端的名字（"macos-keychain" / "windows-credential-manager" /
+/// 当前 secret 存储后端的名字（"macos-keychain" / "ios-keychain" / "windows-credential-manager" /
 /// "linux-secret-service" / "db"）。前端用来显示"凭证存哪儿"。
 #[tauri::command]
 pub fn secret_backend(state: State<AppState>) -> String {

@@ -8,7 +8,7 @@
 //!         ▼
 //!     HybridStore             ← ChaCha20-Poly1305 加/解密
 //!       ├── master_key (32B)
-//!       │     ├── KeyringMasterKey  ← keychain（mac/win/linux-desktop）
+//!       │     ├── KeyringMasterKey  ← keychain（macOS/iOS/Windows/Linux desktop）
 //!       │     └── FileMasterKey     ← <data_dir>/master.key（headless/Android）
 //!       │
 //!       └── DbStore  ← rssh.db 的 `secrets` 表（密文 base64）
@@ -26,7 +26,7 @@
 //!     → file。结果写 `db.settings.master_key_backend` 标记。
 //!   - 后续启动按标记走，**永不翻转**：曾经 keyring → 必须 keyring，keychain 不可
 //!     用就硬 fail（避免 silently 切到 file 用新主密钥让旧密文全部解不开）。
-//!   - 编译期 `#[cfg(...)]` 只是排除 iOS/Android（keyring crate 没这俩平台后端），
+//!   - 编译期 `#[cfg(...)]` 只排除没有原生后端的平台（例如 Android），
 //!     **运行期是否选 keyring 由 `try_open()` 真探测决定**，不是看 OS。
 //!
 //! Service 名固定 `rssh`，account 命名规则全平台、CLI/GUI 共用：
@@ -49,13 +49,23 @@ use crate::error::{AppError, AppResult};
 pub mod crypto;
 mod db_store;
 mod hybrid_store;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "linux"
+))]
 mod keyring_store;
 mod master_key;
 
 pub use db_store::DbStore;
 pub use hybrid_store::HybridStore;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "linux"
+))]
 pub use keyring_store::KeyringStore;
 pub use master_key::{FileMasterKey, KeyringMasterKey, MasterKeyBackend};
 
@@ -104,7 +114,7 @@ pub fn open(db: Arc<Db>, data_dir: &Path) -> AppResult<SecretSystem> {
     let db_store = Arc::new(DbStore::new(db.clone()));
     let recorded = db::settings::get(&db, BACKEND_MARKER)?;
 
-    // 运行期探测：编译进 keyring crate 的平台 (mac/win/linux) + 真能 probe 写读
+    // 运行期探测：编译进 keyring crate 的平台 + 真能 probe 写读
     let probed: Option<Arc<dyn SecretStore>> = probe_keyring();
 
     match (recorded.as_deref(), probed) {
@@ -162,16 +172,26 @@ pub fn open(db: Arc<Db>, data_dir: &Path) -> AppResult<SecretSystem> {
 }
 
 /// 运行期探测系统 keychain。`#[cfg(...)]` 排除编译不进 keyring crate 的平台
-/// （iOS / Android），其他平台靠 `try_open()` 真探测（写 probe key + 读回 + 删）。
+/// （例如 Android），其他平台靠 `try_open()` 真探测（写 probe key + 读回 + 删）。
 fn probe_keyring() -> Option<Arc<dyn SecretStore>> {
-    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows",
+        target_os = "linux"
+    ))]
     {
         keyring_store::try_open().map(|kr| {
             let arc: Arc<KeyringStore> = Arc::new(kr);
             arc as Arc<dyn SecretStore>
         })
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows",
+        target_os = "linux"
+    )))]
     {
         None
     }

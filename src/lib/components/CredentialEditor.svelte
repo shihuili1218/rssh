@@ -19,7 +19,9 @@
   let credentialTypeOptions = $derived([
     { value: "password",    label: t("credential.type.password") },
     { value: "key",         label: t("credential.type.key") },
-    { value: "agent",       label: t("credential.type.agent") },
+    ...(!app.isMobile || credentialType === "agent"
+      ? [{ value: "agent", label: t("credential.type.agent") }]
+      : []),
     { value: "none",        label: t("credential.type.none") },
     { value: "interactive", label: t("credential.type.interactive") },
   ]);

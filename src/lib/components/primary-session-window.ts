@@ -1,5 +1,6 @@
 interface PrimarySessionWindowDependencies {
   signal?: AbortSignal;
+  canOpenLocal?: boolean;
   reconcile: () => Promise<unknown>;
   allowResourcePanes: () => void;
   loadAutoOpenLocal: () => Promise<boolean>;
@@ -18,6 +19,7 @@ export async function initializePrimarySessionWindow(
   }
   if (dependencies.signal?.aborted) return;
   dependencies.allowResourcePanes();
+  if (dependencies.canOpenLocal === false) return;
 
   try {
     const autoOpen = await dependencies.loadAutoOpenLocal();

@@ -493,9 +493,9 @@ pub(crate) fn register_prompt_waiter<T>(
 
 pub enum ReadySession {
     Ssh(crate::ssh::client::SessionHandle),
-    #[cfg(not(target_os = "android"))]
+    #[cfg(desktop)]
     Pty(crate::terminal::pty::PtyHandle),
-    #[cfg(not(target_os = "android"))]
+    #[cfg(desktop)]
     Serial(crate::terminal::serial::SerialHandle),
     Telnet(crate::terminal::telnet::TelnetHandle),
     Sftp(std::sync::Arc<crate::ssh::sftp::SftpHandle>),
@@ -511,9 +511,9 @@ impl ReadySession {
     fn kind(&self) -> SessionKind {
         match self {
             Self::Ssh(_) => SessionKind::Ssh,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             Self::Pty(_) => SessionKind::Pty,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             Self::Serial(_) => SessionKind::Serial,
             Self::Telnet(_) => SessionKind::Telnet,
             Self::Sftp(_) => SessionKind::Sftp,
@@ -531,7 +531,7 @@ impl ReadySession {
             Self::CleanupProbe { cleaned, .. } => {
                 cleaned.store(true, std::sync::atomic::Ordering::SeqCst);
             }
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             Self::Pty(_) | Self::Serial(_) => {}
             Self::Telnet(_) | Self::Sftp(_) => {}
         }
@@ -652,9 +652,9 @@ fn insert_ready_handle(state: &AppState, session_id: &str, handle: ReadySession)
             sessions.insert(session_id.to_owned(), handle);
             Ok(())
         }
-        #[cfg(not(target_os = "android"))]
+        #[cfg(desktop)]
         ReadySession::Pty(handle) => insert_unique(&state.pty_sessions, session_id, handle),
-        #[cfg(not(target_os = "android"))]
+        #[cfg(desktop)]
         ReadySession::Serial(handle) => insert_unique(&state.serial_sessions, session_id, handle),
         ReadySession::Telnet(handle) => insert_unique(&state.telnet_sessions, session_id, handle),
         ReadySession::Sftp(handle) => insert_unique(&state.sftp_sessions, session_id, handle),
@@ -805,9 +805,9 @@ pub enum OwnedAiTarget {
         handle: crate::ssh::client::SshHandle,
         profile_id: String,
     },
-    #[cfg(not(target_os = "android"))]
+    #[cfg(desktop)]
     PtyShellPath(String),
-    #[cfg(not(target_os = "android"))]
+    #[cfg(desktop)]
     Serial,
     Telnet,
 }
@@ -851,7 +851,7 @@ pub fn owned_ready_ai_target(
                     serde_json::json!({ "id": id }),
                 )
             }),
-        #[cfg(not(target_os = "android"))]
+        #[cfg(desktop)]
         SessionKind::Pty => locked(&state.pty_sessions)?
             .get(id)
             .map(|session| OwnedAiTarget::PtyShellPath(session.shell_path().to_owned()))
@@ -861,7 +861,7 @@ pub fn owned_ready_ai_target(
                     serde_json::json!({ "id": id }),
                 )
             }),
-        #[cfg(not(target_os = "android"))]
+        #[cfg(desktop)]
         SessionKind::Serial => locked(&state.serial_sessions)?
             .contains_key(id)
             .then_some(OwnedAiTarget::Serial)
@@ -896,11 +896,11 @@ fn take_ready_handle(
         SessionKind::Ssh => locked(&state.sessions)?
             .remove(session_id)
             .map(ReadySession::Ssh),
-        #[cfg(not(target_os = "android"))]
+        #[cfg(desktop)]
         SessionKind::Pty => locked(&state.pty_sessions)?
             .remove(session_id)
             .map(ReadySession::Pty),
-        #[cfg(not(target_os = "android"))]
+        #[cfg(desktop)]
         SessionKind::Serial => locked(&state.serial_sessions)?
             .remove(session_id)
             .map(ReadySession::Serial),
@@ -1277,9 +1277,9 @@ mod tests {
             secret_store,
             lifecycle_sessions: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             pty_sessions: Mutex::new(HashMap::new()),
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             serial_sessions: Mutex::new(HashMap::new()),
             telnet_sessions: Mutex::new(HashMap::new()),
             sftp_sessions: Mutex::new(HashMap::new()),
@@ -1458,7 +1458,7 @@ mod tests {
         let reservation = reserve_resource(
             &state,
             "550e8400-e29b-41d4-a716-446655440000",
-            crate::state::SessionKind::Pty,
+            crate::state::SessionKind::Ssh,
             owner.clone(),
         )
         .unwrap();
@@ -1468,7 +1468,7 @@ mod tests {
         let error = match reserve_resource(
             &state,
             "550e8400-e29b-41d4-a716-446655440000",
-            crate::state::SessionKind::Pty,
+            crate::state::SessionKind::Ssh,
             owner,
         ) {
             Ok(_) => panic!("cancelled id was reused"),
@@ -1485,7 +1485,7 @@ mod tests {
         let reservation = reserve_resource(
             &state,
             "550e8400-e29b-41d4-a716-446655440001",
-            crate::state::SessionKind::Pty,
+            crate::state::SessionKind::Ssh,
             owner.clone(),
         )
         .unwrap();
@@ -1493,7 +1493,7 @@ mod tests {
         assert!(close_resource(
             &state,
             reservation.id(),
-            crate::state::SessionKind::Pty,
+            crate::state::SessionKind::Ssh,
             &other,
         )
         .is_err());
@@ -1502,7 +1502,7 @@ mod tests {
         assert!(close_resource(
             &state,
             reservation.id(),
-            crate::state::SessionKind::Serial,
+            crate::state::SessionKind::Telnet,
             &owner,
         )
         .is_err());
@@ -1511,7 +1511,7 @@ mod tests {
         close_resource(
             &state,
             reservation.id(),
-            crate::state::SessionKind::Pty,
+            crate::state::SessionKind::Ssh,
             &owner,
         )
         .unwrap();
@@ -1529,14 +1529,14 @@ mod tests {
         let a = reserve_resource(
             &state,
             "550e8400-e29b-41d4-a716-446655440010",
-            SessionKind::Pty,
+            SessionKind::Ssh,
             owner_a.clone(),
         )
         .unwrap();
         let b = reserve_resource(
             &state,
             "550e8400-e29b-41d4-a716-446655440011",
-            SessionKind::Pty,
+            SessionKind::Ssh,
             owner_b,
         )
         .unwrap();
@@ -1559,23 +1559,23 @@ mod tests {
         let reservation = reserve_resource(
             &state,
             "550e8400-e29b-41d4-a716-446655440020",
-            SessionKind::Pty,
+            SessionKind::Ssh,
             owner.clone(),
         )
         .unwrap();
-        close_resource(&state, reservation.id(), SessionKind::Pty, &owner).unwrap();
+        close_resource(&state, reservation.id(), SessionKind::Ssh, &owner).unwrap();
         let cleaned = Arc::new(AtomicBool::new(false));
 
         let error = reservation
             .activate(ReadySession::CleanupProbe {
-                kind: SessionKind::Pty,
+                kind: SessionKind::Ssh,
                 cleaned: cleaned.clone(),
             })
             .unwrap_err();
 
         assert_eq!(error.code(), "session_reservation_lost");
         assert!(cleaned.load(Ordering::SeqCst));
-        assert!(state.pty_sessions.lock().unwrap().is_empty());
+        assert!(state.sessions.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1613,7 +1613,7 @@ mod tests {
         let reservation = reserve_resource(
             &state,
             "550e8400-e29b-41d4-a716-446655440021",
-            SessionKind::Pty,
+            SessionKind::Ssh,
             SessionOwner::Window("main".into()),
         )
         .unwrap();
@@ -1623,7 +1623,7 @@ mod tests {
             .activate_returned(
                 "550e8400-e29b-41d4-a716-446655440022",
                 ReadySession::CleanupProbe {
-                    kind: SessionKind::Pty,
+                    kind: SessionKind::Ssh,
                     cleaned: cleaned.clone(),
                 },
             )

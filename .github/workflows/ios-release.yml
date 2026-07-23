@@ -1,0 +1,94 @@
+name: iOS Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: App Store build number; defaults to this workflow's run number
+        required: false
+        type: string
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-ios:
+    if: github.event_name == 'workflow_dispatch' || vars.IOS_BUILD_ENABLED == 'true'
+    runs-on: macos-latest
+    env:
+      CI: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install iOS build tools
+        shell: bash
+        run: |
+          command -v pod >/dev/null || brew install cocoapods
+          command -v xcodegen >/dev/null || brew install xcodegen
+
+      - name: Sync version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version '$VERSION' in tag '$GITHUB_REF_NAME'"
+            exit 1
+          fi
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          sed -i.bak "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
+          sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
+          rm -f src-tauri/tauri.conf.json.bak src-tauri/Cargo.toml.bak
+
+      - name: Build signed IPA
+        id: build
+        shell: bash
+        env:
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
+          REQUESTED_BUILD_NUMBER: ${{ inputs.build_number }}
+        run: |
+          BUILD_NUMBER="${REQUESTED_BUILD_NUMBER:-${GITHUB_RUN_NUMBER}}"
+          if [[ ! "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Invalid build number '$BUILD_NUMBER'; expected a positive integer"
+            exit 1
+          fi
+          ./build-ios.sh --build-number "$BUILD_NUMBER"
+          echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rssh-ios-${{ github.run_id }}-build-${{ steps.build.outputs.build_number }}
+          path: src-tauri/gen/apple/build/arm64/*.ipa
+          if-no-files-found: error
+
+      - name: Attach IPA to draft release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: RSSH ${{ github.ref_name }}
+          files: src-tauri/gen/apple/build/arm64/*.ipa

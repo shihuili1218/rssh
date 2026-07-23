@@ -54,6 +54,7 @@ export function pickTextFile(
       run();
     };
 
+    input.addEventListener("cancel", () => finish(() => resolve(null)), { once: true });
     input.addEventListener("change", async () => {
       const file = input.files?.[0];
       if (!file) return finish(() => resolve(null));

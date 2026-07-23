@@ -5,7 +5,7 @@
              └──→ Profile_DB ──[encrypted]──→ GitHub repo ──┬──→ Windows
                                                             ├──→ macOS
                                                             ├──→ Linux
-                                                            └──→ Android
+                                                            └──→ Mobile
 
   Implementation: 8 absolutely-positioned nodes in a 16:10 stage, an SVG
   layer with 7 connectors that draw in (stroke-dashoffset), and "doc"
@@ -15,6 +15,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { t } from "../../i18n/index.svelte.ts";
+  import { isIOS } from "../../platform.ts";
   import NextButton from "./NextButton.svelte";
 
   let { onNext }: { onNext: () => void } = $props();
@@ -184,8 +185,10 @@
       <div class="node-label-sm">{t("welcome.scene.sync.platform_linux")}</div>
     </div>
     <div class="node platform p-and"  style="--pf: #4cb88a;">
-      <div class="pf-tile">A</div>
-      <div class="node-label-sm">{t("welcome.scene.sync.platform_android")}</div>
+      <div class="pf-tile">{isIOS ? "i" : "A"}</div>
+      <div class="node-label-sm">
+        {t(isIOS ? "welcome.scene.sync.platform_ios" : "welcome.scene.sync.platform_android")}
+      </div>
     </div>
 
     <!-- Profile doc that travels DB → repo. -->

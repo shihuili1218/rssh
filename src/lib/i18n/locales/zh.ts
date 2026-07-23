@@ -274,6 +274,7 @@ const zh: Messages = {
   "welcome.scene.sync.platform_macos": "macOS",
   "welcome.scene.sync.platform_linux": "Linux",
   "welcome.scene.sync.platform_android": "Android",
+  "welcome.scene.sync.platform_ios": "iOS",
   "welcome.scene.sync.caption_kw1": "密钥留在 OS 钥匙串",
   "welcome.scene.sync.caption_kw2": "profile 加密到 GitHub",
   "welcome.scene.sync.caption_kw3": "全设备同步",
@@ -877,7 +878,7 @@ const zh: Messages = {
   "error.cli_priv_request_failed": "申请权限失败：{err}",
 
   // ── 密钥存储（envelope 加密 DB + master-key 后端）──
-  "error.keychain_unavailable_but_required": "系统 keychain 不可用，但本机之前已把主密钥存到 keychain。请打开系统 keychain（macOS Keychain Access / Windows 凭据管理器 / Linux Secret Service）并解锁，然后重启 rssh。",
+  "error.keychain_unavailable_but_required": "系统 keychain 不可用，但本机之前已把主密钥存到 keychain。请检查系统 keychain（Apple Keychain / Windows 凭据管理器 / Linux Secret Service），必要时解锁，然后重启 rssh。",
   "error.master_key_backend_unknown": "数据库 master-key 后端标记未知：{value}。请到设置 → 从备份恢复，或联系支持。",
   "error.master_key_read_failed": "读取 master.key 失败（{path}）：{err}",
   "error.master_key_write_failed": "写入 master.key 失败（{op}，{path}）：{err}",

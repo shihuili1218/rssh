@@ -444,7 +444,7 @@ pub async fn ai_session_start_impl(
             }
             Some(handle)
         }
-        #[cfg(not(target_os = "android"))]
+        #[cfg(desktop)]
         AiTarget::Local(target_id) => {
             let shell_path = match crate::commands::lifecycle::owned_ready_ai_target(
                 state,
@@ -458,9 +458,9 @@ pub async fn ai_session_start_impl(
             initial_shell = super::shell::ShellKind::from_local_path(&shell_path);
             None
         }
-        #[cfg(target_os = "android")]
+        #[cfg(mobile)]
         AiTarget::Local(_) => return Err(AppError::not_found("local_pty_not_found", json!({}))),
-        #[cfg(not(target_os = "android"))]
+        #[cfg(desktop)]
         AiTarget::Serial(target_id) => {
             // No shell to probe — a serial port is raw bytes. Validate it exists,
             // then run with ShellKind::Serial (no sentinel, no exit code) and no
@@ -474,7 +474,7 @@ pub async fn ai_session_start_impl(
             initial_shell = super::shell::ShellKind::Serial;
             None
         }
-        #[cfg(target_os = "android")]
+        #[cfg(mobile)]
         AiTarget::Serial(_) => {
             return Err(AppError::not_found("serial_session_not_found", json!({})))
         }
@@ -502,7 +502,7 @@ pub async fn ai_session_start_impl(
     // 移动端注入能力声明，引导 LLM 切桌面端、别徒劳调工具：analyze_locally 真·阻断
     // （Tauri 2 mobile 不能 spawn 分析窗口）；download_file 技术上能跑（写 app 数据
     // 目录），但 analyze_locally 用不了、下下来的文件也取不出私有目录，故一并劝退。
-    let is_mobile = cfg!(target_os = "android") || cfg!(target_os = "ios");
+    let is_mobile = cfg!(mobile);
     let system_prompt = skills::build_catalog_prompt(&state.db, locale_lbl, is_mobile)?;
     let user_skills_cache = skills::list_user(&state.db)?;
 
@@ -1073,7 +1073,7 @@ pub(crate) fn ai_session_rebind_target_impl(
             crate::commands::lifecycle::OwnedAiTarget::Ssh { handle, .. } => Some(handle),
             _ => unreachable!("SSH lifecycle kind returned a non-SSH target"),
         },
-        #[cfg(not(target_os = "android"))]
+        #[cfg(desktop)]
         AiTarget::Local(target_id) => {
             let _ = crate::commands::lifecycle::owned_ready_ai_target(
                 state,
@@ -1083,9 +1083,9 @@ pub(crate) fn ai_session_rebind_target_impl(
             )?;
             None
         }
-        #[cfg(target_os = "android")]
+        #[cfg(mobile)]
         AiTarget::Local(_) => return Err(AppError::not_found("local_pty_not_found", json!({}))),
-        #[cfg(not(target_os = "android"))]
+        #[cfg(desktop)]
         AiTarget::Serial(target_id) => {
             let _ = crate::commands::lifecycle::owned_ready_ai_target(
                 state,
@@ -1095,7 +1095,7 @@ pub(crate) fn ai_session_rebind_target_impl(
             )?;
             None
         }
-        #[cfg(target_os = "android")]
+        #[cfg(mobile)]
         AiTarget::Serial(_) => {
             return Err(AppError::not_found("serial_session_not_found", json!({})))
         }
@@ -1261,7 +1261,7 @@ pub(crate) fn conversation_target_key(state: &AppState, target: &AiTarget) -> Ap
             crate::db::ai_conversation::ssh_target_key(h.profile_id())
         }
         AiTarget::Local(_) => "local".to_string(),
-        #[cfg(not(target_os = "android"))]
+        #[cfg(desktop)]
         AiTarget::Serial(id) => {
             let g = locked(&state.serial_sessions)?;
             let h = g
@@ -1269,7 +1269,7 @@ pub(crate) fn conversation_target_key(state: &AppState, target: &AiTarget) -> Ap
                 .ok_or_else(|| AppError::not_found("serial_session_not_found", json!({})))?;
             format!("serial:{}", h.port_name())
         }
-        #[cfg(target_os = "android")]
+        #[cfg(mobile)]
         AiTarget::Serial(_) => {
             return Err(AppError::not_found("serial_session_not_found", json!({})))
         }

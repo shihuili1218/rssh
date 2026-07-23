@@ -272,6 +272,7 @@ const en = {
   "welcome.scene.sync.platform_macos": "macOS",
   "welcome.scene.sync.platform_linux": "Linux",
   "welcome.scene.sync.platform_android": "Android",
+  "welcome.scene.sync.platform_ios": "iOS",
   "welcome.scene.sync.caption_kw1": "keys in OS keychain",
   "welcome.scene.sync.caption_kw2": "profiles in your repo",
   "welcome.scene.sync.caption_kw3": "synced everywhere",
@@ -874,7 +875,7 @@ const en = {
   "error.cli_priv_request_failed": "Request privileges failed: {err}",
 
   // ── secret storage (envelope-encrypted DB + master-key backend) ──
-  "error.keychain_unavailable_but_required": "System keychain is unavailable, but this install has previously stored the master key there. Open the system keychain (macOS Keychain Access / Windows Credential Manager / Linux Secret Service) and unlock it, then restart rssh.",
+  "error.keychain_unavailable_but_required": "System keychain is unavailable, but this install has previously stored the master key there. Check the system keychain (Apple Keychain / Windows Credential Manager / Linux Secret Service), unlock it if applicable, then restart rssh.",
   "error.master_key_backend_unknown": "Unknown master-key backend marker in DB: {value}. Open Settings → restore from backup, or contact support.",
   "error.master_key_read_failed": "Read master.key failed ({path}): {err}",
   "error.master_key_write_failed": "Write master.key failed ({op}, {path}): {err}",

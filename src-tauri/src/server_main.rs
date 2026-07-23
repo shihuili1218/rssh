@@ -2,6 +2,7 @@
 //! `rssh_lib::server`; the IDEA plugin (or a dev script) spawns this and reads
 //! the `{"port":..,"token":..}` line it prints on stdout to point the frontend.
 
+#[cfg(desktop)]
 fn main() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .try_init();
@@ -15,4 +16,10 @@ fn main() {
         eprintln!("rssh-server failed: {e}");
         std::process::exit(1);
     }
+}
+
+#[cfg(mobile)]
+fn main() {
+    eprintln!("rssh-server is only supported on desktop platforms");
+    std::process::exit(1);
 }

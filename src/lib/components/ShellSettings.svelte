@@ -40,13 +40,15 @@
   let customMode = $derived(pendingCustom || (selectedShell !== "" && !shells.includes(selectedShell)));
 
   onMount(async () => {
-    try { shells = await invoke<string[]>("list_shells"); } catch { shells = []; }
-    selectedShell = await invoke<string | null>("get_setting", { key: "local_shell" }) ?? "";
-    if (selectedShell && !shells.includes(selectedShell)) {
-      customPath = selectedShell;
+    if (!app.isMobile) {
+      try { shells = await invoke<string[]>("list_shells"); } catch { shells = []; }
+      selectedShell = await invoke<string | null>("get_setting", { key: "local_shell" }) ?? "";
+      if (selectedShell && !shells.includes(selectedShell)) {
+        customPath = selectedShell;
+      }
+      openLocalOnStartup = (await invoke<string | null>("get_setting", { key: "open_local_on_startup" })) === "true";
     }
     verboseLog = (await invoke<string | null>("get_setting", { key: "verbose_log" })) !== "false";
-    openLocalOnStartup = (await invoke<string | null>("get_setting", { key: "open_local_on_startup" })) === "true";
     const ts = await invoke<string | null>("get_setting", { key: "connect_timeout" });
     if (ts) connectTimeout = parseInt(ts, 10) || 10;
     copyOnSelect = await app.loadCopyOnSelect();

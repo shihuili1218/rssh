@@ -211,6 +211,7 @@
         if (!bypassStartupReconcile) {
             void initializePrimarySessionWindow({
                 signal: startup.signal,
+                canOpenLocal: !app.isMobile,
                 reconcile: () => invoke("reconcile_sessions", { activeIds: [] }),
                 allowResourcePanes: () => { resourcePanesAllowed = true; },
                 loadAutoOpenLocal: async () =>

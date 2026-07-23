@@ -1,4 +1,4 @@
-//! 系统 keychain 后端。仅在 macOS / Windows / Linux（Secret Service 可达时）可用。
+//! 系统 keychain 后端。仅在 macOS / iOS / Windows / Linux（Secret Service 可达时）可用。
 
 use super::SecretStore;
 use crate::error::{AppError, AppResult};
@@ -70,10 +70,31 @@ impl SecretStore for KeyringStore {
     fn backend_name(&self) -> &'static str {
         if cfg!(target_os = "macos") {
             "macos-keychain"
+        } else if cfg!(target_os = "ios") {
+            "ios-keychain"
         } else if cfg!(target_os = "windows") {
             "windows-credential-manager"
         } else {
             "linux-secret-service"
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backend_name_matches_the_native_store() {
+        let expected = if cfg!(target_os = "macos") {
+            "macos-keychain"
+        } else if cfg!(target_os = "ios") {
+            "ios-keychain"
+        } else if cfg!(target_os = "windows") {
+            "windows-credential-manager"
+        } else {
+            "linux-secret-service"
+        };
+        assert_eq!(KeyringStore.backend_name(), expected);
     }
 }

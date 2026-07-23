@@ -81,22 +81,24 @@ fontdb = "0.23.0"
 url = "2.5.8"
 
 # Raw termios access for the serial `xany` (IXANY) flag — the serialport crate
-# doesn't expose it. Unix only; Windows has no DCB equivalent exposed here.
-[target.'cfg(unix)'.dependencies]
+# doesn't expose it. Only the Unix desktop targets compile the serial module.
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 libc = "0.2"
 
-# PTY & native file dialogs & clipboard — 桌面平台专用
-[target.'cfg(not(target_os = "android"))'.dependencies]
+# PTY, serial and clipboard — the three desktop targets RSSH actually ships.
+# Cargo target tables cannot use Tauri's `desktop` cfg alias, so keep this as a
+# positive OS list instead of treating every non-mobile target as a desktop.
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 portable-pty = "0.8"
 # Serial console transport — a 3rd byte-stream alongside SSH/PTY. macOS uses
 # IOKit and Windows uses the Win32 API (no extra system dep); Linux links
 # libudev for port enumeration, so Linux CI/packaging needs `libudev-dev` at
-# build time (see build-linux.sh). Excluded on Android like portable-pty.
+# build time (see build-linux.sh).
 serialport = "4.9.0"
 arboard = "3"
 
-# Keychain — 各平台用各自原生 backend；Android 没有支持，自动降级到 DB
-[target.'cfg(target_os = "macos")'.dependencies]
+# Keychain — Apple platforms share the native Security.framework backend.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }

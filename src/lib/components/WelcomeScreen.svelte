@@ -21,15 +21,19 @@
   let { onDismiss }: { onDismiss: () => void } = $props();
 
   // Linear scene flow. CTA is terminal — its "Next" is dismiss.
-  const FLOW = ["intro", "ai", "blocks", "sync", "cli", "cta"] as const;
-  type Scene = (typeof FLOW)[number];
+  type Scene = "intro" | "ai" | "blocks" | "sync" | "cli" | "cta";
+  const FLOW: readonly Scene[] = isMobile
+    ? ["intro", "ai", "blocks", "sync", "cta"]
+    : ["intro", "ai", "blocks", "sync", "cli", "cta"];
 
   let scene = $state<Scene>("intro");
   // Bumping this remounts the active scene to replay it from the start.
   let replayKey = $state(0);
 
   // Demo-scene indicator only shows for the 4 "feature" scenes.
-  const FEATURE_SCENES: Scene[] = ["ai", "blocks", "sync", "cli"];
+  const FEATURE_SCENES: Scene[] = isMobile
+    ? ["ai", "blocks", "sync"]
+    : ["ai", "blocks", "sync", "cli"];
   let featureIdx = $derived(FEATURE_SCENES.indexOf(scene));
   let showIndicator = $derived(featureIdx >= 0);
 
@@ -219,7 +223,7 @@
   .skip-btn {
     position: absolute;
     top: calc(20px + env(safe-area-inset-top, 0px));
-    right: 24px;
+    right: calc(24px + env(safe-area-inset-right, 0px));
     z-index: 10;
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -250,7 +254,10 @@
 
   .scene-host {
     position: absolute;
-    inset: 0;
+    top: env(safe-area-inset-top, 0px);
+    right: env(safe-area-inset-right, 0px);
+    bottom: env(safe-area-inset-bottom, 0px);
+    left: env(safe-area-inset-left, 0px);
     z-index: 2;
     display: flex;
   }

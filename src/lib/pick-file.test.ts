@@ -75,6 +75,12 @@ describe("pickTextFile", () => {
         await expect(p).resolves.toBeNull();
     });
 
+    it("resolves null on the file input cancel event", async () => {
+        const p = pickTextFile();
+        input.fire("cancel");
+        await expect(p).resolves.toBeNull();
+    });
+
     it("rejects oversized files with the shared key_file_too_large error shape", async () => {
         const p = pickTextFile({ maxBytes: 10 });
         input.files = [{ name: "big", size: 11, text: async () => "x" }];
