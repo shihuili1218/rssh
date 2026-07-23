@@ -4,11 +4,12 @@
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import * as cli from "../stores/cli.svelte.ts";
     import { writeClipboard } from "../stores/app.svelte.ts";
+    import { toast } from "../stores/toast.svelte.ts";
     import AppIcon from "./AppIcon.svelte";
 
     const completionCommands = [
         "rssh completions zsh > ~/.zsh/completions/_rssh",
-        "rssh completions bash >> ~/.bashrc",
+        "mkdir -p ~/.local/share/bash-completion/completions && rssh completions bash > ~/.local/share/bash-completion/completions/rssh",
         "rssh completions fish > ~/.config/fish/completions/rssh.fish",
         "rssh completions powershell  # paste into $PROFILE",
     ];
@@ -36,11 +37,15 @@
     }
 
     async function copyCompletion(command: string) {
-        await writeClipboard(command);
-        copiedCompletion = command;
-        setTimeout(() => {
-            if (copiedCompletion === command) copiedCompletion = null;
-        }, 1500);
+        try {
+            await writeClipboard(command);
+            copiedCompletion = command;
+            setTimeout(() => {
+                if (copiedCompletion === command) copiedCompletion = null;
+            }, 1500);
+        } catch (error) {
+            toast.error(errMsg(error));
+        }
     }
 </script>
 
@@ -89,7 +94,7 @@
                 <code>{command}</code>
                 <button
                     type="button"
-                    class="copy-btn"
+                    class="btn btn-icon"
                     class:copied={copiedCompletion === command}
                     title={copiedCompletion === command ? t("about.copied") : t("common.copy")}
                     aria-label={copiedCompletion === command ? t("about.copied") : t("common.copy")}
@@ -211,22 +216,8 @@
         font-size: 12px;
         white-space: nowrap;
     }
-    .copy-btn {
-        display: grid;
-        place-items: center;
-        flex: none;
-        width: 28px;
-        height: 28px;
-        padding: 0;
-        border: none;
-        border-radius: var(--radius-sm);
-        background: transparent;
-        color: var(--text-dim);
-        cursor: pointer;
-    }
-    .copy-btn:hover { background: var(--bg); color: var(--accent); }
-    .copy-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-    .copy-btn.copied { color: var(--success); }
+    .completion-row :global(.btn-icon) { flex: none; }
+    .completion-row :global(.btn-icon.copied) { color: var(--success); }
     .cmd-table {
         width: 100%;
         border-collapse: collapse;
