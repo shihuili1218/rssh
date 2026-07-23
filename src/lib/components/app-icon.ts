@@ -6,6 +6,7 @@ export const APP_ICON_NAMES = [
   "check",
   "cloud-download",
   "cloud-upload",
+  "copy",
   "docker",
   "edit",
   "file",

@@ -40,6 +40,9 @@
     {:else}
       <path d="M12 11v9m-3-3 3 3 3-3" />
     {/if}
+  {:else if name === "copy"}
+    <rect x="8" y="8" width="12" height="12" rx="2" />
+    <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
   {:else if name === "docker"}
     <path d="M4 10h3v3H4zm4 0h3v3H8zm4 0h3v3h-3zM8 6h3v3H8zm4 0h3v3h-3zm4 4h3v3h-3z" />
     <path d="M3 14h16c-.6 3.8-3.2 6-7.6 6H9c-3.1 0-5.2-2-6-6Zm16-2c1.4 0 2.2.6 2.7 1.5-1 .7-2 .9-3 .7" />

@@ -4,14 +4,17 @@
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import * as cli from "../stores/cli.svelte.ts";
     import { writeClipboard } from "../stores/app.svelte.ts";
+    import AppIcon from "./AppIcon.svelte";
 
-    const completionCommands = `rssh completions zsh > ~/.zsh/completions/_rssh
-rssh completions bash >> ~/.bashrc
-rssh completions fish > ~/.config/fish/completions/rssh.fish
-rssh completions powershell  # paste into $PROFILE`;
+    const completionCommands = [
+        "rssh completions zsh > ~/.zsh/completions/_rssh",
+        "rssh completions bash >> ~/.bashrc",
+        "rssh completions fish > ~/.config/fish/completions/rssh.fish",
+        "rssh completions powershell  # paste into $PROFILE",
+    ];
 
     let installing = $state(false);
-    let completionsCopied = $state(false);
+    let copiedCompletion = $state<string | null>(null);
     let msg = $state("");
     let state = $derived(cli.state());
     let status = $derived(cli.status());
@@ -32,10 +35,12 @@ rssh completions powershell  # paste into $PROFILE`;
         }
     }
 
-    async function copyCompletions() {
-        await writeClipboard(completionCommands);
-        completionsCopied = true;
-        setTimeout(() => { completionsCopied = false; }, 1500);
+    async function copyCompletion(command: string) {
+        await writeClipboard(command);
+        copiedCompletion = command;
+        setTimeout(() => {
+            if (copiedCompletion === command) copiedCompletion = null;
+        }, 1500);
     }
 </script>
 
@@ -76,14 +81,25 @@ rssh completions powershell  # paste into $PROFILE`;
         {/if}
     </div>
 
-    <div class="section-heading">
-        <h3>{t("settings.cli.completions")}</h3>
-        <button type="button" class="btn btn-sm" onclick={copyCompletions}>
-            {completionsCopied ? t("about.copied") : t("common.copy")}
-        </button>
-    </div>
+    <h3>{t("settings.cli.completions")}</h3>
     <p class="hint">{t("settings.cli.completions_hint")}</p>
-    <pre class="code-block">{completionCommands}</pre>
+    <div class="completion-list">
+        {#each completionCommands as command}
+            <div class="completion-row">
+                <code>{command}</code>
+                <button
+                    type="button"
+                    class="copy-btn"
+                    class:copied={copiedCompletion === command}
+                    title={copiedCompletion === command ? t("about.copied") : t("common.copy")}
+                    aria-label={copiedCompletion === command ? t("about.copied") : t("common.copy")}
+                    onclick={() => copyCompletion(command)}
+                >
+                    <AppIcon name={copiedCompletion === command ? "check" : "copy"} size={15} />
+                </button>
+            </div>
+        {/each}
+    </div>
 
     <h3>{t("settings.cli.commands")}</h3>
     <table class="cmd-table">
@@ -138,12 +154,6 @@ rssh completions powershell  # paste into $PROFILE`;
         color: var(--text);
         margin: 0;
     }
-    .section-heading {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-    }
     .status-card {
         display: flex;
         flex-direction: column;
@@ -178,6 +188,45 @@ rssh completions powershell  # paste into $PROFILE`;
         white-space: pre;
         color: var(--text-sub);
     }
+    .completion-list {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        border-radius: var(--radius-sm);
+        background: var(--surface);
+    }
+    .completion-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        padding: 8px 10px 8px 12px;
+    }
+    .completion-row + .completion-row { border-top: 1px solid var(--divider); }
+    .completion-row code {
+        flex: 1;
+        overflow-x: auto;
+        color: var(--text-sub);
+        font-family: monospace;
+        font-size: 12px;
+        white-space: nowrap;
+    }
+    .copy-btn {
+        display: grid;
+        place-items: center;
+        flex: none;
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        border: none;
+        border-radius: var(--radius-sm);
+        background: transparent;
+        color: var(--text-dim);
+        cursor: pointer;
+    }
+    .copy-btn:hover { background: var(--bg); color: var(--accent); }
+    .copy-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .copy-btn.copied { color: var(--success); }
     .cmd-table {
         width: 100%;
         border-collapse: collapse;
