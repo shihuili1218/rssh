@@ -1,4 +1,4 @@
-name: Pre-Release
+name: Release Beta
 
 on:
   workflow_dispatch:
@@ -232,17 +232,12 @@ jobs:
             "dist/rssh-${VERSION}-${{ matrix.name }}-jetbrains-plugin.zip"
           ls -lh dist/
 
-      # 走 Release Assets（Fastly）而不是 Actions Artifacts（Azure Blob + zip
-      # 包装），下载速度差一个数量级。draft + prerelease 跟 release.yml 一致：
-      # 自动上传到 draft release，由人工 publish。多个 job 共享同一 tag，
-      # softprops 会自动把文件 append 到同一 release（不会创建多个）。
       - name: Upload to pre-release
         uses: softprops/action-gh-release@v2
         with:
-          draft: true
           prerelease: true
           tag_name: v${{ steps.ver.outputs.v }}
-          name: "RSSH v${{ steps.ver.outputs.v }}"
+          name: "RSSH v${{ steps.ver.outputs.v }} Beta"
           files: dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -335,10 +330,9 @@ jobs:
       - name: Upload to pre-release
         uses: softprops/action-gh-release@v2
         with:
-          draft: true
           prerelease: true
           tag_name: v${{ steps.ver.outputs.v }}
-          name: "RSSH v${{ steps.ver.outputs.v }}"
+          name: "RSSH v${{ steps.ver.outputs.v }} Beta"
           files: dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
