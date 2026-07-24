@@ -1094,6 +1094,15 @@ async fn dispatch_async(
             args.get("instanceId").and_then(Value::as_str),
         )
         .await),
+        "ai_session_rollback_context" => ok(crate::ai::commands::ai_session_rollback_context_impl(
+            state,
+            &arg::<String>(&args, "tabId")?,
+            owner,
+            arg::<usize>(&args, "userMessageIndex")?,
+            arg(&args, "expectedUserMessages")?,
+            args.get("instanceId").and_then(Value::as_str),
+        )
+        .await),
         "ai_session_prepare_stop" => crate::commands::lifecycle::prepare_ai_session_stop(
             state,
             &arg::<String>(&args, "tabId")?,

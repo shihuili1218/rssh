@@ -353,6 +353,7 @@ pub fn run() {
             ai::commands::ai_session_prepare_stop,
             ai::commands::ai_session_stop,
             ai::commands::ai_session_clear_context,
+            ai::commands::ai_session_rollback_context,
             ai::commands::ai_session_rebind_target,
             ai::commands::ai_remote_shell_probe_needed,
             ai::commands::ai_cache_remote_shell,

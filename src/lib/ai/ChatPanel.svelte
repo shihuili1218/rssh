@@ -9,6 +9,7 @@
     import { formatTokenCount } from "./tokens.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import { toast } from "../stores/toast.svelte.ts";
+    import { writeText as writeClipboard } from "../clipboard.ts";
     import { onMount } from "svelte";
 
     // tabId 是 AI 会话身份（切 tab / 重连不丢；显式关闭面板时结束）。
@@ -40,6 +41,7 @@
     let chatBoxEl = $state<HTMLDivElement | null>(null);
     let showClearDialog = $state(false);
     let clearDialogOwner = $state<PanelOwner | null>(null);
+    let rollingBack = $state(false);
 
     let session = $derived(ai.sessionForTab(tabId));
     let items: ChatItem[] = $derived(ai.chatItems(tabId));
@@ -304,6 +306,36 @@
     function fmt(ts: number) {
         return new Date(ts).toLocaleTimeString();
     }
+
+    async function copyUserMessage(text: string) {
+        try {
+            await writeClipboard(text);
+        } catch (error) {
+            toast.error(errMsg(error));
+        }
+    }
+
+    function userMessageIndexAt(itemIndex: number): number {
+        return items.slice(0, itemIndex).filter((item) => item.kind === "user").length;
+    }
+
+    async function rollbackToUserMessage(itemIndex: number, text: string) {
+        if (rollingBack || !session) return;
+        const owner = snapshotOwner();
+        const userMessageIndex = userMessageIndexAt(itemIndex);
+        rollingBack = true;
+        try {
+            if (ai.isStreaming(owner.tabId)) {
+                await ai.cancelStream(owner.tabId, owner.lease);
+            }
+            await ai.rollbackContext(owner.tabId, userMessageIndex, text, owner.lease);
+        } catch (error) {
+            console.error("[ai] rollback context:", error);
+            toast.error(errMsg(error));
+        } finally {
+            rollingBack = false;
+        }
+    }
 </script>
 
 <div class="ai-panel">
@@ -380,7 +412,26 @@
                 <div class="item item-{item.kind}">
                     {#if item.kind === "user"}
                         <div class="ts">{fmt(item.at)}</div>
-                        <div class="bubble user">{item.text}</div>
+                        <div class="user-message">
+                            <div class="message-actions">
+                                <button class="message-action" onclick={() => copyUserMessage(item.text)}
+                                        title={t("ai.message.copy")} aria-label={t("ai.message.copy")}>
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <rect x="9" y="9" width="13" height="13" rx="2"/>
+                                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                                    </svg>
+                                </button>
+                                <button class="message-action" onclick={() => rollbackToUserMessage(i, item.text)}
+                                        disabled={rollingBack} title={t("ai.message.rollback")}
+                                        aria-label={t("ai.message.rollback")}>
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M9 14 4 9l5-5"/>
+                                        <path d="M4 9h10a6 6 0 0 1 6 6v5"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <div class="bubble user">{item.text}</div>
+                        </div>
                     {:else if item.kind === "assistant"}
                         <div class="ts">{fmt(item.at)}</div>
                         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
@@ -605,6 +656,32 @@
         display: flex; flex-direction: column; gap: 3px;
     }
     .item { display: flex; flex-direction: column; gap: 1px; }
+    .user-message {
+        display: flex; align-items: center; justify-content: flex-end; gap: 4px;
+    }
+    .message-actions {
+        display: flex; gap: 1px;
+        opacity: 0; pointer-events: none;
+        transition: opacity 120ms ease;
+    }
+    .item-user:hover .message-actions,
+    .item-user:focus-within .message-actions {
+        opacity: 1; pointer-events: auto;
+    }
+    .message-action {
+        width: 24px; height: 24px; padding: 0;
+        display: inline-flex; align-items: center; justify-content: center;
+        border: 0; border-radius: 4px; background: transparent;
+        color: var(--text-dim); cursor: pointer;
+    }
+    .message-action:hover {
+        color: var(--text);
+        background: color-mix(in srgb, var(--text) 8%, transparent);
+    }
+    .message-action:disabled { opacity: 0.4; cursor: default; }
+    @media (hover: none) {
+        .message-actions { opacity: 1; pointer-events: auto; }
+    }
     .ts {
         font-size: 10px; color: var(--text-dim);
         font-family: monospace;
@@ -616,7 +693,6 @@
     }
     .bubble.user {
         background: var(--accent); color: var(--white);
-        align-self: flex-end;
     }
     .bubble.assistant {
         background: color-mix(in srgb, var(--text) 8%, var(--bg));

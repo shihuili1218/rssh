@@ -9,6 +9,8 @@
     import { remoteUploadName } from "../sftp-name.ts";
     import Modal from "./Modal.svelte";
     import AppIcon from "./AppIcon.svelte";
+    import {writeText as writeClipboard} from "../clipboard.ts";
+    import {toast} from "../stores/toast.svelte.ts";
 
     /** Mirrors the backend WalkEntry; rel_path is always '/'-separated. */
     interface WalkEntry { rel_path: string; size: number; }
@@ -299,8 +301,8 @@
     }
 
     function copyPath(entry: RemoteEntry) {
-        app.writeClipboard(entryPath(entry));
         closeCtxMenu();
+        void writeClipboard(entryPath(entry)).catch((error) => toast.error(errMsg(error)));
     }
 
     function copyPathToTerminal(entry: RemoteEntry) {

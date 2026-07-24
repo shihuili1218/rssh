@@ -92,7 +92,7 @@ type ContextEpochState = Readonly<{
   epoch: number;
 }>;
 
-type PendingContextClear = {
+type PendingContextChange = {
   readonly instanceId: string;
   readonly targetEpoch: number;
   readonly bufferedEvents: Array<() => void>;
@@ -100,12 +100,12 @@ type PendingContextClear = {
 
 /**
  * One monotonic conversation epoch per live actor. Both sides start at zero
- * and increment only after a ClearContext action has been processed. Tauri
+ * and increment only after a context clear or rollback has been processed. Tauri
  * commands and events use independent channels, so the epoch is the fence that
  * stops an already-queued pre-clear event from rebuilding cleared UI.
  */
 const _contextEpochByTab: Record<string, ContextEpochState> = {};
-const _pendingContextClearByTab: Record<string, PendingContextClear> = {};
+const _pendingContextChangeByTab: Record<string, PendingContextChange> = {};
 
 const _unlistenersByTab: Record<string, UnlistenFn[]> = {};
 const _tabGeneration: Record<string, number> = {};
@@ -121,13 +121,20 @@ type PendingConversationMutation = Readonly<{
   kind: "clear";
   sequence: number;
   operation: Promise<void>;
+}> | Readonly<{
+  kind: "rollback";
+  sequence: number;
+  userMessageIndex: number;
+  expectedUserMessages: readonly string[];
+  terminalMutations: AiTerminalMutation[];
+  operation: Promise<void>;
 }>;
 const _pendingConversationMutationsByTab: Record<
   string,
   Set<PendingConversationMutation>
 > = {};
 /** Backend actor actions are ordered, but independent Tauri commands are not a
- * frontend ordering primitive. Serialize Message/ClearContext per tab so the
+ * frontend ordering primitive. Serialize messages and context changes per tab so the
  * order in which callers mutate the UI is also the order Rust receives them.
  * In particular, a clear acknowledgement and its UI reset must finish before a
  * later send can produce assistant/command events. */
@@ -337,22 +344,53 @@ function removeOptimisticUserMessage(tab_id: string, client_id: string): void {
   schedulePersist(tab_id);
 }
 
-function applyContextClear(
+function timelineAfterContextChange(
+  items: ChatItem[],
+  sequence: number,
+  rollback?: Readonly<{
+    userMessageIndex: number;
+    expectedUserMessages: readonly string[];
+  }>,
+): ChatItem[] {
+  let cutoff = 0;
+  if (rollback) {
+    const positions = items
+      .map((item, index) => item.kind === "user" ? index : -1)
+      .filter((index) => index >= 0)
+      .slice(0, rollback.expectedUserMessages.length);
+    const matches = positions.length === rollback.expectedUserMessages.length
+      && positions.every((position, index) => {
+        const item = items[position];
+        return item.kind === "user" && item.text === rollback.expectedUserMessages[index];
+      });
+    if (!matches || positions[rollback.userMessageIndex] === undefined) return items;
+    cutoff = positions[rollback.userMessageIndex];
+  }
+  return [
+    ...items.slice(0, cutoff),
+    ...items.slice(cutoff).filter(
+      (item) => item.kind === "user"
+        && item.client_seq !== undefined
+        && item.client_seq > sequence,
+    ),
+  ];
+}
+
+function applyContextChange(
   session: SessionInstanceRef,
-  clearSequence: number,
+  sequence: number,
+  rollback?: Readonly<{
+    userMessageIndex: number;
+    expectedUserMessages: readonly string[];
+  }>,
 ): void {
   if (_sessionByTab[session.tabId]?.instance_id !== session.instanceId) return;
   commandApprovals.clearSession(session);
   clearCommandExecutionsForSession(session);
-  const items = _chatByTab[session.tabId] ?? [];
-  // Sends called after ClearContext carry a larger sequence even if their
-  // optimistic bubble was rendered before the actor processed the clear.
-  // Preserve exactly those; every pre-clear assistant/command/note belongs to
-  // the context the backend just discarded.
-  _chatByTab[session.tabId] = items.filter(
-    (item) => item.kind === "user"
-      && item.client_seq !== undefined
-      && item.client_seq > clearSequence,
+  _chatByTab[session.tabId] = timelineAfterContextChange(
+    _chatByTab[session.tabId] ?? [],
+    sequence,
+    rollback,
   );
   _pendingByTab[session.tabId] = null;
   _keyboardLockedByTab[session.tabId] = false;
@@ -366,22 +404,26 @@ function initializeContextEpoch(session: SessionInstanceRef): void {
   };
 }
 
-function beginContextClear(session: SessionInstanceRef): PendingContextClear | null {
+function beginContextChange(session: SessionInstanceRef): PendingContextChange | null {
   if (_sessionByTab[session.tabId]?.instance_id !== session.instanceId) return null;
   const current = _contextEpochByTab[session.tabId];
-  const pending: PendingContextClear = {
+  const pending: PendingContextChange = {
     instanceId: session.instanceId,
     targetEpoch: current?.instanceId === session.instanceId ? current.epoch + 1 : 1,
     bufferedEvents: [],
   };
-  _pendingContextClearByTab[session.tabId] = pending;
+  _pendingContextChangeByTab[session.tabId] = pending;
   return pending;
 }
 
-function finishContextClear(
+function finishContextChange(
   session: SessionInstanceRef,
-  pending: PendingContextClear | null,
-  clearSequence: number,
+  pending: PendingContextChange | null,
+  sequence: number,
+  rollback?: Readonly<{
+    userMessageIndex: number;
+    expectedUserMessages: readonly string[];
+  }>,
 ): void {
   // A close can invalidate the session while the clear command is awaiting its
   // processing ack. Never recreate epoch state or replay buffered callbacks for
@@ -400,18 +442,18 @@ function finishContextClear(
   // Epoch installation and UI reset are one synchronous transaction from the
   // event loop's point of view. Only after both are complete may epoch+1 events
   // that outran the invoke response be released.
-  applyContextClear(session, clearSequence);
-  if (pending && _pendingContextClearByTab[session.tabId] === pending) {
-    delete _pendingContextClearByTab[session.tabId];
+  applyContextChange(session, sequence, rollback);
+  if (pending && _pendingContextChangeByTab[session.tabId] === pending) {
+    delete _pendingContextChangeByTab[session.tabId];
   }
   for (const apply of pending?.bufferedEvents.splice(0) ?? []) apply();
 }
 
-function abandonContextClear(session: SessionInstanceRef, pending: PendingContextClear | null): void {
+function abandonContextChange(session: SessionInstanceRef, pending: PendingContextChange | null): void {
   if (!pending) return;
   pending.bufferedEvents.splice(0);
-  if (_pendingContextClearByTab[session.tabId] === pending) {
-    delete _pendingContextClearByTab[session.tabId];
+  if (_pendingContextChangeByTab[session.tabId] === pending) {
+    delete _pendingContextChangeByTab[session.tabId];
   }
 }
 
@@ -460,7 +502,7 @@ function dispatchContextEvent(
   if (eventEpoch === null) return;
   const current = _contextEpochByTab[session.tabId];
   if (current?.instanceId !== session.instanceId || eventEpoch < current.epoch) return;
-  const pending = _pendingContextClearByTab[session.tabId];
+  const pending = _pendingContextChangeByTab[session.tabId];
   if (
     pending?.instanceId === session.instanceId
     && eventEpoch >= pending.targetEpoch
@@ -713,9 +755,9 @@ function clearSessionState(tab_id: string) {
   delete _keyboardLockedByTab[tab_id];
   delete _targetKindByTab[tab_id];
   delete _contextEpochByTab[tab_id];
-  const pendingClear = _pendingContextClearByTab[tab_id];
-  pendingClear?.bufferedEvents.splice(0);
-  delete _pendingContextClearByTab[tab_id];
+  const pendingChange = _pendingContextChangeByTab[tab_id];
+  pendingChange?.bufferedEvents.splice(0);
+  delete _pendingContextChangeByTab[tab_id];
   delete _chatByTab[tab_id];
   delete _tokensByTab[tab_id];
 }
@@ -783,7 +825,7 @@ async function stopSessionNow(tab_id: string): Promise<void> {
 
   // Signal-only shutdown keeps the actor and conversation lease alive. It
   // unblocks tool waits but deliberately does not join/remove the actor; pending
-  // Message/ClearContext processing acknowledgements and the final UI timeline
+  // Message/context-change processing acknowledgements and the final UI timeline
   // must settle before the full stop releases ownership.
   const prepareResults = session
     ? await Promise.allSettled([
@@ -802,23 +844,29 @@ async function stopSessionNow(tab_id: string): Promise<void> {
     pendingMutations.map((pending) => pending.operation),
   );
   const failedClientIds = new Set<string>();
-  let latestSuccessfulClear = -1;
+  const successfulContextChanges: Array<Extract<PendingConversationMutation, { kind: "clear" | "rollback" }>> = [];
   mutationResults.forEach((result, index) => {
     const mutation = pendingMutations[index];
     if (result.status === "rejected" && mutation.kind === "send") {
       failedClientIds.add(mutation.clientId);
-    } else if (result.status === "fulfilled" && mutation.kind === "clear") {
-      latestSuccessfulClear = Math.max(latestSuccessfulClear, mutation.sequence);
+    } else if (result.status === "fulfilled" && (mutation.kind === "clear" || mutation.kind === "rollback")) {
+      successfulContextChanges.push(mutation);
     }
   });
-  const filteredItems = items?.filter(
-    (item) => {
-      if (item.kind !== "user") return latestSuccessfulClear < 0;
-      if (item.client_id && failedClientIds.has(item.client_id)) return false;
-      return latestSuccessfulClear < 0
-        || (item.client_seq !== undefined && item.client_seq > latestSuccessfulClear);
-    },
+  let filteredItems = items?.filter(
+    (item) => item.kind !== "user" || !item.client_id || !failedClientIds.has(item.client_id),
   );
+  for (const mutation of successfulContextChanges.sort((a, b) => a.sequence - b.sequence)) {
+    if (!filteredItems) break;
+    if (mutation.kind === "rollback") {
+      filteredItems = applyTerminalMutations(filteredItems, mutation.terminalMutations);
+    }
+    filteredItems = timelineAfterContextChange(
+      filteredItems,
+      mutation.sequence,
+      mutation.kind === "rollback" ? mutation : undefined,
+    );
+  }
   const finalItems = filteredItems
     ? applyTerminalMutations(filteredItems, terminalMutations)
     : filteredItems;
@@ -934,7 +982,7 @@ export async function clearContext(tab_id: string, lease: SessionLease): Promise
   const session = sessionInstanceForLease(tab_id, lease);
   const sequence = ++_nextConversationMutationId;
   const operation = enqueueConversationMutation(tab_id, async () => {
-    const pending = beginContextClear(session);
+    const pending = beginContextChange(session);
     try {
       await invoke("ai_session_clear_context", {
         tabId: session.tabId,
@@ -943,15 +991,71 @@ export async function clearContext(tab_id: string, lease: SessionLease): Promise
       // Like user messages, the backend response is a processing ack. Frontend
       // owns the matching UI mutation. Epoch installation + reset happens
       // synchronously, then any new-epoch events that outran this response run.
-      finishContextClear(session, pending, sequence);
+      finishContextChange(session, pending, sequence);
     } catch (error) {
-      abandonContextClear(session, pending);
+      abandonContextChange(session, pending);
       throw error;
     }
   });
   const pending: PendingConversationMutation = {
     kind: "clear",
     sequence,
+    operation,
+  };
+  trackConversationMutation(tab_id, pending);
+  try {
+    await operation;
+  } finally {
+    untrackConversationMutation(tab_id, pending);
+  }
+}
+
+/** Remove one user turn and everything after it from history and the UI timeline. */
+export async function rollbackContext(
+  tab_id: string,
+  userMessageIndex: number,
+  expectedText: string,
+  lease: SessionLease,
+): Promise<void> {
+  const session = sessionInstanceForLease(tab_id, lease);
+  const expectedUserMessages = (_chatByTab[tab_id] ?? [])
+    .filter((item): item is Extract<ChatItem, { kind: "user" }> => item.kind === "user")
+    .map((item) => item.text);
+  if (
+    userMessageIndex >= expectedUserMessages.length
+    || expectedUserMessages[userMessageIndex] !== expectedText
+  ) throw new Error("ai_context_message_mismatch");
+  const sequence = ++_nextConversationMutationId;
+  const terminalMutations: AiTerminalMutation[] = [];
+  const operation = enqueueConversationMutation(tab_id, async () => {
+    const pending = beginContextChange(session);
+    try {
+      const response = await invoke<AiTerminalMutation[]>("ai_session_rollback_context", {
+        tabId: session.tabId,
+        instanceId: session.instanceId,
+        userMessageIndex,
+        expectedUserMessages,
+      });
+      const mutations = Array.isArray(response) ? response : [];
+      terminalMutations.push(...mutations);
+      if (_sessionByTab[tab_id]?.instance_id === session.instanceId) {
+        _chatByTab[tab_id] = applyTerminalMutations(_chatByTab[tab_id] ?? [], mutations);
+      }
+      finishContextChange(session, pending, sequence, {
+        userMessageIndex,
+        expectedUserMessages,
+      });
+    } catch (error) {
+      abandonContextChange(session, pending);
+      throw error;
+    }
+  });
+  const pending: PendingConversationMutation = {
+    kind: "rollback",
+    sequence,
+    userMessageIndex,
+    expectedUserMessages,
+    terminalMutations,
     operation,
   };
   trackConversationMutation(tab_id, pending);

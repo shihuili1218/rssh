@@ -83,6 +83,14 @@ pub enum UserAction {
     ClearContext {
         ack: Option<oneshot::Sender<AppResult<()>>>,
     },
+    /// Remove the selected user message and every later history message.
+    /// The ordinal is among user messages only; expected_text prevents a stale
+    /// UI timeline from truncating the wrong turn.
+    RollbackContext {
+        user_message_index: usize,
+        expected_user_messages: Vec<String>,
+        ack: Option<oneshot::Sender<AppResult<Vec<AiTerminalMutation>>>>,
+    },
     /// SSH 重连或目标切换。actor 不变，只换 target_id + ssh_handle，
     /// 让后续 file_ops / SFTP 走新连接。remote_caps 也清掉重新探测。
     RebindTarget {
@@ -115,6 +123,15 @@ impl std::fmt::Debug for UserAction {
                 ..
             } => write!(f, "CommandResult({command_id} exit={exit_code})"),
             UserAction::ClearContext { .. } => f.write_str("ClearContext"),
+            UserAction::RollbackContext {
+                user_message_index,
+                expected_user_messages,
+                ..
+            } => write!(
+                f,
+                "RollbackContext({user_message_index}/{})",
+                expected_user_messages.len()
+            ),
             UserAction::RebindTarget { target_id, .. } => {
                 write!(f, "RebindTarget({target_id})")
             }
@@ -379,6 +396,42 @@ async fn wait_for_shutdown(shutdown_rx: &mut watch::Receiver<bool>) {
     }
 }
 
+fn rollback_history(
+    history: &mut Vec<ChatMessage>,
+    user_message_index: usize,
+    expected_user_messages: &[String],
+) -> AppResult<usize> {
+    if user_message_index >= expected_user_messages.len() {
+        return Err(AppError::other(
+            "ai_context_message_mismatch",
+            json!({ "user_message_index": user_message_index }),
+        ));
+    }
+    let actual: Vec<(usize, &str)> = history
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| match message {
+            ChatMessage::User { content } => Some((index, content.as_str())),
+            _ => None,
+        })
+        .collect();
+    let matches = actual.len() == expected_user_messages.len()
+        && actual
+            .iter()
+            .zip(expected_user_messages)
+            .all(|((_, actual), expected)| *actual == expected);
+    if !matches {
+        return Err(AppError::other(
+            "ai_context_message_mismatch",
+            json!({ "user_message_index": user_message_index }),
+        ));
+    }
+    let cutoff = actual[user_message_index].0;
+    let dropped = history.len() - cutoff;
+    history.truncate(cutoff);
+    Ok(dropped)
+}
+
 impl Actor {
     async fn run(mut self, mut shutdown_rx: watch::Receiver<bool>) {
         loop {
@@ -415,6 +468,11 @@ impl Actor {
                 UserAction::ClearContext { ack } => {
                     self.clear_context(ack);
                 }
+                UserAction::RollbackContext {
+                    user_message_index,
+                    expected_user_messages,
+                    ack,
+                } => self.rollback_context(user_message_index, &expected_user_messages, ack),
                 // RebindTarget 由 recv_action 透明吞掉，这里不会落到。
                 UserAction::CommandResult {
                     command_id, ack, ..
@@ -456,6 +514,11 @@ impl Actor {
                     Self::complete_action(ack, Ok(()));
                 }
                 Ok(UserAction::ClearContext { ack }) => self.clear_context(ack),
+                Ok(UserAction::RollbackContext {
+                    user_message_index,
+                    expected_user_messages,
+                    ack,
+                }) => self.rollback_context(user_message_index, &expected_user_messages, ack),
                 Ok(UserAction::CommandResult {
                     command_id, ack, ..
                 })
@@ -491,6 +554,45 @@ impl Actor {
         self.persist_history();
         self.emit("context_cleared", json!({}));
         Self::complete_action(ack, Ok(()));
+    }
+
+    fn rollback_context(
+        &mut self,
+        user_message_index: usize,
+        expected_user_messages: &[String],
+        ack: Option<oneshot::Sender<AppResult<Vec<AiTerminalMutation>>>>,
+    ) {
+        let result = rollback_history(
+            &mut self.history,
+            user_message_index,
+            expected_user_messages,
+        );
+        let dropped = match result {
+            Ok(dropped) => dropped,
+            Err(error) => {
+                Self::complete_action(ack, Err(error));
+                return;
+            }
+        };
+        self.remote_caps = None;
+        self.context_epoch += 1;
+        let terminal_mutations = self
+            .terminal_mutations
+            .lock()
+            .map(|mut terminal| std::mem::take(&mut *terminal))
+            .unwrap_or_default();
+        self.audit_push(AuditKind::Note {
+            message: format!(
+                "context rolled back before user message #{} ({dropped} messages dropped)",
+                user_message_index + 1
+            ),
+        });
+        self.persist_history();
+        self.emit(
+            "context_rolled_back",
+            json!({ "user_message_index": user_message_index }),
+        );
+        Self::complete_action(ack, Ok(terminal_mutations));
     }
 
     fn complete_action<T>(ack: Option<oneshot::Sender<AppResult<T>>>, result: AppResult<T>) {
@@ -940,6 +1042,19 @@ impl Actor {
                         }),
                     );
                     Self::reject_pending_action(ack, "clear_context", card_id);
+                    continue;
+                }
+                UserAction::RollbackContext { ack, .. } => {
+                    self.audit_push(AuditKind::Note {
+                        message: format!("context rollback dropped during tool call {card_id}"),
+                    });
+                    self.emit(
+                        "error",
+                        json!({
+                            "message": "Cannot roll back context while a tool call is running. Wait for it to finish, then roll back.",
+                        }),
+                    );
+                    Self::reject_pending_action(ack, "rollback_context", card_id);
                     continue;
                 }
                 _ => continue,
@@ -1541,6 +1656,22 @@ impl Actor {
                     Self::reject_pending_action(ack, "clear_context", &cmd_id);
                     continue;
                 }
+                UserAction::RollbackContext { ack, .. } => {
+                    self.audit_push(AuditKind::Note {
+                        message: format!(
+                            "context rollback dropped during command approval (pending tool_call {})",
+                            cmd_id
+                        ),
+                    });
+                    self.emit(
+                        "error",
+                        json!({
+                            "message": "Cannot roll back context while a command is pending approval. Approve or reject the command first.",
+                        }),
+                    );
+                    Self::reject_pending_action(ack, "rollback_context", &cmd_id);
+                    continue;
+                }
                 // 落到这里的只剩 stale RejectCommand/CommandResult（id 不匹配），静默丢即可。
                 _ => continue,
             }
@@ -1661,5 +1792,79 @@ impl Actor {
         }
         let event = format!("ai:{kind}:{}", self.cfg.tab_id);
         let _ = self.app.emit(&event, payload);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn user(content: &str) -> ChatMessage {
+        ChatMessage::User {
+            content: content.to_string(),
+        }
+    }
+
+    fn assistant(content: &str) -> ChatMessage {
+        ChatMessage::Assistant {
+            content: content.to_string(),
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        }
+    }
+
+    #[test]
+    fn rollback_removes_selected_user_turn_and_later_history() {
+        let mut history = vec![
+            user("keep"),
+            assistant("kept"),
+            user("remove"),
+            assistant("gone"),
+        ];
+
+        let expected = vec!["keep".to_string(), "remove".to_string()];
+        let dropped = rollback_history(&mut history, 1, &expected).unwrap();
+
+        assert_eq!(dropped, 2);
+        assert_eq!(history.len(), 2);
+        assert!(matches!(&history[0], ChatMessage::User { content } if content == "keep"));
+    }
+
+    #[test]
+    fn rollback_uses_user_ordinal_even_when_text_repeats() {
+        let mut history = vec![
+            user("same"),
+            assistant("first"),
+            user("same"),
+            assistant("second"),
+        ];
+
+        let expected = vec!["same".to_string(), "same".to_string()];
+        rollback_history(&mut history, 1, &expected).unwrap();
+
+        assert_eq!(history.len(), 2);
+        assert!(
+            matches!(&history[1], ChatMessage::Assistant { content, .. } if content == "first")
+        );
+    }
+
+    #[test]
+    fn rollback_rejects_stale_text_without_mutating_history() {
+        let mut history = vec![user("actual"), assistant("answer")];
+
+        let error = rollback_history(&mut history, 0, &["stale".to_string()]).unwrap_err();
+
+        assert_eq!(error.code(), "ai_context_message_mismatch");
+        assert_eq!(history.len(), 2);
+    }
+
+    #[test]
+    fn rollback_rejects_a_shifted_prefix_even_when_target_text_repeats() {
+        let mut history = vec![user("missing in ui"), user("same"), assistant("answer")];
+        let expected = vec!["same".to_string()];
+
+        rollback_history(&mut history, 0, &expected).unwrap_err();
+
+        assert_eq!(history.len(), 3);
     }
 }

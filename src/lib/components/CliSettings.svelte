@@ -3,7 +3,7 @@
     import {invoke} from "@tauri-apps/api/core";
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import * as cli from "../stores/cli.svelte.ts";
-    import { writeClipboard } from "../stores/app.svelte.ts";
+    import { writeText as writeClipboard } from "../clipboard.ts";
     import { toast } from "../stores/toast.svelte.ts";
     import AppIcon from "./AppIcon.svelte";
 
