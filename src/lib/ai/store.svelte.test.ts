@@ -594,6 +594,189 @@ describe("tab lifecycle", () => {
     }]);
   });
 
+  it("rolls back the selected user message and every later timeline item", async () => {
+    vi.resetModules();
+    const ai = await import("./store.svelte.ts");
+    ai.activateTab("tab-a");
+    ai.openPanel("tab-a");
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "ai_session_start") return info;
+      return null;
+    });
+    const lease = ai.captureSessionLease("tab-a");
+    await ai.startSession({ ...args, lease });
+    const assistantStart = listenMock.mock.calls.find(
+      ([event]) => event === "ai:assistant_message_start:tab-a",
+    )?.[1];
+    const assistantEnd = listenMock.mock.calls.find(
+      ([event]) => event === "ai:assistant_message_end:tab-a",
+    )?.[1];
+
+    await ai.sendMessage("tab-a", "keep", lease);
+    assistantStart?.({ payload: { id: "reply-1", context_epoch: 0 } });
+    assistantEnd?.({ payload: { id: "reply-1", text: "kept", context_epoch: 0 } });
+    await ai.sendMessage("tab-a", "remove", lease);
+    assistantStart?.({ payload: { id: "reply-2", context_epoch: 0 } });
+    assistantEnd?.({ payload: { id: "reply-2", text: "removed", context_epoch: 0 } });
+
+    await ai.rollbackContext("tab-a", 1, "remove", lease);
+
+    expect(invokeMock).toHaveBeenCalledWith("ai_session_rollback_context", {
+      tabId: "tab-a",
+      instanceId: "instance-a",
+      userMessageIndex: 1,
+      expectedUserMessages: ["keep", "remove"],
+    });
+    expect(ai.chatItems("tab-a")).toEqual([
+      expect.objectContaining({ kind: "user", text: "keep" }),
+      expect.objectContaining({ kind: "assistant", text: "kept" }),
+    ]);
+  });
+
+  it("can roll back an earlier user message when later turns exist", async () => {
+    vi.resetModules();
+    const ai = await import("./store.svelte.ts");
+    ai.activateTab("tab-a");
+    ai.openPanel("tab-a");
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "ai_session_start") return info;
+      if (command === "ai_session_rollback_context") return [];
+      return null;
+    });
+    const lease = ai.captureSessionLease("tab-a");
+    await ai.startSession({ ...args, lease });
+    await ai.sendMessage("tab-a", "first", lease);
+    await ai.sendMessage("tab-a", "second", lease);
+    await ai.sendMessage("tab-a", "third", lease);
+
+    await ai.rollbackContext("tab-a", 0, "first", lease);
+
+    expect(invokeMock).toHaveBeenCalledWith("ai_session_rollback_context", {
+      tabId: "tab-a",
+      instanceId: "instance-a",
+      userMessageIndex: 0,
+      expectedUserMessages: ["first", "second", "third"],
+    });
+    expect(ai.chatItems("tab-a")).toEqual([]);
+  });
+
+  it("keeps the timeline when context rollback is rejected", async () => {
+    vi.resetModules();
+    const ai = await import("./store.svelte.ts");
+    ai.activateTab("tab-a");
+    ai.openPanel("tab-a");
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "ai_session_start") return info;
+      if (command === "ai_session_rollback_context") throw new Error("message mismatch");
+      return null;
+    });
+    const lease = ai.captureSessionLease("tab-a");
+    await ai.startSession({ ...args, lease });
+    await ai.sendMessage("tab-a", "keep me", lease);
+
+    await expect(ai.rollbackContext("tab-a", 0, "keep me", lease))
+      .rejects.toThrow("message mismatch");
+
+    expect(ai.chatItems("tab-a")).toEqual([
+      expect.objectContaining({ kind: "user", text: "keep me" }),
+    ]);
+  });
+
+  it("applies preserved command results before truncating a later user turn", async () => {
+    vi.resetModules();
+    const ai = await import("./store.svelte.ts");
+    ai.activateTab("tab-a");
+    ai.openPanel("tab-a");
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "ai_session_start") return info;
+      if (command === "ai_session_rollback_context") return [{
+        kind: "command_completed",
+        payload: {
+          id: "command-1",
+          exit_code: 0,
+          timed_out: false,
+          duration_ms: 4,
+          output: "done",
+          original_bytes: 4,
+          truncated_bytes: 0,
+        },
+      }];
+      return null;
+    });
+    const lease = ai.captureSessionLease("tab-a");
+    await ai.startSession({ ...args, lease });
+    const commandProposed = listenMock.mock.calls.find(
+      ([event]) => event === "ai:command_proposed:tab-a",
+    )?.[1];
+    await ai.sendMessage("tab-a", "keep", lease);
+    commandProposed?.({ payload: {
+      id: "command-1",
+      tool_call_id: "command-1",
+      cmd: "echo done",
+      full_cmd: "echo done",
+      sentinel: "sentinel",
+      explain: "",
+      side_effect: "",
+      timeout_s: 30,
+      kind: "run_command",
+      context_epoch: 0,
+    } });
+    await ai.sendMessage("tab-a", "remove", lease);
+
+    await ai.rollbackContext("tab-a", 1, "remove", lease);
+
+    expect(ai.chatItems("tab-a")).toEqual([
+      expect.objectContaining({ kind: "user", text: "keep" }),
+      expect.objectContaining({
+        kind: "command",
+        result: expect.objectContaining({ output: "done" }),
+      }),
+    ]);
+  });
+
+  it("persists an acknowledged pending rollback before full stop", async () => {
+    vi.resetModules();
+    const ai = await import("./store.svelte.ts");
+    ai.activateTab("tab-a");
+    ai.openPanel("tab-a");
+    let resolveRollback!: () => void;
+    const rollbackGate = new Promise<void>((resolve) => { resolveRollback = resolve; });
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "ai_session_start") return info;
+      if (command === "ai_session_rollback_context") {
+        await rollbackGate;
+        return [];
+      }
+      return null;
+    });
+    const lease = ai.captureSessionLease("tab-a");
+    await ai.startSession({ ...args, lease });
+    await ai.sendMessage("tab-a", "keep", lease);
+    await ai.sendMessage("tab-a", "remove", lease);
+
+    const rollingBack = ai.rollbackContext("tab-a", 1, "remove", lease);
+    await vi.waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      "ai_session_rollback_context",
+      expect.objectContaining({
+        userMessageIndex: 1,
+        expectedUserMessages: ["keep", "remove"],
+      }),
+    ));
+    const closing = ai.closePanel("tab-a");
+    resolveRollback();
+    await Promise.all([rollingBack, closing]);
+
+    const saves = invokeMock.mock.calls.filter(
+      ([command]) => command === "ai_conversation_save_timeline",
+    );
+    const final = saves[saves.length - 1]?.[1] as { timeline: string };
+    expect(JSON.parse(final.timeline)).toEqual([{
+      kind: "user",
+      text: "keep",
+      at: expect.any(Number),
+    }]);
+  });
+
   it("returns a closed panel to its first-open conversation state", async () => {
     vi.resetModules();
     const ai = await import("./store.svelte.ts");

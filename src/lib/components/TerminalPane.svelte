@@ -30,6 +30,8 @@
     import {compileHighlightRules, type CompiledHighlightRule} from "../terminal/highlight.ts";
     import {HighlightDecorator} from "../terminal/highlight-decorations.ts";
     import {t, errMsg} from "../i18n/index.svelte.ts";
+    import {readText as readClipboard, writeText as writeClipboard} from "../clipboard.ts";
+    import {toast} from "../stores/toast.svelte.ts";
     import {ACTIONS, matchBinding, optionArrowWordMotion, type ActionId} from "../keyboard/keymap.ts";
     import * as keymap from "../stores/keymap.svelte.ts";
     import BlockContextMenu, {type MenuItem} from "./BlockContextMenu.svelte";
@@ -413,8 +415,12 @@
         // arboard (not navigator.clipboard) so this process — not WebKitGTK —
         // owns the X11 CLIPBOARD selection. Otherwise a later arboard-based
         // paste (clipboard_read) deadlocks on its own WebView and times out.
-        await app.writeClipboard(text);
-        clearBlockSelection();
+        try {
+            await writeClipboard(text);
+            clearBlockSelection();
+        } catch (error) {
+            toast.error(errMsg(error));
+        }
     }
 
     function copyBlocksAsImage(blocks: CommandBlock[]) {
@@ -423,7 +429,7 @@
         // `new ClipboardItem(...)` 会同步 throw ReferenceError，那是发生在
         // .catch() 前的，会冒泡到 click handler 把 UI 搞炸。先 bail out。
         if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
-            console.warn("copy image: ClipboardItem / clipboard.write unavailable");
+            toast.error(t("terminal.block.copy_image_unavailable"));
             return;
         }
         // 关键：clipboard.write 必须**同步**地在 click handler 里调用，
@@ -439,10 +445,10 @@
             navigator.clipboard
                 .write([new ClipboardItem({ "image/png": pngPromise })])
                 .then(() => clearBlockSelection())
-                .catch((e) => console.warn("copy image failed:", e));
+                .catch((error) => toast.error(errMsg(error)));
         } catch (e) {
             // ClipboardItem 构造或 clipboard.write 调用本身的 sync throw 兜底
-            console.warn("copy image failed (sync):", e);
+            toast.error(errMsg(e));
         }
     }
 
@@ -793,9 +799,16 @@
         invoke(writeCmd, { sessionId, data: Array.from(new TextEncoder().encode(wrapped)) });
     }
 
-    function copySelection() {
+    async function copySelection(): Promise<boolean> {
         const sel = terminal.getSelection();
-        if (sel) app.writeClipboard(sel);
+        if (!sel) return false;
+        try {
+            await writeClipboard(sel);
+            return true;
+        } catch (error) {
+            toast.error(errMsg(error));
+            return false;
+        }
     }
 
     /** Copy-on-select: fires on a real left-button mouse release on the terminal
@@ -837,12 +850,13 @@
         e.preventDefault();
         e.stopPropagation();
         if (action === "paste") {
-            app.readClipboard().then(pasteText);
+            readClipboard().then(pasteText).catch((error) => toast.error(errMsg(error)));
         } else if (terminal.hasSelection()) {
-            copySelection();
-            terminal.clearSelection();
+            void copySelection().then((copied) => {
+                if (copied) terminal.clearSelection();
+            });
         } else {
-            app.readClipboard().then(pasteText);
+            readClipboard().then(pasteText).catch((error) => toast.error(errMsg(error)));
         }
     }
 
@@ -1545,8 +1559,8 @@
                 case "term.search": openSearch(); break;
                 case "term.sftp": app.navigate("sftp"); break;
                 case "term.snippet": app.openSnippetPicker(); break;
-                case "term.paste": app.readClipboard().then(pasteText); break;
-                case "term.copy": copySelection(); break;
+                case "term.paste": readClipboard().then(pasteText).catch((error) => toast.error(errMsg(error))); break;
+                case "term.copy": void copySelection(); break;
             }
         }
         terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
@@ -1572,7 +1586,7 @@
         // to write selected text into the desktop clipboard.
         if (tabType !== "serial") {
             registerClipboardOscHandler(terminal.parser, {
-                writeText: app.writeClipboard,
+                writeText: (text) => writeClipboard(text).catch((error) => toast.error(errMsg(error))),
             });
         }
 

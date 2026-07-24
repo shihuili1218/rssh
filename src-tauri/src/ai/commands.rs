@@ -733,13 +733,13 @@ pub(crate) fn ai_send_action(
     )
 }
 
-async fn ai_send_processed_action(
+async fn ai_send_processed_action<T>(
     state: &AppState,
     tab_id: &str,
     expected_owner: &crate::state::SessionOwner,
     expected_instance_id: Option<&str>,
-    build: impl FnOnce(tokio::sync::oneshot::Sender<AppResult<()>>) -> UserAction,
-) -> AppResult<()> {
+    build: impl FnOnce(tokio::sync::oneshot::Sender<AppResult<T>>) -> UserAction,
+) -> AppResult<T> {
     let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
     ai_send_action(
         state,
@@ -777,6 +777,24 @@ pub(crate) async fn ai_session_clear_context_impl(
 ) -> AppResult<()> {
     ai_send_processed_action(state, tab_id, expected_owner, expected_instance_id, |ack| {
         UserAction::ClearContext { ack: Some(ack) }
+    })
+    .await
+}
+
+pub(crate) async fn ai_session_rollback_context_impl(
+    state: &AppState,
+    tab_id: &str,
+    expected_owner: &crate::state::SessionOwner,
+    user_message_index: usize,
+    expected_user_messages: Vec<String>,
+    expected_instance_id: Option<&str>,
+) -> AppResult<Vec<session::AiTerminalMutation>> {
+    ai_send_processed_action(state, tab_id, expected_owner, expected_instance_id, |ack| {
+        UserAction::RollbackContext {
+            user_message_index,
+            expected_user_messages,
+            ack: Some(ack),
+        }
     })
     .await
 }
@@ -968,6 +986,27 @@ pub async fn ai_session_clear_context(
         &state,
         &tab_id,
         &crate::state::SessionOwner::Window(window.label().to_owned()),
+        instance_id.as_deref(),
+    )
+    .await
+}
+
+/// Truncate history before one user message while preserving the audit log.
+#[tauri::command]
+pub async fn ai_session_rollback_context(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    tab_id: String,
+    user_message_index: usize,
+    expected_user_messages: Vec<String>,
+    instance_id: Option<String>,
+) -> AppResult<Vec<session::AiTerminalMutation>> {
+    ai_session_rollback_context_impl(
+        &state,
+        &tab_id,
+        &crate::state::SessionOwner::Window(window.label().to_owned()),
+        user_message_index,
+        expected_user_messages,
         instance_id.as_deref(),
     )
     .await

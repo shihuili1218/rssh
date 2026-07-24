@@ -28,6 +28,7 @@
     import * as keymap from "../stores/keymap.svelte.ts";
     import {t, errMsg} from "../i18n/index.svelte.ts";
     import {toast} from "../stores/toast.svelte.ts";
+    import {readText as readClipboard, writeText as writeClipboard} from "../clipboard.ts";
     import {initializePrimarySessionWindow} from "./primary-session-window.ts";
     import {
         defaultPanelWidth,
@@ -759,7 +760,9 @@
                 {
                     label: t("tab.context.copy"),
                     disabled: !selection,
-                    onClick: () => { if (selection) app.writeClipboard(selection); },
+                    onClick: () => {
+                        if (selection) void writeClipboard(selection).catch((error) => toast.error(errMsg(error)));
+                    },
                 },
                 {
                     label: t("tab.context.paste"),
@@ -771,10 +774,10 @@
                     // after the async read, so it wins the focus back from <body>.
                     onClick: () => {
                         app.setActiveTab(tab.id);
-                        app.readClipboard().then(text => {
+                        readClipboard().then(text => {
                             if (text) app.terminalPaste(tab.id, text);
-                            app.terminalFocus(tab.id);
-                        });
+                        }).catch((error) => toast.error(errMsg(error)))
+                          .finally(() => app.terminalFocus(tab.id));
                     },
                 },
             ];
@@ -782,7 +785,7 @@
                 const utc = formatUtc(ts);
                 copyPaste.push({
                     label: `${t("tab.context.copy_utc")}: ${utc}`,
-                    onClick: () => { app.writeClipboard(utc); },
+                    onClick: () => { void writeClipboard(utc).catch((error) => toast.error(errMsg(error))); },
                 });
             }
             // Save the selected text as a command snippet: name = first 10

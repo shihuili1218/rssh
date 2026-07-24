@@ -2,9 +2,10 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
-  import { t } from "../i18n/index.svelte.ts";
+  import { t, errMsg } from "../i18n/index.svelte.ts";
   import * as updates from "../stores/updates.svelte.ts";
-  import { writeClipboard } from "../stores/app.svelte.ts";
+  import { writeText as writeClipboard } from "../clipboard.ts";
+  import { toast } from "../stores/toast.svelte.ts";
   import WelcomeScreen from "./WelcomeScreen.svelte";
 
   const REPO = "shihuili1218/rssh";
@@ -38,9 +39,13 @@
     // arboard (via writeClipboard), not navigator.clipboard, so this process
     // owns the X11 CLIPBOARD selection and a later arboard paste doesn't
     // deadlock on the WebView and time out.
-    await writeClipboard(diag);
-    justCopied = true;
-    setTimeout(() => { justCopied = false; }, 1500);
+    try {
+      await writeClipboard(diag);
+      justCopied = true;
+      setTimeout(() => { justCopied = false; }, 1500);
+    } catch (error) {
+      toast.error(errMsg(error));
+    }
   }
 </script>
 

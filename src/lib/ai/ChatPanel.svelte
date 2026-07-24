@@ -9,6 +9,7 @@
     import { formatTokenCount } from "./tokens.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import { toast } from "../stores/toast.svelte.ts";
+    import { writeText as writeClipboard } from "../clipboard.ts";
     import { onMount } from "svelte";
 
     // tabId 是 AI 会话身份（切 tab / 重连不丢；显式关闭面板时结束）。
@@ -40,6 +41,13 @@
     let chatBoxEl = $state<HTMLDivElement | null>(null);
     let showClearDialog = $state(false);
     let clearDialogOwner = $state<PanelOwner | null>(null);
+    let rollingBack = $state(false);
+    let rollbackDialog = $state<{
+        owner: PanelOwner;
+        instanceId: string;
+        userMessageIndex: number;
+        text: string;
+    } | null>(null);
 
     let session = $derived(ai.sessionForTab(tabId));
     let items: ChatItem[] = $derived(ai.chatItems(tabId));
@@ -87,6 +95,7 @@
         if (active) return;
         showClearDialog = false;
         clearDialogOwner = null;
+        rollbackDialog = null;
     });
 
     // 历史对话随当前 target（同一 tab 重连时 session id 会变）重新加载。
@@ -252,7 +261,7 @@
 
     /** 点扫帚按钮：开二次确认模态。actor 不在就不弹（清个空气没意义）。 */
     function openClearDialog() {
-        if (!session) return;
+        if (!session || rollbackDialog || rollingBack) return;
         clearDialogOwner = snapshotOwner();
         showClearDialog = true;
     }
@@ -303,6 +312,59 @@
 
     function fmt(ts: number) {
         return new Date(ts).toLocaleTimeString();
+    }
+
+    async function copyUserMessage(text: string) {
+        try {
+            await writeClipboard(text);
+        } catch (error) {
+            toast.error(errMsg(error));
+        }
+    }
+
+    function userMessageIndexAt(itemIndex: number): number {
+        return items.slice(0, itemIndex).filter((item) => item.kind === "user").length;
+    }
+
+    function openRollbackDialog(itemIndex: number, text: string) {
+        if (rollingBack || rollbackDialog || showClearDialog || !session) return;
+        rollbackDialog = {
+            owner: snapshotOwner(),
+            instanceId: session.instance_id,
+            userMessageIndex: userMessageIndexAt(itemIndex),
+            text,
+        };
+    }
+
+    function closeRollbackDialog() {
+        rollbackDialog = null;
+    }
+
+    async function confirmRollback() {
+        const target = rollbackDialog;
+        closeRollbackDialog();
+        if (
+            !target
+            || rollingBack
+            || ai.sessionForTab(target.owner.tabId)?.instance_id !== target.instanceId
+        ) return;
+        rollingBack = true;
+        try {
+            if (ai.isStreaming(target.owner.tabId)) {
+                await ai.cancelStream(target.owner.tabId, target.owner.lease);
+            }
+            await ai.rollbackContext(
+                target.owner.tabId,
+                target.userMessageIndex,
+                target.text,
+                target.owner.lease,
+            );
+        } catch (error) {
+            console.error("[ai] rollback context:", error);
+            toast.error(errMsg(error));
+        } finally {
+            rollingBack = false;
+        }
     }
 </script>
 
@@ -380,7 +442,26 @@
                 <div class="item item-{item.kind}">
                     {#if item.kind === "user"}
                         <div class="ts">{fmt(item.at)}</div>
-                        <div class="bubble user">{item.text}</div>
+                        <div class="user-message">
+                            <div class="message-actions">
+                                <button class="message-action" onclick={() => copyUserMessage(item.text)}
+                                        title={t("ai.message.copy")} aria-label={t("ai.message.copy")}>
+                                    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <rect x="9" y="9" width="13" height="13" rx="2"/>
+                                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                                    </svg>
+                                </button>
+                                <button class="message-action rollback" onclick={() => openRollbackDialog(i, item.text)}
+                                        disabled={rollingBack} title={t("ai.message.rollback")}
+                                        aria-label={t("ai.message.rollback")}>
+                                    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M9 14 4 9l5-5"/>
+                                        <path d="M4 9h10a6 6 0 0 1 6 6v5"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <div class="bubble user">{item.text}</div>
+                        </div>
                     {:else if item.kind === "assistant"}
                         <div class="ts">{fmt(item.at)}</div>
                         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
@@ -477,6 +558,20 @@
             </button>
             <button class="btn btn-sm btn-primary" onclick={clearContext}>
                 {t("ai.toolbar.clear_confirm_action")}
+            </button>
+        </div>
+    </Modal>
+{/if}
+
+{#if rollbackDialog}
+    <Modal onClose={closeRollbackDialog} class="stack"
+           aria-labelledby="rollback-dialog-title" aria-describedby="rollback-dialog-body">
+        <h3 id="rollback-dialog-title" class="dialog-title">{t("ai.message.rollback_confirm_title")}</h3>
+        <div id="rollback-dialog-body" class="dialog-body">{t("ai.message.rollback_confirm")}</div>
+        <div class="modal-actions">
+            <button class="btn btn-sm" onclick={closeRollbackDialog}>{t("common.cancel")}</button>
+            <button class="btn btn-sm btn-danger" onclick={confirmRollback}>
+                {t("ai.message.rollback_confirm_action")}
             </button>
         </div>
     </Modal>
@@ -605,6 +700,41 @@
         display: flex; flex-direction: column; gap: 3px;
     }
     .item { display: flex; flex-direction: column; gap: 1px; }
+    .user-message {
+        display: flex; align-items: center; justify-content: flex-end; gap: 4px;
+    }
+    .message-actions {
+        display: flex; gap: 1px;
+        opacity: 0; pointer-events: none;
+        transition: opacity 120ms ease;
+    }
+    .item-user:hover .message-actions,
+    .item-user:focus-within .message-actions {
+        opacity: 1; pointer-events: auto;
+    }
+    .message-action {
+        width: 24px; height: 24px; padding: 0;
+        display: inline-flex; align-items: center; justify-content: center;
+        flex-shrink: 0;
+        border: 0; border-radius: 4px; background: transparent;
+        color: var(--text-dim); cursor: pointer;
+    }
+    .message-action:hover {
+        color: var(--text);
+        background: color-mix(in srgb, var(--text) 8%, transparent);
+    }
+    .message-action.rollback:hover { color: var(--error); }
+    .message-action:disabled { opacity: 0.4; cursor: default; }
+    @media (hover: none), (any-pointer: coarse) {
+        .user-message {
+            flex-direction: column;
+            align-items: flex-end;
+        }
+        .message-actions { opacity: 1; pointer-events: auto; }
+        .message-action { width: 44px; height: 44px; }
+        .message-actions { order: 2; }
+        .bubble.user { order: 1; }
+    }
     .ts {
         font-size: 10px; color: var(--text-dim);
         font-family: monospace;
@@ -616,7 +746,6 @@
     }
     .bubble.user {
         background: var(--accent); color: var(--white);
-        align-self: flex-end;
     }
     .bubble.assistant {
         background: color-mix(in srgb, var(--text) 8%, var(--bg));

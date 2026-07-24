@@ -75,6 +75,11 @@ pub enum AuditKind {
         id: String,
         name: String,
     },
+    ContextRolledBack {
+        /// Zero-based index among user messages in the active context.
+        user_message_index: usize,
+        dropped_messages: usize,
+    },
     Note {
         message: String,
     },
@@ -196,6 +201,16 @@ impl AuditLog {
                 AuditKind::SkillLoaded { id, name } => {
                     s.push_str(&format!("SKILL_LOADED     id={id} name={name}\n"));
                 }
+                AuditKind::ContextRolledBack {
+                    user_message_index,
+                    dropped_messages,
+                } => {
+                    s.push_str(&format!(
+                        "CONTEXT_ROLLBACK user_message={} dropped={}\n",
+                        user_message_index + 1,
+                        dropped_messages
+                    ));
+                }
                 AuditKind::Note { message } => {
                     s.push_str(&format!("NOTE             {message}\n"));
                 }
@@ -269,6 +284,15 @@ mod tests {
         .unwrap();
         assert_eq!(analyze["type"], "analyze_proposed");
         assert_eq!(analyze["task"], "find leaks");
+
+        let rollback = serde_json::to_value(AuditKind::ContextRolledBack {
+            user_message_index: 1,
+            dropped_messages: 4,
+        })
+        .unwrap();
+        assert_eq!(rollback["type"], "context_rolled_back");
+        assert_eq!(rollback["user_message_index"], 1);
+        assert_eq!(rollback["dropped_messages"], 4);
     }
 
     #[test]
@@ -283,5 +307,17 @@ mod tests {
         assert!(content.contains("NOTE"));
         assert!(content.contains("测试"));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rollback_has_a_stable_human_readable_log_entry() {
+        let mut log = AuditLog::default();
+        log.push(AuditKind::ContextRolledBack {
+            user_message_index: 2,
+            dropped_messages: 5,
+        });
+
+        let content = log.to_log_string();
+        assert!(content.contains("CONTEXT_ROLLBACK user_message=3 dropped=5"));
     }
 }

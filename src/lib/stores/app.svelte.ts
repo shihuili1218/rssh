@@ -562,26 +562,6 @@ export function readTerminalViewportText(tabId: string): string[] | null {
   return _terminalControls.get(tabId)?.readViewportText?.() ?? null;
 }
 
-/** Read system clipboard. On desktop, goes through Rust to bypass
- *  WebKit's permission prompt for externally-sourced content. */
-export async function readClipboard(): Promise<string> {
-  if (isMobile) {
-    return navigator.clipboard.readText().catch(() => "");
-  }
-  return invoke<string>("clipboard_read").catch(() => "");
-}
-
-/** Write text to the system clipboard. On desktop goes through Rust (arboard)
- *  — WKWebView's `navigator.clipboard.writeText` silently fails from a
- *  right-click / unfocused context. Mobile uses the web API. */
-export async function writeClipboard(text: string): Promise<void> {
-  if (isMobile) {
-    await navigator.clipboard.writeText(text).catch(() => {});
-    return;
-  }
-  await invoke("clipboard_write", { text }).catch(() => {});
-}
-
 /* ─── Session registry (for broadcast) ─── */
 interface SessionEntry {
   tabId: string;
