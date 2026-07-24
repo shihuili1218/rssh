@@ -581,11 +581,9 @@ impl Actor {
             .lock()
             .map(|mut terminal| std::mem::take(&mut *terminal))
             .unwrap_or_default();
-        self.audit_push(AuditKind::Note {
-            message: format!(
-                "context rolled back before user message #{} ({dropped} messages dropped)",
-                user_message_index + 1
-            ),
+        self.audit_push(AuditKind::ContextRolledBack {
+            user_message_index,
+            dropped_messages: dropped,
         });
         self.persist_history();
         self.emit(

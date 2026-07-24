@@ -78,6 +78,10 @@
             case "download_completed": return t("ai.audit.summary.download_completed", { path: k.local_path, size: formatBytes(k.bytes) });
             case "analyze_proposed": return t("ai.audit.summary.analyze_proposed", { path: k.local_path, task: k.task });
             case "skill_loaded": return t("ai.audit.summary.skill_loaded", { name: k.name, id: k.id });
+            case "context_rolled_back": return t("ai.audit.summary.context_rolled_back", {
+                index: k.user_message_index + 1,
+                count: k.dropped_messages,
+            });
             case "note": return t("ai.audit.summary.note", { message: k.message });
             case "error": return t("ai.audit.summary.error", { message: k.message });
         }
