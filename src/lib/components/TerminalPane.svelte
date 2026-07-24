@@ -429,7 +429,7 @@
         // `new ClipboardItem(...)` 会同步 throw ReferenceError，那是发生在
         // .catch() 前的，会冒泡到 click handler 把 UI 搞炸。先 bail out。
         if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
-            toast.error("Clipboard image copy is unavailable");
+            toast.error(t("terminal.block.copy_image_unavailable"));
             return;
         }
         // 关键：clipboard.write 必须**同步**地在 click handler 里调用，

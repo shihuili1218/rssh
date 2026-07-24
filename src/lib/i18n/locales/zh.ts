@@ -197,6 +197,7 @@ const zh: Messages = {
   "terminal.block.menu.copy_text_n": "复制 {n} 块为文本",
   "terminal.block.menu.copy_image": "复制为图片",
   "terminal.block.menu.copy_image_n": "复制 {n} 块为图片",
+  "terminal.block.copy_image_unavailable": "当前环境不支持复制图片到剪贴板",
   "terminal.block.menu.color": "染色",
   "terminal.block.menu.uncolor": "取消染色",
   "terminal.block.menu.send_ai": "发送到 AI",

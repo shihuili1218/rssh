@@ -261,7 +261,7 @@
 
     /** 点扫帚按钮：开二次确认模态。actor 不在就不弹（清个空气没意义）。 */
     function openClearDialog() {
-        if (!session || rollbackDialog) return;
+        if (!session || rollbackDialog || rollingBack) return;
         clearDialogOwner = snapshotOwner();
         showClearDialog = true;
     }
