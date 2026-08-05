@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use russh::client;
 use russh::ChannelMsg;
+use serde::Serialize;
 use serde_json::json;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
@@ -724,15 +725,66 @@ mod tests {
         let err = map_connect_error(russh::Error::Version, "h", 22, &mismatch);
         assert_eq!(err.code(), "ssh_connect_failed");
     }
+
+    #[test]
+    fn terminal_output_waits_for_the_previous_chunk_to_be_parsed() {
+        let mut flow = TerminalOutputFlow::default();
+
+        assert!(flow.can_receive());
+        let sequence = flow.mark_emitted();
+        assert!(!flow.can_receive());
+
+        assert!(!flow.acknowledge(sequence + 1));
+        assert!(!flow.can_receive());
+        assert!(flow.acknowledge(sequence));
+        assert!(flow.can_receive());
+    }
 }
 
 // ---------------------------------------------------------------------------
 // SessionCmd / SessionHandle
 // ---------------------------------------------------------------------------
 
+#[derive(Default)]
+struct TerminalOutputFlow {
+    in_flight: Option<u64>,
+    next_sequence: u64,
+}
+
+impl TerminalOutputFlow {
+    fn can_receive(&self) -> bool {
+        self.in_flight.is_none()
+    }
+
+    fn mark_emitted(&mut self) -> u64 {
+        debug_assert!(self.in_flight.is_none());
+        let sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.wrapping_add(1);
+        self.in_flight = Some(sequence);
+        sequence
+    }
+
+    fn acknowledge(&mut self, sequence: u64) -> bool {
+        if self.in_flight != Some(sequence) {
+            return false;
+        }
+        self.in_flight = None;
+        true
+    }
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalOutputChunk {
+    data: Vec<u8>,
+    sequence: u64,
+}
+
 pub enum SessionCmd {
+    StartOutput,
     Write(Vec<u8>),
     Resize { cols: u32, rows: u32 },
+    AcknowledgeOutput(u64),
     Close,
 }
 
@@ -746,6 +798,14 @@ pub struct SessionHandle {
 }
 
 impl SessionHandle {
+    /// Start forwarding shell output only after the handle is visible in the
+    /// lifecycle registry. Otherwise a fast remote prompt can be parsed and ACKed
+    /// before `ssh_output_ack` can find this session, wedging the first chunk.
+    pub fn start_output(&self) -> AppResult<()> {
+        self.tx
+            .send(SessionCmd::StartOutput)
+            .map_err(|_| AppError::ssh("ssh_session_closed", json!({})))
+    }
     pub fn write(&self, data: &[u8]) -> AppResult<()> {
         self.tx
             .send(SessionCmd::Write(data.to_vec()))
@@ -754,6 +814,11 @@ impl SessionHandle {
     pub fn resize(&self, cols: u32, rows: u32) -> AppResult<()> {
         self.tx
             .send(SessionCmd::Resize { cols, rows })
+            .map_err(|_| AppError::ssh("ssh_session_closed", json!({})))
+    }
+    pub fn acknowledge_output(&self, sequence: u64) -> AppResult<()> {
+        self.tx
+            .send(SessionCmd::AcknowledgeOutput(sequence))
             .map_err(|_| AppError::ssh("ssh_session_closed", json!({})))
     }
     pub fn ssh_handle(&self) -> &SshHandle {
@@ -932,10 +997,13 @@ async fn session_task(
     app: crate::emitter::Host,
     mut recorder: Option<Recorder>,
 ) {
+    let mut output_started = false;
+    let mut output_flow = TerminalOutputFlow::default();
     loop {
         let event = tokio::select! {
-            msg = channel.wait() => Event::Ssh(msg),
+            biased;
             cmd = rx.recv() => Event::Cmd(cmd),
+            msg = channel.wait(), if output_started && output_flow.can_receive() => Event::Ssh(msg),
         };
 
         match event {
@@ -943,22 +1011,52 @@ async fn session_task(
                 if let Some(ref mut rec) = recorder {
                     let _ = rec.record(&data);
                 }
-                let _ = app.emit(&data_event, data.to_vec());
+                let sequence = output_flow.mark_emitted();
+                if app
+                    .emit(
+                        &data_event,
+                        TerminalOutputChunk {
+                            data: data.to_vec(),
+                            sequence,
+                        },
+                    )
+                    .is_err()
+                {
+                    break;
+                }
             }
             Event::Ssh(Some(ChannelMsg::ExtendedData { data, .. })) => {
                 if let Some(ref mut rec) = recorder {
                     let _ = rec.record(&data);
                 }
-                let _ = app.emit(&data_event, data.to_vec());
+                let sequence = output_flow.mark_emitted();
+                if app
+                    .emit(
+                        &data_event,
+                        TerminalOutputChunk {
+                            data: data.to_vec(),
+                            sequence,
+                        },
+                    )
+                    .is_err()
+                {
+                    break;
+                }
             }
             Event::Ssh(Some(ChannelMsg::Eof | ChannelMsg::Close)) | Event::Ssh(None) => {
                 break;
+            }
+            Event::Cmd(Some(SessionCmd::StartOutput)) => {
+                output_started = true;
             }
             Event::Cmd(Some(SessionCmd::Write(data))) => {
                 let _ = channel.data(std::io::Cursor::new(data)).await;
             }
             Event::Cmd(Some(SessionCmd::Resize { cols, rows })) => {
                 let _ = channel.window_change(cols, rows, 0, 0).await;
+            }
+            Event::Cmd(Some(SessionCmd::AcknowledgeOutput(sequence))) => {
+                output_flow.acknowledge(sequence);
             }
             Event::Cmd(Some(SessionCmd::Close)) | Event::Cmd(None) => {
                 let _ = channel.close().await;

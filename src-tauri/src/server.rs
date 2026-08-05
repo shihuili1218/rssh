@@ -848,6 +848,14 @@ async fn dispatch_async(
                 .map(|_| Value::Null)
                 .map_err(err_value)
         }
+        "ssh_output_ack" => {
+            let sid: String = arg(&args, "sessionId")?;
+            let sequence: u64 = arg(&args, "sequence")?;
+            ssh_session(state, &sid)?
+                .acknowledge_output(sequence)
+                .map(|_| Value::Null)
+                .map_err(err_value)
+        }
         "ssh_resize" => {
             let sid: String = arg(&args, "sessionId")?;
             let cols = args.get("cols").and_then(Value::as_u64).unwrap_or(80) as u32;
@@ -1446,12 +1454,18 @@ async fn ssh_connect(
         }
     }
     let session_id = result.session_id;
+    let handle = result.handle;
     reservation
         .activate_returned(
             &session_id,
-            crate::commands::lifecycle::ReadySession::Ssh(result.handle),
+            crate::commands::lifecycle::ReadySession::Ssh(handle.clone()),
         )
         .map_err(err_value)?;
+    if let Err(error) = handle.start_output() {
+        let _ =
+            crate::commands::lifecycle::close_resource(state, &session_id, SessionKind::Ssh, owner);
+        return Err(err_value(error));
+    }
     Ok(json!(session_id))
 }
 

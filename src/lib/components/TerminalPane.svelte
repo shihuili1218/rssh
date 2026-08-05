@@ -20,6 +20,7 @@
     import {readViewportSnapshot, readViewportText} from "../terminal/viewport-snapshot.ts";
     import {createFoldStore, type FoldStore} from "../terminal/folds.ts";
     import {createPaintScheduler, type PaintScheduler} from "../terminal/paint-scheduler.ts";
+    import {readTransportOutput, type TransportOutputPayload} from "../terminal/transport-output.ts";
 
     import {extractBlocksText} from "../terminal/block-content.ts";
     import {setupTouchScroll} from "../terminal/touch-scroll.ts";
@@ -239,8 +240,8 @@
         fitAddon?.fit();
     }
 
-    function writeRawOutput(raw: Uint8Array) {
-        terminal.write(raw);
+    function writeRawOutput(raw: Uint8Array, onParsed?: () => void) {
+        terminal.write(raw, onParsed);
     }
 
     // 右键菜单状态。null = 不显示。
@@ -610,6 +611,16 @@
         reservedSessionAttempt.cancel();
         announceDisconnected(`Write failed: ${errMsg(error)}`);
     }
+    function acknowledgeSshOutput(sid: string, sequence: number) {
+        void invoke("ssh_output_ack", { sessionId: sid, sequence }).catch((error) => {
+            // A callback from an old connection must not tear down its replacement.
+            if (destroyed || disconnected || sessionId !== sid) return;
+            console.warn("[ssh] output acknowledgement failed:", error);
+            sessionId = null;
+            reservedSessionAttempt.cancel();
+            announceDisconnected(`Output acknowledgement failed: ${errMsg(error)}`);
+        });
+    }
     function streamSendBytes(bytes: number[]) {
         if (!sessionId || disconnected || !bytes.length) return;
         const sid = sessionId;
@@ -893,9 +904,10 @@
     async function createSessionEventSubscription(sid: string): Promise<UnlistenFn> {
         const listeners: UnlistenFn[] = [];
         try {
-            listeners.push(await listen<number[]>(`${dataEvent}:${sid}`, (ev) => {
+            listeners.push(await listen<TransportOutputPayload>(`${dataEvent}:${sid}`, (ev) => {
                 if (!acceptsSessionEvent(sid)) return;
-                const raw = new Uint8Array(ev.payload);
+                const output = readTransportOutput(ev.payload);
+                const raw = output.bytes;
                 if (streamOpts) {
                     stageLoginScript(raw);
                     if (streamOpts.outputMode === "hex") { terminal.write(bytesToHex(raw)); return; }
@@ -904,7 +916,10 @@
                 }
                 // Write the raw bytes untouched — keyword highlighting is a decoration
                 // layer over the parsed grid (HighlightDecorator), not a byte rewrite.
-                writeRawOutput(raw);
+                const onParsed = isSsh && output.sequence !== null
+                    ? () => acknowledgeSshOutput(sid, output.sequence!)
+                    : undefined;
+                writeRawOutput(raw, onParsed);
             }));
             if (isSsh) {
                 // Every connection-scoped event uses the reserved session id.

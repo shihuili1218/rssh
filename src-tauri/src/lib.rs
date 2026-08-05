@@ -222,6 +222,7 @@ pub fn run() {
             // SSH session
             commands::session::ssh_connect,
             commands::session::ssh_write,
+            commands::session::ssh_output_ack,
             commands::session::ssh_resize,
             commands::session::ssh_disconnect,
             commands::session::ssh_auth_respond,

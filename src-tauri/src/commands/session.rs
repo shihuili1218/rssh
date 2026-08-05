@@ -81,6 +81,7 @@ pub async fn ssh_connect(
 
     let known_hosts_path = crate::ssh::known_hosts::path_for(&state.data_dir);
     let init_command = profile.init_command.clone();
+    let connection_owner = owner.clone();
     let result = client::run_blocking_ssh(move || async move {
         client::connect(client::ConnectParams {
             session_id,
@@ -90,7 +91,7 @@ pub async fn ssh_connect(
             cols,
             rows,
             app: crate::emitter::Host::Tauri(app),
-            owner,
+            owner: connection_owner,
             recording_path,
             log_session_id: effective_log_id,
             prompt_session_id,
@@ -109,10 +110,20 @@ pub async fn ssh_connect(
     }
 
     let session_id = result.session_id;
+    let handle = result.handle;
     reservation.activate_returned(
         &session_id,
-        crate::commands::lifecycle::ReadySession::Ssh(result.handle),
+        crate::commands::lifecycle::ReadySession::Ssh(handle.clone()),
     )?;
+    if let Err(error) = handle.start_output() {
+        let _ = crate::commands::lifecycle::close_resource(
+            &state,
+            &session_id,
+            SessionKind::Ssh,
+            &owner,
+        );
+        return Err(error);
+    }
 
     Ok(session_id)
 }
@@ -124,6 +135,15 @@ pub async fn ssh_write(
     data: Vec<u8>,
 ) -> AppResult<()> {
     get_session(&state, &session_id)?.write(&data)
+}
+
+#[tauri::command]
+pub async fn ssh_output_ack(
+    state: State<'_, AppState>,
+    session_id: String,
+    sequence: u64,
+) -> AppResult<()> {
+    get_session(&state, &session_id)?.acknowledge_output(sequence)
 }
 
 #[tauri::command]

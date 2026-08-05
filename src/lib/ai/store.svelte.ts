@@ -20,6 +20,7 @@ import {
 } from "./timeline.ts";
 import { sessionCommandKey, type SessionInstanceRef } from "./session-identity.ts";
 import { commandApprovals, isAutoApprovalAllowed } from "./command-approval.ts";
+import { readTransportOutput, type TransportOutputPayload } from "../terminal/transport-output.ts";
 export type { SessionInstanceRef } from "./session-identity.ts";
 import type {
   AiSessionInfo,
@@ -1142,8 +1143,8 @@ export async function probeRemoteShell(target_id: string): Promise<boolean> {
   // can never open a line mid-token and let `^P=` false-match a sliced echo line.
   const TAIL_CAP = 16 * 1024;
   let buffer = "";
-  const unlisten = await listen<number[]>(dataEvent, (e) => {
-    buffer += new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(e.payload));
+  const unlisten = await listen<TransportOutputPayload>(dataEvent, (e) => {
+    buffer += new TextDecoder("utf-8", { fatal: false }).decode(readTransportOutput(e.payload).bytes);
     if (buffer.length > TAIL_CAP) {
       const tail = buffer.slice(-TAIL_CAP);
       const nl = tail.indexOf("\n");
@@ -1496,9 +1497,9 @@ export async function executeCommand(
   };
 
   try {
-    const unlisten = await listen<number[]>(dataEvent, (e) => {
+    const unlisten = await listen<TransportOutputPayload>(dataEvent, (e) => {
       if (exec.status !== "running") return;
-      const chunk = new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(e.payload));
+      const chunk = new TextDecoder("utf-8", { fatal: false }).decode(readTransportOutput(e.payload).bytes);
       exec.buffer.append(chunk);
       // Raw devices (serial/telnet) have no sentinel — just accumulate.
       // Completion comes from the user (submit) or the safety timeout below.
