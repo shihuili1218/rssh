@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
@@ -7,7 +8,7 @@ use russh::ChannelMsg;
 use serde::Serialize;
 use serde_json::json;
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
+use tokio::time::{sleep_until, timeout, Duration, Instant};
 
 use crate::error::{locked, AppError, AppResult};
 use crate::models::{Credential, Profile};
@@ -729,15 +730,66 @@ mod tests {
     #[test]
     fn terminal_output_waits_for_the_previous_chunk_to_be_parsed() {
         let mut flow = TerminalOutputFlow::default();
+        let now = Instant::now();
 
         assert!(flow.can_receive());
-        let sequence = flow.mark_emitted();
+        flow.push(vec![1, 2, 3], now);
+        let output = flow.next_emission().unwrap();
         assert!(!flow.can_receive());
 
-        assert!(!flow.acknowledge(sequence + 1));
+        assert!(!flow.acknowledge(output.sequence + 1));
         assert!(!flow.can_receive());
-        assert!(flow.acknowledge(sequence));
+        assert!(flow.acknowledge(output.sequence));
         assert!(flow.can_receive());
+    }
+
+    #[test]
+    fn ctrl_c_drops_old_tail_and_keeps_draining_before_ui_ack() {
+        let mut flow = TerminalOutputFlow::default();
+        let now = Instant::now();
+
+        flow.push(vec![1], now);
+        let in_flight = flow.next_emission().unwrap();
+        assert!(!flow.can_receive());
+
+        assert!(flow.begin_interrupt_drain(now));
+        assert!(flow.can_receive());
+        flow.push(vec![2], now);
+        assert!(flow.begin_interrupt_drain(now));
+        flow.push(vec![3], now);
+
+        assert!(flow.acknowledge(in_flight.sequence));
+        assert!(flow.next_emission().is_none());
+
+        flow.finish_interrupt_drain();
+        let tail = flow.next_emission().unwrap();
+        assert_eq!(tail.data, vec![3]);
+    }
+
+    #[test]
+    fn ctrl_c_without_output_does_not_start_a_drain_window() {
+        let mut flow = TerminalOutputFlow::default();
+
+        assert!(!flow.begin_interrupt_drain(Instant::now()));
+        assert!(flow.interrupt_deadline().is_none());
+        assert!(flow.can_receive());
+    }
+
+    #[test]
+    fn interrupt_tail_is_bounded_without_stopping_ssh_reads() {
+        let mut flow = TerminalOutputFlow::default();
+        let now = Instant::now();
+
+        flow.push(vec![0], now);
+        let _ = flow.next_emission().unwrap();
+        assert!(flow.begin_interrupt_drain(now));
+        for byte in 0..16 {
+            flow.push(vec![byte; 4096], now);
+        }
+
+        assert!(flow.can_receive());
+        assert!(flow.pending_bytes <= INTERRUPT_TAIL_MAX_BYTES);
+        assert!(flow.pending.len() <= INTERRUPT_TAIL_MAX_CHUNKS);
     }
 }
 
@@ -745,23 +797,57 @@ mod tests {
 // SessionCmd / SessionHandle
 // ---------------------------------------------------------------------------
 
+const INTERRUPT_DRAIN_QUIET: Duration = Duration::from_millis(100);
+const INTERRUPT_TAIL_MAX_BYTES: usize = 32 * 1024;
+const INTERRUPT_TAIL_MAX_CHUNKS: usize = 8;
+const PTY_INTERRUPT_BYTE: u8 = 0x03;
+
 #[derive(Default)]
 struct TerminalOutputFlow {
     in_flight: Option<u64>,
     next_sequence: u64,
+    pending: VecDeque<Vec<u8>>,
+    pending_bytes: usize,
+    interrupt_deadline: Option<Instant>,
 }
 
 impl TerminalOutputFlow {
     fn can_receive(&self) -> bool {
-        self.in_flight.is_none()
+        self.interrupt_deadline.is_some() || (self.in_flight.is_none() && self.pending.is_empty())
     }
 
-    fn mark_emitted(&mut self) -> u64 {
-        debug_assert!(self.in_flight.is_none());
+    fn push(&mut self, data: Vec<u8>, now: Instant) {
+        if data.is_empty() {
+            return;
+        }
+        debug_assert!(self.interrupt_deadline.is_some() || self.pending.is_empty());
+        self.pending_bytes += data.len();
+        self.pending.push_back(data);
+
+        if self.interrupt_deadline.is_none() {
+            return;
+        }
+        while (self.pending_bytes > INTERRUPT_TAIL_MAX_BYTES
+            || self.pending.len() > INTERRUPT_TAIL_MAX_CHUNKS)
+            && self.pending.len() > 1
+        {
+            if let Some(dropped) = self.pending.pop_front() {
+                self.pending_bytes -= dropped.len();
+            }
+        }
+        self.interrupt_deadline = Some(now + INTERRUPT_DRAIN_QUIET);
+    }
+
+    fn next_emission(&mut self) -> Option<TerminalOutputChunk> {
+        if self.in_flight.is_some() || self.interrupt_deadline.is_some() {
+            return None;
+        }
+        let data = self.pending.pop_front()?;
+        self.pending_bytes -= data.len();
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.wrapping_add(1);
         self.in_flight = Some(sequence);
-        sequence
+        Some(TerminalOutputChunk { data, sequence })
     }
 
     fn acknowledge(&mut self, sequence: u64) -> bool {
@@ -770,6 +856,34 @@ impl TerminalOutputFlow {
         }
         self.in_flight = None;
         true
+    }
+
+    fn begin_interrupt_drain(&mut self, now: Instant) -> bool {
+        if self.in_flight.is_none() && self.pending.is_empty() && self.interrupt_deadline.is_none()
+        {
+            return false;
+        }
+        // russh delivers inbound packets through a bounded per-channel queue.
+        // If that queue fills while we wait for the UI ACK, russh's single
+        // connection task blocks in send().await and cannot forward the ETX on
+        // the same connection. Drop the unseen prefix and keep consuming into a
+        // small tail until the flood goes quiet, so the outbound ETX reaches sshd.
+        self.pending.clear();
+        self.pending_bytes = 0;
+        self.interrupt_deadline = Some(now + INTERRUPT_DRAIN_QUIET);
+        true
+    }
+
+    fn finish_interrupt_drain(&mut self) {
+        self.interrupt_deadline = None;
+    }
+
+    fn interrupt_deadline(&self) -> Option<Instant> {
+        self.interrupt_deadline
+    }
+
+    fn is_idle(&self) -> bool {
+        self.in_flight.is_none() && self.pending.is_empty() && self.interrupt_deadline.is_none()
     }
 }
 
@@ -987,6 +1101,7 @@ pub async fn connect(params: ConnectParams) -> AppResult<ConnectResult> {
 enum Event {
     Ssh(Option<ChannelMsg>),
     Cmd(Option<SessionCmd>),
+    OutputQuiet,
 }
 
 async fn session_task(
@@ -998,12 +1113,29 @@ async fn session_task(
     mut recorder: Option<Recorder>,
 ) {
     let mut output_started = false;
+    let mut source_closed = false;
     let mut output_flow = TerminalOutputFlow::default();
     loop {
+        if output_started {
+            if let Some(chunk) = output_flow.next_emission() {
+                if app.emit(&data_event, chunk).is_err() {
+                    break;
+                }
+                continue;
+            }
+        }
+        if source_closed && output_flow.is_idle() {
+            break;
+        }
+
+        let can_receive = output_started && !source_closed && output_flow.can_receive();
+        let interrupt_deadline = output_flow.interrupt_deadline();
         let event = tokio::select! {
             biased;
             cmd = rx.recv() => Event::Cmd(cmd),
-            msg = channel.wait(), if output_started && output_flow.can_receive() => Event::Ssh(msg),
+            msg = channel.wait(), if can_receive => Event::Ssh(msg),
+            _ = sleep_until(interrupt_deadline.unwrap_or_else(Instant::now)),
+                if interrupt_deadline.is_some() => Event::OutputQuiet,
         };
 
         match event {
@@ -1011,52 +1143,37 @@ async fn session_task(
                 if let Some(ref mut rec) = recorder {
                     let _ = rec.record(&data);
                 }
-                let sequence = output_flow.mark_emitted();
-                if app
-                    .emit(
-                        &data_event,
-                        TerminalOutputChunk {
-                            data: data.to_vec(),
-                            sequence,
-                        },
-                    )
-                    .is_err()
-                {
-                    break;
-                }
+                output_flow.push(data.to_vec(), Instant::now());
             }
             Event::Ssh(Some(ChannelMsg::ExtendedData { data, .. })) => {
                 if let Some(ref mut rec) = recorder {
                     let _ = rec.record(&data);
                 }
-                let sequence = output_flow.mark_emitted();
-                if app
-                    .emit(
-                        &data_event,
-                        TerminalOutputChunk {
-                            data: data.to_vec(),
-                            sequence,
-                        },
-                    )
-                    .is_err()
-                {
-                    break;
-                }
+                output_flow.push(data.to_vec(), Instant::now());
             }
             Event::Ssh(Some(ChannelMsg::Eof | ChannelMsg::Close)) | Event::Ssh(None) => {
-                break;
+                source_closed = true;
+                output_flow.finish_interrupt_drain();
             }
             Event::Cmd(Some(SessionCmd::StartOutput)) => {
                 output_started = true;
             }
             Event::Cmd(Some(SessionCmd::Write(data))) => {
-                let _ = channel.data(std::io::Cursor::new(data)).await;
+                if data.contains(&PTY_INTERRUPT_BYTE) {
+                    output_flow.begin_interrupt_drain(Instant::now());
+                }
+                if channel.data(std::io::Cursor::new(data)).await.is_err() {
+                    break;
+                }
             }
             Event::Cmd(Some(SessionCmd::Resize { cols, rows })) => {
                 let _ = channel.window_change(cols, rows, 0, 0).await;
             }
             Event::Cmd(Some(SessionCmd::AcknowledgeOutput(sequence))) => {
                 output_flow.acknowledge(sequence);
+            }
+            Event::OutputQuiet => {
+                output_flow.finish_interrupt_drain();
             }
             Event::Cmd(Some(SessionCmd::Close)) | Event::Cmd(None) => {
                 let _ = channel.close().await;
