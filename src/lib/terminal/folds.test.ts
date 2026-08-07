@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { Terminal } from "@xterm/xterm";
 import { createFoldStore } from "./folds.ts";
-import type { CommandBlock, CommandBlockTracker } from "./command-blocks.ts";
+import { createCommandBlockTracker, type CommandBlock, type CommandBlockTracker } from "./command-blocks.ts";
 
 /* ─────────────────────────────────────────────────────────────
  * Fake xterm.js Terminal —— 复刻 folds.ts 用到的全部私有/公有 API。
@@ -143,6 +144,7 @@ function fakeTerm(opts: { rows: number; initialLines: number; cursorY: number; y
   const resizeListeners = new Set<() => void>();
   const cursorMoveListeners = new Set<() => void>();
   const lineFeedListeners = new Set<() => void>();
+  const writeParsedListeners = new Set<() => void>();
   let activeBufferType: "normal" | "alternate" = "normal";
 
   const term = {
@@ -165,6 +167,10 @@ function fakeTerm(opts: { rows: number; initialLines: number; cursorY: number; y
       lineFeedListeners.add(fn);
       return { dispose: () => lineFeedListeners.delete(fn) };
     },
+    onWriteParsed(fn: () => void) {
+      writeParsedListeners.add(fn);
+      return { dispose: () => writeParsedListeners.delete(fn) };
+    },
     _core: { buffer },
   };
 
@@ -184,6 +190,7 @@ function fakeTerm(opts: { rows: number; initialLines: number; cursorY: number; y
       cursorMoveListeners.forEach((fn) => fn());
     },
     fireCursorMove: () => cursorMoveListeners.forEach((fn) => fn()),
+    fireWriteParsed: () => writeParsedListeners.forEach((fn) => fn()),
     setActiveBuffer: (type: "normal" | "alternate") => {
       activeBufferType = type;
     },
@@ -679,6 +686,27 @@ describe("FoldStore — multiple folds", () => {
     expect(f.snapshot()).toEqual(before);
     expect(f.lineContents()).toEqual(beforeLines);
   });
+
+  it("restores an older fold before reusing its bounded cache budget", () => {
+    const f = fakeTerm({ rows: 24, initialLines: 24, cursorY: 19 });
+    const s1 = f.makeMarker(0);
+    const e1 = f.makeMarker(5);
+    const s2 = f.makeMarker(6);
+    const e2 = f.makeMarker(12);
+    const store = createFoldStore(
+      f.term,
+      fakeTracker([makeBlock(1, s1, e1), makeBlock(2, s2, e2)]),
+      { maxCachedLines: 6 },
+    );
+
+    expect(store.fold(1)).toBe(true);
+    expect(store.fold(2)).toBe(true);
+
+    expect(store.isFolded(1)).toBe(false);
+    expect(store.isFolded(2)).toBe(true);
+    expect(f.lineContents()).toContain("L1");
+    expect(store.folds.reduce((total, fold) => total + fold.savedLines.length, 0)).toBe(6);
+  });
 });
 
 describe("FoldStore — auto-cleanup", () => {
@@ -792,5 +820,223 @@ describe("FoldStore — onChange notifications", () => {
     store.fold(99); // 不存在
     expect(calls).toBe(0);
     store.dispose();
+  });
+});
+
+describe("FoldStore — automatic command-block limit", () => {
+  it("does not hide rows when command-block controls are unavailable", () => {
+    const f = fakeTerm({ rows: 12, initialLines: 12, cursorY: 10 });
+    const start = f.makeMarker(0);
+    const store = createFoldStore(
+      f.term,
+      fakeTracker([makeBlock(1, start, null)]),
+      { maxVisibleLines: 3, maxCachedLines: 8, shouldAutoFold: () => false },
+    );
+
+    f.fireWriteParsed();
+
+    expect(store.getFold(1)).toBeUndefined();
+    expect(f.lineContents().slice(0, 4)).toEqual(["L0", "L1", "L2", "L3"]);
+  });
+
+  it("folds the oldest body rows and leaves the newest rows visible", () => {
+    const f = fakeTerm({ rows: 12, initialLines: 12, cursorY: 10 });
+    const start = f.makeMarker(0);
+    const tracker = fakeTracker([makeBlock(1, start, null)]);
+    const store = createFoldStore(f.term, tracker, {
+      maxVisibleLines: 3,
+      maxCachedLines: 8,
+    });
+    const originalLines = f.lineRefs();
+
+    f.fireWriteParsed();
+
+    expect(f.lineContents().slice(0, 4)).toEqual(["L0", "L8", "L9", "L10"]);
+    expect(store.getFold(1)).toMatchObject({
+      kind: "prefix",
+      count: 7,
+    });
+    expect(store.getFold(1)?.savedLines).toEqual(originalLines.slice(1, 8));
+  });
+
+  it("bounds cached rows and retains the newest restorable prefix", () => {
+    const f = fakeTerm({ rows: 12, initialLines: 12, cursorY: 10 });
+    const start = f.makeMarker(0);
+    const store = createFoldStore(
+      f.term,
+      fakeTracker([makeBlock(1, start, null)]),
+      { maxVisibleLines: 3, maxCachedLines: 4 },
+    );
+    const originalLines = f.lineRefs();
+
+    f.fireWriteParsed();
+
+    expect(store.getFold(1)?.count).toBe(4);
+    expect(store.getFold(1)?.savedLines).toEqual(originalLines.slice(4, 8));
+    expect(store.folds.reduce((total, fold) => total + fold.savedLines.length, 0)).toBe(4);
+  });
+
+  it("unfold restores the cached prefix before the newest visible rows", () => {
+    const f = fakeTerm({ rows: 12, initialLines: 12, cursorY: 10 });
+    const start = f.makeMarker(0);
+    const store = createFoldStore(
+      f.term,
+      fakeTracker([makeBlock(1, start, null)]),
+      { maxVisibleLines: 3, maxCachedLines: 8 },
+    );
+    const before = f.lineContents();
+
+    f.fireWriteParsed();
+    expect(store.unfold(1)).toBe(true);
+
+    expect(f.lineContents()).toEqual(before);
+  });
+
+  it("can reapply the automatic limit after a terminal reflow unfolds rows", () => {
+    const f = fakeTerm({ rows: 12, initialLines: 12, cursorY: 10 });
+    const start = f.makeMarker(0);
+    const store = createFoldStore(
+      f.term,
+      fakeTracker([makeBlock(1, start, null)]),
+      { maxVisibleLines: 3, maxCachedLines: 8 },
+    );
+
+    f.fireWriteParsed();
+    store.unfoldAll();
+    expect(store.getFold(1)).toBeUndefined();
+
+    store.enforceAutoFold();
+
+    expect(store.getFold(1)).toMatchObject({ kind: "prefix", count: 7 });
+    expect(f.lineContents().slice(0, 4)).toEqual(["L0", "L8", "L9", "L10"]);
+  });
+
+  it("folds during a large parse batch before xterm can trim the block marker", () => {
+    const f = fakeTerm({ rows: 40, initialLines: 40, cursorY: 3 });
+    const start = f.makeMarker(0);
+    const store = createFoldStore(
+      f.term,
+      fakeTracker([makeBlock(1, start, null)]),
+      { maxVisibleLines: 3, maxCachedLines: 36 },
+    );
+
+    for (let line = 0; line < 32; line++) f.lineFeed();
+
+    expect(start.isDisposed).toBe(false);
+    expect(store.getFold(1)).toMatchObject({ kind: "prefix", count: 32 });
+    expect(f.snapshot().cursorAbs).toBe(3);
+  });
+
+  it("releases compensation-row references after live output consumes them", () => {
+    const f = fakeTerm({ rows: 40, initialLines: 40, cursorY: 3 });
+    const start = f.makeMarker(0);
+    const store = createFoldStore(
+      f.term,
+      fakeTracker([makeBlock(1, start, null)]),
+      { maxVisibleLines: 3, maxCachedLines: 36 },
+    );
+
+    for (let line = 0; line < 320; line++) f.lineFeed();
+
+    expect(store.getFold(1)?.savedLines).toHaveLength(36);
+    expect(store.getFold(1)?.pushedBlankRefs.length).toBeLessThanOrEqual(64);
+  });
+});
+
+describe("FoldStore — automatic limit (real xterm contract)", () => {
+  const writeP = (term: Terminal, data: string) =>
+    new Promise<void>((resolve) => term.write(data, resolve));
+
+  it("keeps a live block marker and the newest rows through a large write", async () => {
+    const term = new Terminal({
+      cols: 80,
+      rows: 5,
+      allowProposedApi: true,
+      scrollback: 1_000,
+    });
+    const tracker = createCommandBlockTracker(term);
+    const store = createFoldStore(term, tracker, {
+      maxVisibleLines: 3,
+      maxCachedLines: 20,
+    });
+    term.input("\r");
+
+    await writeP(term, Array.from({ length: 40 }, (_, index) => `L${index}`).join("\r\n"));
+
+    const block = tracker.blocks[0];
+    expect(block.start.isDisposed).toBe(false);
+    expect(term.buffer.active.baseY + term.buffer.active.cursorY - block.start.line).toBe(3);
+    expect(store.getFold(block.id)).toMatchObject({ kind: "prefix", count: 20 });
+    expect(term.buffer.active.getLine(block.start.line + 1)?.translateToString(true)).toBe("L37");
+
+    expect(store.unfold(block.id)).toBe(true);
+    expect(store.isFolded(block.id)).toBe(false);
+    expect(term.buffer.active.getLine(block.start.line + 1)?.translateToString(true)).toBe("L17");
+
+    store.dispose();
+    tracker.dispose();
+    term.dispose();
+  });
+
+  it("folds the tail of a block closed by prompt detection in the same parse batch", async () => {
+    const term = new Terminal({
+      cols: 80,
+      rows: 5,
+      allowProposedApi: true,
+      scrollback: 1_000,
+    });
+    const tracker = createCommandBlockTracker(term, "prompt");
+    const store = createFoldStore(term, tracker, {
+      maxVisibleLines: 3,
+      maxCachedLines: 20,
+    });
+
+    await writeP(term, "$ ");
+    term.input("echo test\r");
+    await writeP(
+      term,
+      `echo test\r\n${Array.from({ length: 10 }, (_, index) => `L${index}`).join("\r\n")}\r\n$ `,
+    );
+
+    expect(tracker.blocks).toHaveLength(2);
+    const completed = tracker.blocks[0];
+    expect(completed.end).not.toBeNull();
+    expect(store.getFold(completed.id)).toMatchObject({ kind: "prefix", count: 7 });
+    expect(term.buffer.active.getLine(completed.start.line + 1)?.translateToString(true)).toBe("L7");
+
+    store.dispose();
+    tracker.dispose();
+    term.dispose();
+  });
+
+  it("bounds a command larger than xterm scrollback and still unfolds useful history", async () => {
+    const term = new Terminal({
+      cols: 80,
+      rows: 5,
+      allowProposedApi: true,
+      scrollback: 1_000,
+    });
+    const tracker = createCommandBlockTracker(term);
+    const store = createFoldStore(term, tracker, {
+      maxVisibleLines: 900,
+      maxCachedLines: 99,
+    });
+    term.input("\r");
+
+    await writeP(term, Array.from({ length: 1_500 }, (_, index) => `L${index}`).join("\r\n"));
+
+    const block = tracker.blocks[0];
+    expect(block.start.isDisposed).toBe(false);
+    expect(term.buffer.active.baseY + term.buffer.active.cursorY - block.start.line).toBe(900);
+    expect(store.getFold(block.id)).toMatchObject({ kind: "prefix", count: 99 });
+
+    expect(store.unfold(block.id)).toBe(true);
+    expect(block.start.isDisposed).toBe(false);
+    expect(term.buffer.active.baseY + term.buffer.active.cursorY - block.start.line).toBe(999);
+    expect(term.buffer.active.getLine(block.start.line + 1)?.translateToString(true)).toBe("L501");
+
+    store.dispose();
+    tracker.dispose();
+    term.dispose();
   });
 });

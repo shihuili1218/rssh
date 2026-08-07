@@ -7,6 +7,10 @@ import type {
   CommandBlockRedactionSettings as RedactionSettings,
 } from "../terminal/command-block-redaction.ts";
 import type { CommandBlockSplitMode } from "../terminal/command-blocks.ts";
+import {
+  COMMAND_BLOCK_MAX_LINES_DEFAULT,
+  normalizeCommandBlockMaxLines,
+} from "../terminal/limits.ts";
 import type { ViewportSnapshot } from "../terminal/viewport-snapshot.ts";
 import { toast } from "./toast.svelte.ts";
 
@@ -751,6 +755,39 @@ export async function setCommandBlockSplitMode(value: CommandBlockSplitMode) {
   await invoke("set_setting", { key: "command_block_split_mode", value });
   _commandBlockSplitMode = value;
   _cbsmLoaded = true;
+}
+
+let _commandBlockMaxLines = $state(COMMAND_BLOCK_MAX_LINES_DEFAULT);
+let _cbmlLoaded = false;
+let _cbmlLoad: Promise<number> | null = null;
+export function commandBlockMaxLines() { return _commandBlockMaxLines; }
+export async function loadCommandBlockMaxLines(): Promise<number> {
+  if (_cbmlLoaded) return _commandBlockMaxLines;
+  if (!_cbmlLoad) {
+    _cbmlLoad = (async () => {
+      try {
+        const value = await invoke<string | null>("get_setting", { key: "command_block_max_lines" });
+        _commandBlockMaxLines = value === null
+          ? COMMAND_BLOCK_MAX_LINES_DEFAULT
+          : normalizeCommandBlockMaxLines(value);
+      } catch (error) {
+        console.warn("[settings] command-block line limit load failed:", error);
+        toast.error(errMsg(error));
+      }
+      _cbmlLoaded = true;
+      return _commandBlockMaxLines;
+    })();
+  }
+  return _cbmlLoad;
+}
+export async function setCommandBlockMaxLines(value: number) {
+  const normalized = normalizeCommandBlockMaxLines(value);
+  await invoke("set_setting", {
+    key: "command_block_max_lines",
+    value: String(normalized),
+  });
+  _commandBlockMaxLines = normalized;
+  _cbmlLoaded = true;
 }
 
 let _commandBlockBar = $state(true);

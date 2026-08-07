@@ -9,7 +9,8 @@
  *   3. 不变量 cursor 内容跟随：splice 在 cursor 上方时 cursor 绝对行
  *      要相应减少（fold）或增加（unfold）
  *
- * fold 流程：splice 抽出 → push 空行补齐（记下引用）→ drain ybase 再 y → 重排 ydisp
+ * fold 流程：splice 抽出 → push 空行补齐（记下引用）→ drain ybase 再 y → 重排 ydisp。
+ * 手动折叠抽完整 body；自动折叠只抽最早的前缀，保留最新输出可见。
  *
  * unfold 流程：splice 塞回 → 删除本 fold 当初补在 buffer 里的空行。
  *   补偿空行可能已被后续 fold 推到 buffer 中间；因此不能只看末尾，
@@ -21,6 +22,10 @@
  *   - block.start 死亡（scrollback 修剪到该 block 之前）— 通过监听
  *     tracker.onChange 检测 block 从 tracker 消失来代理
  *
+ * 缓存不变量：所有 fold.savedLines 的总数受 maxCachedLines 限制。预算
+ * 满时先展开旧 fold，把历史交还 xterm；单个超长活动块只保留最新的
+ * 可恢复前缀。调用方保证 visible + cached < xterm scrollback。
+ *
  * ⚠️ Private-API warning: depends on _core.buffer's lines/ybase/ydisp/y/
  *    getBlankLine/addMarker, plus _core._viewport.queueSync (scrollbar resync).
  *    package.json pins "@xterm/xterm": "6.0.0". Any xterm bump must re-run
@@ -29,12 +34,14 @@
  *    requires re-checking these private hooks against the new build by hand.
  */
 import type { Terminal, IDisposable, IMarker } from "@xterm/xterm";
-import type { CommandBlockTracker } from "./command-blocks";
+import type { CommandBlock, CommandBlockTracker } from "./command-blocks";
 
 export interface Fold {
   /** 自增 id（仅用于调试）；外界以 blockId 索引 */
   id: number;
   blockId: number;
+  /** full = user folded the complete closed block; prefix = automatic oldest rows. */
+  kind: "full" | "prefix";
   /** body 行数 */
   count: number;
   /** splice 抽出的 BufferLine 实例（对我们透明） */
@@ -60,12 +67,27 @@ export interface FoldStore extends IDisposable {
   getFold(blockId: number): Fold | undefined;
   /** Expand every fold before xterm changes row/column geometry. */
   unfoldAll(): void;
+  /** Reapply the configured automatic limit after xterm reflows its rows. */
+  enforceAutoFold(): void;
   /** 折叠状态变化时通知（fold/unfold/scrollback 失效）。 */
   onChange(fn: () => void): IDisposable;
 }
 
+export interface FoldStoreOptions {
+  /** Keep this many newest body rows visible in a growing command block. */
+  maxVisibleLines?: number;
+  /** Global saved-line budget across every fold in this terminal. */
+  maxCachedLines?: number;
+  /** Visual block controls must be available before automatic folding hides rows. */
+  shouldAutoFold?: () => boolean;
+}
+
 /** xterm 默认 attr（fg=0,bg=0），与 DEFAULT_ATTR_DATA 等价。getBlankLine 必填。 */
 const BLANK_ATTR = { fg: 0, bg: 0, extended: { ext: 0, urlId: 0, underlineStyle: 0 } };
+// Bound work inside one xterm parse batch without splicing on every LF. The
+// settings cap leaves at least 99 scrollback rows, so 32 is safely below the
+// distance at which xterm could trim the current block's start marker.
+const AUTO_FOLD_BATCH_LINES = 32;
 
 interface PrivateBuffer {
   lines: {
@@ -132,7 +154,11 @@ function isStillBlankLine(line: unknown): boolean {
   return true;
 }
 
-export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): FoldStore {
+export function createFoldStore(
+  term: Terminal,
+  tracker: CommandBlockTracker,
+  options: FoldStoreOptions = {},
+): FoldStore {
   // 以 blockId 为键便于 O(1) 判断"该 block 是否折叠"。Fold 的 id 仅用于调试。
   const folds = new Map<number, FoldState>();
   // Compensation-line identity -> owning fold/index. Cursor events can update
@@ -144,6 +170,133 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
 
   const emit = () => listeners.forEach((fn) => fn());
 
+  const maxVisibleLines = Number.isFinite(options.maxVisibleLines)
+    ? Math.max(1, Math.trunc(options.maxVisibleLines!))
+    : null;
+  const maxCachedLines = Number.isFinite(options.maxCachedLines)
+    ? Math.max(1, Math.trunc(options.maxCachedLines!))
+    : Number.POSITIVE_INFINITY;
+
+  function discardFold(f: FoldState): void {
+    for (const line of f.pushedBlankRefs) {
+      const owner = blankOwners.get(line);
+      if (owner?.blockId === f.blockId) blankOwners.delete(line);
+    }
+  }
+
+  function pruneConsumedBlankRefs(f: FoldState): void {
+    const consumed = Math.min(f.consumedBlankCount, f.pushedBlankRefs.length);
+    if (consumed === 0) return;
+    for (const line of f.pushedBlankRefs.slice(0, consumed)) {
+      const owner = blankOwners.get(line);
+      if (owner?.blockId === f.blockId) blankOwners.delete(line);
+    }
+    f.pushedBlankRefs.splice(0, consumed);
+    f.consumedBlankCount = 0;
+    f.pushedBlankRefs.forEach((line, index) => {
+      blankOwners.set(line, { blockId: f.blockId, index });
+    });
+  }
+
+  /** Drop the oldest saved rows first. The xterm buffer has the same policy,
+   *  and keeping a larger shadow history would only make unfold trim it again. */
+  function enforceSavedLineBudget(currentBlockId: number): void {
+    if (!Number.isFinite(maxCachedLines)) return;
+    let overflow = Array.from(folds.values())
+      .reduce((total, item) => total + item.savedLines.length, 0) - maxCachedLines;
+    if (overflow <= 0) return;
+
+    // Restore older folds into xterm before reusing their shadow-cache budget.
+    // Silently deleting a full fold would leave only its command row with no
+    // label and no way to recover the body.
+    for (const blockId of Array.from(folds.keys())) {
+      if (blockId === currentBlockId) continue;
+      unfold(blockId);
+      overflow = Array.from(folds.values())
+        .reduce((total, item) => total + item.savedLines.length, 0) - maxCachedLines;
+      if (overflow <= 0) return;
+    }
+
+    // One long current block can still exceed the whole budget. Match xterm's
+    // head-trim policy and retain the newest restorable prefix rows.
+    const current = folds.get(currentBlockId);
+    if (!current || overflow <= 0) return;
+    current.savedLines.splice(0, Math.min(overflow, current.savedLines.length));
+    current.count = current.savedLines.length;
+  }
+
+  function removeLines(
+    blockId: number,
+    kind: Fold["kind"],
+    startLine: number,
+    count: number,
+  ): boolean {
+    if (count <= 0) return false;
+    const existing = folds.get(blockId);
+    if (existing && (existing.kind !== "prefix" || kind !== "prefix")) return false;
+    if (existing) {
+      recordCursorConsumption();
+      for (let i = existing.consumedBlankCount; i < existing.pushedBlankRefs.length; i++) {
+        if (!isStillBlankLine(existing.pushedBlankRefs[i])) {
+          existing.consumedBlankCount = i + 1;
+        }
+      }
+      pruneConsumedBlankRefs(existing);
+    }
+
+    const buf = getBuf(term);
+    const cursorAbs = buf.ybase + buf.y;
+    const endLine = startLine + count - 1;
+    if (endLine >= cursorAbs) return false;
+    const wasLive = buf.ydisp === buf.ybase;
+
+    const saved: unknown[] = [];
+    for (let i = 0; i < count; i++) saved.push(buf.lines.get(startLine + i));
+
+    // Drain scrollback first; only deletions from the visible screen need
+    // compensation rows to preserve lines.length === ybase + rows.
+    const ybaseDrain = Math.min(buf.ybase, count);
+    const pushCount = count - ybaseDrain;
+    buf.lines.splice(startLine, count);
+
+    const pushedRefs: unknown[] = [];
+    for (let i = 0; i < pushCount; i++) {
+      const blank = buf.getBlankLine(BLANK_ATTR);
+      buf.lines.push(blank);
+      pushedRefs.push(blank);
+    }
+
+    buf.ybase -= ybaseDrain;
+    buf.y = Math.max(0, buf.y - pushCount);
+    if (buf.ydisp >= startLine + count) buf.ydisp -= count;
+    else if (buf.ydisp >= startLine) buf.ydisp = startLine;
+    if (buf.ydisp > buf.ybase) buf.ydisp = buf.ybase;
+    if (wasLive) buf.ydisp = buf.ybase;
+
+    const foldState = existing ?? {
+      id: nextId++,
+      blockId,
+      kind,
+      count: 0,
+      savedLines: [],
+      pushedBlankRefs: [],
+      consumedBlankCount: 0,
+    };
+    foldState.savedLines.push(...saved);
+    foldState.count = foldState.savedLines.length;
+    const blankOffset = foldState.pushedBlankRefs.length;
+    foldState.pushedBlankRefs.push(...pushedRefs);
+    folds.set(blockId, foldState);
+    pushedRefs.forEach((line, index) => {
+      blankOwners.set(line, { blockId, index: blankOffset + index });
+    });
+    enforceSavedLineBudget(blockId);
+    syncViewport(term);
+    term.refresh(0, term.rows - 1);
+    emit();
+    return true;
+  }
+
   function fold(blockId: number): boolean {
     if (folds.has(blockId)) return false;
     const block = tracker.blocks.find((b) => b.id === blockId);
@@ -153,67 +306,52 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     const endLine = block.end.line;
     if (startLine > endLine) return false; // 空 body
 
-    const buf = getBuf(term);
-    const cursorAbs = buf.ybase + buf.y;
-    if (endLine >= cursorAbs) return false; // 折叠区间含 cursor 或之后 — 拒绝
     const count = endLine - startLine + 1;
-    // 抓 wasLive 在 mutation 之前——和 unfold 对称。用户在底部活线时折叠
-    // 上方旧块，ydisp -= count 会把视口推上去脱离底部，体感像"自动滚动"。
-    const wasLive = buf.ydisp === buf.ybase;
-
-    const saved: unknown[] = [];
-    for (let i = 0; i < count; i++) saved.push(buf.lines.get(startLine + i));
-
-    // 抽 ybase 让出 scrollback 空间，剩下的部分用 push 空行补。
-    // 关键：push 数量 = count - ybaseDrain（不是 count！），否则 lines.length
-    // 会比实际需要的多 ybaseDrain 行，造成滚动条与内容不同步。
-    const ybaseDrain = Math.min(buf.ybase, count);
-    const pushCount = count - ybaseDrain;
-
-    // splice 抽出 → marker 自动迁移 + 范围内 marker 自动 dispose（含 block.end）
-    buf.lines.splice(startLine, count);
-
-    // 不变量 (1)：lines.length === ybase + rows
-    //   splice 后 lines.length 减了 count
-    //   ybase 减 ybaseDrain，rows 不变
-    //   缺口 = count - ybaseDrain = pushCount → 末尾补 pushCount 行
-    const pushedRefs: unknown[] = [];
-    for (let i = 0; i < pushCount; i++) {
-      const blank = buf.getBlankLine(BLANK_ATTR);
-      buf.lines.push(blank);
-      pushedRefs.push(blank);
-    }
-
-    // 不变量 (2)：cursor 跟随内容。绝对位置 -= count。
-    //   ybase 让 ybaseDrain；y 让 pushCount。和 = count。
-    buf.ybase -= ybaseDrain;
-    buf.y -= pushCount;
-    if (buf.y < 0) buf.y = 0;
-
-    // 视口顶端：在 splice 后则减 count；在区间内塌到 startLine；最后夹到 [0, ybase]
-    if (buf.ydisp >= startLine + count) buf.ydisp -= count;
-    else if (buf.ydisp >= startLine) buf.ydisp = startLine;
-    if (buf.ydisp > buf.ybase) buf.ydisp = buf.ybase;
-    // wasLive 钉在底部：上面的位移逻辑会把活线模式打破，这里把它拉回来
-    if (wasLive) buf.ydisp = buf.ybase;
-
-    const foldState: FoldState = {
-      id: nextId++, blockId, count,
-      savedLines: saved, pushedBlankRefs: pushedRefs, consumedBlankCount: 0,
-    };
-    folds.set(blockId, foldState);
-    pushedRefs.forEach((line, index) => blankOwners.set(line, { blockId, index }));
-    syncViewport(term);
-    term.refresh(0, term.rows - 1);
-    emit();
-    return true;
+    return removeLines(blockId, "full", startLine, count);
   }
 
-  function discardFold(f: FoldState): void {
-    for (const line of f.pushedBlankRefs) {
-      const owner = blankOwners.get(line);
-      if (owner?.blockId === f.blockId) blankOwners.delete(line);
+  function canAutoFold(): boolean {
+    return maxVisibleLines !== null
+      && options.shouldAutoFold?.() !== false
+      && term.buffer.active.type === "normal";
+  }
+
+  function foldBlockOverflow(block: CommandBlock, minimumExcess: number): void {
+    if (maxVisibleLines === null || block.start.isDisposed) return;
+    if (folds.get(block.id)?.kind === "full") return;
+    const buf = getBuf(term);
+    const endLine = block.end === null
+      ? buf.ybase + buf.y
+      : block.end.isDisposed ? null : block.end.line;
+    if (endLine === null) return;
+    const visibleBodyLines = endLine - block.start.line;
+    const excess = visibleBodyLines - maxVisibleLines;
+    if (excess >= minimumExcess) {
+      removeLines(block.id, "prefix", block.start.line + 1, excess);
     }
+  }
+
+  function foldActiveOverflow(minimumExcess: number): void {
+    if (!canAutoFold()) return;
+    const block = tracker.blocks[tracker.blocks.length - 1];
+    if (block?.end === null) foldBlockOverflow(block, minimumExcess);
+  }
+
+  function foldRecentOverflow(): void {
+    if (!canAutoFold()) return;
+    const blocks = tracker.blocks;
+    // Prompt detection runs before this listener and may close the previous
+    // block while opening a new prompt block in the same parse batch.
+    for (let i = Math.max(0, blocks.length - 2); i < blocks.length; i++) {
+      foldBlockOverflow(blocks[i], 1);
+    }
+  }
+
+  function enforceAutoFold(): void {
+    if (!canAutoFold()) return;
+    // Markers migrate as older rows are removed, so a stable block snapshot is
+    // enough even though removeLines mutates the xterm buffer underneath it.
+    for (const block of Array.from(tracker.blocks)) foldBlockOverflow(block, 1);
   }
 
   function recordCursorConsumption(): void {
@@ -342,14 +480,15 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
     buf.y = clamp(nextCursorAbs - buf.ybase, 0, term.rows - 1);
     buf.ydisp = wasLive ? buf.ybase : clamp(nextYdisp, 0, buf.ybase);
 
-    // 重装 block.end：splice 时它被 dispose，block-bar 渲染依赖它的位置
-    try {
-      const newEnd = buf.addMarker(block.start.line + f.count);
-      // CommandBlock.end 字段未声明 readonly，可直接赋值；tracker 不知情
-      // 但本 FoldStore 自己 emit 让消费者重绘。
-      (block as { end: IMarker | null }).end = newEnd;
-    } catch {
-      // addMarker 异常则保持 end=disposed，block-bar 会回退到 cursor 位置 — 可接受
+    // A full fold consumed block.end, so recreate it. Prefix folds leave the
+    // newest rows in the buffer; a later end marker migrates with insertion.
+    if (f.kind === "full") {
+      try {
+        const newEnd = buf.addMarker(block.start.line + f.count);
+        (block as { end: IMarker | null }).end = newEnd;
+      } catch {
+        // Keep the disposed marker; renderers already fall back to the cursor.
+      }
     }
 
     discardFold(f);
@@ -369,8 +508,14 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
   // high-water mark when output later moves the cursor back up.
   disposables.push(
     term.onCursorMove(recordCursorConsumption),
-    term.onLineFeed(recordCursorConsumption),
+    term.onLineFeed(() => {
+      recordCursorConsumption();
+      foldActiveOverflow(AUTO_FOLD_BATCH_LINES);
+    }),
   );
+  if (maxVisibleLines !== null) {
+    disposables.push(term.onWriteParsed(foldRecentOverflow));
+  }
 
   // scrollback 修剪：tracker 监听 block.start.onDispose 后从 blocks 数组移除。
   // 这里通过 onChange 比对 tracker 现存 block — 折叠记录里若 block 不在了，丢弃。
@@ -401,6 +546,7 @@ export function createFoldStore(term: Terminal, tracker: CommandBlockTracker): F
       return folds.get(blockId);
     },
     unfoldAll,
+    enforceAutoFold,
     onChange(fn) {
       listeners.add(fn);
       return { dispose: () => listeners.delete(fn) };

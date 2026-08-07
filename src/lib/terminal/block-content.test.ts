@@ -307,6 +307,24 @@ describe("resolveBlockLines (folded blocks)", () => {
     const lines = resolveBlockLines(term as any, fakeBlock(1, 0, 1), foldStore);
     expect(lines).toHaveLength(2);
   });
+
+  it("prefix fold returns cached oldest rows followed by the visible newest rows", () => {
+    const promptLine = lineFromSpec("$ build");
+    const cached1 = lineFromSpec("step 1");
+    const cached2 = lineFromSpec("step 2");
+    const visible3 = lineFromSpec("step 3");
+    const visible4 = lineFromSpec("step 4");
+    const term = fakeTerm([promptLine, visible3, visible4]);
+    const foldStore = {
+      getFold: (id: number) => id === 9
+        ? { kind: "prefix" as const, savedLines: [cached1, cached2] }
+        : undefined,
+    };
+
+    const lines = resolveBlockLines(term as any, fakeBlock(9, 0, null), foldStore);
+
+    expect(lines).toEqual([promptLine, cached1, cached2, visible3, visible4]);
+  });
 });
 
 describe("extractBlocksText with foldStore", () => {

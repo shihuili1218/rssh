@@ -19,7 +19,10 @@ import type { CommandBlock } from "./command-blocks";
 /** 折叠仓库的最小接口，只用 getFold 查 saved body。
  *  避免直接 import FoldStore，让本模块对 folds.ts 的依赖只剩"读"语义。 */
 export interface FoldLookup {
-  getFold(blockId: number): { savedLines: unknown[] } | undefined;
+  getFold(blockId: number): {
+    kind?: "full" | "prefix";
+    savedLines: unknown[];
+  } | undefined;
 }
 
 /** 一个块的可视行号范围。end 缺失时 fallback 到 cursor 绝对行（块还在写）。 */
@@ -69,7 +72,16 @@ export function resolveBlockLines(
   if (fold) {
     const prompt = buf.getLine(block.start.line);
     const body = fold.savedLines as unknown as IBufferLine[];
-    return prompt ? [prompt, ...body] : [...body];
+    const out = prompt ? [prompt, ...body] : [...body];
+    if (fold.kind !== "prefix") return out;
+
+    const cursorAbs = buf.baseY + buf.cursorY;
+    const endLine = block.end && !block.end.isDisposed ? block.end.line : cursorAbs;
+    for (let y = block.start.line + 1; y <= endLine; y++) {
+      const line = buf.getLine(y);
+      if (line) out.push(line);
+    }
+    return out;
   }
   const cursorAbs = buf.baseY + buf.cursorY;
   const endLine = block.end && !block.end.isDisposed ? block.end.line : cursorAbs;

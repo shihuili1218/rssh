@@ -526,3 +526,33 @@ describe("command block split mode", () => {
     });
   });
 });
+
+describe("command block line limit", () => {
+  it("uses the safe default when unset and persists a user value", async () => {
+    invokeMock.mockResolvedValueOnce(null);
+    const app = await loadAppModule();
+
+    await expect(app.loadCommandBlockMaxLines()).resolves.toBe(500);
+    await app.setCommandBlockMaxLines(320);
+
+    expect(app.commandBlockMaxLines()).toBe(320);
+    expect(invokeMock).toHaveBeenCalledWith("set_setting", {
+      key: "command_block_max_lines",
+      value: "320",
+    });
+  });
+
+  it("clamps imported and user-entered values to the supported range", async () => {
+    invokeMock.mockResolvedValueOnce("50000");
+    const app = await loadAppModule();
+
+    await expect(app.loadCommandBlockMaxLines()).resolves.toBe(900);
+    await app.setCommandBlockMaxLines(1);
+
+    expect(app.commandBlockMaxLines()).toBe(10);
+    expect(invokeMock).toHaveBeenCalledWith("set_setting", {
+      key: "command_block_max_lines",
+      value: "10",
+    });
+  });
+});

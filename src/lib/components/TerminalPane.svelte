@@ -19,6 +19,7 @@
     import {createCommandBlockTracker, type CommandBlock, type CommandBlockTracker} from "../terminal/command-blocks.ts";
     import {readViewportSnapshot, readViewportText} from "../terminal/viewport-snapshot.ts";
     import {createFoldStore, type FoldStore} from "../terminal/folds.ts";
+    import {TERMINAL_SCROLLBACK_LINES, commandBlockFoldCacheLines} from "../terminal/limits.ts";
     import {createPaintScheduler, type PaintScheduler} from "../terminal/paint-scheduler.ts";
 
     import {extractBlockTexts, extractBlocksText} from "../terminal/block-content.ts";
@@ -230,14 +231,16 @@
     function fitTerminal() {
         if (destroyed || !terminal) return;
         // saved fold lines have the current column geometry. Expand them before
-        // FitAddon calls terminal.resize(), including while the alt buffer is
-        // active; FoldStore itself is bound to the normal history buffer.
+        // FitAddon calls terminal.resize(), then reapply the automatic limit to
+        // the reflowed rows. This also runs while the alt buffer is active;
+        // FoldStore itself is bound to the normal history buffer and defers the
+        // re-fold until the normal buffer becomes active again.
         const proposed = fitAddon?.proposeDimensions();
-        if (proposed && terminal
-            && (proposed.cols !== terminal.cols || proposed.rows !== terminal.rows)) {
-            foldStore?.unfoldAll();
-        }
+        const dimensionsChanged = !!proposed
+            && (proposed.cols !== terminal.cols || proposed.rows !== terminal.rows);
+        if (dimensionsChanged) foldStore?.unfoldAll();
         fitAddon?.fit();
+        if (dimensionsChanged) foldStore?.enforceAutoFold();
     }
 
     function writeRawOutput(raw: Uint8Array) {
@@ -278,17 +281,17 @@
         const out: BlockRect[] = [];
         for (const b of blockTracker.blocks) {
             if (b.start.isDisposed) continue;
-            const folded = foldStore?.isFolded(b.id) ?? false;
-            // Folded：竖线只标 prompt 行，body 已不在 buffer。
-            // Unfolded：常规 [start..end] 跨度。
+            const fold = foldStore?.getFold(b.id);
+            const folded = fold !== undefined;
+            // Full fold leaves only the command row. An automatic prefix fold
+            // keeps the newest output rows visible, so its bar still spans them.
             const startLine = b.start.line;
-            const endLine = folded
+            const endLine = fold?.kind === "full"
                 ? b.start.line
                 : b.end && !b.end.isDisposed ? b.end.line : cursorAbs;
             const top = Math.max(startLine, viewportY);
             const bot = Math.min(endLine, viewportY + rows - 1);
             if (top > bot) continue;
-            const fold = folded ? foldStore?.getFold(b.id) : undefined;
             out.push({
                 id: b.id,
                 y: (top - viewportY) * rowHeight,
@@ -1466,6 +1469,7 @@
     onMount(async () => {
         terminal = new Terminal({
             cursorBlink: true,
+            scrollback: TERMINAL_SCROLLBACK_LINES,
             fontSize: theme.termFontSize(),
             fontFamily: theme.currentTermFontStack(),
             allowProposedApi: true,
@@ -1606,7 +1610,10 @@
         // A tracker keeps one split strategy for its complete lifetime. Changing
         // the preference therefore affects new terminal panes without rewriting
         // existing markers, folds, selections, or colored blocks.
-        const commandBlockSplitMode = await app.loadCommandBlockSplitMode();
+        const [commandBlockSplitMode, commandBlockMaxLines] = await Promise.all([
+            app.loadCommandBlockSplitMode(),
+            app.loadCommandBlockMaxLines(),
+        ]);
         if (destroyed) return;
         blockTracker = createCommandBlockTracker(terminal, commandBlockSplitMode);
         blockTracker.onChange(() => {
@@ -1629,7 +1636,11 @@
 
         // Fold store — splice-based fold/unfold with auto-cleanup on resize and
         // scrollback trim. See folds.ts for the invariant analysis.
-        foldStore = createFoldStore(terminal, blockTracker);
+        foldStore = createFoldStore(terminal, blockTracker, {
+            maxVisibleLines: commandBlockMaxLines,
+            maxCachedLines: commandBlockFoldCacheLines(commandBlockMaxLines),
+            shouldAutoFold: () => app.commandBlockBar(),
+        });
         paintScheduler = createPaintScheduler({
             shouldPaint: () => app.commandBlockBar() && !isAltBuffer,
             paint: () => { paintTick++; },
@@ -1639,6 +1650,7 @@
         terminal.onRender(schedulePaintTick);
         terminal.buffer.onBufferChange((buf) => {
             isAltBuffer = buf.type === "alternate";
+            if (!isAltBuffer) foldStore?.enforceAutoFold();
             paintTick++;
         });
 
@@ -1709,8 +1721,10 @@
     // without us writing paintTick here (writing it here would make this
     // effect self-dependent via `++`, causing an update loop).
     $effect(() => {
-        app.commandBlockBar(); // subscribe
+        const visible = app.commandBlockBar();
+        if (!visible) foldStore?.unfoldAll();
         fitTerminal();
+        if (visible) foldStore?.enforceAutoFold();
     });
 
     // Focus terminal + register writer when this tab becomes active.

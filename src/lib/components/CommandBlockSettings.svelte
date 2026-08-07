@@ -4,6 +4,12 @@
   import { errMsg, t } from "../i18n/index.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
   import type { CommandBlockRedactRule } from "../stores/app.svelte.ts";
+  import {
+    COMMAND_BLOCK_MAX_LINES_DEFAULT,
+    COMMAND_BLOCK_MAX_LINES_MAX,
+    COMMAND_BLOCK_MAX_LINES_MIN,
+    TERMINAL_SCROLLBACK_LINES,
+  } from "../terminal/limits.ts";
 
   let commandBlockBar = $state(true);
   let autoColorBlocks = $state(false);
@@ -11,6 +17,10 @@
   let splitModeReady = $state(false);
   let splitModeSaving = $state(false);
   let splitModeNote = $state<string | null>(null);
+  let maxLines = $state(COMMAND_BLOCK_MAX_LINES_DEFAULT);
+  let maxLinesReady = $state(false);
+  let maxLinesSaving = $state(false);
+  let maxLinesNote = $state<string | null>(null);
   let promptEnabled = $state(true);
   let promptReplacement = $state("anonymous@rssh");
   let redactRules = $state<CommandBlockRedactRule[]>([]);
@@ -25,15 +35,18 @@
   let confirmRuleDeleteTimer: number | null = null;
 
   onMount(async () => {
-    const [bar, autoColor, loadedSplitMode] = await Promise.all([
+    const [bar, autoColor, loadedSplitMode, loadedMaxLines] = await Promise.all([
       app.loadCommandBlockBar(),
       app.loadAutoColorBlocks(),
       app.loadCommandBlockSplitMode(),
+      app.loadCommandBlockMaxLines(),
     ]);
     commandBlockBar = bar;
     autoColorBlocks = autoColor;
     splitMode = loadedSplitMode;
     splitModeReady = true;
+    maxLines = loadedMaxLines;
+    maxLinesReady = true;
     try {
       applyRedaction(await app.loadCommandBlockRedaction(true));
       redactionReady = true;
@@ -76,6 +89,23 @@
       toast.error(errMsg(error));
     } finally {
       splitModeSaving = false;
+    }
+  }
+
+  async function saveMaxLines() {
+    if (!maxLinesReady || maxLinesSaving) return;
+    const previous = app.commandBlockMaxLines();
+    maxLinesSaving = true;
+    maxLinesNote = null;
+    try {
+      await app.setCommandBlockMaxLines(maxLines);
+      maxLines = app.commandBlockMaxLines();
+    } catch (error) {
+      maxLines = previous;
+      maxLinesNote = t("settings.shell.command_block_max_lines_error", { error: errMsg(error) });
+      toast.error(errMsg(error));
+    } finally {
+      maxLinesSaving = false;
     }
   }
 
@@ -241,6 +271,40 @@
           <div class="inline-error" role="alert">{splitModeNote}</div>
         {/if}
       </fieldset>
+
+      <div class="card-divider"></div>
+      <div class="cmd-block-head">
+        <div class="cmd-block-head-body">
+          <label class="cmd-block-title" for="command-block-max-lines">
+            {t("settings.shell.command_block_max_lines")}
+          </label>
+          <div id="command-block-max-lines-desc" class="cmd-block-desc">
+            {t("settings.shell.command_block_max_lines_desc", {
+              min: COMMAND_BLOCK_MAX_LINES_MIN,
+              max: COMMAND_BLOCK_MAX_LINES_MAX,
+              scrollback: TERMINAL_SCROLLBACK_LINES,
+            })}
+          </div>
+          <div class="cmd-block-desc">{t("settings.shell.command_block_max_lines_new_sessions")}</div>
+          {#if maxLinesNote}
+            <div class="inline-error" role="alert">{maxLinesNote}</div>
+          {/if}
+        </div>
+        <input
+          id="command-block-max-lines"
+          class="max-lines-input"
+          type="number"
+          bind:value={maxLines}
+          min={COMMAND_BLOCK_MAX_LINES_MIN}
+          max={COMMAND_BLOCK_MAX_LINES_MAX}
+          disabled={!maxLinesReady || maxLinesSaving}
+          aria-describedby="command-block-max-lines-desc"
+          onblur={saveMaxLines}
+          onkeydown={(event) => {
+            if (event.key === "Enter") (event.currentTarget as HTMLInputElement).blur();
+          }}
+        />
+      </div>
 
       <div class="card-divider"></div>
       <div class="cmd-block-head">
@@ -496,6 +560,11 @@
     white-space: nowrap;
   }
   .inline-error { margin-top: 8px; color: var(--error); font-size: 11px; line-height: 1.5; }
+  .max-lines-input {
+    width: 88px;
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+  }
 
   /* 卡片内分隔线：负边距贯穿到卡片左右边缘。 */
   .card-divider {
